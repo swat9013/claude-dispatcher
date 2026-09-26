@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -39,8 +40,8 @@ const (
 	runTimeout = 60 * time.Second
 )
 
-// git / ps の stub は status / setup / doctor (#4) の観測点。tick の契約は gh と claude の呼び出しだけで決まる
-var stubNames = []string{"gh", "claude", "git", "ps"}
+// git / ps / crontab の stub は status / setup / doctor の観測点。tick の契約は gh と claude の呼び出しだけで決まる
+var stubNames = []string{"gh", "claude", "git", "ps", "crontab"}
 
 var registerSourcesOnce = sync.OnceValue(registerBinarySources)
 
@@ -77,7 +78,7 @@ func TestMain(m *testing.M) {
 // test process が open した file は cache key に入るので、ここで open して変化を拾わせる。
 // open の記録は m.Run の中でしか取られないので、TestMain ではなく sandbox を作るときに 1 度だけ呼ぶ。
 func registerBinarySources() error {
-	for _, root := range []string{"../../cmd", "../../internal", "../../go.mod", "../../go.sum"} {
+	for _, root := range []string{"../../cmd", "../../internal", "../../go.mod", "../../go.sum", "stub"} {
 		err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 			if err != nil || d.IsDir() {
 				return err
@@ -178,7 +179,7 @@ func (s *sandbox) setUp() {
 	s.setIssues()
 	s.setPRs()
 	s.writeClaudeRules()
-	// git / ps は tick が使わない。status / doctor (#4) が呼ぶまで、呼ばれたら成功だけを返す
+	// git / ps は tick が使わない。status / setup / doctor のテストが応答を足すまで、呼ばれたら成功だけを返す
 	s.respond("git", stubwire.Rule{})
 	s.respond("ps", stubwire.Rule{})
 	s.installPlugin("swat-skills@swat9013", "user", "")
@@ -260,6 +261,17 @@ func (s *sandbox) run(args ...string) runResult {
 // runWithEnv は sandbox の env に extra を足して撃つ。
 func (s *sandbox) runWithEnv(extra map[string]string, args ...string) runResult {
 	s.t.Helper()
+	return s.runWith(extra, "", args...)
+}
+
+// runWithInput は stdin に input を流して撃つ (承認を尋ねる subcommand への答え)。
+func (s *sandbox) runWithInput(input string, args ...string) runResult {
+	s.t.Helper()
+	return s.runWith(nil, input, args...)
+}
+
+func (s *sandbox) runWith(extra map[string]string, input string, args ...string) runResult {
+	s.t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), runTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, dispatcherBin, args...)
@@ -271,6 +283,7 @@ func (s *sandbox) runWithEnv(extra map[string]string, args ...string) runResult 
 		cmd.Env = append(cmd.Env, key+"="+value)
 	}
 	var stdout, stderr bytes.Buffer
+	cmd.Stdin = strings.NewReader(input)
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
 	var exitErr *exec.ExitError
