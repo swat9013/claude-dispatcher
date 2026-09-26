@@ -31,23 +31,26 @@ cron ─▶ claude-dispatcher tick ─指示─▶ orchestrator (claude -p) ─�
 
 どちらかで `claude-dispatcher` を PATH の通った場所に置く。crontab には置いた場所の絶対 path が書かれるので、`go run` の一時 build からは導入できない。
 
-**`go install`** (Go 1.24 以上):
+**`go install`** (Go は [go.mod](go.mod) の `go` 行の版以上):
 
 ```sh
 go install github.com/swat9013/claude-dispatcher/cmd/claude-dispatcher@latest
 ```
 
-**GitHub Releases の binary**: [Releases](https://github.com/swat9013/claude-dispatcher/releases) から OS と CPU に合う `claude-dispatcher_<version>_<darwin|linux>_<amd64|arm64>.tar.gz` を取り、`checksums.txt` で確かめてから展開する。
+**GitHub Releases の binary**: [Releases](https://github.com/swat9013/claude-dispatcher/releases) の OS と CPU に合う `claude-dispatcher_<version>_<darwin|linux>_<amd64|arm64>.tar.gz` を `checksums.txt` と一緒に取り、確かめてから展開する。下は macOS (Apple silicon) の例で、置き場の `~/.local/bin` は PATH に入れておく。
 
 ```sh
+gh release download -R swat9013/claude-dispatcher -p '*_darwin_arm64.tar.gz' -p checksums.txt
 shasum -a 256 -c checksums.txt --ignore-missing   # Linux は sha256sum -c checksums.txt --ignore-missing
-tar xzf claude-dispatcher_<version>_darwin_arm64.tar.gz claude-dispatcher
-install -m 755 claude-dispatcher ~/.local/bin/
+tar xzf claude-dispatcher_*_darwin_arm64.tar.gz claude-dispatcher
+mkdir -p ~/.local/bin && install -m 755 claude-dispatcher ~/.local/bin/
 ```
+
+binary は署名していない。macOS でブラウザから取った archive は Gatekeeper に起動を止められるので、`gh release download` か `curl -LO` で取る (ブラウザで取ったなら `xattr -d com.apple.quarantine ~/.local/bin/claude-dispatcher`)。
 
 ## 導入
 
-実装 repo の clone を cwd にして、project 名 (`[A-Za-z0-9._-]+`。以下 `myproj`) を決めて撃つ。
+実装 repo の clone を cwd にして、project 名 (`[A-Za-z0-9._-]+`。以下 `myproj`) を決めて撃つ。流れの正本は [`docs/design/usecases.md`](docs/design/usecases.md) の UC-6、各段の形式は [`docs/design/formats.md`](docs/design/formats.md) §11 / §12。
 
 ```sh
 cd ~/src/widgets
@@ -74,14 +77,14 @@ cron からは親 shell の環境変数も keyring も読めないことがあ�
 
 ## 動いているかを見る
 
-**死活は 2 段で読む**。置き場は `claude-dispatcher paths --json myproj` で引ける。
+**死活は 2 段で読む** (正本は [`docs/design/system.md`](docs/design/system.md) §9)。置き場は `claude-dispatcher paths --json myproj` で引ける。
 
 1. `log.jsonl` の最終行の `ts` が周期 (5 分) の 2 倍より新しければ、tick は回っている
 2. 古ければ `cron.log` の更新時刻を見る
    - `cron.log` が `log.jsonl` の最終行より新しい: cron は撃っているが CLI の手前か起動で落ちている。`cron.log` の末尾の行に理由が出る (binary や clone の path、認証)
    - `cron.log` も古い: cron 自体が撃っていない (crontab の行が無い / マシンがスリープしている)。`crontab -l` と `doctor` で確かめる
 
-`cron.log` には失敗した tick の出力だけが溜まる。中身があることは異常を意味しないので、更新時刻で見る。
+`cron.log` には失敗した tick の出力と、CLI の手前で shell が出した行が溜まる。溜まった中身は過去の失敗かもしれないので、中身の有無ではなく更新時刻で見る。
 
 **今の worker** は `status` で見る。log.jsonl の起動記録を起点に、process の生死・wip label・作業ツリー・CL を読み直して並べる。
 

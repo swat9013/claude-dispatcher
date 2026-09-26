@@ -1,6 +1,4 @@
-# `v*` の tag を push すると、GoReleaser で GitHub Releases に binary を出す。
-# テストは push 前の gate (CONTRIBUTING.md) が担う。black-box テストは依存 CLI の解決を PATH の実物に左右されるので
-# (runner の /usr/bin/gh 等)、Linux の runner で通ることを確かめるまで release の gate にしない
+# `v*` の tag を push すると、GoReleaser で GitHub Releases に binary を出す。gate の方針は CONTRIBUTING.md の「release」
 name: release
 
 on:
@@ -14,15 +12,17 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # release の書き込み権限を持つ job なので、action は commit SHA で固定する
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      - uses: goreleaser/goreleaser-action@v6
+      - run: go vet ./...
+      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
-          version: "~> v2"
+          version: v2.18.2
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
