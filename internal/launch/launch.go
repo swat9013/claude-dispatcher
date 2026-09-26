@@ -1,0 +1,114 @@
+// Package launch は Claude Code セッションの起動を 1 つの部品に閉じる (ADR 0005)。
+//
+// 今の実装は `claude -p` (ClaudePrint) の 1 つだけ。`claude --bg` 等へ変えるときは Launcher の実装を 1 つ足す。
+package launch
+
+import (
+	"crypto/rand"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"syscall"
+	"time"
+)
+
+// Launcher は orchestrator と worker を起動する seam。
+type Launcher interface {
+	// RunOrchestrator は orchestrator を起動して終了を待つ。timeout を超えたら process group ごと止める。
+	// 出力は logFile へ落とす。起動できなかったときだけ error を返す。
+	RunOrchestrator(prompt, logFile string, timeout time.Duration) (OrchestratorRun, error)
+	// SpawnWorker は worker を新しい process session として起動し、待たずに返す。出力は logFile へ落とす。
+	SpawnWorker(prompt, logFile string) (WorkerLaunch, error)
+}
+
+type OrchestratorRun struct {
+	ExitCode  int
+	Seconds   float64
+	TimedOut  bool
+	SessionID string
+}
+
+type WorkerLaunch struct {
+	PID       int
+	SessionID string
+}
+
+// PermissionMode は orchestrator / worker の permission posture。permission 層を外す起動は採らない (ADR 0002 / 0005)
+const PermissionMode = "auto"
+
+// ClaudePrint は `claude -p … --permission-mode auto --session-id <UUID>` で起動する Launcher。
+type ClaudePrint struct {
+	Claude string   // claude の絶対 path
+	Env    []string // 子プロセスの env
+	Cwd    string   // 実装 repo の clone
+}
+
+func (c ClaudePrint) command(prompt, sessionID string, log *os.File) *exec.Cmd {
+	cmd := exec.Command(c.Claude, "-p", prompt, "--permission-mode", PermissionMode, "--session-id", sessionID)
+	cmd.Env = c.Env
+	cmd.Dir = c.Cwd
+	cmd.Stdout, cmd.Stderr = log, log
+	// 新しい process session にする: orchestrator は timeout 時に process group ごと止めるため、
+	// worker は tick の終了と cron の process group に巻き込まれないため
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	return cmd
+}
+
+func (c ClaudePrint) start(prompt, logFile string) (*exec.Cmd, string, error) {
+	log, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return nil, "", fmt.Errorf("起動 log を開けない (%s): %w", logFile, err)
+	}
+	defer log.Close() // 子が複製した fd を持つので、親の分は起動後に閉じてよい
+	sessionID, err := newSessionID()
+	if err != nil {
+		return nil, "", err
+	}
+	cmd := c.command(prompt, sessionID, log)
+	if err := cmd.Start(); err != nil {
+		return nil, "", fmt.Errorf("claude を起動できない (%s): %w", c.Claude, err)
+	}
+	return cmd, sessionID, nil
+}
+
+func (c ClaudePrint) RunOrchestrator(prompt, logFile string, timeout time.Duration) (OrchestratorRun, error) {
+	started := time.Now()
+	cmd, sessionID, err := c.start(prompt, logFile)
+	if err != nil {
+		return OrchestratorRun{}, err
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	run := OrchestratorRun{SessionID: sessionID}
+	select {
+	case <-done:
+	case <-time.After(timeout):
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		<-done
+		run.TimedOut = true
+	}
+	run.Seconds = time.Since(started).Seconds()
+	run.ExitCode = cmd.ProcessState.ExitCode()
+	return run, nil
+}
+
+func (c ClaudePrint) SpawnWorker(prompt, logFile string) (WorkerLaunch, error) {
+	cmd, sessionID, err := c.start(prompt, logFile)
+	if err != nil {
+		return WorkerLaunch{}, err
+	}
+	// 待たない。回収は tick の終了後に init が行う
+	return WorkerLaunch{PID: cmd.Process.Pid, SessionID: sessionID}, nil
+}
+
+// newSessionID は UUID v4 を返す (claude の --session-id に渡し、log から transcript へ辿る鍵にする)。
+func newSessionID() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", errors.New("session id を作れない: " + err.Error())
+	}
+	b[6] = b[6]&0x0f | 0x40
+	b[8] = b[8]&0x3f | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16]), nil
+}
