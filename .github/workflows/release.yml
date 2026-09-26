@@ -1,4 +1,6 @@
-# `v*` の tag を push すると、テストを通してから GoReleaser で GitHub Releases に binary を出す
+# `v*` の tag を push すると、GoReleaser で GitHub Releases に binary を出す。
+# テストは push 前の gate (CONTRIBUTING.md) が担う。black-box テストは依存 CLI の解決を PATH の実物に左右されるので
+# (runner の /usr/bin/gh 等)、Linux の runner で通ることを確かめるまで release の gate にしない
 name: release
 
 on:
@@ -18,7 +20,6 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - run: go vet ./... && go test ./...
       - uses: goreleaser/goreleaser-action@v6
         with:
           version: "~> v2"
