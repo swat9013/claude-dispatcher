@@ -2,8 +2,10 @@
 package paths
 
 import (
+	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 )
 
@@ -34,6 +36,28 @@ func ResolveRoots(getenv func(string) string) Roots {
 		state = filepath.Join(home, ".local", "state")
 	}
 	return Roots{Config: filepath.Join(config, appName), State: filepath.Join(state, appName)}
+}
+
+// Projects は config root の下で config.toml を持つ dir 名を昇順で返す (formats.md §9)。root が無ければ空。
+func (r Roots) Projects() ([]string, error) {
+	entries, err := os.ReadDir(r.Config)
+	if os.IsNotExist(err) {
+		return []string{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	projects := []string{}
+	for _, e := range entries {
+		if !e.IsDir() || !ValidProjectName(e.Name()) {
+			continue
+		}
+		if info, err := os.Stat(r.Project(e.Name()).ConfigFile()); err == nil && !info.IsDir() {
+			projects = append(projects, e.Name())
+		}
+	}
+	sort.Strings(projects)
+	return projects, nil
 }
 
 // Project は 1 project の置き場。
