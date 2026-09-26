@@ -7,7 +7,7 @@ issue tracker の「着手可」の issue を Claude Code に無人で実装さ�
 ## 仕組み
 
 ```
-cron ─▶ claude-dispatcher tick ─指示─▶ orchestrator (claude -p) ─決定 file─▶ tick ─起動─▶ worker (claude -p)
+cron ─▶ claude-dispatcher tick ─指示─▶ orchestrator (claude -p) ─決定ファイル─▶ tick ─起動─▶ worker (claude -p)
         観測 + 指示の導出              選定 + wip label の付与              決定どおり起動      実装 → CL
 ```
 
@@ -29,12 +29,14 @@ cron ─▶ claude-dispatcher tick ─指示─▶ orchestrator (claude -p) ─�
 - [gh](https://cli.github.com/) と、その認証 (初版の対応 tracker は GitHub だけ)
 - cron (macOS / Linux)
 
-## 導入の流れ
+## 導入の流れ (予定)
 
-1. CLI を入れる: `go install github.com/swat9013/claude-dispatcher/cmd/claude-dispatcher@latest` (または GitHub Releases の binary)
-2. 実装 repo の clone で `claude-dispatcher setup <project>` を撃つ。宣言 config の雛形作成・label の作成・試運転・crontab の登録までを、承認を取りながら進める
-3. `claude-dispatcher doctor <project>` が示す entry を Claude Code の settings に足す (CLI は settings を書かない)
-4. 周期の 2 倍待ち、`claude-dispatcher status ps <project>` で tick が回っていることを確かめる
+CLI が未実装のため、以下は設計上の予定の流れです。実装が入った時点で実際の手順に置き換えます。設計の正本は [`docs/design/usecases.md`](docs/design/usecases.md) の UC-6。
+
+1. CLI を入れる (`go install` か GitHub Releases の binary)
+2. 実装 repo の clone で `setup` を撃つ。宣言 config の雛形作成・label の作成・試運転・crontab の登録までを、承認を取りながら進める
+3. `doctor` が示す entry を Claude Code の settings に足す (CLI は settings を書かない)
+4. 周期の 2 倍待ち、log.jsonl の最終行の `ts` が進んでいることで tick が回っていると確かめる (置き場は `paths --json` で引ける)
 
 ## License
 

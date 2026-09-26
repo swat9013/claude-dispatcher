@@ -14,6 +14,8 @@ issue から CL までを無人で回す機構に要るユースケースは 2 �
 - 常駐プロセスの crash 時の再起動・boot 時の起動・二重起動防止という監督問題を抱える
 - orchestrator を常駐セッションにすると context が溜まり、人手の起こし直しが要る
 
+これらは、同じ目的で先に作られた実装 (台帳と常駐プロセスを持つ形) の運用で実際に起きた問題である。本 repo はその後継として、運用で得た知見を設計 doc に引き継いで作り直した。
+
 ## Decision
 
 **専用の永続 store を持たない。状態は成果物 — tracker の label・紐づく open CL の存在・remote branch — に置き、cron が起動する tick が毎回外部 store を読み直して再構成する。**
@@ -23,13 +25,7 @@ issue から CL までを無人で回す機構に要るユースケースは 2 �
 - 取りこぼした tick は補償しない。次 tick が現実を読み直すので、cron の弱点 (取りこぼしを追い掛けない / スリープ中は走らない) が実害にならない
 - 並行実行は `flock` で 1 本に絞る
 
-### cron で動かすための注意 (実運用で踏んだもの)
-
-- **cron の PATH は最小** — `~/go/bin`・`~/.local/bin`・mise の shims・Homebrew の prefix はどれも入っていない。crontab の行は CLI を絶対 path で指し、CLI は依存 CLI (gh / claude / git) の path を自分で解決する
-- **keyring に置いた認証は cron から読めないことがある** — gh は `GH_TOKEN` / `GITHUB_TOKEN` → `hosts.yml` → OS keyring の順で認証を引き、macOS の Claude Code はログインを Keychain に置く。keyring はログイン session に従うので、cron の非ログイン session からは読めないことがある (orchestrator が `Not logged in` で数秒で落ちる)。config に token file を任意で置き、CLI が子プロセスへ環境変数で渡す経路を持つ
-- **対話 shell からの試運転は keyring の失敗を再現しない** — 環境変数を削っても keyring は読めてしまう。keyring の問題は登録後の死活 (log.jsonl 最終行の `ts`) でしか確かめられない
-- **cron 相当の試運転は CLI 自身が最小環境で撃ち直す** — Claude Code の sandbox の除外指定は Bash 呼び出しの先頭 token だけで照合される。呼び出し側が `env -i …` を前置すると CLI が sandbox の中に落ち、gh が credential を読めない偽の失敗になる
-- **死活は 2 段で読む** — log.jsonl 最終行の `ts` が周期の 2 倍より古ければ tick が走っていない。そのとき crontab の出力先 (cron.log) の更新時刻が新しければ CLI の手前の起動失敗、古ければ cron 自体の問題。CLI が起動できない失敗は log.jsonl に載らないので、cron.log を唯一の観測点として残す
+- cron で動かすことが持ち込む制約 (最小の PATH・keyring の認証が読めないこと・対話 shell からの試運転の限界・起動できない失敗の観測点) は、この決定の代償として設計が引き受ける。対処の正本は `docs/design/system.md` §8 / §9
 
 ## Consequences
 

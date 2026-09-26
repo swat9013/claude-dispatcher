@@ -1,4 +1,4 @@
-# F — 外から観測できる形式
+# 外から観測できる形式
 
 - 本 file が CLI の外から観測できる形式の正本。black-box テストはここを参照して書き、実装とテストが食い違ったら本 file に合わせる
 - 各 file の責務は [`system.md`](system.md) §7 / §8 / §9、用語は [`CONTEXT.md`](../../CONTEXT.md)
@@ -23,24 +23,24 @@ macOS でも XDG に揃える (`~/Library` は使わない)。project ごとに�
   tick.lock                           flock の対象
   config-verified                     実在検査に通った config.toml の sha256 (hex 1 行)
   instructions/<stem>.json            指示ファイル (§5.1)。指示があった tick だけ
-  decisions/<stem>.json               決定 file (§5.2)
+  decisions/<stem>.json               決定ファイル (§5.2)
   decisions/<stem>.orchestrator.log   orchestrator の stdout / stderr
-  decisions/<stem>.handoff-<N>.md     orchestrator が人へ返したときの引き渡し本文
-  workers/<N>-<stem>.log              worker の stdout / stderr
+  decisions/<stem>.handoff-<issue>.md orchestrator が人へ返したときの引き渡し本文
+  workers/<issue>-<stem>.log          worker の stdout / stderr
 ```
 
 - `<project>` は `[A-Za-z0-9._-]+`。crontab の行と subcommand の引数で同じ綴りを使う
 - `<stem>` は tick の開始時刻 (UTC) の `YYYYMMDDTHHMMSS.ffffffZ`。マイクロ秒まで入れるのは、同じ秒に 2 tick 走ったときに前の file を上書きしないため
-- Claude Code の sandbox で書き込みを許す必要があるのは state root だけ (orchestrator が決定 file と引き渡し本文を書く)
+- 時刻は RFC 3339 の UTC (`Z` 表記) で、log.jsonl の `ts` はマイクロ秒まで、cron.log の前置は秒まで
 
 ## 2. config.toml
 
 ```toml
 [issue]
-tracker = "gh"                 # 必須。初版は "gh" だけ (他は名指しで失敗)
 repo = "owner/name"            # 必須。issue 置き場
 ready_label = "ready-for-agent" # 必須。着手可 label の綴り
 triage_label = "needs-triage"  # 任意。worker が残タスクを起票するときに付ける唯一の label。省略すると label なし
+tracker = "gh"                 # 任意。既定 "gh"。初版は "gh" だけ (他は名指しで失敗)
 
 [cl]                           # 任意。CL 置き場が issue 置き場と別のときだけ書く
 repo = "owner/other"           # [cl] を書くなら必須 (空の [cl] は誤り)。tracker は issue 側と同じ
@@ -54,6 +54,7 @@ claude_token_file = "~/.config/claude-dispatcher/<project>/claude-token"
 ```
 
 - 未知の table / key、型の誤り、必須 key の欠落は、名指しで `config_error` にする
+- `triage_label` が `ready_label` と同じ綴りなら `config_error` (worker の起票が候補になり自己増殖する)
 - token file の path は `~` 始まりか絶対 path。mode が group / other から読める・file が無い・中身が空なら `config_error`
 - 実在検査 (config が新しいか `config-verified` の hash と違うとき): `[issue].repo` と `[cl].repo` が存在し、issue 置き場に `dispatcher:wip` と `ready-for-human` の label があること。`triage_label` を書いたらそれもあること
 
@@ -62,7 +63,7 @@ claude_token_file = "~/.config/claude-dispatcher/<project>/claude-token"
 | exit | `result` | 意味 |
 |---|---|---|
 | 0 | `ok` | 観測して指示を導出した (orchestrator を起動したなら、正常終了して決定どおり worker を起動した) |
-| 1 | `error` | 観測できなかった / 指示を導出できなかった / orchestrator が正常終了しなかった / claude を起動できなかった / 決定 file の検査に落ちた / 想定外の例外 |
+| 1 | `error` | 観測できなかった / 指示を導出できなかった / orchestrator が正常終了しなかった / claude を起動できなかった / 決定ファイルの検査に落ちた / 想定外の失敗 |
 | 2 | `config_error` | config 起因で観測していない (無い / 読めない / 未知 key / 置き場や label が実在しない / token file の不備) |
 | 3 | `locked` | 前 tick が走っていたので見送った |
 | 4 | `auth_error` | gh の認証が通らず観測していない (綴りを直しても直らない) |
@@ -77,7 +78,7 @@ claude_token_file = "~/.config/claude-dispatcher/<project>/claude-token"
 
 ```json
 {
-  "ts": "2026-09-26T03:00:00.123456+00:00",
+  "ts": "2026-09-26T03:00:00.123456Z",
   "project": "myproj",
   "cwd": "/home/me/src/myproj",
   "result": "ok",
@@ -96,21 +97,21 @@ claude_token_file = "~/.config/claude-dispatcher/<project>/claude-token"
 
 | key | いつ載るか |
 |---|---|
-| `ts` / `project` / `cwd` / `result` | 常に。`ts` は tick の開始時刻 (UTC、ISO 8601)。最終行の `ts` が死活の手掛かり |
+| `ts` / `project` / `cwd` / `result` | 常に。`ts` は tick の開始時刻。最終行の `ts` が死活の手掛かり |
 | `error` | `result` が `ok` 以外のとき。複数行の error は ` / ` で 1 行に畳む |
 | `observed` / `candidates` / `wip` / `instructions` | 観測に至った tick。`instructions` は指示の種別 → 件数 (0 件なら `{}`) |
 | `instruction_file` | 観測に至った tick。指示 0 件なら `null` |
 | `orchestrator` | claude を起動した tick だけ (この key の有無で起動したかを読む) |
 | `spawned` | `orchestrator` があるとき。`result: error` でも起動済みの worker は載る |
 
-- 想定外の例外で止まった tick も `result: error` の行を残す。この行には `instruction_file` / `orchestrator` / `spawned` が載らないので、claude や worker を起動済みかは行から読めない
+- 想定外の失敗 (panic 等) で止まった tick も `result: error` の行を残し、**それまでに確定した key (`instruction_file` / `orchestrator` / 起動済みの `spawned`) を載せる**。tick は段階ごとに行の中身を積み、最後に 1 行で書き出すので、どこで止まっても claude と worker を起動済みかが行から読める
 - `session_id` は CLI が起動ごとに発行して `--session-id` で渡した値。Claude Code の transcript `~/.claude/projects/<cwd から Claude Code が決める dir 名>/<session_id>.jsonl` へ辿る鍵で、`cwd` と組で引く
 
 ### 4.2 orchestrator 行
 
 ```json
 {
-  "ts": "2026-09-26T03:00:00.123456+00:00",
+  "ts": "2026-09-26T03:00:00.123456Z",
   "project": "myproj",
   "actor": "orchestrator",
   "instruction_file": "<state root>/myproj/instructions/20260926T030000.123456Z.json",
@@ -118,9 +119,9 @@ claude_token_file = "~/.config/claude-dispatcher/<project>/claude-token"
 }
 ```
 
-`actor` の有無で tick 行と区別する。`ts` は同じ tick の tick 行と同じ値。決定 file の `decisions` をそのまま写す。
+`actor` の有無で tick 行と区別する。`ts` は同じ tick の tick 行と同じ値。決定ファイルの `decisions` をそのまま写す。
 
-## 5. 指示ファイルと決定 file
+## 5. 指示ファイルと決定ファイル
 
 ### 5.1 指示ファイル (`instructions/<stem>.json`)
 
@@ -151,11 +152,12 @@ claude_token_file = "~/.config/claude-dispatcher/<project>/claude-token"
 
 - 指示の並びは `reenter` → `start` → `anomaly`
 - 候補だけが issue 本文 `body` を持つ (orchestrator の playbook 選定の信号)
+- `linked_cls` と `cls[].issues` の紐づきは、closing reference が指す issue と、head branch `worktree-issue-<issue>` が示す issue の和 (system.md §4)
 - `checks` は head commit の checks の集約 (`SUCCESS` / `PENDING` / `FAILURE` / `ERROR` / `null`)
 - `anomaly.reason` は `wip_over_limit` / `wip_and_ready_for_human` / `multiple_open_cls`。`multiple_open_cls` だけが `cls` を持つ
 - 取得上限に達した tick は指示ファイルを書かず `result: error` にする — 切り詰めた像から指示を出すと、窓の外の open CL を持つ issue が候補へ戻って二重着手になる
 
-### 5.2 決定 file (`decisions/<stem>.json`)
+### 5.2 決定ファイル (`decisions/<stem>.json`)
 
 orchestrator が書く。path は起動時に渡される (指示ファイルと同じ `<stem>`)。
 
@@ -172,9 +174,15 @@ orchestrator が書く。path は起動時に渡される (指示ファイルと
 | `reenter` | `issue` | `reenter` / `skip` |
 | `anomaly` | `issues` の全件 | `skip` / `ready-for-human` |
 
-- `spawn[].kind` は同じ issue の `action` と一致する (`start` / `reenter`)
-- `spawn[].playbooks` は prompt に載せた playbook の絶対 path の列。検査は system.md §7
-- 網羅の欠けは、書かれた `spawn` を起動した後で `error` にする。それ以外の検査 (file が無い / JSON でない / 語彙 / `${` の残り / `playbooks`) に落ちたら 1 件も起動せず `error` にする
+CLI は orchestrator の正常終了後に次を検査する (timeout / 異常終了なら file を読まない)。
+
+| 検査 | 落ちたとき |
+|---|---|
+| file があり JSON として読める (spawn 0 件でも file は要る) | 1 件も起動せず `error` |
+| `action` と `spawn[].kind` が上の語彙に入り、`spawn[].kind` が同じ issue の `action` と一致する | 1 件も起動せず `error` |
+| `spawn[].prompt` に未展開の変数 (`${`) が残っていない | 1 件も起動せず `error` |
+| `spawn[].playbooks` (prompt に載せた playbook の絶対 path の列) の各 path が prompt 本文に含まれ、file として実在する。`start` は指示の選定母集合の 1 本、`reenter` は指示の条件の playbook を条件順に並べた列の部分列 (読み直しで外れた条件は落としてよい) | 1 件も起動せず `error` |
+| 網羅: 上の表の issue 1 件ごとに採否がある | 書かれた `spawn` を起動してから `error` |
 
 ## 6. cron.log の行
 
@@ -185,7 +193,7 @@ CLI が失敗 tick で stderr に出す 1 行:
 ```
 
 - `tick=-` は log.jsonl を書けなかった tick (state dir が無い等)
-- 想定外の例外で止まった tick は、traceback 等の後ろにこの 1 行を置く (`<error>` は `想定外の例外で止まった: <型>: <内容>`)。末尾の行だけで読めるようにするため
+- 想定外の失敗 (panic 等) で止まった tick は、stack trace 等の後ろにこの 1 行を置く (`<error>` は `想定外の失敗で止まった: <内容>`)。末尾の行だけで読めるようにするため
 - 正常な tick は何も書かない。前置の無い行は CLI 以外 (shell) が出したもの
 
 ## 7. `tick --dry-run` の stdout

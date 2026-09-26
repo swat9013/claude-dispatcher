@@ -61,11 +61,11 @@ worker が剥がさずに死んで残った wip。snapshot からは着手中と
 ## 役とやり取り
 
 **orchestrator**:
-指示があるときだけ起動される使い切りの LLM セッション。指示ごとの採否を判断し、wip を付け、起動する worker を決定 file に書く。
+指示があるときだけ起動される使い切りの LLM セッション。指示ごとの採否を判断し、wip を付け、起動する worker を決定ファイルに書く。
 _Avoid_: scheduler, manager
 
 **worker**:
-決定 file どおりに CLI が detach 起動する使い切りの LLM セッション。担当 issue を実装して CL に到達するか、人へ返して終わる。orchestrator との往復チャネルを持たない。
+決定ファイルどおりに CLI が detach 起動する使い切りの LLM セッション。担当 issue を実装して CL に到達するか、人へ返して終わる。orchestrator との往復チャネルを持たない。
 _Avoid_: agent, runner
 
 **指示 (instruction)**:
@@ -86,7 +86,7 @@ _Avoid_: error, alert
 **指示ファイル**:
 指示があった tick で CLI が書く、snapshot と指示の列。orchestrator の唯一の入力。
 
-**決定 file**:
+**決定ファイル**:
 orchestrator が書く唯一の出力。指示ごとの採否と、起動する worker の spawn prompt を持つ。
 
 **spawn prompt**:

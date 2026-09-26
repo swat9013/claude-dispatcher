@@ -1,4 +1,4 @@
-# U — ユースケース
+# ユースケース
 
 - 本 file がユースケースの正本。構造 (システム境界・指示カタログ・状態の表現) は [`system.md`](system.md)、形式は [`formats.md`](formats.md)
 
@@ -51,7 +51,7 @@ Cockburn『ユースケース実践ガイド』(Writing Effective Use Cases) の
 
 1. CLI が空き slot・候補・選定母集合の playbook を添えた `start` 指示を書き、orchestrator を起動する
 2. orchestrator が指示を読み、着手する issue を選び、issue 本文から作業種別を読んで playbook を選ぶ (**選定は LLM に残す**。選定規則は system.md §10)
-3. orchestrator が issue に wip を付け、spawn prompt を決定 file に書いて終了する。CLI が決定 file を検査し、headless worker を detach 起動して tick を終える
+3. orchestrator が issue に wip を付け、spawn prompt を決定ファイルに書いて終了する。CLI が決定ファイルを検査し、headless worker を detach 起動して tick を終える
 4. worker が worktree を作り、playbook と原則索引を読んで実装する
 5. worker が two-axis-review を通し、自律判断を説明文に載せた closing reference 付き CL を作成して、レビュー出力を CL へコメントする
 6. worker が残タスク・範囲外の欠陥・直さなかった指摘を triage 待ちの issue にし (着手可 label は付けない — 次 tick が拾って自己増殖しない)、CL 本文の「user に残る作業」節から番号で指す
@@ -60,11 +60,11 @@ Cockburn『ユースケース実践ガイド』(Writing Effective Use Cases) の
 **Extensions**
 
 - **2a.** orchestrator が候補のいずれも着手に値しないと判断した
-  - 2a1. 候補ごとの見送りと理由を決定 file に書いて終了する (issue には何も書かない)。CLI が log へ写す
-- **3a.** wip の付与に失敗した、または決定 file を書けなかった
+  - 2a1. 候補ごとの見送りと理由を決定ファイルに書いて終了する (issue には何も書かない)。CLI が log へ写す
+- **3a.** wip の付与に失敗した、または決定ファイルを書けなかった
   - 3a1. orchestrator が付けてしまった wip を剥がして終了する
   - 3a2. 現実が変わっていなければ次 tick が同じ指示を再導出する (再試行の状態管理を持たない)
-- **3b.** CLI が worker を起動できなかった (claude が無い / 起動失敗)、または orchestrator が正常終了しなかった (timeout / 異常終了 — 決定 file は読まず起動しない)
+- **3b.** CLI が worker を起動できなかった (claude が無い / 起動失敗)、または orchestrator が正常終了しなかった (timeout / 異常終了 — 決定ファイルは読まず起動しない)
   - 3b1. CLI が失敗を log に残して終了する。wip が付いたままなら次 tick では候補に戻らず start も出ない — stale wip として triage が回収する
 - **6a.** issue にするものが無い
   - 6a1. 何も起票せず step 7 へ進む
@@ -83,17 +83,17 @@ Cockburn『ユースケース実践ガイド』(Writing Effective Use Cases) の
 **Main Success Scenario**
 
 1. CLI が CL の状態 (conflict / 未解決 thread / checks 失敗。複数あれば併記) と条件別 playbook を添えた再入指示を書き、orchestrator を起動する
-2. orchestrator が条件を読み直して立ったままの条件だけを残し、issue に `dispatcher:wip` を付け、条件別 playbook の path を条件順に載せた spawn prompt を決定 file に書く。CLI がそれを検査して worker を起動する
+2. orchestrator が条件を読み直して立ったままの条件だけを残し、issue に `dispatcher:wip` を付け、条件別 playbook の path を条件順に載せた spawn prompt を決定ファイルに書く。CLI がそれを検査して worker を起動する
 3. worker が CL の head branch から worktree を作り直し、条件別 playbook を順に Read してイベントに対応する (base branch を merge して conflict 解消 / thread へ返信・反映・resolve / CI 失敗の修正)
 4. worker が既存 CL の branch へ push し、対応内容を CL 上に残す
 5. worker が wip を剥がし、worktree を消して終了する
 
 **Extensions**
 
-- **2a.** 空き slot が無い (wip 枚数が上限 N に達している)
-  - 2a1. orchestrator が見送りとして理由を決定 file に残す。次 tick で再導出される
+- **2a.** orchestrator が wip 枚数を数え直すと空きが無い (CLI は tick 時点の空きの分だけ指示を出すが、tick の後に人や前 tick の worker が wip を付けていた)
+  - 2a1. orchestrator が見送りとして理由を決定ファイルに残す。次 tick で再導出される
 - **2b.** 読み直すと条件が全部外れていた (tick と今の間に人か worker が動いた)
-  - 2b1. orchestrator が見送りとして理由を決定 file に残す
+  - 2b1. orchestrator が見送りとして理由を決定ファイルに残す
 - **3a.** worker がレビュー指摘に同意できない、または指摘の書き手が collaborator でない
   - 3a1. 同意できる指摘を先に片付け、続行不能経路 (UC-4 の step 3 以降) へ倒す — issue は `ready-for-human` に落ち、その thread は未解決のまま残る
 - **3b.** worker が対応不能と判断した (解消できない conflict / 手元で再現できない CI 失敗等)
@@ -141,7 +141,7 @@ Cockburn『ユースケース実践ガイド』(Writing Effective Use Cases) の
 1. CLI が分類できない観測を `anomaly` 指示として書き、orchestrator を起動する
 2. orchestrator が外部 store を読み直して状況を確かめる
 3. orchestrator が「様子見 (見送り)」を既定に、放置すると誤った着手や二重作業が起きると読めた issue だけを「人へ返す」と判断する
-4. orchestrator が anomaly の issue ごとの判断と理由を決定 file に書いて終了する。CLI が網羅を検査して log へ写す
+4. orchestrator が anomaly の issue ごとの判断と理由を決定ファイルに書いて終了する。CLI が網羅を検査して log へ写す
 
 **Extensions**
 

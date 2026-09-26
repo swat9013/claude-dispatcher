@@ -16,7 +16,7 @@ dispatcher は、自分の repo で回したい第三者に配る汎用ツール
 配り方には次の制約がある。
 
 - cron の最小 PATH からも確実に起動できる、安定した path が要る
-- 契約 (2) と CLI (1) の版が食い違うと、決定 file の形・条件カタログ・検査が噛み合わず、黙って壊れる
+- 契約 (2) と CLI (1) の版が食い違うと、決定ファイルの形・条件カタログ・検査が噛み合わず、黙って壊れる
 - 利用者の環境に余分な runtime を要求したくない
 
 ## Decision
@@ -26,10 +26,8 @@ dispatcher は、自分の repo で回したい第三者に配る汎用ツール
 - 配布は `go install github.com/swat9013/claude-dispatcher/cmd/claude-dispatcher@<tag>` と、GoReleaser で GitHub Releases に置く macOS / Linux の binary
 - orchestrator には契約を skill としてではなく prompt として直接渡す。plugin の skill 名に依存しないので、契約と CLI の版が必ず一致する
 - 契約の中で原則索引を指す path は、CLI が解決した絶対 path を埋め込む
-- plugin の install 先は Claude Code の `~/.claude/plugins/installed_plugins.json` から plugin 名 `swat-skills` の entry の `installPath` を引く
-  - scope の選択順: `projectPath` が cwd と一致する project scope → user scope → どちらも無ければ `~/.claude/skills/swat-skills` (Claude Code が in-place で読む skills ディレクトリ)
-  - 別 marketplace 由来の `swat-skills` entry が複数あれば、どれを使うか決められないので loud に止める
-  - 版の照合・互換検査はしない。常に install 済みの版を使い、playbook の frontmatter (`metadata.deliverable` / `dispatch-when`) や名前が変わって壊れたら、そのとき対処する
+- plugin の install 先は、Claude Code が記録する install 情報から実行時に解決する (手順の正本は `docs/design/system.md` §11)。crontab にも config にも plugin の path を書かせない
+- 版の照合・互換検査はしない。常に install 済みの版を使い、playbook の frontmatter や名前が変わって壊れたら、そのとき対処する
 
 ## Consequences
 
@@ -42,7 +40,7 @@ dispatcher は、自分の repo で回したい第三者に配る汎用ツール
 ### 悪い影響 / 制約
 
 - plugin `swat-skills` の変更で CLI が実行時に壊れうる。互換検査を持たないので、検知は tick の error か worker の失敗になる
-- 決定 file の形を、埋め込んだ契約 (orchestrator が読む例) と `docs/design/formats.md` の両方が持つ。一致をテストで検査する
+- 決定ファイルの形を、埋め込んだ契約 (orchestrator が読む例) と `docs/design/formats.md` の両方が持つ。一致をテストで検査する
 - `installed_plugins.json` は Claude Code の内部 file で、形が変わると解決が壊れる。解決は 1 箇所に閉じ、失敗は loud にする
 
 ## Alternatives considered
@@ -57,7 +55,7 @@ dispatcher は、自分の repo で回したい第三者に配る汎用ツール
 
 ### 契約を plugin の skill に残し、CLI だけを分離する
 
-- 却下理由: 契約と CLI の版が 2 系統に割れ、決定 file の形や条件カタログが食い違っても検知できない
+- 却下理由: 契約と CLI の版が 2 系統に割れ、決定ファイルの形や条件カタログが食い違っても検知できない
 
 ### playbook を本 repo に取り込む
 

@@ -5,9 +5,9 @@
 
 ## Context
 
-dispatcher は project ごとに、人が書く宣言 config と、tick が書く痕跡 (log / 指示ファイル / 決定 file / worker log / lock) を持つ。
+dispatcher は project ごとに、人が書く宣言 config と、tick が書く痕跡 (log / 指示ファイル / 決定ファイル / worker log / lock) を持つ。
 
-- orchestrator は Claude Code の sandbox の中で決定 file と引き渡し本文を書く。sandbox で書き込みを許す範囲は狭いほどよい
+- orchestrator は Claude Code の sandbox の中で決定ファイルと引き渡し本文を書く。sandbox で書き込みを許す範囲は狭いほどよい
 - 宣言 config には置き場 repo の綴りと、任意で認証 token の file の path が入る。LLM のセッションが書き換えてよい対象ではない
 - 動かすには利用者の Claude Code の settings に entry が要る (sandbox の書き込み許可、gh を sandbox の外で実行させる指定)。settings の運用は利用者ごとに違う
 
@@ -16,10 +16,7 @@ dispatcher は project ごとに、人が書く宣言 config と、tick が書�
 **宣言 config は `${XDG_CONFIG_HOME:-~/.config}/claude-dispatcher/<project>/`、tick の痕跡は `${XDG_STATE_HOME:-~/.local/state}/claude-dispatcher/<project>/` に置く。macOS でも XDG に揃える。Claude Code の settings は CLI が書かず、`doctor` が要る entry を表示する。**
 
 - sandbox の書き込み許可は state dir だけで足りる。config は sandbox から書けないまま保てる
-- `doctor` が表示する entry:
-  - `sandbox.filesystem.allowWrite` に state dir
-  - `sandbox.excludedCommands` に `gh` (orchestrator / worker の tracker 操作が credential を読めるように)
-  - `sandbox.excludedCommands` に `claude-dispatcher` (セッションの中から `status` / `doctor` を撃ったとき、中の gh が credential を読めるように)
+- `doctor` が表示する entry の一覧の正本は `docs/design/system.md` §11
 - 置き場の場所は `paths --json` で引ける (外部の読み手が log を読むため)
 
 ## Consequences
