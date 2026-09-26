@@ -49,7 +49,8 @@ func (r Roots) Projects() ([]string, error) {
 	}
 	projects := []string{}
 	for _, e := range entries {
-		if !e.IsDir() || !ValidProjectName(e.Name()) {
+		// dotfiles 等から symlink で置いた project dir も数えるので、DirEntry の種別ではなく config.toml を stat で見る
+		if !ValidProjectName(e.Name()) {
 			continue
 		}
 		if info, err := os.Stat(r.Project(e.Name()).ConfigFile()); err == nil && !info.IsDir() {

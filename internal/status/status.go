@@ -23,16 +23,22 @@ import (
 // Unknown は外部 process が失敗して確かめられなかった値 (表でも JSON でも同じ綴り)。
 const Unknown = "?"
 
-// Probes は外部 process の読み口。どれも失敗したら error を返し、status はその列を Unknown にして注記を残す。
+// Probes は project ごとに撃つ外部 process の読み口。失敗したら error を返し、status はその列を Unknown にして注記を残す。
 type Probes struct {
 	// Gh は token を載せた env で gh を撃つ Runner を返す (config の token file を読むので config を受け取る)
 	Gh func(config.Config) (github.Runner, error)
 	// Git は cwd の clone で git を撃つ
 	Git func(args ...string) (string, error)
-	// ClaudeAgents は `claude agents --json` の出力を返す
-	ClaudeAgents func() (string, error)
-	// Processes は生きている process の pid → command 行を返す (起動記録ごとに ps を撃たない)
-	Processes func() (map[int]string, error)
+}
+
+// Machine はマシン全体で 1 つの観測 (process の一覧と claude のセッション一覧)。1 回の描画で 1 度だけ読み、全 project で共有する。
+type Machine struct {
+	// Processes は生きている process の pid → command 行
+	Processes    map[int]string
+	ProcessesErr error
+	// Agents は `claude agents --json` の出力
+	Agents    string
+	AgentsErr error
 }
 
 // Report は 1 project の像。表と `--json` の共通の形。
@@ -80,20 +86,27 @@ type Branch struct {
 }
 
 // Collect は 1 project の今を組む。
-func Collect(project paths.Project, home string, probes Probes, now time.Time) Report {
-	r := &collector{report: Report{Project: project.Name, Workers: []Worker{}, Notes: []string{}}, probes: probes}
-	lines, broken, err := ticklog.Read(project.LogFile())
-	switch {
-	case err != nil:
-		r.note("log.jsonl を読めない (%v)", err)
-	case broken > 0:
-		r.note("%s の読めない %d 行を飛ばした", project.LogFile(), broken)
-	}
-	processes, procErr := probes.Processes()
+func Collect(project paths.Project, home string, machine Machine, probes Probes, now time.Time) Report {
+	r := &collector{report: Report{Project: project.Name, Workers: []Worker{}, Notes: []string{}}, probes: probes, machine: machine}
+	processes, procErr := machine.Processes, machine.ProcessesErr
 	if procErr != nil {
 		r.note("process の一覧を読めない — tick の実行中と worker の生死は ? (%v)", procErr)
 	}
-	r.report.Tick = tickState(project.Name, lines, processes, procErr)
+	lines, broken, err := ticklog.Read(project.LogFile())
+	if err != nil {
+		// 途中までの行から最終 tick や起動記録を出すと古い像を今として見せるので、log からは何も出さない
+		r.note("log.jsonl を読めない — 最終 tick と worker は出さない (%v)", err)
+		unknown := Unknown
+		r.report.Tick = Tick{Running: tickRunning(project.Name, processes, procErr), LastTS: &unknown, LastResult: &unknown}
+		return r.report
+	}
+	if broken > 0 {
+		r.note("%s の読めない %d 行を飛ばした", project.LogFile(), broken)
+	}
+	r.report.Tick = Tick{Running: tickRunning(project.Name, processes, procErr)}
+	if last, ok := ticklog.Last(lines); ok {
+		r.report.Tick.LastTS, r.report.Tick.LastResult = &last.TS, &last.Result
+	}
 
 	var spawns []spawnRecord
 	for _, line := range lines {
@@ -123,7 +136,7 @@ func Collect(project paths.Project, home string, probes Probes, now time.Time) R
 		}
 		return a.tick.At.Compare(b.tick.At)
 	})
-	for _, s := range spawns {
+	for i, s := range spawns {
 		alive := any(Unknown)
 		if procErr == nil {
 			alive = isWorkerProcess(processes[s.PID], s.SessionID)
@@ -132,8 +145,11 @@ func Collect(project paths.Project, home string, probes Probes, now time.Time) R
 		if wip != nil {
 			issueWIP = slices.Contains(wip, s.Issue)
 		}
+		// wip はその issue の今の worker (最新の起動記録) にだけ掛ける。古い起動記録に掛けると、再入で起こし直した
+		// issue の前回の worker が「exited + wip」(stale wip の手掛かり) に見える。古い起動は process が生きているときだけ載せる
+		latest := i == len(spawns)-1 || spawns[i+1].Issue != s.Issue
 		// 確かめられなかった (?) だけでは載せない — 載せると log に残る過去の起動が全部並ぶ
-		if alive != true && issueWIP != true {
+		if alive != true && (!latest || issueWIP != true) {
 			continue
 		}
 		state := Unknown
@@ -157,8 +173,9 @@ type spawnRecord struct {
 }
 
 type collector struct {
-	report Report
-	probes Probes
+	report  Report
+	probes  Probes
+	machine Machine
 }
 
 func (r *collector) note(format string, args ...any) {
@@ -212,7 +229,7 @@ func lookup[K comparable](table any, key K) any {
 }
 
 func (r *collector) sessions() any {
-	out, err := r.probes.ClaudeAgents()
+	out, err := r.machine.Agents, r.machine.AgentsErr
 	var rows []struct {
 		ID        string `json:"id"`
 		Status    string `json:"status"`
@@ -243,8 +260,10 @@ func (r *collector) branches(cfg config.Config, issues []int) any {
 		r.note("cwd の clone を読めない — BRANCH は ? (%v)", err)
 		return Unknown
 	}
-	origin = strings.TrimSuffix(strings.TrimSpace(origin), ".git")
-	if !strings.HasSuffix(origin, "/"+cfg.CLRepo.String()) && !strings.HasSuffix(origin, ":"+cfg.CLRepo.String()) {
+	// GitHub の owner / name は大文字小文字を区別しない
+	origin = strings.TrimSuffix(strings.TrimSuffix(strings.TrimSpace(origin), "/"), ".git")
+	want := strings.ToLower(cfg.CLRepo.String())
+	if lower := strings.ToLower(origin); !strings.HasSuffix(lower, "/"+want) && !strings.HasSuffix(lower, ":"+want) {
 		r.note("cwd の clone (%s) は %s でない — BRANCH は ? (その clone を cwd にして撃つ)", origin, cfg.CLRepo)
 		return Unknown
 	}
@@ -311,19 +330,11 @@ func isWorkerProcess(command, sessionID string) bool {
 	return command != "" && sessionID != "" && strings.Contains(command, sessionID)
 }
 
-func tickState(project string, lines []ticklog.Line, processes map[int]string, procErr error) Tick {
-	t := Tick{Running: any(Unknown)}
-	if procErr == nil {
-		t.Running = tickRunning(project, processes)
+// tickRunning は `claude-dispatcher … tick <project>` の process (試運転を除く) が居るか。一覧を読めなければ Unknown。
+func tickRunning(project string, processes map[int]string, procErr error) any {
+	if procErr != nil {
+		return Unknown
 	}
-	if last, ok := ticklog.Last(lines); ok {
-		t.LastTS, t.LastResult = &last.TS, &last.Result
-	}
-	return t
-}
-
-// tickRunning は `claude-dispatcher … tick <project>` の process (試運転を除く) が居るか。
-func tickRunning(project string, processes map[int]string) bool {
 	for _, command := range processes {
 		fields := strings.Fields(command)
 		for i := 0; i+2 < len(fields); i++ {
@@ -334,4 +345,12 @@ func tickRunning(project string, processes map[int]string) bool {
 		}
 	}
 	return false
+}
+
+// ReadMachine はマシン全体の観測を 1 度読む。
+func ReadMachine(processes func() (map[int]string, error), agents func() (string, error)) Machine {
+	var m Machine
+	m.Processes, m.ProcessesErr = processes()
+	m.Agents, m.AgentsErr = agents()
+	return m
 }

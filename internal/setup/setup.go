@@ -182,6 +182,11 @@ func requiredLabels(cfg config.Config) []label {
 
 func (r *run) ensureLabels(cfg config.Config) int {
 	gh, err := r.o.Gh(cfg)
+	if config.IsError(err) {
+		// token file の不備は tick と同じく config の誤り
+		fmt.Fprintln(r.o.Stderr, err)
+		return exitConfig
+	}
 	if err != nil {
 		return r.fail("gh を撃てない: %v", err)
 	}

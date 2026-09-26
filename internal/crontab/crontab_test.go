@@ -42,3 +42,12 @@ func TestAppendKeepsTheCurrentLines(t *testing.T) {
 		}
 	}
 }
+
+func TestLineEscapesPercentSignsThatCronWouldTurnIntoNewlines(t *testing.T) {
+	got := crontab.Line("/home/me/100%work", "/bin/claude-dispatcher", "widgets", "/s/cron.log")
+
+	want := `*/5 * * * * cd '/home/me/100\%work' && /bin/claude-dispatcher tick widgets >> /s/cron.log 2>&1`
+	if got != want {
+		t.Fatalf("Line = %s\nwant   %s", got, want)
+	}
+}

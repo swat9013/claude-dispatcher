@@ -55,6 +55,22 @@ func TestPathsWithoutAProjectListTheRootsAndTheProjectsThatHaveAConfig(t *testin
 	}
 }
 
+func TestPathsCountAProjectDirPlacedAsASymlink(t *testing.T) {
+	s := newSandbox(t)
+	dotfiles := filepath.Join(s.root, "dotfiles", "linked")
+	mustMkdir(t, dotfiles)
+	mustWrite(t, filepath.Join(dotfiles, "config.toml"), s.defaultConfig())
+	if err := os.Symlink(dotfiles, filepath.Join(s.configRoot, "linked")); err != nil {
+		t.Fatal(err)
+	}
+
+	doc := s.pathsJSON()
+
+	if !slices.Contains(asList(t, doc["projects"]), any("linked")) {
+		t.Fatalf("symlink の project dir を数えていない: %v", doc["projects"])
+	}
+}
+
 func TestPathsFollowTheHomeDefaultsWhenXDGIsUnset(t *testing.T) {
 	s := newSandboxWithHomeDefaults(t)
 

@@ -155,6 +155,43 @@ func TestStatusLeavesOutAWorkerThatExitedAndHasNoWip(t *testing.T) {
 	}
 }
 
+func TestStatusListsOnlyTheLatestSpawnOfAnIssueWhoseEarlierWorkerExited(t *testing.T) {
+	s := newSandbox(t)
+	s.statusScenario()
+	later := map[string]any{
+		"ts": "2026-09-26T03:30:00.000000Z", "project": s.project, "cwd": s.clone, "result": "ok",
+		"spawned": []map[string]any{{"issue": 42, "kind": "reenter", "pid": workerPID + 1, "log": "/y.log", "session_id": "later-session"}},
+	}
+	f, err := os.OpenFile(s.logFile(), os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Fprintln(f, mustJSON(t, later))
+	f.Close()
+	s.setProcesses(fmt.Sprintf("%d claude -p x --session-id later-session", workerPID+1))
+	s.setWip(42)
+
+	r := s.statusPS()
+
+	if n := strings.Count(r.stdout, "\n#42 "); n != 1 || !strings.Contains(strings.Join(workerRow(r.stdout, 42), " "), "reenter running") {
+		t.Fatalf("#42 の行が最新の起動 1 行でない (%d 行):\n%s", n, r.stdout)
+	}
+}
+
+func TestStatusMatchesTheCloneToTheCLRepoIgnoringCase(t *testing.T) {
+	s := newSandbox(t)
+	s.statusScenario()
+	s.respond("git", stubwire.Rule{ArgsPrefix: []string{"remote", "get-url", "origin"}, Stdout: "https://github.com/ACME/Widgets/\n"})
+	s.workerAlive()
+	s.setWip(42)
+
+	r := s.statusPS()
+
+	if row := workerRow(r.stdout, 42); !strings.Contains(strings.Join(row, " "), "+3") {
+		t.Fatalf("大文字小文字違いの origin を別の repo と見た: %v\n%s", row, r.stdout)
+	}
+}
+
 func TestStatusJSONCarriesTheWorkers(t *testing.T) {
 	s := newSandbox(t)
 	s.statusScenario()
@@ -222,10 +259,14 @@ func TestStatusOfAnUnknownProjectIsAUsageError(t *testing.T) {
 	assertExit(t, r, 2)
 }
 
-func TestStatusWatchRejectsANonPositiveInterval(t *testing.T) {
-	s := newSandbox(t)
+func TestStatusWatchRejectsAnIntervalOutsideItsRange(t *testing.T) {
+	for _, interval := range []string{"0", "0.5", "NaN", "Inf", "1e10"} {
+		t.Run(interval, func(t *testing.T) {
+			s := newSandbox(t)
 
-	r := s.run("status", "watch", s.project, "--interval", "0")
+			r := s.run("status", "watch", s.project, "--interval", interval)
 
-	assertExit(t, r, 2)
+			assertExit(t, r, 2)
+		})
+	}
 }

@@ -98,6 +98,16 @@ func TestSetupWithAMisspelledConfigStopsNamingIt(t *testing.T) {
 	s.assertNames(r.stderr, "readylabel")
 }
 
+func TestSetupWithAMissingTokenFileIsAConfigError(t *testing.T) {
+	s := newSetupSandbox(t)
+	s.writeConfig(s.defaultConfig() + "\n[auth]\ntoken_file = \"~/no-such-token\"\n")
+
+	r := s.setup("y\n")
+
+	assertExit(t, r, 2)
+	s.assertNames(r.stderr, "token_file")
+}
+
 func TestSetupCreatesMissingLabelsOnlyWhenApproved(t *testing.T) {
 	for _, tc := range []struct {
 		name    string

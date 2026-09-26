@@ -3,7 +3,9 @@ package ticklog
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
+	"io"
 	"os"
 	"time"
 )
@@ -25,7 +27,7 @@ type Spawned struct {
 }
 
 // Read は file の tick 行 (orchestrator 行は除く) を順に返す。読めない行 (途中で切れた行など) は飛ばし、その件数を返す。
-// file が無ければ行も無い。
+// file が無ければ行も無い。読み出しが途中で失敗したら行は返さない (途中までの行を全体として見せない)。
 func Read(file string) (lines []Line, broken int, err error) {
 	f, err := os.Open(file)
 	if os.IsNotExist(err) {
@@ -35,33 +37,46 @@ func Read(file string) (lines []Line, broken int, err error) {
 		return nil, 0, err
 	}
 	defer f.Close()
-	scanner := bufio.NewScanner(f)
-	// 指示の多い tick の行は既定の 64KiB を超えうる
-	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
-	for scanner.Scan() {
-		if len(scanner.Bytes()) == 0 {
-			continue
+	// 行の長さに上限を置かない (bufio.Scanner は上限を超えた行で読むのを止め、それより後の tick が見えなくなる)
+	reader := bufio.NewReader(f)
+	for {
+		raw, readErr := reader.ReadBytes('\n')
+		if readErr != nil && readErr != io.EOF {
+			return nil, 0, readErr
 		}
-		var raw struct {
-			Line
-			Actor *string `json:"actor"`
-		}
-		if err := json.Unmarshal(scanner.Bytes(), &raw); err != nil {
+		if line, ok, bad := parse(raw); bad {
 			broken++
-			continue
+		} else if ok {
+			lines = append(lines, line)
 		}
-		if raw.Actor != nil {
-			continue
+		if readErr == io.EOF {
+			return lines, broken, nil
 		}
-		at, err := time.Parse(time.RFC3339Nano, raw.TS)
-		if err != nil {
-			broken++
-			continue
-		}
-		raw.Line.At = at
-		lines = append(lines, raw.Line)
 	}
-	return lines, broken, scanner.Err()
+}
+
+// parse は 1 行を tick 行として読む。ok は tick 行だった、bad は読めなかった (空行と orchestrator 行はどちらでもない)。
+func parse(raw []byte) (line Line, ok, bad bool) {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 {
+		return Line{}, false, false
+	}
+	var doc struct {
+		Line
+		Actor *string `json:"actor"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return Line{}, false, true
+	}
+	if doc.Actor != nil {
+		return Line{}, false, false
+	}
+	at, err := time.Parse(time.RFC3339Nano, doc.TS)
+	if err != nil {
+		return Line{}, false, true
+	}
+	doc.Line.At = at
+	return doc.Line, true, false
 }
 
 // Last は最後の tick 行を返す。無ければ false。

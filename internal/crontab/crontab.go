@@ -15,10 +15,12 @@ const Schedule = "*/5 * * * *"
 
 // Line は project の tick を撃つ crontab の 1 行。cron の PATH に binary は無いので self は絶対 path で書く (system.md §9)。
 func Line(clone, self, project, cronLog string) string {
-	return fmt.Sprintf("%s cd %s && %s tick %s >> %s 2>&1", Schedule, shellQuote(clone), shellQuote(self), project, shellQuote(cronLog))
+	command := fmt.Sprintf("cd %s && %s tick %s >> %s 2>&1", shellQuote(clone), shellQuote(self), project, shellQuote(cronLog))
+	// cron は command の中の % を (quote の中でも) 改行に変えるので、\% で渡す
+	return Schedule + " " + strings.ReplaceAll(command, "%", `\%`)
 }
 
-var plainWord = regexp.MustCompile(`^[A-Za-z0-9_./~:@%+=,-]+$`)
+var plainWord = regexp.MustCompile(`^[A-Za-z0-9_./~:@+=,-]+$`)
 
 // shellQuote は shell が 1 語として読む形にする。特殊な文字が無ければそのまま (人が crontab を読みやすいように)。
 func shellQuote(s string) string {

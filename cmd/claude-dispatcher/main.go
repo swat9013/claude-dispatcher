@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -240,7 +241,11 @@ func newLauncher(cwd string) func(env []string) (launch.Launcher, error) {
 
 // --- status ---
 
-const defaultWatchInterval = 5 * time.Second
+const (
+	defaultWatchInterval = 5 * time.Second
+	minWatchInterval     = time.Second
+	maxWatchInterval     = 24 * time.Hour
+)
 
 func runStatus(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 || (args[0] != "ps" && args[0] != "watch") {
@@ -257,9 +262,10 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 		case arg == "--interval" && watch && i+1 < len(args):
 			i++
 			seconds, err := strconv.ParseFloat(args[i], 64)
-			if err != nil || seconds <= 0 {
-				// 0 は gh / git / claude を休みなく撃ち続け、tick と同じ gh の rate limit を食い潰す
-				return usageError(stderr, "--interval は 0 より大きい秒数: %s", args[i])
+			// 短すぎる周期は gh / git / claude を休みなく撃ち続け、tick と同じ gh の rate limit を食い潰す。
+			// NaN / Inf / 桁あふれは Duration にすると 0 以下になるので、範囲で弾く
+			if err != nil || !(seconds >= minWatchInterval.Seconds() && seconds <= maxWatchInterval.Seconds()) {
+				return usageError(stderr, "--interval は %g 以上 %g 以下の秒数: %s", minWatchInterval.Seconds(), maxWatchInterval.Seconds(), args[i])
 			}
 			interval = time.Duration(seconds * float64(time.Second))
 		case strings.HasPrefix(arg, "-"):
@@ -295,11 +301,13 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "project が 1 つも無い: %s\n", e.roots.Config)
 		return exitUsage
 	}
-	probes := e.statusProbes()
+	probes := status.Probes{Gh: e.ghFor, Git: e.git}
 	collect := func() []status.Report {
+		// process の一覧と claude のセッション一覧はマシンで 1 つなので、描画ごとに 1 度だけ読んで全 project で共有する
+		machine := status.ReadMachine(e.processes, func() (string, error) { return e.output("claude", "agents", "--json") })
 		reports := make([]status.Report, 0, len(projects))
 		for _, name := range projects {
-			reports = append(reports, status.Collect(e.roots.Project(name), e.home, probes, time.Now()))
+			reports = append(reports, status.Collect(e.roots.Project(name), e.home, machine, probes, time.Now()))
 		}
 		return reports
 	}
@@ -324,26 +332,20 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-func (e environment) statusProbes() status.Probes {
-	return status.Probes{
-		Gh:           e.ghFor,
-		Git:          e.git,
-		ClaudeAgents: func() (string, error) { return e.output("claude", "agents", "--json") },
-		Processes: func() (map[int]string, error) {
-			out, err := e.output("ps", "-A", "-o", "pid=,command=")
-			if err != nil {
-				return nil, err
-			}
-			processes := map[int]string{}
-			for _, line := range strings.Split(out, "\n") {
-				pid, command, _ := strings.Cut(strings.TrimSpace(line), " ")
-				if n, err := strconv.Atoi(pid); err == nil {
-					processes[n] = strings.TrimSpace(command)
-				}
-			}
-			return processes, nil
-		},
+// processes は生きている process の pid → command 行。
+func (e environment) processes() (map[int]string, error) {
+	out, err := e.output("ps", "-A", "-o", "pid=,command=")
+	if err != nil {
+		return nil, err
 	}
+	processes := map[int]string{}
+	for _, line := range strings.Split(out, "\n") {
+		pid, command, _ := strings.Cut(strings.TrimSpace(line), " ")
+		if n, err := strconv.Atoi(pid); err == nil {
+			processes[n] = strings.TrimSpace(command)
+		}
+	}
+	return processes, nil
 }
 
 // --- setup / doctor ---
@@ -360,9 +362,9 @@ func runSetup(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	self, err := os.Executable()
+	self, err := selfForCrontab(e.env)
 	if err != nil {
-		fmt.Fprintf(stderr, "自分の path を解決できない: %v\n", err)
+		fmt.Fprintln(stderr, err)
 		return 1
 	}
 	return setup.Run(setup.Options{
@@ -402,6 +404,28 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 		Gh:      e.ghFor,
 		Crontab: e.crontab,
 	})
+}
+
+// selfForCrontab は crontab の行に埋める自分の絶対 path。撃たれたときの綴り (PATH で引いた path) を使う —
+// os.Executable は symlink を解決した実体 (Homebrew の版つき Cellar の path 等) を返すことがあり、更新で消える。
+// go run の一時 build は crontab から撃てないので拒む。
+func selfForCrontab(env []string) (string, error) {
+	self := os.Args[0]
+	if !strings.Contains(self, string(os.PathSeparator)) {
+		found, err := deps.Lookup(self, env)
+		if err != nil {
+			return "", fmt.Errorf("自分の path を解決できない: %w", err)
+		}
+		self = found
+	}
+	abs, err := filepath.Abs(self)
+	if err != nil {
+		return "", fmt.Errorf("自分の path を解決できない: %w", err)
+	}
+	if strings.Contains(abs, string(os.PathSeparator)+"go-build") {
+		return "", fmt.Errorf("go run の一時 build (%s) は crontab に書けない。go install 等で置いた binary から撃つ", abs)
+	}
+	return abs, nil
 }
 
 // --- paths ---
