@@ -250,10 +250,10 @@ claude-dispatcher status ps [<project>] [--json]
 claude-dispatcher status watch [<project>] [--interval <秒>]
 ```
 
-project を省略すると、config root の下の全 project (§9 の `projects`) を並べる。`watch` は `ps` の表を `--interval` 秒 (既定 5、0 より大きい数) ごとに描き直し、Ctrl-C で終わる。実装 repo の clone を cwd にして撃つ (BRANCH 列は cwd の clone の作業ツリーを読む)。
+project を省略すると、config root の下の全 project (§9 の `projects`) を並べる。`watch` は `ps` の表を `--interval` 秒 (既定 5、1 以上 86400 以下) ごとに描き直し、Ctrl-C で終わる。実装 repo の clone を cwd にして撃つ (BRANCH 列は cwd の clone の作業ツリーを読む)。
 
 - **読み取り専用**: state dir にも外部 store にも書かない。lock file も作らず、lock も取らない (取ると、その一瞬に重なった tick が `locked` の行を残す)。tick が走っているかは process の一覧 (`claude-dispatcher … tick <project>` の process) で見る
-- **載せる worker**: log.jsonl の tick 行の `spawned` のうち、issue に `dispatcher:wip` が付いているか、process が生きているもの。process の生死は pid の command 行に `session_id` が在るかで見る (pid は再利用される)。process が死んでいて wip が残っている行が stale wip の手掛かり (system.md §1)
+- **載せる worker**: log.jsonl の tick 行の `spawned` のうち、issue ごとの最新の起動記録で issue に `dispatcher:wip` が付いているか process が生きているもの、と、それより古い起動記録で process が生きているもの (wip は issue の今の worker にだけ掛ける。古い起動記録に掛けると、再入で起こし直した issue の前回の worker が stale wip に見える)。process の生死は pid の command 行に `session_id` が在るかで見る (pid は再利用される)。process が死んでいて wip が残っている行が stale wip の手掛かり (system.md §1)
 - 外部 process (gh / git / claude / ps) が失敗した列は `?` にして表は出し、何を読めなかったかを `! <理由>` の注記行に残す
 
 表は project ごとに 1 段:
