@@ -3,6 +3,7 @@ package tick_test
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -137,15 +138,64 @@ func TestOrchestratorIsLaunchedThroughTheSeamWithTheInstructionFile(t *testing.T
 	}
 }
 
-func TestDecidedWorkersAreLaunchedThroughTheSeamAndLogged(t *testing.T) {
+func TestDecidedWorkersAreLaunchedThroughTheSeam(t *testing.T) {
 	e := newEnv(t)
 	launcher := &fakeLauncher{orchestrate: e.writesDecisions, spawn: launchesWorkers}
 
 	e.run(fakeGh{issues: twoCandidates}, launcher)
 
-	if spawned := e.tickLine()["spawned"].([]any); len(launcher.workers) != 2 || len(spawned) != 2 {
-		t.Fatalf("worker の起動 %d 件 / spawned = %v", len(launcher.workers), spawned)
+	if len(launcher.workers) != 2 {
+		t.Fatalf("worker の起動 %d 件", len(launcher.workers))
 	}
+}
+
+func TestLaunchedWorkersAreListedOnTheTickLine(t *testing.T) {
+	e := newEnv(t)
+
+	e.run(fakeGh{issues: twoCandidates}, &fakeLauncher{orchestrate: e.writesDecisions, spawn: launchesWorkers})
+
+	if spawned := e.tickLine()["spawned"].([]any); len(spawned) != 2 {
+		t.Fatalf("spawned = %v", spawned)
+	}
+}
+
+func TestTickThatCannotWriteItsLineLeavesTheReasonOnStderr(t *testing.T) {
+	e := newEnv(t)
+	must(t, os.Mkdir(e.project.LogFile(), 0o755)) // log.jsonl の位置に dir を置いて append を失敗させる
+
+	e.run(fakeGh{issues: "[]"}, &fakeLauncher{})
+
+	if !strings.Contains(e.stderr.String(), "tick=- result=ok") || !strings.Contains(e.stderr.String(), "log.jsonl に書けない") {
+		t.Fatalf("stderr = %q", e.stderr.String())
+	}
+}
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("broken pipe") }
+
+func TestDryRunThatCannotWriteStdoutFails(t *testing.T) {
+	e := newEnv(t)
+
+	exit := tick.DryRun(tick.Options{
+		Project: "widgets", Roots: e.roots, Home: e.home, Cwd: e.cwd, Env: []string{"HOME=" + e.home, "PATH=" + e.fakeDeps()},
+		Now: now, Stdout: failingWriter{}, Stderr: &e.stderr,
+		Gh: func([]string) (github.Runner, error) { return fakeGh{issues: "[]"}, nil },
+	})
+
+	if exit != 1 || !strings.Contains(e.stderr.String(), "stdout に書けない") {
+		t.Fatalf("exit %d / stderr = %q", exit, e.stderr.String())
+	}
+}
+
+// fakeDeps は試運転が PATH で探す依存 CLI (中身は空) を置いた dir を返す。
+func (e *env) fakeDeps() string {
+	dir := filepath.Join(e.t.TempDir(), "bin")
+	must(e.t, os.MkdirAll(dir, 0o755))
+	for _, name := range []string{"gh", "claude"} {
+		must(e.t, os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\n"), 0o755))
+	}
+	return dir
 }
 
 // panicsOnSecondWorker は 2 件目の worker の起動で壊れる launcher (1 件目は起動済み)。

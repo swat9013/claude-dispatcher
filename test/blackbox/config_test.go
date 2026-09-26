@@ -414,15 +414,16 @@ func TestGhFailureOtherThanAnUnseenRepoDuringVerificationIsAnError(t *testing.T)
 	}
 }
 
-func TestLabelsBeyondOneRoundTripAreAnErrorRatherThanAConfigError(t *testing.T) {
+// label を名前で 1 つずつ確かめるので、repo の label の総数では止まらない
+func TestRepoWithManyLabelsPassesTheVerification(t *testing.T) {
 	s := newSandbox(t)
 	names := []string{wipLabel, humanLabel, defaultReadyLabel}
-	for i := len(names); i < 500; i++ {
+	for i := len(names); i < 1000; i++ {
 		names = append(names, fmt.Sprintf("label-%d", i))
 	}
 	s.setLabels(names...)
 
 	r := s.tick()
 
-	s.assertOutcome(r, outcomeError)
+	s.assertOutcome(r, outcomeOK)
 }

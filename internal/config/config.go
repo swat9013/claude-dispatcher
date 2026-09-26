@@ -14,8 +14,6 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
-
-	"github.com/swat9013/claude-dispatcher/internal/github"
 )
 
 // 機構が付ける label。着手可 label と triage label だけが config で綴りを変えられる
@@ -44,10 +42,10 @@ func IsError(err error) bool {
 type Config struct {
 	Path        string
 	Tracker     string
-	IssueRepo   github.Repo
+	IssueRepo   Repo
 	ReadyLabel  string
-	TriageLabel string      // 空なら残タスクの起票に label を付けない
-	CLRepo      github.Repo // [cl] を省くと IssueRepo
+	TriageLabel string // 空なら残タスクの起票に label を付けない
+	CLRepo      Repo   // [cl] を省くと IssueRepo
 	MaxWIP      int
 	// TokenFile / ClaudeTokenFile は `~` を展開した絶対 path。空なら書かれていない
 	TokenFile       string
@@ -102,8 +100,7 @@ func Load(path, home string) (Config, error) {
 		for _, key := range unknown {
 			names = append(names, key.String())
 		}
-		return Config{}, errorf("%s: 未知の綴り %s (許すのは [issue] repo / ready_label / triage_label / tracker, [cl] repo, [limits] max_wip, [auth] token_file / claude_token_file)",
-			path, strings.Join(names, ", "))
+		return Config{}, errorf("%s: 未知の綴り %s (許す table と key は docs/design/formats.md §2)", path, strings.Join(names, ", "))
 	}
 
 	c := Config{Path: path, Tracker: "gh"}
@@ -150,12 +147,12 @@ func Load(path, home string) (Config, error) {
 		// 同じだと worker の起票が次 tick の候補になり、dispatcher が自分の作業を自己増殖させる
 		return Config{}, errorf("%s: [issue].triage_label が ready_label と同じ綴り %q", path, c.ReadyLabel)
 	}
-	if c.IssueRepo, err = github.ParseRepo(issueRepo); err != nil {
+	if c.IssueRepo, err = ParseRepo(issueRepo); err != nil {
 		return Config{}, errorf("%s: [issue].%v", path, err)
 	}
 	c.CLRepo = c.IssueRepo
 	if clRepo != "" {
-		if c.CLRepo, err = github.ParseRepo(clRepo); err != nil {
+		if c.CLRepo, err = ParseRepo(clRepo); err != nil {
 			return Config{}, errorf("%s: [cl].%v", path, err)
 		}
 	}

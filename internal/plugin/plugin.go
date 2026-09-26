@@ -40,6 +40,7 @@ type entry struct {
 // Resolve は installed_plugins.json から swat-skills の installPath を選ぶ。
 // 選択順: projectPath が cwd と一致する project scope → user scope → ~/.claude/skills/swat-skills。
 // 別 marketplace 由来の entry が複数あれば、どれを使うか決められないので止める。
+// 原則索引の file の実在は見ない (設計 doc に無い。error にするかは #15 で決める)。無いと worker は原則を受け取らずに走る。
 func Resolve(home, cwd string) (Install, error) {
 	file := filepath.Join(home, ".claude", "plugins", "installed_plugins.json")
 	raw, err := os.ReadFile(file)
@@ -112,6 +113,7 @@ type StartPlaybook struct {
 
 // StartPlaybooks は frontmatter の metadata に `deliverable: cl` を持つ playbook を集める。
 // 印があるのに `dispatch-when` が無い / frontmatter が読めない playbook は黙って外さず失敗にする。
+// 母集合が空でも失敗にしない (設計 doc に無い。error にするかは #15 で決める)。空だと start は全候補の見送りになる。
 func (i Install) StartPlaybooks() ([]StartPlaybook, error) {
 	files, err := filepath.Glob(filepath.Join(i.procedureDir(), "playbook-*", "SKILL.md"))
 	if err != nil {

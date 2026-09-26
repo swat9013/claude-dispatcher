@@ -120,7 +120,7 @@ type CLBrief struct {
 	Base   string `json:"base"`
 }
 
-// ConditionPointer は立っている条件 1 つと、worker へ渡す対応 playbook の絶対 path
+// ConditionPointer は立っている条件 1 つと、worker へ渡す対応 playbook (Derive の直後は名前、WithPlaybooks の後は絶対 path)
 type ConditionPointer struct {
 	Name     string `json:"name"`
 	Playbook string `json:"playbook"`
@@ -141,8 +141,7 @@ func (i ReenterInstruction) MarshalJSON() ([]byte, error) {
 func (i ReenterInstruction) withPlaybooks(install plugin.Install) (Instruction, error) {
 	conditions := make([]ConditionPointer, 0, len(i.Conditions))
 	for _, c := range i.Conditions {
-		idx := slices.IndexFunc(Conditions, func(known Condition) bool { return known.Name == c.Name })
-		conditions = append(conditions, ConditionPointer{Name: c.Name, Playbook: install.Playbook(Conditions[idx].Playbook)})
+		conditions = append(conditions, ConditionPointer{Name: c.Name, Playbook: install.Playbook(c.Playbook)})
 	}
 	i.Conditions = conditions
 	return i, nil
@@ -243,7 +242,8 @@ func Derive(s Snapshot) []Instruction {
 		var conditions []ConditionPointer
 		for _, c := range Conditions {
 			if c.Holds(cl) {
-				conditions = append(conditions, ConditionPointer{Name: c.Name})
+				// playbook は名前で置き、WithPlaybooks が install 先の絶対 path に置き換える
+				conditions = append(conditions, ConditionPointer{Name: c.Name, Playbook: c.Playbook})
 			}
 		}
 		if len(conditions) > 0 {

@@ -13,7 +13,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
-	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -264,7 +263,7 @@ func (r *run) verifyOnce(cfg config.Config, gh github.Runner) error {
 // config_error にするのは gh が「repo が見えない」「label が無い」と答えたときだけ。gh を起動できない・認証が通らない・
 // 読み切れないといった失敗は綴りを直しても直らないので、そのまま返して classifyGhError に写させる (system.md §8)。
 func verifyConfig(cfg config.Config, gh github.Runner) error {
-	repos := []github.Repo{cfg.IssueRepo}
+	repos := []config.Repo{cfg.IssueRepo}
 	if cfg.CLRepo != cfg.IssueRepo {
 		repos = append(repos, cfg.CLRepo)
 	}
@@ -276,17 +275,17 @@ func verifyConfig(cfg config.Config, gh github.Runner) error {
 			return err
 		}
 	}
-	labels, err := github.Labels(gh, cfg.IssueRepo)
-	if err != nil {
-		return err
-	}
 	required := []string{config.WIPLabel, config.HumanLabel}
 	if cfg.TriageLabel != "" {
 		required = append(required, cfg.TriageLabel)
 	}
 	var missing []string
 	for _, name := range required {
-		if !slices.Contains(labels, name) {
+		exists, err := github.LabelExists(gh, cfg.IssueRepo, name)
+		if err != nil {
+			return err
+		}
+		if !exists {
 			missing = append(missing, name)
 		}
 	}

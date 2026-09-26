@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/swat9013/claude-dispatcher/internal/config"
 	"github.com/swat9013/claude-dispatcher/internal/proc"
 )
 
@@ -97,32 +98,34 @@ func containsAny(text string, markers []string) bool {
 }
 
 // RepoExists は repo が見えるかを確かめる。
-func RepoExists(gh Runner, repo Repo) error {
+func RepoExists(gh Runner, repo config.Repo) error {
 	_, err := gh.Run("repo", "view", repo.String(), "--json", "nameWithOwner")
 	return err
 }
 
-// LabelListLimit は 1 往復で読む label の上限
-const LabelListLimit = 500
+// labelSearchLimit は label の検索 1 往復で読む件数の上限
+const labelSearchLimit = 100
 
-// Labels は repo の label 名を全件返す。
-func Labels(gh Runner, repo Repo) ([]string, error) {
-	out, err := gh.Run("label", "list", "-R", repo.String(), "--json", "name", "--limit", fmt.Sprint(LabelListLimit))
+// LabelExists は repo に name の label があるかを返す。name で検索して綴りの一致を見るので、repo の label の総数に上限を持たない。
+func LabelExists(gh Runner, repo config.Repo, name string) (bool, error) {
+	out, err := gh.Run("label", "list", "-R", repo.String(), "--search", name, "--json", "name", "--limit", fmt.Sprint(labelSearchLimit))
 	if err != nil {
-		return nil, err
+		return false, err
 	}
 	var labels []struct{ Name string }
 	if err := json.Unmarshal(out, &labels); err != nil {
-		return nil, fmt.Errorf("gh label list の出力を読めない: %w", err)
+		return false, fmt.Errorf("gh label list の出力を読めない: %w", err)
 	}
-	if len(labels) >= LabelListLimit {
-		return nil, fmt.Errorf("%w: label が %d 件以上ある (%s)", ErrTruncated, LabelListLimit, repo)
-	}
-	names := make([]string, 0, len(labels))
 	for _, l := range labels {
-		names = append(names, l.Name)
+		if l.Name == name {
+			return true, nil
+		}
 	}
-	return names, nil
+	if len(labels) >= labelSearchLimit {
+		// 検索は名前と説明の部分一致なので、一致する label が上限の外に居るかもしれない
+		return false, fmt.Errorf("%w: label %q の検索結果が %d 件以上ある (%s)", ErrTruncated, name, labelSearchLimit, repo)
+	}
+	return false, nil
 }
 
 // ErrTruncated は 1 往復の上限に達し、観測が全量でないこと。切り詰めた像から指示を出さない
@@ -141,7 +144,7 @@ type Issue struct {
 }
 
 // OpenIssues は repo の open issue を全件返す。
-func OpenIssues(gh Runner, repo Repo) ([]Issue, error) {
+func OpenIssues(gh Runner, repo config.Repo) ([]Issue, error) {
 	out, err := gh.Run("issue", "list", "-R", repo.String(), "--state", "open",
 		"--limit", fmt.Sprint(IssueListLimit), "--json", "number,title,labels,url,body")
 	if err != nil {
@@ -216,7 +219,7 @@ type PR struct {
 }
 
 // OpenPRs は repo の open PR を全件返す。closing reference は issueRepo を指すものだけを数える。
-func OpenPRs(gh Runner, repo, issueRepo Repo) ([]PR, error) {
+func OpenPRs(gh Runner, repo, issueRepo config.Repo) ([]PR, error) {
 	// -f は生文字列。-F だと数字だけの owner / name が Int に型付けされ String! 変数に入らない
 	out, err := gh.Run("api", "graphql", "-f", "query="+prQuery, "-f", "owner="+repo.Owner, "-f", "name="+repo.Name)
 	if err != nil {
