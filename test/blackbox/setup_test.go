@@ -218,6 +218,19 @@ func TestSetupWithTheLineAlreadyRegisteredEndsWithoutAsking(t *testing.T) {
 	}
 }
 
+func TestSetupTreatsATickLineWhoseScheduleWasChangedAsRegistered(t *testing.T) {
+	s := newInstallSandbox(t)
+	changed := strings.Replace(s.tickCronLine(), "*/5 ", "*/10 ", 1) + "\n"
+	s.setCrontab(changed)
+
+	r := s.setup("")
+
+	assertExit(t, r, 0)
+	if len(s.crontabWrites()) != 0 || s.crontab() != changed {
+		t.Fatal("周期だけを変えた tick 行を書き直した")
+	}
+}
+
 func TestSetupShowsButDoesNotReplaceADifferentTickLineOfTheProject(t *testing.T) {
 	s := newInstallSandbox(t)
 	existing := "*/10 * * * * cd /elsewhere && /old/claude-dispatcher tick " + s.project + " >> /tmp/cron.log 2>&1\n"

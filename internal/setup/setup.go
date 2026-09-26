@@ -229,11 +229,11 @@ func (r *run) ensureCrontab() int {
 	line := crontab.Line(r.o.Clone, r.o.Self, r.o.Project.Name, r.o.Project.CronLog())
 	existing := crontab.TickLines(table, r.o.Project.Name)
 	switch {
-	case slices.Contains(existing, line):
-		r.say("crontab: 登録済み\n  %s", line)
+	case slices.ContainsFunc(existing, func(e string) bool { return crontab.SameCommand(e, line) }):
+		r.say("crontab: 登録済み\n  %s", strings.Join(existing, "\n  "))
 		return exitDone
 	case len(existing) > 0:
-		// 周期や cd 先を人が変えた行かもしれない。黙って置き換えない
+		// cd 先や binary を人が変えた行かもしれない。黙って置き換えない
 		r.say("crontab に %s の tick 行が別の形である。置き換えない — 変えるなら `crontab -e` で自分で直す", r.o.Project.Name)
 		for _, e := range existing {
 			r.say("  現行:   %s", e)

@@ -53,8 +53,8 @@ func renderProject(r Report) []string {
 	rows := [][]string{columns}
 	for _, w := range r.Workers {
 		rows = append(rows, []string{
-			fmt.Sprintf("#%d", w.Spawn.Issue), w.Spawn.Kind, cell(w.Alive, state), formatElapsed(w.Elapsed),
-			cell(w.Session, session), cell(w.Branch, branch), cell(w.WIP, yesNo), cell(w.CL, cl), ticklog.ShortTS(w.TickTS),
+			fmt.Sprintf("#%d", w.Spawn.Issue), w.Spawn.Kind, cell(w.Alive, stateCell), formatElapsed(w.Elapsed),
+			cell(w.Session, sessionCell), cell(w.Branch, branchCell), cell(w.WIP, wipCell), cell(w.CL, clCell), ticklog.ShortTS(w.TickTS),
 		})
 	}
 	widths := make([]int, len(columns))
@@ -87,21 +87,21 @@ func formatElapsed(d time.Duration) string {
 	return fmt.Sprintf("%dd%02dh", seconds/86400, seconds%86400/3600)
 }
 
-func state(alive bool) string {
+func stateCell(alive bool) string {
 	if alive {
 		return "running"
 	}
 	return "exited"
 }
 
-func yesNo(v bool) string {
+func wipCell(v bool) string {
 	if v {
 		return "yes"
 	}
 	return "no"
 }
 
-func session(s *Session) string {
+func sessionCell(s *Session) string {
 	if s == nil {
 		return "-"
 	}
@@ -114,14 +114,14 @@ func session(s *Session) string {
 	return orDash(s.ID) + " " + orDash(strings.Join(progress, "/"))
 }
 
-func branch(b *Branch) string {
+func branchCell(b *Branch) string {
 	if b == nil {
 		return "-"
 	}
 	return "+" + cell(b.Ahead, func(n int) string { return fmt.Sprint(n) })
 }
 
-func cl(c *github.CLState) string {
+func clCell(c *github.CLState) string {
 	if c == nil {
 		return "-"
 	}

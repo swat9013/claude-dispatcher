@@ -371,16 +371,11 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	self, err := selfForCrontab(os.Args[0], e.env)
-	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
-	}
 	return doctor.Run(doctor.Options{
 		Project: e.roots.Project(args[0]),
 		Home:    e.home,
 		Clone:   e.cwd,
-		Self:    self,
+		Self:    func() (string, error) { return selfForCrontab(os.Args[0], e.env) },
 		Env:     e.env,
 		Stdout:  stdout,
 		Gh:      e.ghFor,

@@ -297,7 +297,7 @@ claude-dispatcher setup <project>
 
    `<claude-dispatcher の絶対 path>` は撃たれたときの綴り (PATH で引いた path) を絶対 path にしたもの。symlink は解決しない — Homebrew 等の版つきの実体の path を書くと、更新で消える。`go run` の一時 build からは組めないので止まる。path と cron.log の `%` は cron が改行として読むので `\%` にする
 
-   同じ行があれば済み。この project の tick 行 (`tick <project>` か、移植元の `dispatcher-tick.py <project>` を含むコメントでない行) が別の形であれば、現行の行と組んだ行を並べて示すだけで**置き換えない**。無ければ足す行を示して承認を尋ね、承認されたら現行の表に 1 行足して登録し、`crontab -l` で登録を確かめる
+   周期の欄 (先頭 5 欄) を除いて同じ行があれば済み (周期は人が変えてよい)。この project の tick 行 (`tick <project>` か、移植元の `dispatcher-tick.py <project>` を含むコメントでない行) が別の形であれば、現行の行と組んだ行を並べて示すだけで**置き換えない**。無ければ足す行を示して承認を尋ね、承認されたら現行の表に 1 行足して登録し、`crontab -l` で登録を確かめる
 
 - **承認は stdin から `y` / `yes` を受けたときだけ**。それ以外 (空行・EOF・端末の無い実行) は承認なしとして書かず、自分で撃つコマンドを示して止まる
 - Claude Code の settings は書かない (`doctor` が要る entry を示す)
@@ -329,7 +329,7 @@ NG  label         置き場 acme/widgets に dispatcher:wip が無い — `claud
 | `playbook` | 条件カタログ (system.md §6) の playbook が全部在る。start の選定母集合の本数も示す (0 本は `--`。tick は start を出さないだけで動く) |
 | `原則索引` | 原則索引の file が在る |
 | `試運転` | `tick <project> --dry-run --cron-env` (state dir に何も書かない) が exit 0 で終わる。NG なら出力を添える |
-| `crontab` | `setup` が組む行 (§11) と同じ行がある。この project の tick 行が別の形なら現行の行と組む行を並べて NG |
+| `crontab` | `setup` が組む行 (§11) と周期の欄を除いて同じ行がある。この project の tick 行が別の形なら現行の行と組む行を並べて NG。自分の絶対 path を組めない (`go run` の一時 build 等) ときもこの項目だけ NG にして、ほかの項目は検査する |
 | `最終 tick` | log.jsonl の最後の tick 行の `ts` と `result`、読めない行があればその件数 (情報。判定しない) |
 
 先頭の印は `ok` (充足) / `NG` (不足。理由と直し方を添える) / `--` (情報)。項目の後に、Claude Code の settings に要る entry (sandbox の `filesystem.allowWrite` に state dir、`excludedCommands` に `gh` と `claude-dispatcher`) を示す。

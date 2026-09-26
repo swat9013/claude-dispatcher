@@ -259,6 +259,16 @@ func TestDoctorReportsATickLineThatDiffersFromTheOneSetupBuildsAsNG(t *testing.T
 	}
 }
 
+func TestDoctorAcceptsATickLineWhoseScheduleWasChanged(t *testing.T) {
+	s := newInstallSandbox(t)
+	s.setCrontab(strings.Replace(s.tickCronLine(), "*/5 ", "*/10 ", 1) + "\n")
+
+	r := s.doctor()
+
+	assertExit(t, r, 0)
+	assertDoctorMark(t, r.stdout, "crontab", "ok")
+}
+
 func TestDoctorCountsTheLogLinesItCouldNotRead(t *testing.T) {
 	s := newInstallSandbox(t)
 	s.satisfied()

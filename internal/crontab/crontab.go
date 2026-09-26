@@ -33,6 +33,7 @@ func shellQuote(s string) string {
 
 // TickLines は table のうち project の tick を撃つ行 (コメントでない行) を返す。`tick <project>` の行に加えて、
 // 移植元の `dispatcher-tick.py <project>` の行も数える — 見落とすと隣に行を足し、同じ project を 2 重に tick する。
+// 移植元の行を数えるのは移行のあいだだけ。移植元の script (swat-skills の dispatcher) が廃止されたら外す。
 func TickLines(table, project string) []string {
 	pattern := regexp.MustCompile(`(^|[\s/])(tick|dispatcher-tick\.py)\s+` + regexp.QuoteMeta(project) + `(\s|$)`)
 	var lines []string
@@ -46,6 +47,19 @@ func TickLines(table, project string) []string {
 		}
 	}
 	return lines
+}
+
+// SameCommand は 2 つの crontab の行が周期の欄 (先頭 5 欄) を除いて同じか。周期は人が変えてよいので、setup が組む行との
+// 突き合わせは command (cd 先・binary・cron.log) だけで見る。
+func SameCommand(a, b string) bool {
+	command := func(line string) string {
+		fields := strings.Fields(line)
+		if len(fields) <= 5 {
+			return ""
+		}
+		return strings.Join(fields[5:], " ")
+	}
+	return command(a) != "" && command(a) == command(b)
 }
 
 // Append は table の末尾に line を足した表を返す。

@@ -29,8 +29,9 @@ type Options struct {
 	Home    string
 	// Clone は実装 repo の clone (cwd)。plugin の project scope の照合と、crontab の行の cd 先
 	Clone string
-	// Self は claude-dispatcher の絶対 path。crontab の行を setup と同じ形に組んで突き合わせる
-	Self string
+	// Self は claude-dispatcher の絶対 path を返す。crontab の行を setup と同じ形に組んで突き合わせる。組めなければ
+	// crontab の項目だけを NG にし、ほかの検査は続ける
+	Self func() (string, error)
 	// Env は依存 CLI の PATH を解決した後の env
 	Env    []string
 	Stdout io.Writer
@@ -181,7 +182,7 @@ func checkPlugin(r *report, o Options) {
 	case len(problems) > 0:
 		r.line(markNG, "playbook", "%s", strings.Join(problems, " / "))
 	case len(starts) == 0:
-		// 母集合が空でも tick は動く (start を出さないだけ)。空を導入の不足とするかは決めていないので判定しない
+		// 母集合が空でも tick は動く (start を出さないだけ) ので情報にする (formats.md §12)。空の母集合で tick を止めるかは #15
 		r.line(markInfo, "playbook", "start の選定母集合 (metadata.deliverable: cl の playbook) が 0 本 — tick は start を出さない。条件 %d 本は在る", len(tick.Conditions))
 	default:
 		r.line(markOK, "playbook", "start %d 本 + 条件 %d 本", len(starts), len(tick.Conditions))
@@ -226,15 +227,20 @@ func checkCrontab(r *report, o Options) {
 		r.line(markNG, "crontab", "読めない: %v", err)
 		return
 	}
-	want := crontab.Line(o.Clone, o.Self, o.Project.Name, o.Project.CronLog())
+	self, err := o.Self()
+	if err != nil {
+		r.line(markNG, "crontab", "setup の組む行と突き合わせられない: %v", err)
+		return
+	}
+	want := crontab.Line(o.Clone, self, o.Project.Name, o.Project.CronLog())
 	lines := crontab.TickLines(table, o.Project.Name)
 	switch {
-	case slices.Contains(lines, want):
-		r.line(markOK, "crontab", "%s", want)
+	case slices.ContainsFunc(lines, func(l string) bool { return crontab.SameCommand(l, want) }):
+		r.line(markOK, "crontab", "%s", strings.Join(lines, " / "))
 	case len(lines) == 0:
 		r.line(markNG, "crontab", "%s の tick 行が無い — `claude-dispatcher setup %s` で登録する", o.Project.Name, o.Project.Name)
 	default:
-		// cd 先・binary・cron.log のどれかが setup の組む行と違う。周期を人が変えた行もここに落ちる
+		// cd 先・binary・cron.log のどれかが setup の組む行と違う (周期の違いは見ない)
 		r.line(markNG, "crontab", "%s の tick 行が setup の組む行と違う — 意図した変更でなければ `crontab -e` で直す\n  現行:   %s\n  組む行: %s",
 			o.Project.Name, strings.Join(lines, "\n  現行:   "), want)
 	}

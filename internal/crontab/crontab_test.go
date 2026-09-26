@@ -51,6 +51,22 @@ func TestTickLinesCountsTheLineOfTheScriptThisWasPortedFrom(t *testing.T) {
 	}
 }
 
+func TestSameCommandIgnoresTheSchedule(t *testing.T) {
+	line := crontab.Line("/x", "/bin/claude-dispatcher", "widgets", "/s/cron.log")
+	for _, tc := range []struct {
+		other string
+		want  bool
+	}{
+		{"*/10 * * * *  cd /x && /bin/claude-dispatcher tick widgets >> /s/cron.log 2>&1", true},
+		{"*/5 * * * * cd /y && /bin/claude-dispatcher tick widgets >> /s/cron.log 2>&1", false},
+		{"*/5 * * * * cd /x && /bin/claude-dispatcher tick widgets", false},
+	} {
+		if got := crontab.SameCommand(tc.other, line); got != tc.want {
+			t.Fatalf("SameCommand(%q) = %v, want %v", tc.other, got, tc.want)
+		}
+	}
+}
+
 func TestLineEscapesPercentSignsThatCronWouldTurnIntoNewlines(t *testing.T) {
 	got := crontab.Line("/home/me/100%work", "/bin/claude-dispatcher", "widgets", "/s/cron.log")
 

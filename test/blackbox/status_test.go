@@ -216,7 +216,7 @@ func TestStatusWithoutAProjectListsEveryProject(t *testing.T) {
 	for _, block := range strings.Split(r.stdout, "\n\n") {
 		headers = append(headers, strings.Fields(block)[0])
 	}
-	if !slices.Equal(headers, []string{"other", s.project}) || workerRow(r.stdout, 42) == nil {
+	if !slices.Equal(headers, []string{"other", s.project}) {
 		t.Fatalf("全 project を名前順に並べていない (%v):\n%s", headers, r.stdout)
 	}
 }

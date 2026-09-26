@@ -228,10 +228,15 @@ func (c *collector) fillDetails(cfg config.Config, cfgErr error, gh github.Runne
 	}
 	for i := range c.report.Workers {
 		w := &c.report.Workers[i]
-		w.Session = Probed[*Session]{Value: sessions.Value[w.Spawn.SessionID], Known: sessions.Known}
-		w.Branch = Probed[*Branch]{Value: branches.Value[w.Spawn.Issue], Known: branches.Known}
-		w.CL = Probed[*github.CLState]{Value: cls.Value[w.Spawn.Issue], Known: cls.Known}
+		w.Session = lookupIn(sessions, w.Spawn.SessionID)
+		w.Branch = lookupIn(branches, w.Spawn.Issue)
+		w.CL = lookupIn(cls, w.Spawn.Issue)
 	}
+}
+
+// lookupIn は読めた表なら key の値 (無ければ零値) を、読めなかった表なら ? を返す。
+func lookupIn[K comparable, V any](table Probed[map[K]V], key K) Probed[V] {
+	return Probed[V]{Value: table.Value[key], Known: table.Known}
 }
 
 func (c *collector) sessions() Probed[map[string]*Session] {
