@@ -80,16 +80,23 @@ func (s *sandbox) assertNames(msg string, names ...string) {
 // assertCronLogLine は stderr の最終行が前置付きの 1 行で、project / tick / result が一致することを確かめ、error 部分を返す。
 func assertCronLogLine(t *testing.T, stderr, project, tick, result string) string {
 	t.Helper()
+	m := lastCronLogLine(t, stderr)
+	if m[2] != project || m[3] != tick || m[4] != result {
+		t.Fatalf("前置 = [%s] tick=%s result=%s, want [%s] tick=%s result=%s", m[2], m[3], m[4], project, tick, result)
+	}
+	return m[5]
+}
+
+// lastCronLogLine は stderr の最終行を cron.log の行として分解する ([全体, 時刻, project, tick, result, error])。
+func lastCronLogLine(t *testing.T, stderr string) []string {
+	t.Helper()
 	lines := strings.Split(strings.TrimRight(stderr, "\n"), "\n")
 	last := lines[len(lines)-1]
 	m := cronLogLinePattern.FindStringSubmatch(last)
 	if m == nil {
 		t.Fatalf("stderr の最終行が `<時刻> [<project>] tick=<ts> result=<result> <error>` でない: %q", last)
 	}
-	if m[2] != project || m[3] != tick || m[4] != result {
-		t.Fatalf("前置 = [%s] tick=%s result=%s, want [%s] tick=%s result=%s", m[2], m[3], m[4], project, tick, result)
-	}
-	return m[5]
+	return m
 }
 
 // assertRejectedBeforeLaunch は決定ファイルが検査に落ち、1 件も起動せず error になったことを確かめる。
@@ -99,6 +106,7 @@ func (s *sandbox) assertRejectedBeforeLaunch(r runResult) {
 	if spawned, _ := line["spawned"].([]any); len(spawned) != 0 {
 		s.t.Fatalf("検査に落ちた決定ファイルで起動した: %v", spawned)
 	}
+	settleDetachedWorkers()
 	if calls := s.callsMatching("claude", isWorkerCall); len(calls) != 0 {
 		s.t.Fatalf("worker が起動された: %d 件", len(calls))
 	}

@@ -143,12 +143,15 @@ func newBareSandbox(t *testing.T) *sandbox {
 
 func (s *sandbox) setUp() {
 	mustMkdir(s.t, s.stateDir())
-	s.writeConfig(s.configWith("", fmt.Sprintf("max_wip = %d", defaultMaxWIP)))
+	s.writeConfig(s.defaultConfig())
 	s.setLabels(wipLabel, humanLabel, defaultReadyLabel, "needs-triage")
 	s.respond("gh", stubwire.Rule{ArgsPrefix: []string{"repo", "view"}, Stdout: `{"nameWithOwner":"` + defaultIssueRepo + `"}`})
 	s.setIssues()
 	s.setPRs()
 	s.writeClaudeRules()
+	// git / ps は tick が使わない。status / doctor (#4) が呼ぶまで、呼ばれたら成功だけを返す
+	s.respond("git", stubwire.Rule{})
+	s.respond("ps", stubwire.Rule{})
 	s.installPlugin("swat-skills@swat9013", "user", "")
 }
 
@@ -196,8 +199,10 @@ func (s *sandbox) configWith(issueExtra, limits string) string {
 }
 
 func (s *sandbox) defaultConfig() string {
-	return s.configWith("", fmt.Sprintf("max_wip = %d", defaultMaxWIP))
+	return s.configWith("", maxWIPLine(defaultMaxWIP))
 }
+
+func maxWIPLine(n int) string { return fmt.Sprintf("max_wip = %d", n) }
 
 func (s *sandbox) writeConfig(content string) {
 	s.t.Helper()
@@ -206,7 +211,7 @@ func (s *sandbox) writeConfig(content string) {
 }
 
 func (s *sandbox) setMaxWIP(n int) {
-	s.writeConfig(s.configWith("", fmt.Sprintf("max_wip = %d", n)))
+	s.writeConfig(s.configWith("", maxWIPLine(n)))
 }
 
 // --- 実行 ---

@@ -8,23 +8,23 @@ import (
 
 // flock による単一実行 (system.md §9, formats.md §3)。前 tick が lock を持つ間の tick は locked で見送る。
 
-func holdLock(t *testing.T, file string) *os.File {
+// tryLock は file の排他 lock を待たずに取る。取れたら true (lock はテストの終わりまで持つ)。
+func tryLock(t *testing.T, file string) bool {
 	t.Helper()
 	lock, err := os.OpenFile(file, os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { lock.Close() })
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		t.Fatalf("lock を取れない: %v", err)
-	}
-	return lock
+	return syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) == nil
 }
 
 func TestTickIsSkippedAsLockedWhileAnotherTickHoldsTheLock(t *testing.T) {
 	s := newSandbox(t)
 	s.setIssues(readyIssue(42))
-	holdLock(t, s.lockFile())
+	if !tryLock(t, s.lockFile()) {
+		t.Fatal("前 tick の代わりに lock を取れない")
+	}
 
 	r := s.tick()
 
@@ -47,5 +47,7 @@ func TestLockIsReleasedWhenTheTickEnds(t *testing.T) {
 	if _, err := os.Stat(s.lockFile()); err != nil {
 		t.Fatalf("tick が lock file を %s に置いていない: %v", s.lockFile(), err)
 	}
-	holdLock(t, s.lockFile())
+	if !tryLock(t, s.lockFile()) {
+		t.Fatal("tick の終了後も lock が残っている")
+	}
 }

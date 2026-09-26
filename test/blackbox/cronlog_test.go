@@ -44,9 +44,8 @@ func TestTickWithoutAStateDirPointsToNoLogLine(t *testing.T) {
 	if r.exit == 0 {
 		t.Fatal("state dir の無い tick が成功した")
 	}
-	lines := strings.Split(strings.TrimRight(r.stderr, "\n"), "\n")
-	if m := cronLogLinePattern.FindStringSubmatch(lines[len(lines)-1]); m == nil || m[3] != "-" {
-		t.Fatalf("log.jsonl を書けない tick の最終行が tick=- でない: %q", r.stderr)
+	if tick := lastCronLogLine(t, r.stderr)[3]; tick != "-" {
+		t.Fatalf("log.jsonl を書けない tick の最終行が tick=%s (want -)", tick)
 	}
 }
 

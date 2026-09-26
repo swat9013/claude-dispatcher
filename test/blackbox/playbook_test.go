@@ -84,7 +84,7 @@ func TestProjectScopeInstallForAnotherCloneIsIgnored(t *testing.T) {
 	assertPlaybooksOnlyFrom(t, s, s.defaultInstallPath())
 }
 
-func TestSkillsDirIsUsedWhenNoPluginIsInstalled(t *testing.T) {
+func TestSkillsDirIsUsedWhenNoInstallMatchesTheClone(t *testing.T) {
 	skillsDir := func(s *sandbox) string { return filepath.Join(s.home, ".claude", "skills", "swat-skills") }
 	for _, tc := range []struct {
 		name  string

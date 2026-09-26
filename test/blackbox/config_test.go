@@ -49,6 +49,18 @@ func TestConfigThatIsNotTOMLIsRejected(t *testing.T) {
 	s.assertConfigErrorWithoutObserving(r, s.configFile())
 }
 
+func TestUnreadableConfigIsRejected(t *testing.T) {
+	s := newSandbox(t)
+	if err := os.Chmod(s.configFile(), 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(s.configFile(), 0o644) })
+
+	r := s.tick()
+
+	s.assertConfigErrorWithoutObserving(r, s.configFile())
+}
+
 func TestConfigMissingARequiredKeyIsRejectedNamingTheKey(t *testing.T) {
 	for _, tc := range []struct {
 		missing string
@@ -197,6 +209,9 @@ func TestUnchangedConfigIsNotVerifiedAgain(t *testing.T) {
 
 	if after := len(s.verificationCalls()); after != before {
 		t.Fatalf("変わらない config を再検査した: repo view / label list が %d 回増えた", after-before)
+	}
+	if len(s.observationCalls()) < 2 {
+		t.Fatal("再検査を省いた tick が観測していない")
 	}
 }
 

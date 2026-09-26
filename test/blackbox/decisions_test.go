@@ -1,7 +1,6 @@
 package blackbox_test
 
 import (
-	"path/filepath"
 	"slices"
 	"strconv"
 	"testing"
@@ -69,7 +68,11 @@ func TestDecidedWorkerIsLaunchedHeadlessWithItsPromptInTheClone(t *testing.T) {
 
 	assertExit(t, s.tick(), 0)
 
-	w := s.waitWorkerCalls(1)[0]
+	workers := s.waitWorkerCalls(1)
+	if len(workers) != 1 {
+		t.Fatalf("worker の起動 = %d 回, want 1", len(workers))
+	}
+	w := workers[0]
 	// -p (--print) は値を取らない。prompt は argv のどこかに 1 引数として逐語で載る
 	if !w.hasArg("-p") || !w.hasArg(workerPrompt(42, playbook)) {
 		t.Fatalf("worker に -p と決定ファイルの spawn prompt が逐語で渡っていない: %q", w.args())
@@ -97,7 +100,7 @@ func TestDecisionsWithoutSpawnLaunchNoWorker(t *testing.T) {
 func TestMissingDecisionsFileLaunchesNothing(t *testing.T) {
 	s := newSandbox(t)
 	s.setIssues(readyIssue(42))
-	s.orchestratorExits(0, nil)
+	s.orchestratorWritesNothing()
 
 	r := s.tick()
 
@@ -122,12 +125,12 @@ func TestInvalidSpawnRejectsTheWholeDecisionsFile(t *testing.T) {
 		{"action が語彙の外", func(install string) (decision, spawn) {
 			p := playbookPath(install, "playbook-implementation")
 			return decision{Issue: 42, Action: "implement", Reason: "r"},
-				spawn{Issue: 42, Kind: "start", Prompt: workerPrompt(42, p), Playbooks: []string{p}}
+				startSpawn(42, p)
 		}},
 		{"kind が同じ issue の action と違う", func(install string) (decision, spawn) {
 			p := playbookPath(install, "playbook-implementation")
 			return decision{Issue: 42, Action: "skip", Reason: "r"},
-				spawn{Issue: 42, Kind: "start", Prompt: workerPrompt(42, p), Playbooks: []string{p}}
+				startSpawn(42, p)
 		}},
 		{"prompt に未展開の変数", func(install string) (decision, spawn) {
 			p := playbookPath(install, "playbook-implementation")
@@ -140,9 +143,9 @@ func TestInvalidSpawnRejectsTheWholeDecisionsFile(t *testing.T) {
 				spawn{Issue: 42, Kind: "start", Prompt: workerPrompt(42), Playbooks: []string{p}}
 		}},
 		{"playbook が実在しない", func(install string) (decision, spawn) {
-			p := filepath.Join(install, "skills", "procedure", "playbook-gone", "SKILL.md")
+			p := playbookPath(install, "playbook-gone")
 			return decision{Issue: 42, Action: "start", Reason: "r"},
-				spawn{Issue: 42, Kind: "start", Prompt: workerPrompt(42, p), Playbooks: []string{p}}
+				startSpawn(42, p)
 		}},
 		{"playbooks が空", func(install string) (decision, spawn) {
 			return decision{Issue: 42, Action: "start", Reason: "r"},
@@ -151,7 +154,7 @@ func TestInvalidSpawnRejectsTheWholeDecisionsFile(t *testing.T) {
 		{"start の playbook が選定母集合の外", func(install string) (decision, spawn) {
 			p := playbookPath(install, "playbook-ci-fix")
 			return decision{Issue: 42, Action: "start", Reason: "r"},
-				spawn{Issue: 42, Kind: "start", Prompt: workerPrompt(42, p), Playbooks: []string{p}}
+				startSpawn(42, p)
 		}},
 		{"start の playbook が 2 本", func(install string) (decision, spawn) {
 			p := playbookPath(install, "playbook-implementation")
@@ -314,7 +317,7 @@ func TestOrchestratorThatDidNotExitNormallyHasItsDecisionsIgnored(t *testing.T) 
 	s := newSandbox(t)
 	s.setIssues(readyIssue(42))
 	valid := startDecisions(playbookPath(s.defaultInstallPath(), "playbook-implementation"), 42)
-	s.orchestratorExits(3, &valid)
+	s.orchestratorFailsAfterWriting(3, valid)
 
 	r := s.tick()
 

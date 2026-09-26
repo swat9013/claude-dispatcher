@@ -111,7 +111,11 @@ func TestCandidatesWithFreeSlotsYieldAStartInstruction(t *testing.T) {
 	}
 	var got []int
 	for _, c := range asList(t, start["candidates"]) {
-		got = append(got, number(t, asMap(t, c)["number"]))
+		candidate := asMap(t, c)
+		if _, ok := candidate["body"]; !ok {
+			t.Fatalf("start の候補が body を持たない: %v", candidate)
+		}
+		got = append(got, number(t, candidate["number"]))
 	}
 	slices.Sort(got)
 	if !slices.Equal(got, []int{42, 43}) {

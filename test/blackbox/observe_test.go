@@ -140,6 +140,11 @@ func (s *sandbox) waitWorkerCalls(n int) []stubCall {
 	return s.callsMatching("claude", isWorkerCall)
 }
 
+// settleDetachedWorkers は、tick が起動したかもしれない worker の呼び出し記録が届くまでの猶予を置く。
+// detach 起動は tick と同期する点を持たないので、「起動されていない」ことは猶予の後の不在でしか確かめられない。
+// 起動の有無の主な観測点は log の spawned で、これは補助。
+func settleDetachedWorkers() { time.Sleep(300 * time.Millisecond) }
+
 // waitForSpawnedWorkers は log の spawned に載った worker の終了を待つ。detach 起動された worker の stub が
 // テスト終了後に sandbox へ書くと、TempDir の削除が "directory not empty" で落ちる。
 func (s *sandbox) waitForSpawnedWorkers() {

@@ -210,13 +210,17 @@ func (s *sandbox) orchestratorWritesBlockingWorkerLogs(d decisions, issues ...in
 	})
 }
 
-// orchestratorExits は orchestrator が exit code で終わるようにする。written があれば決定ファイルも書く。
-func (s *sandbox) orchestratorExits(code int, written *decisions) {
-	r := stubwire.Rule{Stdout: orchestratorOutput, Exit: code}
-	if written != nil {
-		r.Decisions = &stubwire.DecisionsWrite{StateDir: s.stateDir(), Content: written.fileContent(s.t)}
-	}
-	s.orchestratorBehaves(r)
+// orchestratorWritesNothing は orchestrator が正常終了するが決定ファイルを書かないようにする。
+func (s *sandbox) orchestratorWritesNothing() {
+	s.orchestratorBehaves(stubwire.Rule{Stdout: orchestratorOutput})
+}
+
+// orchestratorFailsAfterWriting は orchestrator が d を書いたうえで exit code で異常終了するようにする。
+func (s *sandbox) orchestratorFailsAfterWriting(code int, d decisions) {
+	s.orchestratorBehaves(stubwire.Rule{
+		Stdout: orchestratorOutput, Exit: code,
+		Decisions: &stubwire.DecisionsWrite{StateDir: s.stateDir(), Content: d.fileContent(s.t)},
+	})
 }
 
 // orchestratorBehaves は orchestrator の起動 (worker の印を持たない claude 呼び出し) への応答を決める。
@@ -271,9 +275,14 @@ func startDecisions(playbook string, issues ...int) decisions {
 	var d decisions
 	for _, n := range issues {
 		d.Decisions = append(d.Decisions, decision{Issue: n, Action: "start", Reason: "着手できる"})
-		d.Spawn = append(d.Spawn, spawn{Issue: n, Kind: "start", Prompt: workerPrompt(n, playbook), Playbooks: []string{playbook}})
+		d.Spawn = append(d.Spawn, startSpawn(n, playbook))
 	}
 	return d
+}
+
+// startSpawn は playbook で issue に新規着手する worker の spawn を組む。
+func startSpawn(issue int, playbook string) spawn {
+	return spawn{Issue: issue, Kind: "start", Prompt: workerPrompt(issue, playbook), Playbooks: []string{playbook}}
 }
 
 // workerPrompt は playbook の path を本文に載せた spawn prompt の fixture。

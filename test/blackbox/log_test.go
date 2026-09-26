@@ -265,9 +265,25 @@ func TestTickStoppedMidSpawnKeepsTheWorkersAlreadyLaunched(t *testing.T) {
 
 	r := s.tick()
 
+	// 起動の順序と log を開く時機は設計 doc が決めていない。起動記録のある worker と spawned が一致することを見る
 	line := s.assertOutcome(r, outcomeError)
-	if entry := onlySpawned(t, line); number(t, entry["issue"]) != 42 {
-		t.Fatalf("止まる前に起動した worker が spawned に載っていない: %v", entry)
+	var logged []int
+	for _, raw := range asList(t, line["spawned"]) {
+		logged = append(logged, number(t, asMap(t, raw)["issue"]))
+	}
+	s.waitWorkerCalls(len(logged))
+	settleDetachedWorkers()
+	var launched []int
+	for _, c := range s.callsMatching("claude", isWorkerCall) {
+		for _, n := range []int{42, 43} {
+			if c.hasArg(workerPrompt(n, playbook)) {
+				launched = append(launched, n)
+			}
+		}
+	}
+	slices.Sort(launched)
+	if !slices.Equal(logged, launched) || slices.Contains(logged, 43) {
+		t.Fatalf("spawned %v と起動した worker %v が一致しない (43 は log を開けず起動できない)", logged, launched)
 	}
 }
 
