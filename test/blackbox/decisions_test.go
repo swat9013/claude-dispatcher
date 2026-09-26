@@ -3,6 +3,7 @@ package blackbox_test
 import (
 	"path/filepath"
 	"slices"
+	"strconv"
 	"testing"
 )
 
@@ -19,7 +20,7 @@ func TestOrchestratorIsLaunchedWithTheContractFlagsInTheClone(t *testing.T) {
 		t.Fatalf("orchestrator の起動 = %d 回", len(calls))
 	}
 	c := calls[0]
-	if _, ok := c.flagValue("-p"); !ok {
+	if !c.hasArg("-p") {
 		t.Fatalf("-p で起動していない: %v", c.args())
 	}
 	if mode, _ := c.flagValue("--permission-mode"); mode != "auto" {
@@ -32,12 +33,11 @@ func TestOrchestratorIsLaunchedWithTheContractFlagsInTheClone(t *testing.T) {
 		t.Fatalf("orchestrator の cwd = %s, want clone %s", c.Cwd, s.clone)
 	}
 	line := s.onlyTickLine()
-	instructionFile := line["instruction_file"].(string)
+	instructionFile := asString(t, line["instruction_file"])
 	if !c.contains(instructionFile) {
 		t.Fatalf("orchestrator の prompt に指示ファイルの path %s が無い", instructionFile)
 	}
-	stem := instructionFile[len(filepath.Dir(instructionFile))+1 : len(instructionFile)-len(".json")]
-	if decisionsFile := filepath.Join(s.stateDir(), "decisions", stem+".json"); !c.contains(decisionsFile) {
+	if decisionsFile := filepath.Join(s.stateDir(), "decisions", tickStem(instructionFile)+".json"); !c.contains(decisionsFile) {
 		t.Fatalf("orchestrator の prompt に決定ファイルの path %s が無い", decisionsFile)
 	}
 }
@@ -53,8 +53,9 @@ func TestDecidedWorkerIsLaunchedWithItsPromptInTheClone(t *testing.T) {
 		t.Fatalf("worker の起動 = %d 回", len(workers))
 	}
 	w := workers[0]
-	if prompt, _ := w.flagValue("-p"); prompt != workerPrompt(42, playbook) {
-		t.Fatalf("worker の prompt が決定ファイルの spawn prompt と違う: %q", prompt)
+	// -p (--print) は値を取らない。prompt は argv のどこかに 1 引数として逐語で載る
+	if !w.hasArg("-p") || !w.hasArg(workerPrompt(42, playbook)) {
+		t.Fatalf("worker に -p と決定ファイルの spawn prompt が逐語で渡っていない: %q", w.args())
 	}
 	if mode, _ := w.flagValue("--permission-mode"); mode != "auto" {
 		t.Fatalf("--permission-mode = %q, want auto", mode)
@@ -73,7 +74,7 @@ func TestDecisionsWithoutSpawnLaunchNoWorker(t *testing.T) {
 
 	assertExit(t, r, 0)
 	assertResult(t, s.onlyTickLine(), "ok")
-	if spawned := s.onlyTickLine()["spawned"].([]any); len(spawned) != 0 {
+	if spawned := asList(t, s.onlyTickLine()["spawned"]); len(spawned) != 0 {
 		t.Fatalf("spawned = %v", spawned)
 	}
 	s.assertNoWorkerCalls()
@@ -240,8 +241,8 @@ func TestReenterDecisionLaunchesAReenterWorker(t *testing.T) {
 	r := s.tick()
 
 	assertExit(t, r, 0)
-	spawned := s.onlyTickLine()["spawned"].([]any)
-	if len(spawned) != 1 || spawned[0].(map[string]any)["kind"] != "reenter" {
+	spawned := asList(t, s.onlyTickLine()["spawned"])
+	if len(spawned) != 1 || asMap(t, spawned[0])["kind"] != "reenter" {
 		t.Fatalf("spawned = %v", spawned)
 	}
 	if got := len(s.waitWorkerCalls(1)); got != 1 {
@@ -305,8 +306,8 @@ func TestCoverageGapLaunchesTheWrittenSpawnsThenFailsNamingTheIssue(t *testing.T
 	assertExit(t, r, 1)
 	line := s.onlyTickLine()
 	assertResult(t, line, "error")
-	assertErrorMentions(t, line, "43")
-	if spawned := line["spawned"].([]any); len(spawned) != 1 {
+	s.assertErrorNames(line, "43")
+	if spawned := asList(t, line["spawned"]); len(spawned) != 1 {
 		t.Fatalf("網羅の欠けでも書かれた spawn は起動する: %v", spawned)
 	}
 	if got := len(s.waitWorkerCalls(1)); got != 1 {
@@ -344,8 +345,13 @@ func TestEachInstructionKindAcceptsOnlyItsOwnActions(t *testing.T) {
 
 			r := s.tick()
 
-			want := map[bool]int{true: 0, false: 1}[tc.covered]
-			assertExit(t, r, want)
+			if tc.covered {
+				assertExit(t, r, 0)
+				return
+			}
+			// 網羅の欠けとして落ちたこと (他の検査で落ちたのではないこと) を、欠けた issue の名指しで見る
+			assertExit(t, r, 1)
+			s.assertErrorNames(s.onlyTickLine(), strconv.Itoa(tc.decisions[0].Issue))
 		})
 	}
 }
@@ -364,8 +370,8 @@ func TestOrchestratorThatDidNotExitNormallyHasItsDecisionsIgnored(t *testing.T) 
 
 	assertRejectedBeforeLaunch(t, s, r)
 	line := s.onlyTickLine()
-	orchestrator := line["orchestrator"].(map[string]any)
-	if number(orchestrator["exit_code"]) != 3 || orchestrator["timed_out"] != false {
+	orchestrator := asMap(t, line["orchestrator"])
+	if number(t, orchestrator["exit_code"]) != 3 || orchestrator["timed_out"] != false {
 		t.Fatalf("orchestrator = %v", orchestrator)
 	}
 	if got := s.orchestratorLines(); len(got) != 0 {
@@ -387,12 +393,12 @@ func TestDecidedWorkersOfOneTickGetDistinctLogsAndSessions(t *testing.T) {
 
 	assertExit(t, s.tick(), 0)
 
-	spawned := s.onlyTickLine()["spawned"].([]any)
+	spawned := asList(t, s.onlyTickLine()["spawned"])
 	var issues []int
 	logs, sessions := map[any]bool{}, map[any]bool{}
 	for _, raw := range spawned {
-		entry := raw.(map[string]any)
-		issues = append(issues, number(entry["issue"]))
+		entry := asMap(t, raw)
+		issues = append(issues, number(t, entry["issue"]))
 		logs[entry["log"]] = true
 		sessions[entry["session_id"]] = true
 	}

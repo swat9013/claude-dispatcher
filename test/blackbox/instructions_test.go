@@ -1,7 +1,6 @@
 package blackbox_test
 
 import (
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -31,7 +30,7 @@ func TestInstructionFileIsNamedByTheTickStemAndReferencedFromTheLog(t *testing.T
 	if len(files) != 1 {
 		t.Fatalf("指示ファイル = %v", files)
 	}
-	if stem := strings.TrimSuffix(filepath.Base(files[0]), ".json"); !tickStemPattern.MatchString(stem) {
+	if stem := tickStem(files[0]); !tickStemPattern.MatchString(stem) {
 		t.Fatalf("stem が YYYYMMDDTHHMMSS.ffffffZ でない: %q", stem)
 	}
 	if got := s.onlyTickLine()["instruction_file"]; got != files[0] {
@@ -47,7 +46,7 @@ func TestInstructionFileCarriesTheSnapshot(t *testing.T) {
 
 	s.tick()
 
-	snapshot := s.onlyInstructionFile()["snapshot"].(map[string]any)
+	snapshot := asMap(t, s.onlyInstructionFile()["snapshot"])
 	wantKeys := []string{"cl_repo", "cls", "issue_repo", "issues", "limits", "linked_cls", "observed", "observed_at"}
 	if got := keys(snapshot); !slices.Equal(got, wantKeys) {
 		t.Fatalf("snapshot の key = %v, want %v", got, wantKeys)
@@ -55,30 +54,30 @@ func TestInstructionFileCarriesTheSnapshot(t *testing.T) {
 	if snapshot["issue_repo"] != defaultIssueRepo || snapshot["cl_repo"] != defaultIssueRepo {
 		t.Fatalf("[cl] を省くと CL 置き場は issue 置き場を継ぐ: %v / %v", snapshot["issue_repo"], snapshot["cl_repo"])
 	}
-	limits := snapshot["limits"].(map[string]any)
-	if number(limits["max_wip"]) != 2 || number(limits["wip_count"]) != 1 {
+	limits := asMap(t, snapshot["limits"])
+	if number(t, limits["max_wip"]) != 2 || number(t, limits["wip_count"]) != 1 {
 		t.Fatalf("limits = %v", limits)
 	}
-	issues := snapshot["issues"].(map[string]any)
-	candidates := issues["candidates"].([]any)
+	issues := asMap(t, snapshot["issues"])
+	candidates := asList(t, issues["candidates"])
 	if len(candidates) != 1 {
 		t.Fatalf("candidates = %v", candidates)
 	}
-	candidate := candidates[0].(map[string]any)
+	candidate := asMap(t, candidates[0])
 	if got := keys(candidate); !slices.Equal(got, []string{"body", "number", "title", "url"}) {
 		t.Fatalf("候補の key = %v (候補だけが body を持つ)", got)
 	}
-	wip := issues["wip"].([]any)
-	if len(wip) != 1 || !slices.Equal(keys(wip[0].(map[string]any)), []string{"number", "title", "url"}) {
+	wip := asList(t, issues["wip"])
+	if len(wip) != 1 || !slices.Equal(keys(asMap(t, wip[0])), []string{"number", "title", "url"}) {
 		t.Fatalf("wip = %v (wip は body を持たない)", wip)
 	}
-	if got := numbers(issues["ready_for_human"]); !slices.Equal(got, []int{38}) {
+	if got := numbers(t, issues["ready_for_human"]); !slices.Equal(got, []int{38}) {
 		t.Fatalf("ready_for_human = %v", got)
 	}
-	if got := numbers(snapshot["linked_cls"].(map[string]any)["40"]); !slices.Equal(got, []int{101}) {
+	if got := numbers(t, asMap(t, snapshot["linked_cls"])["40"]); !slices.Equal(got, []int{101}) {
 		t.Fatalf("linked_cls = %v", snapshot["linked_cls"])
 	}
-	cl := snapshot["cls"].([]any)[0].(map[string]any)
+	cl := asMap(t, asList(t, snapshot["cls"])[0])
 	wantCL := []string{"base", "branch", "checks", "draft", "issues", "mergeable", "number", "unresolved_threads", "url"}
 	if got := keys(cl); !slices.Equal(got, wantCL) {
 		t.Fatalf("cls の key = %v, want %v", got, wantCL)
@@ -95,7 +94,7 @@ func TestCandidatesWithFreeSlotsYieldAStartInstruction(t *testing.T) {
 
 	s.tick()
 
-	starts := instructionsOfKind(s.onlyInstructionFile(), "start")
+	starts := instructionsOfKind(t, s.onlyInstructionFile(), "start")
 	if len(starts) != 1 {
 		t.Fatalf("start 指示 = %v", starts)
 	}
@@ -103,13 +102,13 @@ func TestCandidatesWithFreeSlotsYieldAStartInstruction(t *testing.T) {
 	if got := keys(start); !slices.Equal(got, []string{"candidates", "free_slots", "kind", "playbooks"}) {
 		t.Fatalf("start 指示の key = %v", got)
 	}
-	if number(start["free_slots"]) != 1 {
+	if number(t, start["free_slots"]) != 1 {
 		t.Fatalf("free_slots = %v, want 1 (max_wip 2 - wip 1)", start["free_slots"])
 	}
 	var got []int
-	for _, c := range start["candidates"].([]any) {
-		candidate := c.(map[string]any)
-		got = append(got, number(candidate["number"]))
+	for _, c := range asList(t, start["candidates"]) {
+		candidate := asMap(t, c)
+		got = append(got, number(t, candidate["number"]))
 		if candidate["body"] == nil {
 			t.Fatalf("候補が body を持たない: %v", candidate)
 		}
@@ -139,16 +138,16 @@ func TestCandidateExcludesWipHumanAndIssuesWithAnOpenCL(t *testing.T) {
 
 	s.tick()
 
-	snapshot := s.onlyInstructionFile()["snapshot"].(map[string]any)
+	snapshot := asMap(t, s.onlyInstructionFile()["snapshot"])
 	var got []int
-	for _, c := range snapshot["issues"].(map[string]any)["candidates"].([]any) {
-		got = append(got, number(c.(map[string]any)["number"]))
+	for _, c := range asList(t, asMap(t, snapshot["issues"])["candidates"]) {
+		got = append(got, number(t, asMap(t, c)["number"]))
 	}
 	if !slices.Equal(got, []int{1}) {
 		t.Fatalf("候補 = %v, want [1] (着手可 ∧ ¬wip ∧ ¬ready-for-human ∧ 紐づく open CL なし)", got)
 	}
-	linked := snapshot["linked_cls"].(map[string]any)
-	if !slices.Equal(numbers(linked["5"]), []int{105}) {
+	linked := asMap(t, snapshot["linked_cls"])
+	if !slices.Equal(numbers(t, linked["5"]), []int{105}) {
 		t.Fatalf("head branch の規約で紐づいていない: %v", linked)
 	}
 }
@@ -161,7 +160,7 @@ func TestClosingReferenceToAnotherRepoDoesNotLink(t *testing.T) {
 
 	s.tick()
 
-	if len(instructionsOfKind(s.onlyInstructionFile(), "start")) != 1 {
+	if len(instructionsOfKind(t, s.onlyInstructionFile(), "start")) != 1 {
 		t.Fatal("別 repo の issue を指す closing reference で候補から外れた")
 	}
 }
@@ -183,10 +182,10 @@ func TestNoFreeSlotYieldsNoStartAndNoInstructionFile(t *testing.T) {
 
 // --- reenter ---
 
-func conditionNames(instruction map[string]any) []string {
+func conditionNames(t *testing.T, instruction map[string]any) []string {
 	var out []string
-	for _, c := range instruction["conditions"].([]any) {
-		out = append(out, c.(map[string]any)["name"].(string))
+	for _, c := range asList(t, instruction["conditions"]) {
+		out = append(out, asString(t, asMap(t, c)["name"]))
 	}
 	return out
 }
@@ -199,7 +198,7 @@ func TestConflictingWorkerCLOfAnUnclaimedIssueYieldsReenter(t *testing.T) {
 
 	s.tick()
 
-	reenters := instructionsOfKind(s.onlyInstructionFile(), "reenter")
+	reenters := instructionsOfKind(t, s.onlyInstructionFile(), "reenter")
 	if len(reenters) != 1 {
 		t.Fatalf("reenter 指示 = %v", reenters)
 	}
@@ -207,18 +206,18 @@ func TestConflictingWorkerCLOfAnUnclaimedIssueYieldsReenter(t *testing.T) {
 	if got := keys(reenter); !slices.Equal(got, []string{"cl", "conditions", "issue", "kind"}) {
 		t.Fatalf("reenter 指示の key = %v", got)
 	}
-	if number(reenter["issue"]) != 39 {
+	if number(t, reenter["issue"]) != 39 {
 		t.Fatalf("issue = %v", reenter["issue"])
 	}
-	cl := reenter["cl"].(map[string]any)
+	cl := asMap(t, reenter["cl"])
 	if got := keys(cl); !slices.Equal(got, []string{"base", "branch", "number", "url"}) {
 		t.Fatalf("cl の key = %v", got)
 	}
-	if number(cl["number"]) != 100 || cl["branch"] != workerBranch(39) || cl["base"] != "worktree-issue-38" {
+	if number(t, cl["number"]) != 100 || cl["branch"] != workerBranch(39) || cl["base"] != "worktree-issue-38" {
 		t.Fatalf("cl = %v", cl)
 	}
-	conditions := reenter["conditions"].([]any)
-	condition := conditions[0].(map[string]any)
+	conditions := asList(t, reenter["conditions"])
+	condition := asMap(t, conditions[0])
 	want := playbookPath(s.defaultInstallPath(), "playbook-conflict-resolution")
 	if len(conditions) != 1 || condition["name"] != "conflict" || condition["playbook"] != want {
 		t.Fatalf("conditions = %v, want [{conflict %s}]", conditions, want)
@@ -233,16 +232,16 @@ func TestAllConditionsOnOneCLAreCombinedInCatalogOrder(t *testing.T) {
 
 	s.tick()
 
-	reenters := instructionsOfKind(s.onlyInstructionFile(), "reenter")
+	reenters := instructionsOfKind(t, s.onlyInstructionFile(), "reenter")
 	if len(reenters) != 1 {
 		t.Fatalf("1 CL の条件が 1 指示にまとまっていない: %v", reenters)
 	}
-	if got := conditionNames(reenters[0]); !slices.Equal(got, []string{"conflict", "review", "ci"}) {
+	if got := conditionNames(t, reenters[0]); !slices.Equal(got, []string{"conflict", "review", "ci"}) {
 		t.Fatalf("conditions = %v, want 条件カタログの順 [conflict review ci]", got)
 	}
 	var playbooks []string
-	for _, c := range reenters[0]["conditions"].([]any) {
-		playbooks = append(playbooks, c.(map[string]any)["playbook"].(string))
+	for _, c := range asList(t, reenters[0]["conditions"]) {
+		playbooks = append(playbooks, asString(t, asMap(t, c)["playbook"]))
 	}
 	install := s.defaultInstallPath()
 	want := []string{
@@ -268,7 +267,7 @@ func TestCiConditionStandsOnlyForFailedChecks(t *testing.T) {
 			s.setPRs(pullRequest{number: 100, branch: workerBranch(39), closes: []int{39}, checks: tc.checks})
 			s.orchestratorSkips(39)
 
-			s.tick()
+			assertExit(t, s.tick(), 0)
 
 			files := s.instructionFiles()
 			if !tc.reenters {
@@ -277,8 +276,8 @@ func TestCiConditionStandsOnlyForFailedChecks(t *testing.T) {
 				}
 				return
 			}
-			reenters := instructionsOfKind(s.onlyInstructionFile(), "reenter")
-			if len(reenters) != 1 || !slices.Equal(conditionNames(reenters[0]), []string{"ci"}) {
+			reenters := instructionsOfKind(t, s.onlyInstructionFile(), "reenter")
+			if len(reenters) != 1 || !slices.Equal(conditionNames(t, reenters[0]), []string{"ci"}) {
 				t.Fatalf("reenter = %v", reenters)
 			}
 		})
@@ -331,13 +330,13 @@ func TestReenterTakesSlotsBeforeStart(t *testing.T) {
 
 	doc := s.onlyInstructionFile()
 	var kinds []string
-	for _, i := range instructionsOf(doc) {
-		kinds = append(kinds, i["kind"].(string))
+	for _, i := range instructionsOf(t, doc) {
+		kinds = append(kinds, asString(t, i["kind"]))
 	}
 	if !slices.Equal(kinds, []string{"reenter", "start"}) {
 		t.Fatalf("指示の並び = %v, want [reenter start]", kinds)
 	}
-	if got := number(instructionsOfKind(doc, "start")[0]["free_slots"]); got != 1 {
+	if got := number(t, instructionsOfKind(t, doc, "start")[0]["free_slots"]); got != 1 {
 		t.Fatalf("start の free_slots = %d, want 1 (reenter が 1 slot 取った残り)", got)
 	}
 }
@@ -355,10 +354,10 @@ func TestReenterBeyondFreeSlotsIsNotIssuedThisTick(t *testing.T) {
 	s.tick()
 
 	doc := s.onlyInstructionFile()
-	if got := len(instructionsOfKind(doc, "reenter")); got != 1 {
+	if got := len(instructionsOfKind(t, doc, "reenter")); got != 1 {
 		t.Fatalf("空き 1 slot に reenter が %d 件", got)
 	}
-	if got := len(instructionsOfKind(doc, "start")); got != 0 {
+	if got := len(instructionsOfKind(t, doc, "start")); got != 0 {
 		t.Fatal("slot が無いのに start が出た")
 	}
 }
@@ -398,19 +397,19 @@ func TestAnomaliesAreRaisedForUnclassifiableObservations(t *testing.T) {
 
 			s.tick()
 
-			anomalies := instructionsOfKind(s.onlyInstructionFile(), "anomaly")
+			anomalies := instructionsOfKind(t, s.onlyInstructionFile(), "anomaly")
 			if len(anomalies) != 1 {
 				t.Fatalf("anomaly = %v", anomalies)
 			}
 			anomaly := anomalies[0]
-			if anomaly["reason"] != tc.reason || !slices.Equal(numbers(anomaly["issues"]), tc.want) {
+			if anomaly["reason"] != tc.reason || !slices.Equal(numbers(t, anomaly["issues"]), tc.want) {
 				t.Fatalf("anomaly = %v, want reason %s issues %v", anomaly, tc.reason, tc.want)
 			}
 			_, hasCLs := anomaly["cls"]
 			if hasCLs != (tc.reason == "multiple_open_cls") {
 				t.Fatalf("cls を持つのは multiple_open_cls だけ: %v", anomaly)
 			}
-			if tc.reason == "multiple_open_cls" && !slices.Equal(numbers(anomaly["cls"]), []int{98, 99}) {
+			if tc.reason == "multiple_open_cls" && !slices.Equal(numbers(t, anomaly["cls"]), []int{98, 99}) {
 				t.Fatalf("cls = %v", anomaly["cls"])
 			}
 		})
@@ -428,7 +427,7 @@ func TestMultipleOpenCLsOfOneIssueYieldOnlyTheAnomaly(t *testing.T) {
 
 	s.tick()
 
-	if got := instructionsOfKind(s.onlyInstructionFile(), "reenter"); len(got) != 0 {
+	if got := instructionsOfKind(t, s.onlyInstructionFile(), "reenter"); len(got) != 0 {
 		t.Fatalf("CL が複数紐づく issue に reenter が出た: %v", got)
 	}
 }
@@ -443,8 +442,8 @@ func TestInstructionsAreOrderedReenterStartAnomaly(t *testing.T) {
 	s.tick()
 
 	var kinds []string
-	for _, i := range instructionsOf(s.onlyInstructionFile()) {
-		kinds = append(kinds, i["kind"].(string))
+	for _, i := range instructionsOf(t, s.onlyInstructionFile()) {
+		kinds = append(kinds, asString(t, i["kind"]))
 	}
 	if !slices.Equal(kinds, []string{"reenter", "start", "anomaly"}) {
 		t.Fatalf("指示の並び = %v", kinds)

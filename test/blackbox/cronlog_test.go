@@ -35,7 +35,7 @@ func TestFailedTickEndsStderrWithALinePointingToItsLogLine(t *testing.T) {
 
 	assertExit(t, r, 2)
 	line := s.onlyTickLine()
-	msg := assertCronLogLine(t, r.stderr, s.project, line["ts"].(string), "config_error")
+	msg := assertCronLogLine(t, r.stderr, s.project, asString(t, line["ts"]), "config_error")
 	if msg != line["error"] {
 		t.Fatalf("cron.log の error %q と log.jsonl の error %q が違う", msg, line["error"])
 	}
@@ -75,7 +75,7 @@ func TestCronLogLineFoldsAMultilineErrorIntoOneLine(t *testing.T) {
 	r := s.tick()
 
 	assertExit(t, r, 1)
-	msg := assertCronLogLine(t, r.stderr, s.project, s.onlyTickLine()["ts"].(string), "error")
+	msg := assertCronLogLine(t, r.stderr, s.project, asString(t, s.onlyTickLine()["ts"]), "error")
 	if !strings.Contains(msg, "first problem / second problem") {
 		t.Fatalf("error が 1 行に畳まれていない: %q", msg)
 	}
@@ -89,5 +89,5 @@ func TestTickStoppedMidwayPointsToTheLogLineItLeft(t *testing.T) {
 	r := s.tick()
 
 	assertExit(t, r, 1)
-	assertCronLogLine(t, r.stderr, s.project, s.onlyTickLine()["ts"].(string), "error")
+	assertCronLogLine(t, r.stderr, s.project, asString(t, s.onlyTickLine()["ts"]), "error")
 }

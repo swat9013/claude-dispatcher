@@ -29,7 +29,7 @@ func TestQuietTickLeavesOneLineAndDoesNotLaunchClaude(t *testing.T) {
 	if line["instruction_file"] != nil {
 		t.Fatalf("指示 0 件なのに instruction_file = %v", line["instruction_file"])
 	}
-	if got := line["instructions"].(map[string]any); len(got) != 0 {
+	if got := asMap(t, line["instructions"]); len(got) != 0 {
 		t.Fatalf("指示 0 件の instructions = %v, want {}", got)
 	}
 	if calls := s.calls("claude"); len(calls) != 0 {
@@ -68,14 +68,14 @@ func TestObservedCountsAreLogged(t *testing.T) {
 	s.tick()
 
 	line := s.onlyTickLine()
-	observed := line["observed"].(map[string]any)
-	if number(observed["issues"]) != 3 || number(observed["cls"]) != 1 {
+	observed := asMap(t, line["observed"])
+	if number(t, observed["issues"]) != 3 || number(t, observed["cls"]) != 1 {
 		t.Fatalf("observed = %v", observed)
 	}
-	if number(line["candidates"]) != 2 || number(line["wip"]) != 1 {
+	if number(t, line["candidates"]) != 2 || number(t, line["wip"]) != 1 {
 		t.Fatalf("candidates = %v, wip = %v", line["candidates"], line["wip"])
 	}
-	if got := line["instructions"].(map[string]any); len(got) != 1 || number(got["start"]) != 1 {
+	if got := asMap(t, line["instructions"]); len(got) != 1 || number(t, got["start"]) != 1 {
 		t.Fatalf("instructions = %v, want {start: 1}", got)
 	}
 }
@@ -103,7 +103,7 @@ func TestMultilineErrorIsFoldedIntoOneLine(t *testing.T) {
 
 	s.tick()
 
-	msg := s.onlyTickLine()["error"].(string)
+	msg := asString(t, s.onlyTickLine()["error"])
 	if strings.Contains(msg, "\n") || !strings.Contains(msg, "first problem / second problem") {
 		t.Fatalf("複数行の error が ` / ` で 1 行に畳まれていない: %q", msg)
 	}
@@ -130,17 +130,17 @@ func TestTickThatLaunchedClaudeLogsTheOrchestratorRun(t *testing.T) {
 	assertExit(t, r, 0)
 	line := s.onlyTickLine()
 	assertResult(t, line, "ok")
-	orchestrator := line["orchestrator"].(map[string]any)
+	orchestrator := asMap(t, line["orchestrator"])
 	if got := keys(orchestrator); !slices.Equal(got, []string{"exit_code", "seconds", "session_id", "timed_out"}) {
 		t.Fatalf("orchestrator の key = %v", got)
 	}
-	if number(orchestrator["exit_code"]) != 0 || orchestrator["timed_out"] != false {
+	if number(t, orchestrator["exit_code"]) != 0 || orchestrator["timed_out"] != false {
 		t.Fatalf("orchestrator = %v", orchestrator)
 	}
 	if _, ok := orchestrator["seconds"].(float64); !ok {
 		t.Fatalf("seconds が数値でない: %v", orchestrator["seconds"])
 	}
-	sessionID := orchestrator["session_id"].(string)
+	sessionID := asString(t, orchestrator["session_id"])
 	if !uuidPattern.MatchString(sessionID) {
 		t.Fatalf("session_id が UUID でない: %q", sessionID)
 	}
@@ -160,18 +160,18 @@ func TestSpawnedWorkersAreLoggedWithPidLogAndSessionID(t *testing.T) {
 	s.tick()
 
 	line := s.onlyTickLine()
-	spawned := line["spawned"].([]any)
+	spawned := asList(t, line["spawned"])
 	if len(spawned) != 1 {
 		t.Fatalf("spawned = %v", spawned)
 	}
-	entry := spawned[0].(map[string]any)
+	entry := asMap(t, spawned[0])
 	if got := keys(entry); !slices.Equal(got, []string{"issue", "kind", "log", "pid", "session_id"}) {
 		t.Fatalf("spawned の key = %v", got)
 	}
-	if number(entry["issue"]) != 42 || entry["kind"] != "start" || number(entry["pid"]) <= 0 {
+	if number(t, entry["issue"]) != 42 || entry["kind"] != "start" || number(t, entry["pid"]) <= 0 {
 		t.Fatalf("spawned = %v", entry)
 	}
-	stem := strings.TrimSuffix(filepath.Base(line["instruction_file"].(string)), ".json")
+	stem := tickStem(asString(t, line["instruction_file"]))
 	if want := filepath.Join(s.stateDir(), "workers", fmt.Sprintf("42-%s.log", stem)); entry["log"] != want {
 		t.Fatalf("log = %v, want %s", entry["log"], want)
 	}
@@ -182,7 +182,7 @@ func TestSpawnedWorkersAreLoggedWithPidLogAndSessionID(t *testing.T) {
 	if got, _ := workers[0].flagValue("--session-id"); got != entry["session_id"] {
 		t.Fatalf("worker に渡した --session-id %q と log の session_id %v が違う", got, entry["session_id"])
 	}
-	if entry["session_id"] == line["orchestrator"].(map[string]any)["session_id"] {
+	if entry["session_id"] == asMap(t, line["orchestrator"])["session_id"] {
 		t.Fatal("worker と orchestrator が同じ session id を持つ")
 	}
 }
@@ -205,12 +205,12 @@ func TestOrchestratorDecisionsAreCopiedToAnOrchestratorLine(t *testing.T) {
 	if line["ts"] != tickLine["ts"] || line["instruction_file"] != tickLine["instruction_file"] || line["project"] != s.project {
 		t.Fatalf("orchestrator 行が同じ tick を指していない: %v / %v", line, tickLine)
 	}
-	got := line["decisions"].([]any)
+	got := asList(t, line["decisions"])
 	if len(got) != 1 {
 		t.Fatalf("decisions = %v", got)
 	}
-	d := got[0].(map[string]any)
-	if number(d["issue"]) != 42 || d["action"] != "start" || d["reason"] != "着手できる" {
+	d := asMap(t, got[0])
+	if number(t, d["issue"]) != 42 || d["action"] != "start" || d["reason"] != "着手できる" {
 		t.Fatalf("決定ファイルの decisions がそのまま写っていない: %v", d)
 	}
 }
@@ -243,7 +243,7 @@ func TestOrchestratorOutputGoesNextToTheDecisionsFile(t *testing.T) {
 
 	s.tick()
 
-	stem := strings.TrimSuffix(filepath.Base(s.onlyTickLine()["instruction_file"].(string)), ".json")
+	stem := tickStem(asString(t, s.onlyTickLine()["instruction_file"]))
 	log := filepath.Join(s.stateDir(), "decisions", stem+".orchestrator.log")
 	if got := string(mustRead(t, log)); !strings.Contains(got, strings.TrimSpace(orchestratorOutput)) {
 		t.Fatalf("orchestrator の出力が %s に無い: %q", log, got)
@@ -257,7 +257,7 @@ func TestWorkerOutputGoesToItsLog(t *testing.T) {
 	s.tick()
 
 	s.waitWorkerCalls(1)
-	file := s.onlyTickLine()["spawned"].([]any)[0].(map[string]any)["log"].(string)
+	file := asString(t, asMap(t, asList(t, s.onlyTickLine()["spawned"])[0])["log"])
 	waitFor(t, func() bool {
 		raw, err := os.ReadFile(file)
 		return err == nil && strings.Contains(string(raw), strings.TrimSpace(workerStubOutput))

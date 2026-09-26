@@ -38,10 +38,10 @@ func TestDryRunReportsInstructionCountsOnOneLineAndWritesNothing(t *testing.T) {
 	if out["dry_run"] != true || out["result"] != "ok" || out["project"] != s.project {
 		t.Fatalf("試運転の行 = %v", out)
 	}
-	if got := out["instructions"].(map[string]any); len(got) != 1 || number(got["start"]) != 1 {
+	if got := asMap(t, out["instructions"]); len(got) != 1 || number(t, got["start"]) != 1 {
 		t.Fatalf("instructions = %v, want {start: 1}", got)
 	}
-	if number(out["candidates"]) != 1 || number(out["wip"]) != 1 {
+	if number(t, out["candidates"]) != 1 || number(t, out["wip"]) != 1 {
 		t.Fatalf("candidates / wip = %v / %v", out["candidates"], out["wip"])
 	}
 	if after := tree(t, s.stateRoot); !reflect.DeepEqual(before, after) {
@@ -91,7 +91,7 @@ func TestDryRunOfAQuietProjectReportsEmptyInstructions(t *testing.T) {
 	if err := json.Unmarshal([]byte(strings.TrimSpace(r.stdout)), &out); err != nil {
 		t.Fatal(err)
 	}
-	if got := out["instructions"].(map[string]any); len(got) != 0 {
+	if got := asMap(t, out["instructions"]); len(got) != 0 {
 		t.Fatalf("instructions = %v, want {}", got)
 	}
 }
@@ -112,9 +112,7 @@ func TestDryRunFailsWhenClaudeCannotBeResolved(t *testing.T) {
 	if r.exit == 0 {
 		t.Fatalf("claude が解決できないのに試運転が通った: %s", r.stdout)
 	}
-	if !strings.Contains(r.stderr, "claude") {
-		t.Fatalf("解決できない依存を名指ししていない: %q", r.stderr)
-	}
+	s.assertNames(r.stderr, "claude")
 }
 
 func TestCronEnvWithoutDryRunIsRejected(t *testing.T) {
@@ -163,7 +161,7 @@ func TestCronEnvDryRunRunsWithOnlyHomeAndAMinimalPath(t *testing.T) {
 	if err := json.Unmarshal([]byte(strings.TrimSpace(r.stdout)), &out); err != nil {
 		t.Fatalf("撃ち直した試運転の stdout が JSON 1 行でない: %v\n%s", err, r.stdout)
 	}
-	if got := out["instructions"].(map[string]any); number(got["start"]) != 1 {
+	if got := asMap(t, out["instructions"]); number(t, got["start"]) != 1 {
 		t.Fatalf("instructions = %v", got)
 	}
 }

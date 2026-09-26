@@ -3,6 +3,7 @@ package blackbox_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -11,14 +12,14 @@ import (
 
 func startPlaybooks(t *testing.T, s *sandbox) map[string]string {
 	t.Helper()
-	starts := instructionsOfKind(s.onlyInstructionFile(), "start")
+	starts := instructionsOfKind(t, s.onlyInstructionFile(), "start")
 	if len(starts) != 1 {
 		t.Fatalf("start 指示 = %v", starts)
 	}
 	out := map[string]string{}
-	for _, raw := range starts[0]["playbooks"].([]any) {
-		p := raw.(map[string]any)
-		out[p["path"].(string)] = p["dispatch_when"].(string)
+	for _, raw := range asList(t, starts[0]["playbooks"]) {
+		p := asMap(t, raw)
+		out[asString(t, p["path"])] = asString(t, p["dispatch_when"])
 	}
 	return out
 }
@@ -54,8 +55,14 @@ func TestProjectScopeInstallForTheCloneWinsOverUserScope(t *testing.T) {
 
 	s.tick()
 
-	if _, ok := startPlaybooks(t, s)[playbookPath(project, "playbook-implementation")]; !ok {
-		t.Fatalf("clone の project scope の install を選んでいない: %v", startPlaybooks(t, s))
+	got := startPlaybooks(t, s)
+	for path := range got {
+		if !strings.HasPrefix(path, project+"/") {
+			t.Fatalf("clone の project scope の install だけを使っていない: %v", got)
+		}
+	}
+	if _, ok := got[playbookPath(project, "playbook-implementation")]; !ok {
+		t.Fatalf("clone の project scope の install を選んでいない: %v", got)
 	}
 }
 
@@ -67,8 +74,11 @@ func TestProjectScopeInstallForAnotherCloneIsIgnored(t *testing.T) {
 
 	s.tick()
 
-	if _, ok := startPlaybooks(t, s)[playbookPath(s.defaultInstallPath(), "playbook-implementation")]; !ok {
-		t.Fatalf("user scope の install を選んでいない: %v", startPlaybooks(t, s))
+	got := startPlaybooks(t, s)
+	for path := range got {
+		if !strings.HasPrefix(path, s.defaultInstallPath()+"/") {
+			t.Fatalf("user scope の install だけを使っていない: %v", got)
+		}
 	}
 }
 
@@ -97,7 +107,7 @@ func TestPluginFromTwoMarketplacesStopsTheTick(t *testing.T) {
 	assertExit(t, r, 1)
 	line := s.onlyTickLine()
 	assertResult(t, line, "error")
-	assertErrorMentions(t, line, "swat-skills")
+	s.assertErrorNames(line, "swat-skills")
 	if files := s.instructionFiles(); len(files) != 0 {
 		t.Fatalf("playbook を解決できないのに指示ファイルを書いた: %v", files)
 	}
@@ -115,7 +125,7 @@ func TestMarkedPlaybookWithoutDispatchWhenStopsTheTickNamingIt(t *testing.T) {
 	r := s.tick()
 
 	assertExit(t, r, 1)
-	assertErrorMentions(t, s.onlyTickLine(), filepath.Join(broken, "SKILL.md"))
+	s.assertErrorNames(s.onlyTickLine(), filepath.Join(broken, "SKILL.md"))
 	if calls := s.calls("claude"); len(calls) != 0 {
 		t.Fatalf("母集合を決められないのに claude を起動した: %v", calls)
 	}
@@ -131,7 +141,7 @@ func TestUnreadableFrontmatterStopsTheTick(t *testing.T) {
 	r := s.tick()
 
 	assertExit(t, r, 1)
-	assertErrorMentions(t, s.onlyTickLine(), filepath.Join(broken, "SKILL.md"))
+	s.assertErrorNames(s.onlyTickLine(), filepath.Join(broken, "SKILL.md"))
 }
 
 func TestOrchestratorPromptCarriesTheResolvedPrincipleIndexPath(t *testing.T) {

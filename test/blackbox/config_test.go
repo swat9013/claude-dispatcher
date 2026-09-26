@@ -29,7 +29,7 @@ func assertConfigErrorWithoutObserving(t *testing.T, s *sandbox, r runResult, fr
 	assertExit(t, r, 2)
 	line := s.onlyTickLine()
 	assertResult(t, line, "config_error")
-	assertErrorMentions(t, line, fragments...)
+	s.assertErrorNames(line, fragments...)
 	if calls := s.observationCalls(); len(calls) != 0 {
 		t.Fatalf("config が不正なのに観測した: %v", calls)
 	}

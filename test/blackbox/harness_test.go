@@ -19,6 +19,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -160,6 +161,8 @@ func newBareSandbox(t *testing.T) *sandbox {
 	for _, dir := range []string{s.home, s.clone, s.stubRoot} {
 		mustMkdir(t, dir)
 	}
+	// TempDir の削除より先に走る (Cleanup は後に登録したものから走る)
+	t.Cleanup(s.waitForSpawnedWorkers)
 	s.installStubs(s.binDir)
 	s.env = map[string]string{
 		"HOME": s.home,
@@ -520,6 +523,15 @@ func (c stubCall) flagValue(name string) (string, bool) {
 	return "", false
 }
 
+func (c stubCall) hasArg(want string) bool {
+	for _, arg := range c.args() {
+		if arg == want {
+			return true
+		}
+	}
+	return false
+}
+
 func (c stubCall) hasPrefix(prefix ...string) bool {
 	args := c.args()
 	if len(args) < len(prefix) {
@@ -602,6 +614,28 @@ func waitFor(t *testing.T, done func() bool, failure string) {
 			t.Fatal(failure)
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// waitForSpawnedWorkers は log の spawned に載った worker の終了を待つ。detach 起動された worker の stub が
+// テスト終了後に sandbox へ書くと、TempDir の削除が "directory not empty" で落ちる。
+func (s *sandbox) waitForSpawnedWorkers() {
+	if s.stateRoot == "" {
+		return
+	}
+	for _, line := range s.tickLines() {
+		spawned, _ := line["spawned"].([]any)
+		for _, raw := range spawned {
+			entry, _ := raw.(map[string]any)
+			pid, _ := entry["pid"].(float64)
+			if pid <= 0 {
+				continue
+			}
+			deadline := time.Now().Add(10 * time.Second)
+			for syscall.Kill(int(pid), 0) == nil && time.Now().Before(deadline) {
+				time.Sleep(20 * time.Millisecond)
+			}
+		}
 	}
 }
 
@@ -693,17 +727,19 @@ func (s *sandbox) onlyInstructionFile() map[string]any {
 	return doc
 }
 
-func instructionsOf(doc map[string]any) []map[string]any {
+func instructionsOf(t *testing.T, doc map[string]any) []map[string]any {
+	t.Helper()
 	var out []map[string]any
-	for _, raw := range doc["instructions"].([]any) {
-		out = append(out, raw.(map[string]any))
+	for _, raw := range asList(t, doc["instructions"]) {
+		out = append(out, asMap(t, raw))
 	}
 	return out
 }
 
-func instructionsOfKind(doc map[string]any, kind string) []map[string]any {
+func instructionsOfKind(t *testing.T, doc map[string]any, kind string) []map[string]any {
+	t.Helper()
 	var out []map[string]any
-	for _, i := range instructionsOf(doc) {
+	for _, i := range instructionsOf(t, doc) {
 		if i["kind"] == kind {
 			out = append(out, i)
 		}
@@ -792,28 +828,81 @@ func assertResult(t *testing.T, line logLine, want string) {
 	}
 }
 
-func assertErrorMentions(t *testing.T, line logLine, fragments ...string) {
-	t.Helper()
-	msg, _ := line["error"].(string)
-	for _, f := range fragments {
-		if !strings.Contains(msg, f) {
-			t.Fatalf("error が %q を名指ししていない: %q", f, msg)
+// assertErrorNames は log 行の error が names をそれぞれ名指ししていることを確かめる。
+//
+// sandbox の path は test 名を含み ("…/TestConfigMissing…repo123/001/…") 部分文字列の検査を素通しにするので、
+// "/" を含まない名前は sandbox の path を除いた本文に語として現れることを見る。"/" を含む名前 (path・owner/name) は
+// 本文にそのまま含まれることを見る。
+func (s *sandbox) assertErrorNames(line logLine, names ...string) {
+	s.t.Helper()
+	s.assertNames(asString(s.t, line["error"]), names...)
+}
+
+func (s *sandbox) assertNames(msg string, names ...string) {
+	s.t.Helper()
+	withoutPaths := regexp.MustCompile(`\S*`+regexp.QuoteMeta(s.root)+`\S*`).ReplaceAllString(msg, "<path>")
+	for _, name := range names {
+		if strings.Contains(name, "/") {
+			if !strings.Contains(msg, name) {
+				s.t.Fatalf("%q を名指ししていない: %q", name, msg)
+			}
+			continue
+		}
+		word := regexp.MustCompile(`(^|[^A-Za-z0-9_-])` + regexp.QuoteMeta(name) + `([^A-Za-z0-9_-]|$)`)
+		if !word.MatchString(withoutPaths) {
+			s.t.Fatalf("%q を名指ししていない: %q", name, msg)
 		}
 	}
 }
 
-func number(v any) int {
+// tickStem は指示ファイル等の path から tick の stem (YYYYMMDDTHHMMSS.ffffffZ) を取り出す。
+func tickStem(file string) string {
+	return strings.TrimSuffix(filepath.Base(file), ".json")
+}
+
+// 型の合わない値は panic せず t.Fatal にする (panic は suite 全体を止め、残りの red を隠す)
+
+func asMap(t *testing.T, v any) map[string]any {
+	t.Helper()
+	m, ok := v.(map[string]any)
+	if !ok {
+		t.Fatalf("object でない: %#v", v)
+	}
+	return m
+}
+
+func asList(t *testing.T, v any) []any {
+	t.Helper()
+	l, ok := v.([]any)
+	if !ok {
+		t.Fatalf("array でない: %#v", v)
+	}
+	return l
+}
+
+func asString(t *testing.T, v any) string {
+	t.Helper()
+	str, ok := v.(string)
+	if !ok {
+		t.Fatalf("string でない: %#v", v)
+	}
+	return str
+}
+
+func number(t *testing.T, v any) int {
+	t.Helper()
 	f, ok := v.(float64)
 	if !ok {
-		panic(fmt.Sprintf("数値でない: %#v", v))
+		t.Fatalf("数値でない: %#v", v)
 	}
 	return int(f)
 }
 
-func numbers(v any) []int {
+func numbers(t *testing.T, v any) []int {
+	t.Helper()
 	var out []int
-	for _, x := range v.([]any) {
-		out = append(out, number(x))
+	for _, x := range asList(t, v) {
+		out = append(out, number(t, x))
 	}
 	return out
 }

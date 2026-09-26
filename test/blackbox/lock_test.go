@@ -34,7 +34,7 @@ func TestTickIsSkippedAsLockedWhileAnotherTickHoldsTheLock(t *testing.T) {
 	if calls := s.calls("claude"); len(calls) != 0 {
 		t.Fatalf("lock を取れないのに claude を起動した: %v", calls)
 	}
-	assertCronLogLine(t, r.stderr, s.project, line["ts"].(string), "locked")
+	assertCronLogLine(t, r.stderr, s.project, asString(t, line["ts"]), "locked")
 }
 
 func TestLockIsReleasedWhenTheTickEnds(t *testing.T) {
