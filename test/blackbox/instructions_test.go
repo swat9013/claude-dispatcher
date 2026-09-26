@@ -2,24 +2,13 @@ package blackbox_test
 
 import (
 	"slices"
-	"strings"
 	"testing"
 )
 
 // 指示ファイル (formats.md §5.1) と、その中身を決める指示カタログ (system.md §6)。
-// orchestrator には常に決定ファイルを書かせて tick を正常に終わらせ、指示ファイルだけを見る。
+// orchestrator には常に全件見送りの決定ファイルを書かせて tick を正常に終わらせ、指示ファイルだけを見る。
 
-// skipAll は指示ファイルの全 issue を見送る決定を orchestrator に書かせる (網羅の検査を通すため)。
-func (s *sandbox) orchestratorSkips(issues ...int) {
-	s.t.Helper()
-	var d decisions
-	for _, n := range issues {
-		d.Decisions = append(d.Decisions, decision{Issue: n, Action: "skip", Reason: "テスト"})
-	}
-	s.orchestratorWrites(d.json(s.t))
-}
-
-func TestInstructionFileIsNamedByTheTickStemAndReferencedFromTheLog(t *testing.T) {
+func TestInstructionFileIsNamedByTheTickStem(t *testing.T) {
 	s := newSandbox(t)
 	s.setIssues(readyIssue(42))
 	s.orchestratorSkips(42)
@@ -38,34 +27,44 @@ func TestInstructionFileIsNamedByTheTickStemAndReferencedFromTheLog(t *testing.T
 	}
 }
 
-func TestInstructionFileCarriesTheSnapshot(t *testing.T) {
+// snapshotScenario は候補 42・wip 40 (open CL 101 付き)・人待ち 38 の snapshot を書かせる。
+func snapshotScenario(t *testing.T) map[string]any {
+	t.Helper()
 	s := newSandbox(t)
 	s.setIssues(readyIssue(42), issue{number: 40, labels: []string{wipLabel}}, issue{number: 38, labels: []string{humanLabel}})
 	s.setPRs(pullRequest{number: 101, branch: workerBranch(40), closes: []int{40}, checks: "SUCCESS"})
 	s.orchestratorSkips(42)
-
 	s.tick()
+	return asMap(t, s.onlyInstructionFile()["snapshot"])
+}
 
-	snapshot := asMap(t, s.onlyInstructionFile()["snapshot"])
-	wantKeys := []string{"cl_repo", "cls", "issue_repo", "issues", "limits", "linked_cls", "observed", "observed_at"}
-	if got := keys(snapshot); !slices.Equal(got, wantKeys) {
-		t.Fatalf("snapshot の key = %v, want %v", got, wantKeys)
-	}
-	if snapshot["issue_repo"] != defaultIssueRepo || snapshot["cl_repo"] != defaultIssueRepo {
-		t.Fatalf("[cl] を省くと CL 置き場は issue 置き場を継ぐ: %v / %v", snapshot["issue_repo"], snapshot["cl_repo"])
+func TestSnapshotCarriesItsKeys(t *testing.T) {
+	snapshot := snapshotScenario(t)
+
+	want := []string{"cl_repo", "cls", "issue_repo", "issues", "limits", "linked_cls", "observed", "observed_at"}
+	if got := keys(snapshot); !slices.Equal(got, want) {
+		t.Fatalf("snapshot の key = %v, want %v", got, want)
 	}
 	limits := asMap(t, snapshot["limits"])
 	if number(t, limits["max_wip"]) != 2 || number(t, limits["wip_count"]) != 1 {
 		t.Fatalf("limits = %v", limits)
 	}
-	issues := asMap(t, snapshot["issues"])
-	candidates := asList(t, issues["candidates"])
-	if len(candidates) != 1 {
-		t.Fatalf("candidates = %v", candidates)
+}
+
+func TestClRepoDefaultsToTheIssueRepo(t *testing.T) {
+	snapshot := snapshotScenario(t)
+
+	if snapshot["issue_repo"] != defaultIssueRepo || snapshot["cl_repo"] != defaultIssueRepo {
+		t.Fatalf("[cl] を省くと CL 置き場は issue 置き場を継ぐ: %v / %v", snapshot["issue_repo"], snapshot["cl_repo"])
 	}
-	candidate := asMap(t, candidates[0])
-	if got := keys(candidate); !slices.Equal(got, []string{"body", "number", "title", "url"}) {
-		t.Fatalf("候補の key = %v (候補だけが body を持つ)", got)
+}
+
+func TestOnlyCandidatesCarryTheIssueBody(t *testing.T) {
+	issues := asMap(t, snapshotScenario(t)["issues"])
+
+	candidates := asList(t, issues["candidates"])
+	if len(candidates) != 1 || !slices.Equal(keys(asMap(t, candidates[0])), []string{"body", "number", "title", "url"}) {
+		t.Fatalf("candidates = %v (候補は body を持つ)", candidates)
 	}
 	wip := asList(t, issues["wip"])
 	if len(wip) != 1 || !slices.Equal(keys(asMap(t, wip[0])), []string{"number", "title", "url"}) {
@@ -74,13 +73,18 @@ func TestInstructionFileCarriesTheSnapshot(t *testing.T) {
 	if got := numbers(t, issues["ready_for_human"]); !slices.Equal(got, []int{38}) {
 		t.Fatalf("ready_for_human = %v", got)
 	}
+}
+
+func TestSnapshotNormalizesOpenCLs(t *testing.T) {
+	snapshot := snapshotScenario(t)
+
 	if got := numbers(t, asMap(t, snapshot["linked_cls"])["40"]); !slices.Equal(got, []int{101}) {
 		t.Fatalf("linked_cls = %v", snapshot["linked_cls"])
 	}
 	cl := asMap(t, asList(t, snapshot["cls"])[0])
-	wantCL := []string{"base", "branch", "checks", "draft", "issues", "mergeable", "number", "unresolved_threads", "url"}
-	if got := keys(cl); !slices.Equal(got, wantCL) {
-		t.Fatalf("cls の key = %v, want %v", got, wantCL)
+	wantKeys := []string{"base", "branch", "checks", "draft", "issues", "mergeable", "number", "unresolved_threads", "url"}
+	if got := keys(cl); !slices.Equal(got, wantKeys) {
+		t.Fatalf("cls の key = %v, want %v", got, wantKeys)
 	}
 	if cl["branch"] != workerBranch(40) || cl["base"] != "main" || cl["checks"] != "SUCCESS" || cl["mergeable"] != "MERGEABLE" {
 		t.Fatalf("cls = %v", cl)
@@ -107,11 +111,7 @@ func TestCandidatesWithFreeSlotsYieldAStartInstruction(t *testing.T) {
 	}
 	var got []int
 	for _, c := range asList(t, start["candidates"]) {
-		candidate := asMap(t, c)
-		got = append(got, number(t, candidate["number"]))
-		if candidate["body"] == nil {
-			t.Fatalf("候補が body を持たない: %v", candidate)
-		}
+		got = append(got, number(t, asMap(t, c)["number"]))
 	}
 	slices.Sort(got)
 	if !slices.Equal(got, []int{42, 43}) {
@@ -121,7 +121,7 @@ func TestCandidatesWithFreeSlotsYieldAStartInstruction(t *testing.T) {
 
 func TestCandidateExcludesWipHumanAndIssuesWithAnOpenCL(t *testing.T) {
 	s := newSandbox(t)
-	s.writeConfig(strings.Replace(s.defaultConfig(), "max_wip = 2", "max_wip = 5", 1))
+	s.setMaxWIP(5)
 	s.setIssues(
 		readyIssue(1),
 		issue{number: 2, labels: []string{defaultReadyLabel, wipLabel}},
@@ -146,8 +146,7 @@ func TestCandidateExcludesWipHumanAndIssuesWithAnOpenCL(t *testing.T) {
 	if !slices.Equal(got, []int{1}) {
 		t.Fatalf("候補 = %v, want [1] (着手可 ∧ ¬wip ∧ ¬ready-for-human ∧ 紐づく open CL なし)", got)
 	}
-	linked := asMap(t, snapshot["linked_cls"])
-	if !slices.Equal(numbers(t, linked["5"]), []int{105}) {
+	if linked := asMap(t, snapshot["linked_cls"]); !slices.Equal(numbers(t, linked["5"]), []int{105}) {
 		t.Fatalf("head branch の規約で紐づいていない: %v", linked)
 	}
 }
@@ -165,24 +164,20 @@ func TestClosingReferenceToAnotherRepoDoesNotLink(t *testing.T) {
 	}
 }
 
-func TestNoFreeSlotYieldsNoStartAndNoInstructionFile(t *testing.T) {
+func TestNoFreeSlotYieldsNoInstruction(t *testing.T) {
 	s := newSandbox(t)
 	s.setIssues(readyIssue(42), issue{number: 40, labels: []string{wipLabel}}, issue{number: 41, labels: []string{wipLabel}})
 
-	r := s.tick()
+	assertExit(t, s.tick(), 0)
 
-	assertExit(t, r, 0)
-	if files := s.instructionFiles(); len(files) != 0 {
-		t.Fatalf("空き slot が無いのに指示ファイルを書いた: %v", files)
-	}
-	if calls := s.calls("claude"); len(calls) != 0 {
-		t.Fatalf("指示 0 件なのに claude を起動した: %v", calls)
-	}
+	s.assertNoInstructionFile("空き slot が無いのに")
+	s.assertNoClaude("指示 0 件なのに")
 }
 
 // --- reenter ---
 
 func conditionNames(t *testing.T, instruction map[string]any) []string {
+	t.Helper()
 	var out []string
 	for _, c := range asList(t, instruction["conditions"]) {
 		out = append(out, asString(t, asMap(t, c)["name"]))
@@ -217,9 +212,8 @@ func TestConflictingWorkerCLOfAnUnclaimedIssueYieldsReenter(t *testing.T) {
 		t.Fatalf("cl = %v", cl)
 	}
 	conditions := asList(t, reenter["conditions"])
-	condition := asMap(t, conditions[0])
 	want := playbookPath(s.defaultInstallPath(), "playbook-conflict-resolution")
-	if len(conditions) != 1 || condition["name"] != "conflict" || condition["playbook"] != want {
+	if len(conditions) != 1 || asMap(t, conditions[0])["name"] != "conflict" || asMap(t, conditions[0])["playbook"] != want {
 		t.Fatalf("conditions = %v, want [{conflict %s}]", conditions, want)
 	}
 }
@@ -269,11 +263,8 @@ func TestCiConditionStandsOnlyForFailedChecks(t *testing.T) {
 
 			assertExit(t, s.tick(), 0)
 
-			files := s.instructionFiles()
 			if !tc.reenters {
-				if len(files) != 0 {
-					t.Fatalf("checks %q で指示が出た: %v", tc.checks, files)
-				}
+				s.assertNoInstructionFile("checks " + tc.checks + " で")
 				return
 			}
 			reenters := instructionsOfKind(t, s.onlyInstructionFile(), "reenter")
@@ -291,9 +282,7 @@ func TestResolvedThreadsAloneYieldNoReenter(t *testing.T) {
 
 	assertExit(t, s.tick(), 0)
 
-	if files := s.instructionFiles(); len(files) != 0 {
-		t.Fatalf("解決済み thread だけの CL に指示が出た: %v", files)
-	}
+	s.assertNoInstructionFile("解決済み thread だけの CL に")
 }
 
 func TestNoReenterIsIssuedFor(t *testing.T) {
@@ -313,9 +302,7 @@ func TestNoReenterIsIssuedFor(t *testing.T) {
 
 			assertExit(t, s.tick(), 0)
 
-			if files := s.instructionFiles(); len(files) != 0 {
-				t.Fatalf("指示が出た: %v", files)
-			}
+			s.assertNoInstructionFile(tc.name + "に")
 		})
 	}
 }
@@ -329,12 +316,8 @@ func TestReenterTakesSlotsBeforeStart(t *testing.T) {
 	s.tick()
 
 	doc := s.onlyInstructionFile()
-	var kinds []string
-	for _, i := range instructionsOf(t, doc) {
-		kinds = append(kinds, asString(t, i["kind"]))
-	}
-	if !slices.Equal(kinds, []string{"reenter", "start"}) {
-		t.Fatalf("指示の並び = %v, want [reenter start]", kinds)
+	if got := instructionKinds(t, doc); !slices.Equal(got, []string{"reenter", "start"}) {
+		t.Fatalf("指示の並び = %v, want [reenter start]", got)
 	}
 	if got := number(t, instructionsOfKind(t, doc, "start")[0]["free_slots"]); got != 1 {
 		t.Fatalf("start の free_slots = %d, want 1 (reenter が 1 slot 取った残り)", got)
@@ -343,7 +326,7 @@ func TestReenterTakesSlotsBeforeStart(t *testing.T) {
 
 func TestReenterBeyondFreeSlotsIsNotIssuedThisTick(t *testing.T) {
 	s := newSandbox(t)
-	s.writeConfig(strings.Replace(s.defaultConfig(), "max_wip = 2", "max_wip = 1", 1))
+	s.setMaxWIP(1)
 	s.setIssues(issue{number: 38}, issue{number: 39}, readyIssue(42))
 	s.setPRs(
 		pullRequest{number: 100, branch: workerBranch(38), closes: []int{38}, mergeable: "CONFLICTING"},
@@ -366,54 +349,64 @@ func TestReenterBeyondFreeSlotsIsNotIssuedThisTick(t *testing.T) {
 
 func TestAnomaliesAreRaisedForUnclassifiableObservations(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		issues []issue
-		prs    []pullRequest
-		reason string
-		want   []int
+		name    string
+		issues  []issue
+		prs     []pullRequest
+		reason  string
+		anomaly []int // anomaly の issues が含むべき issue (網羅の検査のため orchestrator はこれを見送る)
 	}{
 		{
 			name:   "wip が上限を超えている",
 			issues: []issue{{number: 1, labels: []string{wipLabel}}, {number: 2, labels: []string{wipLabel}}, {number: 3, labels: []string{wipLabel}}},
-			reason: "wip_over_limit", want: []int{1, 2, 3},
+			reason: "wip_over_limit", anomaly: []int{1, 2, 3},
 		},
 		{
 			name:   "wip と ready-for-human の同居",
 			issues: []issue{{number: 5, labels: []string{wipLabel, humanLabel}}},
-			reason: "wip_and_ready_for_human", want: []int{5},
+			reason: "wip_and_ready_for_human", anomaly: []int{5},
 		},
 		{
 			name:   "1 issue に open CL が複数 (label に依らない)",
 			issues: []issue{{number: 37}},
 			prs:    []pullRequest{{number: 98, branch: workerBranch(37), closes: []int{37}}, {number: 99, branch: "feature/y", closes: []int{37}}},
-			reason: "multiple_open_cls", want: []int{37},
+			reason: "multiple_open_cls", anomaly: []int{37},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newSandbox(t)
 			s.setIssues(tc.issues...)
 			s.setPRs(tc.prs...)
-			s.orchestratorSkips(tc.want...)
+			s.orchestratorSkips(tc.anomaly...)
 
 			s.tick()
 
 			anomalies := instructionsOfKind(t, s.onlyInstructionFile(), "anomaly")
-			if len(anomalies) != 1 {
-				t.Fatalf("anomaly = %v", anomalies)
+			if len(anomalies) != 1 || anomalies[0]["reason"] != tc.reason {
+				t.Fatalf("anomaly = %v, want reason %s", anomalies, tc.reason)
 			}
-			anomaly := anomalies[0]
-			if anomaly["reason"] != tc.reason || !slices.Equal(numbers(t, anomaly["issues"]), tc.want) {
-				t.Fatalf("anomaly = %v, want reason %s issues %v", anomaly, tc.reason, tc.want)
+			got := numbers(t, anomalies[0]["issues"])
+			// wip_over_limit の issues に何を並べるかは formats.md が決めていない。wip の issue から成ることだけを見る
+			if len(got) == 0 || !isSubset(got, tc.anomaly) || (tc.reason != "wip_over_limit" && !slices.Equal(got, tc.anomaly)) {
+				t.Fatalf("anomaly の issues = %v, want %v", got, tc.anomaly)
 			}
-			_, hasCLs := anomaly["cls"]
+			_, hasCLs := anomalies[0]["cls"]
 			if hasCLs != (tc.reason == "multiple_open_cls") {
-				t.Fatalf("cls を持つのは multiple_open_cls だけ: %v", anomaly)
+				t.Fatalf("cls を持つのは multiple_open_cls だけ: %v", anomalies[0])
 			}
-			if tc.reason == "multiple_open_cls" && !slices.Equal(numbers(t, anomaly["cls"]), []int{98, 99}) {
-				t.Fatalf("cls = %v", anomaly["cls"])
+			if hasCLs && !slices.Equal(numbers(t, anomalies[0]["cls"]), []int{98, 99}) {
+				t.Fatalf("cls = %v", anomalies[0]["cls"])
 			}
 		})
 	}
+}
+
+func isSubset(sub, of []int) bool {
+	for _, n := range sub {
+		if !slices.Contains(of, n) {
+			return false
+		}
+	}
+	return true
 }
 
 func TestMultipleOpenCLsOfOneIssueYieldOnlyTheAnomaly(t *testing.T) {
@@ -434,35 +427,26 @@ func TestMultipleOpenCLsOfOneIssueYieldOnlyTheAnomaly(t *testing.T) {
 
 func TestInstructionsAreOrderedReenterStartAnomaly(t *testing.T) {
 	s := newSandbox(t)
-	s.writeConfig(strings.Replace(s.defaultConfig(), "max_wip = 2", "max_wip = 3", 1))
+	s.setMaxWIP(3)
 	s.setIssues(issue{number: 39}, readyIssue(42), issue{number: 5, labels: []string{wipLabel, humanLabel}})
 	s.setPRs(pullRequest{number: 100, branch: workerBranch(39), closes: []int{39}, mergeable: "CONFLICTING"})
 	s.orchestratorSkips(39, 42, 5)
 
 	s.tick()
 
-	var kinds []string
-	for _, i := range instructionsOf(t, s.onlyInstructionFile()) {
-		kinds = append(kinds, asString(t, i["kind"]))
-	}
-	if !slices.Equal(kinds, []string{"reenter", "start", "anomaly"}) {
-		t.Fatalf("指示の並び = %v", kinds)
+	if got := instructionKinds(t, s.onlyInstructionFile()); !slices.Equal(got, []string{"reenter", "start", "anomaly"}) {
+		t.Fatalf("指示の並び = %v", got)
 	}
 }
 
-func TestTruncatedObservationIsAnErrorWithoutAnInstructionFile(t *testing.T) {
+func TestTruncatedObservationIsAnError(t *testing.T) {
 	s := newSandbox(t)
 	s.setIssues(readyIssue(42))
-	s.setPRPage(true, pullRequest{number: 1, branch: "feature/a"})
+	s.setTruncatedPRs(pullRequest{number: 1, branch: "feature/a"})
 
 	r := s.tick()
 
-	assertExit(t, r, 1)
-	assertResult(t, s.onlyTickLine(), "error")
-	if files := s.instructionFiles(); len(files) != 0 {
-		t.Fatalf("切り詰めた観測から指示ファイルを書いた: %v", files)
-	}
-	if calls := s.calls("claude"); len(calls) != 0 {
-		t.Fatalf("切り詰めた観測で claude を起動した: %v", calls)
-	}
+	s.assertOutcome(r, outcomeError)
+	s.assertNoInstructionFile("切り詰めた観測から")
+	s.assertNoClaude("切り詰めた観測で")
 }

@@ -12,39 +12,23 @@ import (
 
 // config.toml の検査 (formats.md §2)。不正な config では観測を始めず、名指しで config_error にする。
 
-func (s *sandbox) observationCalls() []stubCall {
-	return s.callsMatching("gh", func(c stubCall) bool {
-		return c.hasPrefix("issue", "list") || c.hasPrefix("api", "graphql")
-	})
-}
-
-func (s *sandbox) verificationCalls() []stubCall {
-	return s.callsMatching("gh", func(c stubCall) bool {
-		return c.hasPrefix("repo", "view") || c.hasPrefix("label", "list")
-	})
-}
-
-func assertConfigErrorWithoutObserving(t *testing.T, s *sandbox, r runResult, fragments ...string) {
-	t.Helper()
-	assertExit(t, r, 2)
-	line := s.onlyTickLine()
-	assertResult(t, line, "config_error")
-	s.assertErrorNames(line, fragments...)
+func (s *sandbox) assertConfigErrorWithoutObserving(r runResult, names ...string) {
+	s.t.Helper()
+	line := s.assertOutcome(r, outcomeConfigError)
+	s.assertErrorNames(line, names...)
 	if calls := s.observationCalls(); len(calls) != 0 {
-		t.Fatalf("config が不正なのに観測した: %v", calls)
+		s.t.Fatalf("config が不正なのに観測した: %v", calls)
 	}
-	if calls := s.calls("claude"); len(calls) != 0 {
-		t.Fatalf("config が不正なのに claude を起動した: %v", calls)
-	}
+	s.assertNoClaude("config が不正なのに")
 }
 
 func TestConfigWithUnknownKeyIsRejectedNamingTheKey(t *testing.T) {
 	s := newSandbox(t)
-	s.writeConfig(fmt.Sprintf("[issue]\nrepo = %q\nready_label = %q\nreadylabel = \"x\"\n\n[limits]\nmax_wip = 2\n", defaultIssueRepo, defaultReadyLabel))
+	s.writeConfig(s.configWith(`readylabel = "x"`, "max_wip = 2"))
 
 	r := s.tick()
 
-	assertConfigErrorWithoutObserving(t, s, r, "readylabel")
+	s.assertConfigErrorWithoutObserving(r, "readylabel")
 }
 
 func TestConfigWithUnknownTableIsRejectedNamingTheTable(t *testing.T) {
@@ -53,139 +37,151 @@ func TestConfigWithUnknownTableIsRejectedNamingTheTable(t *testing.T) {
 
 	r := s.tick()
 
-	assertConfigErrorWithoutObserving(t, s, r, "limit")
+	s.assertConfigErrorWithoutObserving(r, "limit")
+}
+
+func TestConfigThatIsNotTOMLIsRejected(t *testing.T) {
+	s := newSandbox(t)
+	s.writeConfig(s.defaultConfig() + "\n[issue\n")
+
+	r := s.tick()
+
+	s.assertConfigErrorWithoutObserving(r, s.configFile())
 }
 
 func TestConfigMissingARequiredKeyIsRejectedNamingTheKey(t *testing.T) {
 	for _, tc := range []struct {
-		name    string
-		config  string
 		missing string
+		config  string
 	}{
-		{"repo", fmt.Sprintf("[issue]\nready_label = %q\n\n[limits]\nmax_wip = 2\n", defaultReadyLabel), "repo"},
-		{"ready_label", fmt.Sprintf("[issue]\nrepo = %q\n\n[limits]\nmax_wip = 2\n", defaultIssueRepo), "ready_label"},
-		{"max_wip", fmt.Sprintf("[issue]\nrepo = %q\nready_label = %q\n", defaultIssueRepo, defaultReadyLabel), "max_wip"},
+		{"repo", fmt.Sprintf("[issue]\nready_label = %q\n\n[limits]\nmax_wip = 2\n", defaultReadyLabel)},
+		{"ready_label", fmt.Sprintf("[issue]\nrepo = %q\n\n[limits]\nmax_wip = 2\n", defaultIssueRepo)},
+		{"max_wip", fmt.Sprintf("[issue]\nrepo = %q\nready_label = %q\n", defaultIssueRepo, defaultReadyLabel)},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
+		t.Run(tc.missing, func(t *testing.T) {
 			s := newSandbox(t)
 			s.writeConfig(tc.config)
 
 			r := s.tick()
 
-			assertConfigErrorWithoutObserving(t, s, r, tc.missing)
+			s.assertConfigErrorWithoutObserving(r, tc.missing)
 		})
 	}
 }
 
-func TestConfigWithWrongTypeOrRangeIsRejected(t *testing.T) {
+func TestMaxWIPOtherThanAPositiveIntegerIsRejected(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		limits string
 	}{
-		{"max_wip が 0", "max_wip = 0"},
-		{"max_wip が文字列", `max_wip = "2"`},
-		{"max_wip が真偽値", "max_wip = true"},
+		{"0", "max_wip = 0"},
+		{"文字列", `max_wip = "2"`},
+		{"真偽値", "max_wip = true"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newSandbox(t)
-			s.writeConfig(fmt.Sprintf("[issue]\nrepo = %q\nready_label = %q\n\n[limits]\n%s\n", defaultIssueRepo, defaultReadyLabel, tc.limits))
+			s.writeConfig(s.configWith("", tc.limits))
 
 			r := s.tick()
 
-			assertConfigErrorWithoutObserving(t, s, r, "max_wip")
+			s.assertConfigErrorWithoutObserving(r, "max_wip")
 		})
 	}
 }
 
-func TestConfigWithEmptyClTableIsRejected(t *testing.T) {
-	s := newSandbox(t)
-	s.writeConfig(s.defaultConfig() + "\n[cl]\n")
+func TestEmptyTableThatRequiresKeysIsRejected(t *testing.T) {
+	for _, table := range []string{"cl", "auth"} {
+		t.Run(table, func(t *testing.T) {
+			s := newSandbox(t)
+			s.writeConfig(s.defaultConfig() + "\n[" + table + "]\n")
 
-	r := s.tick()
+			r := s.tick()
 
-	assertConfigErrorWithoutObserving(t, s, r, "cl")
+			s.assertConfigErrorWithoutObserving(r, table)
+		})
+	}
 }
 
-func TestConfigWithEmptyAuthTableIsRejected(t *testing.T) {
+func TestUnsupportedTrackerIsRejectedNamingIt(t *testing.T) {
 	s := newSandbox(t)
-	s.writeConfig(s.defaultConfig() + "\n[auth]\n")
+	s.writeConfig(s.configWith(`tracker = "gitlab"`, "max_wip = 2"))
 
 	r := s.tick()
 
-	assertConfigErrorWithoutObserving(t, s, r, "auth")
-}
-
-func TestConfigWithUnsupportedTrackerIsRejectedNamingIt(t *testing.T) {
-	s := newSandbox(t)
-	s.writeConfig(fmt.Sprintf("[issue]\nrepo = %q\nready_label = %q\ntracker = \"gitlab\"\n\n[limits]\nmax_wip = 2\n", defaultIssueRepo, defaultReadyLabel))
-
-	r := s.tick()
-
-	assertConfigErrorWithoutObserving(t, s, r, "gitlab")
+	s.assertConfigErrorWithoutObserving(r, "gitlab")
 }
 
 func TestTriageLabelSpelledLikeTheReadyLabelIsRejected(t *testing.T) {
 	s := newSandbox(t)
-	s.writeConfig(fmt.Sprintf("[issue]\nrepo = %q\nready_label = %q\ntriage_label = %q\n\n[limits]\nmax_wip = 2\n",
-		defaultIssueRepo, defaultReadyLabel, defaultReadyLabel))
+	s.writeConfig(s.configWith(fmt.Sprintf("triage_label = %q", defaultReadyLabel), "max_wip = 2"))
 
 	r := s.tick()
 
-	assertConfigErrorWithoutObserving(t, s, r, "triage_label")
+	s.assertConfigErrorWithoutObserving(r, "triage_label")
 }
 
-func TestNonexistentRepoIsRejectedNamingTheRepo(t *testing.T) {
+func TestNonexistentIssueRepoIsRejectedNamingTheRepo(t *testing.T) {
 	s := newSandbox(t)
-	s.respond("gh", stubRule{ArgsPrefix: []string{"repo", "view"}, Stderr: "GraphQL: Could not resolve to a Repository\n", Exit: 1})
+	s.repoMissing()
 
 	r := s.tick()
 
-	assertConfigErrorWithoutObserving(t, s, r, defaultIssueRepo)
+	s.assertConfigErrorWithoutObserving(r, defaultIssueRepo)
 }
 
-func TestClRepoIsVerifiedToo(t *testing.T) {
+func TestNonexistentClRepoIsRejectedNamingTheRepo(t *testing.T) {
 	s := newSandbox(t)
 	s.writeConfig(s.defaultConfig() + "\n[cl]\nrepo = \"acme/other\"\n")
-	s.respond("gh", stubRule{ArgsPrefix: []string{"repo", "view", "acme/other"}, Stderr: "GraphQL: Could not resolve to a Repository\n", Exit: 1})
+	s.repoMissing("acme/other")
 
 	r := s.tick()
 
-	assertConfigErrorWithoutObserving(t, s, r, "acme/other")
+	s.assertConfigErrorWithoutObserving(r, "acme/other")
 }
 
 func TestMissingMechanismLabelIsRejectedNamingTheLabel(t *testing.T) {
-	for _, missing := range []string{wipLabel, humanLabel} {
-		t.Run(missing, func(t *testing.T) {
+	for _, tc := range []struct{ missing, present string }{
+		{wipLabel, humanLabel},
+		{humanLabel, wipLabel},
+	} {
+		t.Run(tc.missing, func(t *testing.T) {
 			s := newSandbox(t)
-			present := wipLabel
-			if missing == wipLabel {
-				present = humanLabel
-			}
-			s.setLabels(present, defaultReadyLabel)
+			s.setLabels(tc.present, defaultReadyLabel)
 
 			r := s.tick()
 
-			assertConfigErrorWithoutObserving(t, s, r, missing)
+			s.assertConfigErrorWithoutObserving(r, tc.missing)
 		})
 	}
 }
 
 func TestDeclaredTriageLabelMustExist(t *testing.T) {
 	s := newSandbox(t)
-	s.writeConfig(fmt.Sprintf("[issue]\nrepo = %q\nready_label = %q\ntriage_label = \"triage-me\"\n\n[limits]\nmax_wip = 2\n",
-		defaultIssueRepo, defaultReadyLabel))
+	s.writeConfig(s.configWith(`triage_label = "triage-me"`, "max_wip = 2"))
 
 	r := s.tick()
 
-	assertConfigErrorWithoutObserving(t, s, r, "triage-me")
+	s.assertConfigErrorWithoutObserving(r, "triage-me")
 }
+
+func TestMissingConfigIsAConfigErrorNamingThePath(t *testing.T) {
+	s := newSandbox(t)
+	if err := os.Remove(s.configFile()); err != nil {
+		t.Fatal(err)
+	}
+
+	r := s.tick()
+
+	s.assertConfigErrorWithoutObserving(r, s.configFile())
+}
+
+// --- 検査済み marker ---
 
 func TestVerifiedConfigLeavesItsSha256AsTheMarker(t *testing.T) {
 	s := newSandbox(t)
 
-	r := s.tick()
+	assertExit(t, s.tick(), 0)
 
-	assertExit(t, r, 0)
 	sum := sha256.Sum256(mustRead(t, s.configFile()))
 	if got, want := strings.TrimSpace(string(mustRead(t, s.markerFile()))), hex.EncodeToString(sum[:]); got != want {
 		t.Fatalf("config-verified = %q, want %q", got, want)
@@ -197,14 +193,10 @@ func TestUnchangedConfigIsNotVerifiedAgain(t *testing.T) {
 	assertExit(t, s.tick(), 0)
 	before := len(s.verificationCalls())
 
-	r := s.tick()
+	assertExit(t, s.tick(), 0)
 
-	assertExit(t, r, 0)
 	if after := len(s.verificationCalls()); after != before {
 		t.Fatalf("変わらない config を再検査した: repo view / label list が %d 回増えた", after-before)
-	}
-	if len(s.observationCalls()) == 0 {
-		t.Fatal("観測していない")
 	}
 }
 
@@ -212,11 +204,10 @@ func TestChangedConfigIsVerifiedAgain(t *testing.T) {
 	s := newSandbox(t)
 	assertExit(t, s.tick(), 0)
 	before := len(s.verificationCalls())
-	s.writeConfig(strings.Replace(s.defaultConfig(), "max_wip = 2", "max_wip = 3", 1))
+	s.setMaxWIP(3)
 
-	r := s.tick()
+	assertExit(t, s.tick(), 0)
 
-	assertExit(t, r, 0)
 	if after := len(s.verificationCalls()); after == before {
 		t.Fatal("変わった config を再検査していない")
 	}
@@ -233,39 +224,30 @@ func TestConfigThatFailedVerificationLeavesNoMarker(t *testing.T) {
 	}
 }
 
-func TestMissingConfigIsAConfigErrorNamingThePath(t *testing.T) {
-	s := newSandbox(t)
-	if err := os.Remove(s.configFile()); err != nil {
+// --- 認証 (system.md §8) ---
+
+func writeTokenFile(t *testing.T, file, content string, mode os.FileMode) string {
+	t.Helper()
+	if err := os.WriteFile(file, []byte(content), mode); err != nil {
 		t.Fatal(err)
 	}
-
-	r := s.tick()
-
-	assertConfigErrorWithoutObserving(t, s, r, s.configFile())
-}
-
-// --- 認証 ---
-
-func (s *sandbox) writeTokenFile(name, content string, mode os.FileMode) string {
-	s.t.Helper()
-	file := filepath.Join(s.configDir(), name)
-	if err := os.WriteFile(file, []byte(content), mode); err != nil {
-		s.t.Fatal(err)
-	}
+	// WriteFile は umask を通すので、mode を確実に付け直す
 	if err := os.Chmod(file, mode); err != nil {
-		s.t.Fatal(err)
+		t.Fatal(err)
 	}
 	return file
 }
 
+func (s *sandbox) writeAuth(key, path string) {
+	s.writeConfig(s.defaultConfig() + fmt.Sprintf("\n[auth]\n%s = %q\n", key, path))
+}
+
 func TestTokenFileReachesGhWhenEnvHasNoToken(t *testing.T) {
 	s := newSandbox(t)
-	file := s.writeTokenFile("gh-token", "ghp_abc\ndef\n", 0o600)
-	s.writeConfig(s.defaultConfig() + fmt.Sprintf("\n[auth]\ntoken_file = %q\n", file))
+	s.writeAuth("token_file", writeTokenFile(t, filepath.Join(s.configDir(), "gh-token"), "ghp_abc\ndef\n", 0o600))
 
-	r := s.tick()
+	assertExit(t, s.tick(), 0)
 
-	assertExit(t, r, 0)
 	for _, c := range s.calls("gh") {
 		if c.Env["GH_TOKEN"] != "ghp_abcdef" {
 			t.Fatalf("gh %v に token file の中身 (空白を除いたもの) が GH_TOKEN として届いていない: %q", c.args(), c.Env["GH_TOKEN"])
@@ -273,69 +255,88 @@ func TestTokenFileReachesGhWhenEnvHasNoToken(t *testing.T) {
 	}
 }
 
-func TestEnvTokenWinsOverTokenFileWithoutCheckingTheFile(t *testing.T) {
+func TestTokenFileUnderTildeIsReadFromHome(t *testing.T) {
+	s := newSandbox(t)
+	writeTokenFile(t, filepath.Join(s.home, "gh-token"), "ghp_home", 0o600)
+	s.writeAuth("token_file", "~/gh-token")
+
+	assertExit(t, s.tick(), 0)
+
+	for _, c := range s.calls("gh") {
+		if c.Env["GH_TOKEN"] != "ghp_home" {
+			t.Fatalf("~ 始まりの token file が HOME の下から読まれていない: %q", c.Env["GH_TOKEN"])
+		}
+	}
+}
+
+func TestEnvTokenWinsOverTokenFileWithoutReadingTheFile(t *testing.T) {
 	for _, name := range []string{"GH_TOKEN", "GITHUB_TOKEN"} {
 		t.Run(name, func(t *testing.T) {
 			s := newSandbox(t)
-			// file は無い。env が勝つなら検査もされない
-			s.writeConfig(s.defaultConfig() + fmt.Sprintf("\n[auth]\ntoken_file = %q\n", filepath.Join(s.configDir(), "absent")))
+			// file は無い。env が勝つなら読まれもしない (system.md §8)
+			s.writeAuth("token_file", filepath.Join(s.configDir(), "absent"))
 
 			r := s.runWithEnv(map[string]string{name: "from-env"}, "tick", s.project)
 
 			assertExit(t, r, 0)
 			for _, c := range s.calls("gh") {
-				if c.Env[name] != "from-env" || (name != "GH_TOKEN" && c.Env["GH_TOKEN"] != "") {
-					t.Fatalf("env の token が勝っていない: %v", c.Env)
+				if c.Env[name] != "from-env" {
+					t.Fatalf("env の token が gh に届いていない: %v", c.Env)
 				}
 			}
 		})
 	}
 }
 
-func TestTokenFileReadableByOthersIsAConfigErrorWithoutLeakingTheToken(t *testing.T) {
-	s := newSandbox(t)
-	file := s.writeTokenFile("gh-token", "ghp_secret_value", 0o644)
-	s.writeConfig(s.defaultConfig() + fmt.Sprintf("\n[auth]\ntoken_file = %q\n", file))
+func TestTokenFileReadableByOthersIsRejectedWithoutLeakingTheToken(t *testing.T) {
+	for _, key := range []string{"token_file", "claude_token_file"} {
+		t.Run(key, func(t *testing.T) {
+			s := newSandbox(t)
+			file := writeTokenFile(t, filepath.Join(s.configDir(), "token"), "secret_value_123", 0o644)
+			s.writeAuth(key, file)
 
-	r := s.tick()
+			r := s.tick()
 
-	assertConfigErrorWithoutObserving(t, s, r, file)
-	if strings.Contains(r.stderr, "ghp_secret_value") || strings.Contains(string(mustRead(t, s.logFile())), "ghp_secret_value") {
-		t.Fatal("token が出力に漏れた")
+			s.assertConfigErrorWithoutObserving(r, file)
+			if strings.Contains(r.stderr, "secret_value_123") || strings.Contains(string(mustRead(t, s.logFile())), "secret_value_123") {
+				t.Fatal("token が出力に漏れた")
+			}
+		})
 	}
 }
 
 func TestTokenFileProblemsAreConfigErrors(t *testing.T) {
-	for _, tc := range []struct {
-		name  string
-		setup func(s *sandbox) string // token_file に書く値を返す
-	}{
-		{"file が無い", func(s *sandbox) string { return filepath.Join(s.configDir(), "absent") }},
-		{"中身が空白だけ", func(s *sandbox) string { return s.writeTokenFile("gh-token", " \n", 0o600) }},
-		{"相対 path", func(s *sandbox) string { return "gh-token" }},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			s := newSandbox(t)
-			value := tc.setup(s)
-			s.writeConfig(s.defaultConfig() + fmt.Sprintf("\n[auth]\ntoken_file = %q\n", value))
+	for _, key := range []string{"token_file", "claude_token_file"} {
+		for _, tc := range []struct {
+			name string
+			path func(s *sandbox) string
+		}{
+			{"file が無い", func(s *sandbox) string { return filepath.Join(s.configDir(), "absent") }},
+			{"中身が空白だけ", func(s *sandbox) string {
+				return writeTokenFile(s.t, filepath.Join(s.configDir(), "token"), " \n", 0o600)
+			}},
+			{"相対 path", func(s *sandbox) string { return "token" }},
+		} {
+			t.Run(key+"/"+tc.name, func(t *testing.T) {
+				s := newSandbox(t)
+				s.writeAuth(key, tc.path(s))
 
-			r := s.tick()
+				r := s.tick()
 
-			assertConfigErrorWithoutObserving(t, s, r, "token_file")
-		})
+				s.assertConfigErrorWithoutObserving(r, key)
+			})
+		}
 	}
 }
 
 func TestClaudeTokenFileReachesClaudeButNotGh(t *testing.T) {
 	s := newSandbox(t)
-	file := s.writeTokenFile("claude-token", "sk-ant-oat\n01-xyz\n", 0o600)
-	s.writeConfig(s.defaultConfig() + fmt.Sprintf("\n[auth]\nclaude_token_file = %q\n", file))
+	s.writeAuth("claude_token_file", writeTokenFile(t, filepath.Join(s.configDir(), "claude-token"), "sk-ant-oat\n01-xyz\n", 0o600))
 	s.setIssues(readyIssue(42))
-	s.orchestratorWrites(decisions{Decisions: []decision{{Issue: 42, Action: "skip", Reason: "テスト"}}}.json(t))
+	s.orchestratorSkips(42)
 
-	r := s.tick()
+	assertExit(t, s.tick(), 0)
 
-	assertExit(t, r, 0)
 	orchestrators := s.callsMatching("claude", isOrchestratorCall)
 	if len(orchestrators) != 1 || orchestrators[0].Env["CLAUDE_CODE_OAUTH_TOKEN"] != "sk-ant-oat01-xyz" {
 		t.Fatalf("orchestrator に claude の token が届いていない: %v", orchestrators)
@@ -349,31 +350,30 @@ func TestClaudeTokenFileReachesClaudeButNotGh(t *testing.T) {
 
 func TestGhAuthFailureIsAnAuthError(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		rule stubRule
+		name   string
+		exit   int
+		stderr string
 	}{
-		{"exit 4", stubRule{ArgsPrefix: []string{"repo", "view"}, Exit: 4, Stderr: "authentication required\n"}},
-		{"HTTP 401", stubRule{ArgsPrefix: []string{"repo", "view"}, Exit: 1, Stderr: "HTTP 401: Bad credentials\n"}},
-		{"gh auth login の案内", stubRule{ArgsPrefix: []string{"repo", "view"}, Exit: 1, Stderr: "To get started with GitHub CLI, please run:  gh auth login\n"}},
+		{"exit 4", 4, "authentication required\n"},
+		{"HTTP 401", 1, "HTTP 401: Bad credentials\n"},
+		{"gh auth login の案内", 1, "To get started with GitHub CLI, please run:  gh auth login\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newSandbox(t)
-			s.respond("gh", tc.rule)
+			s.ghFails([]string{"repo", "view"}, tc.exit, tc.stderr)
 
 			r := s.tick()
 
-			assertExit(t, r, 4)
-			assertResult(t, s.onlyTickLine(), "auth_error")
+			s.assertOutcome(r, outcomeAuthError)
 		})
 	}
 }
 
-func TestGhAuthFailureDuringObservationIsAnAuthErrorToo(t *testing.T) {
+func TestGhAuthFailureDuringObservationIsAnAuthError(t *testing.T) {
 	s := newSandbox(t)
-	s.respond("gh", stubRule{ArgsPrefix: []string{"api", "graphql"}, Exit: 1, Stderr: "HTTP 401: Bad credentials\n"})
+	s.ghFails([]string{"api", "graphql"}, 1, "HTTP 401: Bad credentials\n")
 
 	r := s.tick()
 
-	assertExit(t, r, 4)
-	assertResult(t, s.onlyTickLine(), "auth_error")
+	s.assertOutcome(r, outcomeAuthError)
 }

@@ -24,12 +24,31 @@ func startPlaybooks(t *testing.T, s *sandbox) map[string]string {
 	return out
 }
 
-func TestStartCarriesEveryMarkedPlaybookWithItsDispatchWhen(t *testing.T) {
-	s := newSandbox(t)
+// assertPlaybooksOnlyFrom は start の選定母集合が installPath の playbook だけから成ることを確かめる。
+func assertPlaybooksOnlyFrom(t *testing.T, s *sandbox, installPath string) {
+	t.Helper()
+	got := startPlaybooks(t, s)
+	if _, ok := got[playbookPath(installPath, "playbook-implementation")]; !ok {
+		t.Fatalf("%s の install を選んでいない: %v", installPath, got)
+	}
+	for path := range got {
+		if !strings.HasPrefix(path, installPath+"/") {
+			t.Fatalf("%s 以外の install の playbook が混ざった: %v", installPath, got)
+		}
+	}
+}
+
+func (s *sandbox) tickWithOneCandidate() {
+	s.t.Helper()
 	s.setIssues(readyIssue(42))
 	s.orchestratorSkips(42)
+	assertExit(s.t, s.tick(), 0)
+}
 
-	s.tick()
+func TestStartCarriesEveryMarkedPlaybookWithItsDispatchWhen(t *testing.T) {
+	s := newSandbox(t)
+
+	s.tickWithOneCandidate()
 
 	install := s.defaultInstallPath()
 	got := startPlaybooks(t, s)
@@ -50,50 +69,42 @@ func TestStartCarriesEveryMarkedPlaybookWithItsDispatchWhen(t *testing.T) {
 func TestProjectScopeInstallForTheCloneWinsOverUserScope(t *testing.T) {
 	s := newSandbox(t)
 	project := s.installPlugin("swat-skills@swat9013", "project", s.clone)
-	s.setIssues(readyIssue(42))
-	s.orchestratorSkips(42)
 
-	s.tick()
+	s.tickWithOneCandidate()
 
-	got := startPlaybooks(t, s)
-	for path := range got {
-		if !strings.HasPrefix(path, project+"/") {
-			t.Fatalf("clone の project scope の install だけを使っていない: %v", got)
-		}
-	}
-	if _, ok := got[playbookPath(project, "playbook-implementation")]; !ok {
-		t.Fatalf("clone の project scope の install を選んでいない: %v", got)
-	}
+	assertPlaybooksOnlyFrom(t, s, project)
 }
 
 func TestProjectScopeInstallForAnotherCloneIsIgnored(t *testing.T) {
 	s := newSandbox(t)
 	s.installPlugin("swat-skills@swat9013", "project", filepath.Join(s.root, "another-clone"))
-	s.setIssues(readyIssue(42))
-	s.orchestratorSkips(42)
 
-	s.tick()
+	s.tickWithOneCandidate()
 
-	got := startPlaybooks(t, s)
-	for path := range got {
-		if !strings.HasPrefix(path, s.defaultInstallPath()+"/") {
-			t.Fatalf("user scope の install だけを使っていない: %v", got)
-		}
-	}
+	assertPlaybooksOnlyFrom(t, s, s.defaultInstallPath())
 }
 
 func TestSkillsDirIsUsedWhenNoPluginIsInstalled(t *testing.T) {
-	s := newSandbox(t)
-	s.removeInstalledPlugins()
-	skillsDir := filepath.Join(s.home, ".claude", "skills", "swat-skills")
-	writePluginTree(t, skillsDir)
-	s.setIssues(readyIssue(42))
-	s.orchestratorSkips(42)
+	skillsDir := func(s *sandbox) string { return filepath.Join(s.home, ".claude", "skills", "swat-skills") }
+	for _, tc := range []struct {
+		name  string
+		setup func(s *sandbox)
+	}{
+		{"installed_plugins.json が無い", func(s *sandbox) { s.removeInstalledPlugins() }},
+		{"entry が別 clone の project scope だけ", func(s *sandbox) {
+			s.clearPluginEntries()
+			s.installPlugin("swat-skills@swat9013", "project", filepath.Join(s.root, "another-clone"))
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newSandbox(t)
+			tc.setup(s)
+			writePluginTree(t, skillsDir(s))
 
-	s.tick()
+			s.tickWithOneCandidate()
 
-	if _, ok := startPlaybooks(t, s)[playbookPath(skillsDir, "playbook-implementation")]; !ok {
-		t.Fatalf("~/.claude/skills/swat-skills を選んでいない: %v", startPlaybooks(t, s))
+			assertPlaybooksOnlyFrom(t, s, skillsDir(s))
+		})
 	}
 }
 
@@ -104,16 +115,9 @@ func TestPluginFromTwoMarketplacesStopsTheTick(t *testing.T) {
 
 	r := s.tick()
 
-	assertExit(t, r, 1)
-	line := s.onlyTickLine()
-	assertResult(t, line, "error")
-	s.assertErrorNames(line, "swat-skills")
-	if files := s.instructionFiles(); len(files) != 0 {
-		t.Fatalf("playbook を解決できないのに指示ファイルを書いた: %v", files)
-	}
-	if calls := s.calls("claude"); len(calls) != 0 {
-		t.Fatalf("playbook を解決できないのに claude を起動した: %v", calls)
-	}
+	s.assertErrorNames(s.assertOutcome(r, outcomeError), "swat-skills")
+	s.assertNoInstructionFile("playbook を解決できないのに")
+	s.assertNoClaude("playbook を解決できないのに")
 }
 
 func TestMarkedPlaybookWithoutDispatchWhenStopsTheTickNamingIt(t *testing.T) {
@@ -124,14 +128,11 @@ func TestMarkedPlaybookWithoutDispatchWhenStopsTheTickNamingIt(t *testing.T) {
 
 	r := s.tick()
 
-	assertExit(t, r, 1)
-	s.assertErrorNames(s.onlyTickLine(), filepath.Join(broken, "SKILL.md"))
-	if calls := s.calls("claude"); len(calls) != 0 {
-		t.Fatalf("母集合を決められないのに claude を起動した: %v", calls)
-	}
+	s.assertErrorNames(s.assertOutcome(r, outcomeError), filepath.Join(broken, "SKILL.md"))
+	s.assertNoClaude("母集合を決められないのに")
 }
 
-func TestUnreadableFrontmatterStopsTheTick(t *testing.T) {
+func TestUnreadableFrontmatterStopsTheTickNamingThePlaybook(t *testing.T) {
 	s := newSandbox(t)
 	broken := filepath.Join(s.defaultInstallPath(), "skills", "procedure", "playbook-broken")
 	mustMkdir(t, broken)
@@ -140,26 +141,19 @@ func TestUnreadableFrontmatterStopsTheTick(t *testing.T) {
 
 	r := s.tick()
 
-	assertExit(t, r, 1)
-	s.assertErrorNames(s.onlyTickLine(), filepath.Join(broken, "SKILL.md"))
+	s.assertErrorNames(s.assertOutcome(r, outcomeError), filepath.Join(broken, "SKILL.md"))
 }
 
 func TestOrchestratorPromptCarriesTheResolvedPrincipleIndexPath(t *testing.T) {
 	s := newSandbox(t)
-	s.setIssues(readyIssue(42))
-	s.orchestratorSkips(42)
 
-	s.tick()
+	s.tickWithOneCandidate()
 
-	calls := s.callsMatching("claude", isOrchestratorCall)
-	if len(calls) != 1 {
-		t.Fatalf("orchestrator の起動 = %d 回", len(calls))
-	}
 	index := principleIndexPath(s.defaultInstallPath())
 	if _, err := os.Stat(index); err != nil {
 		t.Fatal(err)
 	}
-	if !calls[0].contains(index) {
+	if !onlyOrchestratorCall(s).contains(index) {
 		t.Fatalf("orchestrator の prompt に原則索引の絶対 path %s が無い", index)
 	}
 }

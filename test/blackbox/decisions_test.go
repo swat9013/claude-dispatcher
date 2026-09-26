@@ -9,17 +9,22 @@ import (
 
 // 決定ファイル (formats.md §5.2) の検査と、決定どおりの worker 起動 (system.md §9)。
 
-func TestOrchestratorIsLaunchedWithTheContractFlagsInTheClone(t *testing.T) {
+func onlyOrchestratorCall(s *sandbox) stubCall {
+	s.t.Helper()
+	calls := s.callsMatching("claude", isOrchestratorCall)
+	if len(calls) != 1 {
+		s.t.Fatalf("orchestrator の起動 = %d 回", len(calls))
+	}
+	return calls[0]
+}
+
+func TestOrchestratorIsLaunchedHeadlessInAutoMode(t *testing.T) {
 	s := newSandbox(t)
-	startScenario(t, s)
+	startScenario(s)
 
 	s.tick()
 
-	calls := s.callsMatching("claude", isOrchestratorCall)
-	if len(calls) != 1 {
-		t.Fatalf("orchestrator の起動 = %d 回", len(calls))
-	}
-	c := calls[0]
+	c := onlyOrchestratorCall(s)
 	if !c.hasArg("-p") {
 		t.Fatalf("-p で起動していない: %v", c.args())
 	}
@@ -29,30 +34,42 @@ func TestOrchestratorIsLaunchedWithTheContractFlagsInTheClone(t *testing.T) {
 	if id, _ := c.flagValue("--session-id"); !uuidPattern.MatchString(id) {
 		t.Fatalf("--session-id = %q", id)
 	}
-	if c.Cwd != s.clone {
+}
+
+func TestOrchestratorRunsInTheClone(t *testing.T) {
+	s := newSandbox(t)
+	startScenario(s)
+
+	s.tick()
+
+	if c := onlyOrchestratorCall(s); c.Cwd != s.clone {
 		t.Fatalf("orchestrator の cwd = %s, want clone %s", c.Cwd, s.clone)
 	}
-	line := s.onlyTickLine()
-	instructionFile := asString(t, line["instruction_file"])
+}
+
+func TestOrchestratorPromptCarriesTheInstructionAndDecisionsPaths(t *testing.T) {
+	s := newSandbox(t)
+	startScenario(s)
+
+	s.tick()
+
+	c := onlyOrchestratorCall(s)
+	instructionFile := asString(t, s.onlyTickLine()["instruction_file"])
 	if !c.contains(instructionFile) {
 		t.Fatalf("orchestrator の prompt に指示ファイルの path %s が無い", instructionFile)
 	}
-	if decisionsFile := filepath.Join(s.stateDir(), "decisions", tickStem(instructionFile)+".json"); !c.contains(decisionsFile) {
+	if decisionsFile := s.decisionsFile(tickStem(instructionFile)); !c.contains(decisionsFile) {
 		t.Fatalf("orchestrator の prompt に決定ファイルの path %s が無い", decisionsFile)
 	}
 }
 
-func TestDecidedWorkerIsLaunchedWithItsPromptInTheClone(t *testing.T) {
+func TestDecidedWorkerIsLaunchedHeadlessWithItsPromptInTheClone(t *testing.T) {
 	s := newSandbox(t)
-	playbook := startScenario(t, s)
+	playbook := startScenario(s)
 
 	assertExit(t, s.tick(), 0)
 
-	workers := s.waitWorkerCalls(1)
-	if len(workers) != 1 {
-		t.Fatalf("worker の起動 = %d 回", len(workers))
-	}
-	w := workers[0]
+	w := s.waitWorkerCalls(1)[0]
 	// -p (--print) は値を取らない。prompt は argv のどこかに 1 引数として逐語で載る
 	if !w.hasArg("-p") || !w.hasArg(workerPrompt(42, playbook)) {
 		t.Fatalf("worker に -p と決定ファイルの spawn prompt が逐語で渡っていない: %q", w.args())
@@ -72,121 +89,86 @@ func TestDecisionsWithoutSpawnLaunchNoWorker(t *testing.T) {
 
 	r := s.tick()
 
-	assertExit(t, r, 0)
-	assertResult(t, s.onlyTickLine(), "ok")
-	if spawned := asList(t, s.onlyTickLine()["spawned"]); len(spawned) != 0 {
+	if spawned := asList(t, s.assertOutcome(r, outcomeOK)["spawned"]); len(spawned) != 0 {
 		t.Fatalf("spawned = %v", spawned)
 	}
-	s.assertNoWorkerCalls()
-}
-
-// assertRejectedBeforeLaunch は決定ファイルが検査に落ち、1 件も起動せず error になったことを確かめる。
-func assertRejectedBeforeLaunch(t *testing.T, s *sandbox, r runResult) {
-	t.Helper()
-	assertExit(t, r, 1)
-	line := s.onlyTickLine()
-	assertResult(t, line, "error")
-	if spawned, _ := line["spawned"].([]any); len(spawned) != 0 {
-		t.Fatalf("検査に落ちた決定ファイルで起動した: %v", spawned)
-	}
-	s.assertNoWorkerCalls()
 }
 
 func TestMissingDecisionsFileLaunchesNothing(t *testing.T) {
 	s := newSandbox(t)
 	s.setIssues(readyIssue(42))
-	s.orchestratorBehaves(stubRule{Stdout: orchestratorOutput})
+	s.orchestratorExits(0, nil)
 
 	r := s.tick()
 
-	assertRejectedBeforeLaunch(t, s, r)
+	s.assertRejectedBeforeLaunch(r)
 }
 
 func TestMalformedDecisionsFileLaunchesNothing(t *testing.T) {
 	s := newSandbox(t)
 	s.setIssues(readyIssue(42))
-	s.orchestratorWrites("{not json")
+	s.orchestratorWritesRaw("{not json")
 
 	r := s.tick()
 
-	assertRejectedBeforeLaunch(t, s, r)
+	s.assertRejectedBeforeLaunch(r)
 }
 
 func TestInvalidSpawnRejectsTheWholeDecisionsFile(t *testing.T) {
-	type fixture struct {
-		spawn    spawn
-		decision decision
-	}
 	for _, tc := range []struct {
 		name string
-		make func(s *sandbox) fixture
+		make func(install string) (decision, spawn)
 	}{
-		{"action が語彙の外", func(s *sandbox) fixture {
-			p := playbookPath(s.defaultInstallPath(), "playbook-implementation")
-			return fixture{
-				decision: decision{Issue: 42, Action: "implement", Reason: "r"},
-				spawn:    spawn{Issue: 42, Kind: "start", Prompt: workerPrompt(42, p), Playbooks: []string{p}},
-			}
+		{"action が語彙の外", func(install string) (decision, spawn) {
+			p := playbookPath(install, "playbook-implementation")
+			return decision{Issue: 42, Action: "implement", Reason: "r"},
+				spawn{Issue: 42, Kind: "start", Prompt: workerPrompt(42, p), Playbooks: []string{p}}
 		}},
-		{"kind が同じ issue の action と違う", func(s *sandbox) fixture {
-			p := playbookPath(s.defaultInstallPath(), "playbook-implementation")
-			return fixture{
-				decision: decision{Issue: 42, Action: "skip", Reason: "r"},
-				spawn:    spawn{Issue: 42, Kind: "start", Prompt: workerPrompt(42, p), Playbooks: []string{p}},
-			}
+		{"kind が同じ issue の action と違う", func(install string) (decision, spawn) {
+			p := playbookPath(install, "playbook-implementation")
+			return decision{Issue: 42, Action: "skip", Reason: "r"},
+				spawn{Issue: 42, Kind: "start", Prompt: workerPrompt(42, p), Playbooks: []string{p}}
 		}},
-		{"prompt に未展開の変数", func(s *sandbox) fixture {
-			p := playbookPath(s.defaultInstallPath(), "playbook-implementation")
-			return fixture{
-				decision: decision{Issue: 42, Action: "start", Reason: "r"},
-				spawn:    spawn{Issue: 42, Kind: "start", Prompt: workerPrompt(42, p) + "${CLAUDE_SKILL_DIR}/x", Playbooks: []string{p}},
-			}
+		{"prompt に未展開の変数", func(install string) (decision, spawn) {
+			p := playbookPath(install, "playbook-implementation")
+			return decision{Issue: 42, Action: "start", Reason: "r"},
+				spawn{Issue: 42, Kind: "start", Prompt: workerPrompt(42, p) + "${CLAUDE_SKILL_DIR}/x", Playbooks: []string{p}}
 		}},
-		{"playbook が prompt に載っていない", func(s *sandbox) fixture {
-			p := playbookPath(s.defaultInstallPath(), "playbook-implementation")
-			return fixture{
-				decision: decision{Issue: 42, Action: "start", Reason: "r"},
-				spawn:    spawn{Issue: 42, Kind: "start", Prompt: workerPrompt(42), Playbooks: []string{p}},
-			}
+		{"playbook が prompt に載っていない", func(install string) (decision, spawn) {
+			p := playbookPath(install, "playbook-implementation")
+			return decision{Issue: 42, Action: "start", Reason: "r"},
+				spawn{Issue: 42, Kind: "start", Prompt: workerPrompt(42), Playbooks: []string{p}}
 		}},
-		{"playbook が実在しない", func(s *sandbox) fixture {
-			p := filepath.Join(s.defaultInstallPath(), "skills", "procedure", "playbook-gone", "SKILL.md")
-			return fixture{
-				decision: decision{Issue: 42, Action: "start", Reason: "r"},
-				spawn:    spawn{Issue: 42, Kind: "start", Prompt: workerPrompt(42, p), Playbooks: []string{p}},
-			}
+		{"playbook が実在しない", func(install string) (decision, spawn) {
+			p := filepath.Join(install, "skills", "procedure", "playbook-gone", "SKILL.md")
+			return decision{Issue: 42, Action: "start", Reason: "r"},
+				spawn{Issue: 42, Kind: "start", Prompt: workerPrompt(42, p), Playbooks: []string{p}}
 		}},
-		{"playbooks が空", func(s *sandbox) fixture {
-			return fixture{
-				decision: decision{Issue: 42, Action: "start", Reason: "r"},
-				spawn:    spawn{Issue: 42, Kind: "start", Prompt: workerPrompt(42), Playbooks: []string{}},
-			}
+		{"playbooks が空", func(install string) (decision, spawn) {
+			return decision{Issue: 42, Action: "start", Reason: "r"},
+				spawn{Issue: 42, Kind: "start", Prompt: workerPrompt(42), Playbooks: []string{}}
 		}},
-		{"start の playbook が選定母集合の外", func(s *sandbox) fixture {
-			p := playbookPath(s.defaultInstallPath(), "playbook-ci-fix")
-			return fixture{
-				decision: decision{Issue: 42, Action: "start", Reason: "r"},
-				spawn:    spawn{Issue: 42, Kind: "start", Prompt: workerPrompt(42, p), Playbooks: []string{p}},
-			}
+		{"start の playbook が選定母集合の外", func(install string) (decision, spawn) {
+			p := playbookPath(install, "playbook-ci-fix")
+			return decision{Issue: 42, Action: "start", Reason: "r"},
+				spawn{Issue: 42, Kind: "start", Prompt: workerPrompt(42, p), Playbooks: []string{p}}
 		}},
-		{"start の playbook が 2 本", func(s *sandbox) fixture {
-			p := playbookPath(s.defaultInstallPath(), "playbook-implementation")
-			q := playbookPath(s.defaultInstallPath(), "playbook-docs")
-			return fixture{
-				decision: decision{Issue: 42, Action: "start", Reason: "r"},
-				spawn:    spawn{Issue: 42, Kind: "start", Prompt: workerPrompt(42, p, q), Playbooks: []string{p, q}},
-			}
+		{"start の playbook が 2 本", func(install string) (decision, spawn) {
+			p := playbookPath(install, "playbook-implementation")
+			q := playbookPath(install, "playbook-docs")
+			return decision{Issue: 42, Action: "start", Reason: "r"},
+				spawn{Issue: 42, Kind: "start", Prompt: workerPrompt(42, p, q), Playbooks: []string{p, q}}
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newSandbox(t)
 			s.setIssues(readyIssue(42))
-			f := tc.make(s)
-			s.orchestratorWrites(decisions{Decisions: []decision{f.decision}, Spawn: []spawn{f.spawn}}.json(t))
+			d, sp := tc.make(s.defaultInstallPath())
+			s.orchestratorWrites(decisions{Decisions: []decision{d}, Spawn: []spawn{sp}})
 
 			r := s.tick()
 
-			assertRejectedBeforeLaunch(t, s, r)
+			s.assertRejectedBeforeLaunch(r)
 		})
 	}
 }
@@ -194,30 +176,13 @@ func TestInvalidSpawnRejectsTheWholeDecisionsFile(t *testing.T) {
 func TestOneInvalidSpawnKeepsTheValidOnesFromLaunching(t *testing.T) {
 	s := newSandbox(t)
 	s.setIssues(readyIssue(42), readyIssue(43))
-	p := playbookPath(s.defaultInstallPath(), "playbook-implementation")
-	s.orchestratorWrites(decisions{
-		Decisions: []decision{{Issue: 42, Action: "start", Reason: "r"}, {Issue: 43, Action: "start", Reason: "r"}},
-		Spawn: []spawn{
-			{Issue: 42, Kind: "start", Prompt: workerPrompt(42, p), Playbooks: []string{p}},
-			{Issue: 43, Kind: "start", Prompt: workerPrompt(43, p) + "${UNSET}", Playbooks: []string{p}},
-		},
-	}.json(t))
+	d := startDecisions(playbookPath(s.defaultInstallPath(), "playbook-implementation"), 42, 43)
+	d.Spawn[1].Prompt += "${UNSET}"
+	s.orchestratorWrites(d)
 
 	r := s.tick()
 
-	assertRejectedBeforeLaunch(t, s, r)
-}
-
-func TestSecondDecisionForTheSameIssueIsRejected(t *testing.T) {
-	s := newSandbox(t)
-	s.setIssues(readyIssue(42))
-	s.orchestratorWrites(decisions{Decisions: []decision{
-		{Issue: 42, Action: "skip", Reason: "r"}, {Issue: 42, Action: "skip", Reason: "r"},
-	}}.json(t))
-
-	r := s.tick()
-
-	assertRejectedBeforeLaunch(t, s, r)
+	s.assertRejectedBeforeLaunch(r)
 }
 
 // --- reenter の spawn ---
@@ -230,40 +195,34 @@ func reenterScenario(s *sandbox) (conflict, review string) {
 	return playbookPath(install, "playbook-conflict-resolution"), playbookPath(install, "playbook-review-response")
 }
 
+func reenterDecisions(issue int, playbooks ...string) decisions {
+	return decisions{
+		Decisions: []decision{{Issue: issue, Action: "reenter", Reason: "r"}},
+		Spawn:     []spawn{{Issue: issue, Kind: "reenter", Prompt: workerPrompt(issue, playbooks...), Playbooks: playbooks}},
+	}
+}
+
 func TestReenterDecisionLaunchesAReenterWorker(t *testing.T) {
 	s := newSandbox(t)
 	conflict, review := reenterScenario(s)
-	s.orchestratorWrites(decisions{
-		Decisions: []decision{{Issue: 39, Action: "reenter", Reason: "r"}},
-		Spawn:     []spawn{{Issue: 39, Kind: "reenter", Prompt: workerPrompt(39, conflict, review), Playbooks: []string{conflict, review}}},
-	}.json(t))
+	s.orchestratorWrites(reenterDecisions(39, conflict, review))
 
 	r := s.tick()
 
-	assertExit(t, r, 0)
-	spawned := asList(t, s.onlyTickLine()["spawned"])
-	if len(spawned) != 1 || asMap(t, spawned[0])["kind"] != "reenter" {
-		t.Fatalf("spawned = %v", spawned)
+	if entry := onlySpawned(t, s.assertOutcome(r, outcomeOK)); entry["kind"] != "reenter" {
+		t.Fatalf("spawned = %v", entry)
 	}
-	if got := len(s.waitWorkerCalls(1)); got != 1 {
-		t.Fatalf("worker の起動 = %d 回", got)
-	}
+	s.waitWorkerCalls(1)
 }
 
 func TestReenterSpawnMayDropAConditionThatNoLongerHolds(t *testing.T) {
 	s := newSandbox(t)
 	_, review := reenterScenario(s)
-	s.orchestratorWrites(decisions{
-		Decisions: []decision{{Issue: 39, Action: "reenter", Reason: "r"}},
-		Spawn:     []spawn{{Issue: 39, Kind: "reenter", Prompt: workerPrompt(39, review), Playbooks: []string{review}}},
-	}.json(t))
+	s.orchestratorWrites(reenterDecisions(39, review))
 
 	r := s.tick()
 
-	assertExit(t, r, 0)
-	if got := len(s.waitWorkerCalls(1)); got != 1 {
-		t.Fatalf("worker の起動 = %d 回", got)
-	}
+	onlySpawned(t, s.assertOutcome(r, outcomeOK))
 }
 
 func TestReenterSpawnMustKeepTheConditionOrderAndStayWithinIt(t *testing.T) {
@@ -277,41 +236,36 @@ func TestReenterSpawnMustKeepTheConditionOrderAndStayWithinIt(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newSandbox(t)
 			conflict, review := reenterScenario(s)
-			playbooks := tc.playbooks(conflict, review, playbookPath(s.defaultInstallPath(), "playbook-ci-fix"))
-			s.orchestratorWrites(decisions{
-				Decisions: []decision{{Issue: 39, Action: "reenter", Reason: "r"}},
-				Spawn:     []spawn{{Issue: 39, Kind: "reenter", Prompt: workerPrompt(39, playbooks...), Playbooks: playbooks}},
-			}.json(t))
+			s.orchestratorWrites(reenterDecisions(39, tc.playbooks(conflict, review, playbookPath(s.defaultInstallPath(), "playbook-ci-fix"))...))
 
 			r := s.tick()
 
-			assertRejectedBeforeLaunch(t, s, r)
+			s.assertRejectedBeforeLaunch(r)
 		})
 	}
 }
 
 // --- 網羅 ---
 
-func TestCoverageGapLaunchesTheWrittenSpawnsThenFailsNamingTheIssue(t *testing.T) {
+func TestCoverageGapFailsNamingTheUndecidedIssue(t *testing.T) {
 	s := newSandbox(t)
 	s.setIssues(readyIssue(42), readyIssue(43))
-	p := playbookPath(s.defaultInstallPath(), "playbook-implementation")
-	s.orchestratorWrites(decisions{
-		Decisions: []decision{{Issue: 42, Action: "start", Reason: "r"}},
-		Spawn:     []spawn{{Issue: 42, Kind: "start", Prompt: workerPrompt(42, p), Playbooks: []string{p}}},
-	}.json(t))
+	s.orchestratorWrites(startDecisions(playbookPath(s.defaultInstallPath(), "playbook-implementation"), 42))
 
 	r := s.tick()
 
-	assertExit(t, r, 1)
-	line := s.onlyTickLine()
-	assertResult(t, line, "error")
-	s.assertErrorNames(line, "43")
-	if spawned := asList(t, line["spawned"]); len(spawned) != 1 {
-		t.Fatalf("網羅の欠けでも書かれた spawn は起動する: %v", spawned)
-	}
-	if got := len(s.waitWorkerCalls(1)); got != 1 {
-		t.Fatalf("worker の起動 = %d 回", got)
+	s.assertErrorNames(s.assertOutcome(r, outcomeError), "43")
+}
+
+func TestCoverageGapStillLaunchesTheWrittenSpawns(t *testing.T) {
+	s := newSandbox(t)
+	s.setIssues(readyIssue(42), readyIssue(43))
+	s.orchestratorWrites(startDecisions(playbookPath(s.defaultInstallPath(), "playbook-implementation"), 42))
+
+	s.tick()
+
+	if entry := onlySpawned(t, s.onlyTickLine()); number(t, entry["issue"]) != 42 {
+		t.Fatalf("網羅の欠けでも書かれた spawn は起動する: %v", entry)
 	}
 	if got := s.orchestratorLines(); len(got) != 1 {
 		t.Fatalf("網羅の欠けでも採否は log へ写す: %v", got)
@@ -319,39 +273,39 @@ func TestCoverageGapLaunchesTheWrittenSpawnsThenFailsNamingTheIssue(t *testing.T
 }
 
 func TestEachInstructionKindAcceptsOnlyItsOwnActions(t *testing.T) {
+	anomalyIssue := func(s *sandbox) { s.setIssues(issue{number: 5, labels: []string{wipLabel, humanLabel}}) }
 	for _, tc := range []struct {
-		name      string
-		setup     func(s *sandbox)
-		decisions []decision
-		covered   bool
+		name     string
+		setup    func(s *sandbox)
+		decision decision
+		covered  bool
 	}{
 		{"start 候補は skip で網羅", func(s *sandbox) { s.setIssues(readyIssue(42)) },
-			[]decision{{Issue: 42, Action: "skip", Reason: "r"}}, true},
+			decision{Issue: 42, Action: "skip", Reason: "r"}, true},
 		{"start 候補を ready-for-human にしても網羅にならない", func(s *sandbox) { s.setIssues(readyIssue(42)) },
-			[]decision{{Issue: 42, Action: "ready-for-human", Reason: "r"}}, false},
+			decision{Issue: 42, Action: "ready-for-human", Reason: "r"}, false},
 		{"reenter は skip で網羅", func(s *sandbox) { reenterScenario(s) },
-			[]decision{{Issue: 39, Action: "skip", Reason: "r"}}, true},
+			decision{Issue: 39, Action: "skip", Reason: "r"}, true},
 		{"reenter を start にしても網羅にならない", func(s *sandbox) { reenterScenario(s) },
-			[]decision{{Issue: 39, Action: "start", Reason: "r"}}, false},
-		{"anomaly は ready-for-human で網羅", func(s *sandbox) { s.setIssues(issue{number: 5, labels: []string{wipLabel, humanLabel}}) },
-			[]decision{{Issue: 5, Action: "ready-for-human", Reason: "r"}}, true},
-		{"anomaly を start にしても網羅にならない", func(s *sandbox) { s.setIssues(issue{number: 5, labels: []string{wipLabel, humanLabel}}) },
-			[]decision{{Issue: 5, Action: "start", Reason: "r"}}, false},
+			decision{Issue: 39, Action: "start", Reason: "r"}, false},
+		{"anomaly は ready-for-human で網羅", anomalyIssue,
+			decision{Issue: 5, Action: "ready-for-human", Reason: "r"}, true},
+		{"anomaly を start にしても網羅にならない", anomalyIssue,
+			decision{Issue: 5, Action: "start", Reason: "r"}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newSandbox(t)
 			tc.setup(s)
-			s.orchestratorWrites(decisions{Decisions: tc.decisions}.json(t))
+			s.orchestratorWrites(decisions{Decisions: []decision{tc.decision}})
 
 			r := s.tick()
 
 			if tc.covered {
-				assertExit(t, r, 0)
+				s.assertOutcome(r, outcomeOK)
 				return
 			}
 			// 網羅の欠けとして落ちたこと (他の検査で落ちたのではないこと) を、欠けた issue の名指しで見る
-			assertExit(t, r, 1)
-			s.assertErrorNames(s.onlyTickLine(), strconv.Itoa(tc.decisions[0].Issue))
+			s.assertErrorNames(s.assertOutcome(r, outcomeError), strconv.Itoa(tc.decision.Issue))
 		})
 	}
 }
@@ -359,18 +313,13 @@ func TestEachInstructionKindAcceptsOnlyItsOwnActions(t *testing.T) {
 func TestOrchestratorThatDidNotExitNormallyHasItsDecisionsIgnored(t *testing.T) {
 	s := newSandbox(t)
 	s.setIssues(readyIssue(42))
-	p := playbookPath(s.defaultInstallPath(), "playbook-implementation")
-	valid := decisions{
-		Decisions: []decision{{Issue: 42, Action: "start", Reason: "r"}},
-		Spawn:     []spawn{{Issue: 42, Kind: "start", Prompt: workerPrompt(42, p), Playbooks: []string{p}}},
-	}.json(t)
-	s.orchestratorBehaves(stubRule{Exit: 3, Decisions: &decisionsWrite{StateDir: s.stateDir(), Content: valid}})
+	valid := startDecisions(playbookPath(s.defaultInstallPath(), "playbook-implementation"), 42)
+	s.orchestratorExits(3, &valid)
 
 	r := s.tick()
 
-	assertRejectedBeforeLaunch(t, s, r)
-	line := s.onlyTickLine()
-	orchestrator := asMap(t, line["orchestrator"])
+	s.assertRejectedBeforeLaunch(r)
+	orchestrator := asMap(t, s.onlyTickLine()["orchestrator"])
 	if number(t, orchestrator["exit_code"]) != 3 || orchestrator["timed_out"] != false {
 		t.Fatalf("orchestrator = %v", orchestrator)
 	}
@@ -379,17 +328,10 @@ func TestOrchestratorThatDidNotExitNormallyHasItsDecisionsIgnored(t *testing.T) 
 	}
 }
 
-func TestDecidedWorkersOfOneTickGetDistinctLogsAndSessions(t *testing.T) {
+func TestWorkersOfOneTickGetDistinctLogsAndSessions(t *testing.T) {
 	s := newSandbox(t)
 	s.setIssues(readyIssue(42), readyIssue(43))
-	p := playbookPath(s.defaultInstallPath(), "playbook-implementation")
-	s.orchestratorWrites(decisions{
-		Decisions: []decision{{Issue: 42, Action: "start", Reason: "r"}, {Issue: 43, Action: "start", Reason: "r"}},
-		Spawn: []spawn{
-			{Issue: 42, Kind: "start", Prompt: workerPrompt(42, p), Playbooks: []string{p}},
-			{Issue: 43, Kind: "start", Prompt: workerPrompt(43, p), Playbooks: []string{p}},
-		},
-	}.json(t))
+	s.orchestratorWrites(startDecisions(playbookPath(s.defaultInstallPath(), "playbook-implementation"), 42, 43))
 
 	assertExit(t, s.tick(), 0)
 

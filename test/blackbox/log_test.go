@@ -1,9 +1,7 @@
 package blackbox_test
 
 import (
-	"fmt"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -11,32 +9,43 @@ import (
 
 // log.jsonl の行 (formats.md §4)。外部の読み手を持つ公開契約。
 
-func TestQuietTickLeavesOneLineAndDoesNotLaunchClaude(t *testing.T) {
+func TestQuietTickLineCarriesTheObservationKeysOnly(t *testing.T) {
 	s := newSandbox(t)
 
 	r := s.tick()
 
-	assertExit(t, r, 0)
-	if r.stderr != "" {
-		t.Fatalf("正常な tick が stderr に書いた: %q", r.stderr)
-	}
-	line := s.onlyTickLine()
+	line := s.assertOutcome(r, outcomeOK)
 	want := []string{"candidates", "cwd", "instruction_file", "instructions", "observed", "project", "result", "ts", "wip"}
 	if got := keys(line); !slices.Equal(got, want) {
 		t.Fatalf("静止 tick の行の key = %v, want %v", got, want)
 	}
-	assertResult(t, line, "ok")
 	if line["instruction_file"] != nil {
 		t.Fatalf("指示 0 件なのに instruction_file = %v", line["instruction_file"])
 	}
 	if got := asMap(t, line["instructions"]); len(got) != 0 {
 		t.Fatalf("指示 0 件の instructions = %v, want {}", got)
 	}
-	if calls := s.calls("claude"); len(calls) != 0 {
-		t.Fatalf("指示 0 件なのに claude を起動した: %v", calls)
-	}
-	if files := s.instructionFiles(); len(files) != 0 {
-		t.Fatalf("指示 0 件なのに指示ファイルを書いた: %v", files)
+}
+
+func TestQuietTickDoesNotLaunchClaude(t *testing.T) {
+	s := newSandbox(t)
+
+	assertExit(t, s.tick(), 0)
+
+	s.assertNoClaude("指示 0 件なのに")
+	s.assertNoInstructionFile("指示 0 件なのに")
+}
+
+func TestEachTickAppendsOneLineKeepingThePreviousOnes(t *testing.T) {
+	s := newSandbox(t)
+	assertExit(t, s.tick(), 0)
+	first := string(mustRead(t, s.logFile()))
+
+	assertExit(t, s.tick(), 0)
+
+	after := string(mustRead(t, s.logFile()))
+	if !strings.HasPrefix(after, first) || len(s.tickLines()) != 2 {
+		t.Fatalf("log.jsonl が append-only で 1 tick 1 行になっていない:\n%s", after)
 	}
 }
 
@@ -61,9 +70,7 @@ func TestObservedCountsAreLogged(t *testing.T) {
 	s := newSandbox(t)
 	s.setIssues(readyIssue(1), readyIssue(2), issue{number: 3, labels: []string{wipLabel}})
 	s.setPRs(pullRequest{number: 10, branch: workerBranch(3), closes: []int{3}})
-	s.orchestratorWrites(decisions{Decisions: []decision{
-		{Issue: 1, Action: "skip", Reason: "テスト"}, {Issue: 2, Action: "skip", Reason: "テスト"},
-	}}.json(t))
+	s.orchestratorSkips(1, 2)
 
 	s.tick()
 
@@ -80,15 +87,13 @@ func TestObservedCountsAreLogged(t *testing.T) {
 	}
 }
 
-func TestObservationFailureIsAnErrorNotAQuietTick(t *testing.T) {
+func TestObservationFailureIsAnErrorRatherThanAQuietTick(t *testing.T) {
 	s := newSandbox(t)
-	s.respond("gh", stubRule{ArgsPrefix: []string{"api", "graphql"}, Exit: 1, Stderr: "HTTP 502: Bad Gateway\n"})
+	s.ghFails([]string{"api", "graphql"}, 1, "HTTP 502: Bad Gateway\n")
 
 	r := s.tick()
 
-	assertExit(t, r, 1)
-	line := s.onlyTickLine()
-	assertResult(t, line, "error")
+	line := s.assertOutcome(r, outcomeError)
 	if _, ok := line["error"]; !ok {
 		t.Fatalf("error が無い: %v", line)
 	}
@@ -99,7 +104,7 @@ func TestObservationFailureIsAnErrorNotAQuietTick(t *testing.T) {
 
 func TestMultilineErrorIsFoldedIntoOneLine(t *testing.T) {
 	s := newSandbox(t)
-	s.respond("gh", stubRule{ArgsPrefix: []string{"api", "graphql"}, Exit: 1, Stderr: "first problem\nsecond problem\n"})
+	s.ghFails([]string{"api", "graphql"}, 1, "first problem\nsecond problem\n")
 
 	s.tick()
 
@@ -109,28 +114,15 @@ func TestMultilineErrorIsFoldedIntoOneLine(t *testing.T) {
 	}
 }
 
-// startScenario は候補 42 に start を決め、worker を 1 件起動させる。返り値は選んだ playbook の path。
-func startScenario(t *testing.T, s *sandbox) string {
-	t.Helper()
-	s.setIssues(readyIssue(42))
-	playbook := playbookPath(s.defaultInstallPath(), "playbook-implementation")
-	s.orchestratorWrites(decisions{
-		Decisions: []decision{{Issue: 42, Action: "start", Reason: "着手できる"}},
-		Spawn:     []spawn{{Issue: 42, Kind: "start", Prompt: workerPrompt(42, playbook), Playbooks: []string{playbook}}},
-	}.json(t))
-	return playbook
-}
+// --- claude を起動した tick ---
 
 func TestTickThatLaunchedClaudeLogsTheOrchestratorRun(t *testing.T) {
 	s := newSandbox(t)
-	startScenario(t, s)
+	startScenario(s)
 
 	r := s.tick()
 
-	assertExit(t, r, 0)
-	line := s.onlyTickLine()
-	assertResult(t, line, "ok")
-	orchestrator := asMap(t, line["orchestrator"])
+	orchestrator := asMap(t, s.assertOutcome(r, outcomeOK)["orchestrator"])
 	if got := keys(orchestrator); !slices.Equal(got, []string{"exit_code", "seconds", "session_id", "timed_out"}) {
 		t.Fatalf("orchestrator の key = %v", got)
 	}
@@ -140,7 +132,15 @@ func TestTickThatLaunchedClaudeLogsTheOrchestratorRun(t *testing.T) {
 	if _, ok := orchestrator["seconds"].(float64); !ok {
 		t.Fatalf("seconds が数値でない: %v", orchestrator["seconds"])
 	}
-	sessionID := asString(t, orchestrator["session_id"])
+}
+
+func TestOrchestratorSessionIDIsTheOneGivenToClaude(t *testing.T) {
+	s := newSandbox(t)
+	startScenario(s)
+
+	s.tick()
+
+	sessionID := asString(t, asMap(t, s.onlyTickLine()["orchestrator"])["session_id"])
 	if !uuidPattern.MatchString(sessionID) {
 		t.Fatalf("session_id が UUID でない: %q", sessionID)
 	}
@@ -153,43 +153,62 @@ func TestTickThatLaunchedClaudeLogsTheOrchestratorRun(t *testing.T) {
 	}
 }
 
-func TestSpawnedWorkersAreLoggedWithPidLogAndSessionID(t *testing.T) {
-	s := newSandbox(t)
-	startScenario(t, s)
-
-	s.tick()
-
-	line := s.onlyTickLine()
+func onlySpawned(t *testing.T, line logLine) map[string]any {
+	t.Helper()
 	spawned := asList(t, line["spawned"])
 	if len(spawned) != 1 {
 		t.Fatalf("spawned = %v", spawned)
 	}
-	entry := asMap(t, spawned[0])
+	return asMap(t, spawned[0])
+}
+
+func TestSpawnedWorkerIsLoggedWithItsIssuePidAndLog(t *testing.T) {
+	s := newSandbox(t)
+	startScenario(s)
+
+	s.tick()
+
+	line := s.onlyTickLine()
+	entry := onlySpawned(t, line)
 	if got := keys(entry); !slices.Equal(got, []string{"issue", "kind", "log", "pid", "session_id"}) {
 		t.Fatalf("spawned の key = %v", got)
 	}
 	if number(t, entry["issue"]) != 42 || entry["kind"] != "start" || number(t, entry["pid"]) <= 0 {
 		t.Fatalf("spawned = %v", entry)
 	}
-	stem := tickStem(asString(t, line["instruction_file"]))
-	if want := filepath.Join(s.stateDir(), "workers", fmt.Sprintf("42-%s.log", stem)); entry["log"] != want {
+	if want := s.workerLogFile(42, tickStem(asString(t, line["instruction_file"]))); entry["log"] != want {
 		t.Fatalf("log = %v, want %s", entry["log"], want)
 	}
+}
+
+func TestSpawnedSessionIDIsTheOneGivenToTheWorker(t *testing.T) {
+	s := newSandbox(t)
+	startScenario(s)
+
+	s.tick()
+
+	sessionID := onlySpawned(t, s.onlyTickLine())["session_id"]
 	workers := s.waitWorkerCalls(1)
-	if len(workers) != 1 {
-		t.Fatalf("worker の起動が 1 回でない: %d", len(workers))
+	if got, _ := workers[0].flagValue("--session-id"); got != sessionID {
+		t.Fatalf("worker に渡した --session-id %q と log の session_id %v が違う", got, sessionID)
 	}
-	if got, _ := workers[0].flagValue("--session-id"); got != entry["session_id"] {
-		t.Fatalf("worker に渡した --session-id %q と log の session_id %v が違う", got, entry["session_id"])
-	}
-	if entry["session_id"] == asMap(t, line["orchestrator"])["session_id"] {
+}
+
+func TestWorkerAndOrchestratorGetDistinctSessionIDs(t *testing.T) {
+	s := newSandbox(t)
+	startScenario(s)
+
+	s.tick()
+
+	line := s.onlyTickLine()
+	if onlySpawned(t, line)["session_id"] == asMap(t, line["orchestrator"])["session_id"] {
 		t.Fatal("worker と orchestrator が同じ session id を持つ")
 	}
 }
 
 func TestOrchestratorDecisionsAreCopiedToAnOrchestratorLine(t *testing.T) {
 	s := newSandbox(t)
-	startScenario(t, s)
+	startScenario(s)
 
 	s.tick()
 
@@ -215,17 +234,16 @@ func TestOrchestratorDecisionsAreCopiedToAnOrchestratorLine(t *testing.T) {
 	}
 }
 
-func TestTickStoppedAfterLaunchingTheOrchestratorKeepsWhatWasSettled(t *testing.T) {
+// --- 途中で止まった tick ---
+
+func TestTickStoppedAfterTheOrchestratorKeepsItsSettledKeys(t *testing.T) {
 	s := newSandbox(t)
-	startScenario(t, s)
-	// worker log の置き場を file で塞ぐ: orchestrator は走り終え、worker の起動で止まる
-	mustWrite(t, filepath.Join(s.stateDir(), "workers"), "not a directory")
+	startScenario(s)
+	s.blockWorkerLogs()
 
 	r := s.tick()
 
-	assertExit(t, r, 1)
-	line := s.onlyTickLine()
-	assertResult(t, line, "error")
+	line := s.assertOutcome(r, outcomeError)
 	if file, _ := line["instruction_file"].(string); file == "" {
 		t.Fatalf("止まった tick の行から instruction_file が落ちた: %v", line)
 	}
@@ -237,14 +255,29 @@ func TestTickStoppedAfterLaunchingTheOrchestratorKeepsWhatWasSettled(t *testing.
 	}
 }
 
+func TestTickStoppedMidSpawnKeepsTheWorkersAlreadyLaunched(t *testing.T) {
+	s := newSandbox(t)
+	s.setIssues(readyIssue(42), readyIssue(43))
+	playbook := playbookPath(s.defaultInstallPath(), "playbook-implementation")
+	d := startDecisions(playbook, 42, 43)
+	// 43 の worker log の path を dir で塞ぐ: 42 を起動した後、43 の起動で止まる
+	s.orchestratorWritesBlockingWorkerLogs(d, 43)
+
+	r := s.tick()
+
+	line := s.assertOutcome(r, outcomeError)
+	if entry := onlySpawned(t, line); number(t, entry["issue"]) != 42 {
+		t.Fatalf("止まる前に起動した worker が spawned に載っていない: %v", entry)
+	}
+}
+
 func TestOrchestratorOutputGoesNextToTheDecisionsFile(t *testing.T) {
 	s := newSandbox(t)
-	startScenario(t, s)
+	startScenario(s)
 
 	s.tick()
 
-	stem := tickStem(asString(t, s.onlyTickLine()["instruction_file"]))
-	log := filepath.Join(s.stateDir(), "decisions", stem+".orchestrator.log")
+	log := s.orchestratorLogFile(tickStem(asString(t, s.onlyTickLine()["instruction_file"])))
 	if got := string(mustRead(t, log)); !strings.Contains(got, strings.TrimSpace(orchestratorOutput)) {
 		t.Fatalf("orchestrator の出力が %s に無い: %q", log, got)
 	}
@@ -252,12 +285,12 @@ func TestOrchestratorOutputGoesNextToTheDecisionsFile(t *testing.T) {
 
 func TestWorkerOutputGoesToItsLog(t *testing.T) {
 	s := newSandbox(t)
-	startScenario(t, s)
+	startScenario(s)
 
 	s.tick()
 
 	s.waitWorkerCalls(1)
-	file := asString(t, asMap(t, asList(t, s.onlyTickLine()["spawned"])[0])["log"])
+	file := asString(t, onlySpawned(t, s.onlyTickLine())["log"])
 	waitFor(t, func() bool {
 		raw, err := os.ReadFile(file)
 		return err == nil && strings.Contains(string(raw), strings.TrimSpace(workerStubOutput))
