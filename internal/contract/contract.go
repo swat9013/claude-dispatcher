@@ -7,6 +7,8 @@ import (
 	_ "embed"
 	"fmt"
 	"strings"
+
+	"github.com/swat9013/claude-dispatcher/internal/config"
 )
 
 //go:embed orchestrator.md
@@ -41,6 +43,8 @@ func Prompt(p Params) (string, error) {
 		"<<ISSUE_REPO>>", p.IssueRepo,
 		"<<CL_REPO>>", p.CLRepo,
 		"<<READY_LABEL>>", p.ReadyLabel,
+		"<<WIP_LABEL>>", config.WIPLabel,
+		"<<HUMAN_LABEL>>", config.HumanLabel,
 		"<<TRIAGE_LABEL_RULE>>", triage,
 		"<<PRINCIPLE_INDEX>>", p.PrincipleIndex,
 	).Replace(orchestrator)

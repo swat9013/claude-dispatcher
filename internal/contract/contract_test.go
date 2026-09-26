@@ -1,6 +1,7 @@
 package contract_test
 
 import (
+	"maps"
 	"os"
 	"regexp"
 	"slices"
@@ -93,17 +94,74 @@ func TestConditionCatalogMatchesTheDesignDoc(t *testing.T) {
 	}
 }
 
-func TestPromptLeavesNoPlaceholder(t *testing.T) {
-	prompt, err := contract.Prompt(contract.Params{
-		InstructionFile: "/s/instructions/x.json", DecisionsFile: "/s/decisions/x.json", HandoffFile: "/s/decisions/x.handoff-<N>.md",
-		IssueRepo: "acme/widgets", CLRepo: "acme/widgets", ReadyLabel: "ready-for-agent", PrincipleIndex: "/p/principle-index/SKILL.md",
-	})
-	if err != nil {
-		t.Fatal(err)
+// actionTable は「| `<指示>` | … | `<action>` / `<action>` |」の行から 指示 → 許される action を読む。
+func actionTable(t *testing.T, text string) map[string][]string {
+	t.Helper()
+	table := map[string][]string{}
+	for _, m := range regexp.MustCompile("(?m)^\\| `([a-z]+)` \\| [^|]+ \\| ([^|]+) \\|$").FindAllStringSubmatch(text, -1) {
+		for _, a := range regexp.MustCompile("`([a-z-]+)`").FindAllStringSubmatch(m[2], -1) {
+			table[m[1]] = append(table[m[1]], a[1])
+		}
 	}
-	for _, want := range []string{"/s/instructions/x.json", "/s/decisions/x.json", "/p/principle-index/SKILL.md", "label を付けない"} {
+	if len(table) == 0 {
+		t.Fatal("許される action の表が無い")
+	}
+	return table
+}
+
+func TestContractAndFormatsListTheActionsEachInstructionAllows(t *testing.T) {
+	want := map[string][]string{}
+	for _, i := range []tick.Instruction{tick.StartInstruction{}, tick.ReenterInstruction{}, tick.AnomalyInstruction{}} {
+		for _, a := range i.AllowedActions() {
+			want[i.Kind()] = append(want[i.Kind()], string(a))
+		}
+	}
+	formats := read(t, "../../docs/design/formats.md")
+
+	for name, text := range map[string]string{
+		"契約":         section(t, contract.Text(), "### 決定ファイルの形"),
+		"formats.md": section(t, formats, "### 5.2 決定ファイル (`decisions/<stem>.json`)"),
+	} {
+		if got := actionTable(t, text); !maps.EqualFunc(got, want, slices.Equal) {
+			t.Fatalf("%s の許される action = %v, CLI = %v", name, got, want)
+		}
+	}
+}
+
+func params(triage string) contract.Params {
+	return contract.Params{
+		InstructionFile: "/s/instructions/x.json", DecisionsFile: "/s/decisions/x.json", HandoffFile: "/s/decisions/x.handoff-<N>.md",
+		IssueRepo: "acme/widgets", CLRepo: "acme/cls", ReadyLabel: "ready-for-agent", TriageLabel: triage,
+		PrincipleIndex: "/p/principle-index/SKILL.md",
+	}
+}
+
+func TestPromptFillsEveryPlaceholder(t *testing.T) {
+	prompt, err := contract.Prompt(params(""))
+
+	if err != nil || strings.Contains(prompt, "<<") {
+		t.Fatalf("差し込まれていない placeholder が残った: %v", err)
+	}
+	for _, want := range []string{"/s/instructions/x.json", "/s/decisions/x.json", "/s/decisions/x.handoff-<N>.md",
+		"acme/widgets", "acme/cls", "ready-for-agent", "dispatcher:wip", "/p/principle-index/SKILL.md"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt に %q が無い", want)
 		}
+	}
+}
+
+func TestPromptTellsWorkersToFileFollowUpsWithoutALabelWhenNoTriageLabelIsDeclared(t *testing.T) {
+	prompt, _ := contract.Prompt(params(""))
+
+	if !strings.Contains(prompt, "起票には label を付けない") {
+		t.Fatal("triage label が無いときの起票の規則が無い")
+	}
+}
+
+func TestPromptTellsWorkersToFileFollowUpsWithTheDeclaredTriageLabel(t *testing.T) {
+	prompt, _ := contract.Prompt(params("needs-triage"))
+
+	if !strings.Contains(prompt, "起票には triage label `needs-triage` だけを付ける") {
+		t.Fatal("宣言した triage label で起票する規則が無い")
 	}
 }
