@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"slices"
 	"strings"
 	"time"
 
@@ -76,7 +75,7 @@ func runTick(args []string, stdout, stderr io.Writer) int {
 	}
 
 	home := os.Getenv("HOME")
-	env := withPATH(os.Environ(), deps.ResolvePATH(os.Getenv("PATH"), home))
+	env := deps.WithEnv(os.Environ(), map[string]string{"PATH": deps.ResolvePATH(os.Getenv("PATH"), home)})
 	cwd, err := os.Getwd()
 	if err != nil {
 		fmt.Fprintf(stderr, "cwd を読めない: %v\n", err)
@@ -128,7 +127,7 @@ func reexecInCronEnv(project string, stdout, stderr io.Writer) int {
 const ghTimeout = 120 * time.Second
 
 func newGh(env []string) github.Runner {
-	path := deps.LookPath("gh", lookup(env, "PATH"))
+	path := deps.LookPath("gh", deps.Getenv(env, "PATH"))
 	if path == "" {
 		path = "gh" // 起動で失敗させ、観測できなかった tick として残す
 	}
@@ -137,25 +136,10 @@ func newGh(env []string) github.Runner {
 
 func newLauncher(cwd string) func(env []string) (launch.Launcher, error) {
 	return func(env []string) (launch.Launcher, error) {
-		claude := deps.LookPath("claude", lookup(env, "PATH"))
+		claude := deps.LookPath("claude", deps.Getenv(env, "PATH"))
 		if claude == "" {
-			return nil, fmt.Errorf("claude が PATH に無い (PATH=%s)", lookup(env, "PATH"))
+			return nil, fmt.Errorf("claude が PATH に無い (PATH=%s)", deps.Getenv(env, "PATH"))
 		}
 		return launch.ClaudePrint{Claude: claude, Env: env, Cwd: cwd}, nil
 	}
-}
-
-func lookup(env []string, key string) string {
-	prefix := key + "="
-	for i := len(env) - 1; i >= 0; i-- {
-		if strings.HasPrefix(env[i], prefix) {
-			return env[i][len(prefix):]
-		}
-	}
-	return ""
-}
-
-func withPATH(env []string, path string) []string {
-	out := slices.DeleteFunc(slices.Clone(env), func(kv string) bool { return strings.HasPrefix(kv, "PATH=") })
-	return append(out, "PATH="+path)
 }

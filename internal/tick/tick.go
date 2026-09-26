@@ -64,6 +64,8 @@ type run struct {
 	project paths.Project
 	stem    string
 	rec     record
+	// lock は tick 行を書き終えるまで持つ (log.jsonl の行の並びを tick の順に保つ)
+	lock *os.File
 }
 
 func newRun(o Options) *run {
@@ -76,11 +78,16 @@ func newRun(o Options) *run {
 	}
 }
 
-func (r *run) getenv(key string) string { return lookup(r.o.Env, key) }
+func (r *run) getenv(key string) string { return deps.Getenv(r.o.Env, key) }
 
 // Run は 1 tick を回して exit code を返す。どこで止まっても log.jsonl に 1 行を残す (書ける限り)。
 func Run(o Options) (exit int) {
 	r := newRun(o)
+	defer func() {
+		if r.lock != nil {
+			r.lock.Close()
+		}
+	}()
 	defer func() {
 		if v := recover(); v != nil {
 			// stack trace を先に出し、前置付きの 1 行を最後に置く (cron.log は末尾から読まれる)
@@ -127,7 +134,7 @@ func (r *run) tick() error {
 	if err != nil {
 		return fmt.Errorf("lock file を開けない (%s): %w", r.project.LockFile(), err)
 	}
-	defer lock.Close()
+	r.lock = lock // Run が tick 行を書いた後に閉じる (閉じると flock も外れる)
 	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		// 前 tick が長引いている間も log は進める (最終行の時刻で cron の死活を見るため)
 		return stopf(ResultLocked, "前の tick がまだ走っている (%s)", r.project.LockFile())
@@ -172,7 +179,7 @@ func (r *run) observe(verify func(config.Config, github.Runner) error) (observat
 	if err != nil {
 		return observation{}, stopf(ResultConfigError, "%s", err.Error())
 	}
-	gh := r.o.Gh(withEnv(r.o.Env, tokens.GH))
+	gh := r.o.Gh(deps.WithEnv(r.o.Env, tokens.GH))
 	if err := verify(cfg, gh); err != nil {
 		return observation{}, classifyGhError(err, "")
 	}
@@ -192,7 +199,7 @@ func (r *run) observe(verify func(config.Config, github.Runner) error) (observat
 	if err != nil {
 		return observation{}, stopf(ResultError, "指示を導出できなかった: %v", err)
 	}
-	obs := observation{config: cfg, claudeEnv: withEnv(r.o.Env, tokens.Claude), snapshot: snapshot, instructions: instructions}
+	obs := observation{config: cfg, claudeEnv: deps.WithEnv(r.o.Env, tokens.Claude), snapshot: snapshot, instructions: instructions}
 	if len(instructions) > 0 {
 		// orchestrator の契約に原則索引の path を埋めるので、指示があれば plugin を必ず解決しておく
 		if obs.install, err = playbooks.resolve(); err != nil {
@@ -449,24 +456,4 @@ func DryRun(o Options) (exit int) {
 	}
 	o.Stdout.Write(line)
 	return ResultOK.Exit
-}
-
-// --- env ---
-
-func lookup(env []string, key string) string {
-	prefix := key + "="
-	for i := len(env) - 1; i >= 0; i-- {
-		if strings.HasPrefix(env[i], prefix) {
-			return env[i][len(prefix):]
-		}
-	}
-	return ""
-}
-
-func withEnv(env []string, extra map[string]string) []string {
-	out := slices.Clone(env)
-	for key, value := range extra {
-		out = append(out, key+"="+value)
-	}
-	return out
 }

@@ -165,13 +165,22 @@ func frontmatter(file string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("playbook を読めない: %s: %w", file, err)
 	}
+	raw = bytes.ReplaceAll(raw, []byte("\r\n"), []byte("\n"))
 	rest, ok := bytes.CutPrefix(raw, []byte("---\n"))
 	if !ok {
 		return nil, fmt.Errorf("%w: %s", errNoFrontmatter, file)
 	}
-	head, _, ok := bytes.Cut(rest, []byte("\n---"))
-	if !ok {
-		return nil, fmt.Errorf("%w: %s", errNoFrontmatter, file)
+	// 閉じの `---` は行頭に単独で置かれた行
+	for offset := 0; offset <= len(rest); {
+		line, _, _ := bytes.Cut(rest[offset:], []byte("\n"))
+		if string(bytes.TrimRight(line, " \t")) == "---" {
+			return rest[:offset], nil
+		}
+		next := bytes.IndexByte(rest[offset:], '\n')
+		if next < 0 {
+			break
+		}
+		offset += next + 1
 	}
-	return head, nil
+	return nil, fmt.Errorf("%w: %s", errNoFrontmatter, file)
 }

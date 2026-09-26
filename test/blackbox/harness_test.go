@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -40,6 +41,8 @@ const (
 
 // git / ps の stub は status / setup / doctor (#4) の観測点。tick の契約は gh と claude の呼び出しだけで決まる
 var stubNames = []string{"gh", "claude", "git", "ps"}
+
+var registerSourcesOnce = sync.OnceValue(registerBinarySources)
 
 var (
 	dispatcherBin string
@@ -67,6 +70,29 @@ func TestMain(m *testing.M) {
 	code := m.Run()
 	os.RemoveAll(dir)
 	os.Exit(code)
+}
+
+// registerBinarySources はテスト対象の binary のソースを open しておく。binary は go build の subprocess で作るので、
+// そのままでは go test の cache がソースの変化を追えず、binary を変えても古い結果を返す。
+// test process が open した file は cache key に入るので、ここで open して変化を拾わせる。
+// open の記録は m.Run の中でしか取られないので、TestMain ではなく sandbox を作るときに 1 度だけ呼ぶ。
+func registerBinarySources() error {
+	for _, root := range []string{"../../cmd", "../../internal", "../../go.mod", "../../go.sum"} {
+		err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return err
+			}
+			f, err := os.Open(path)
+			if err != nil {
+				return err
+			}
+			return f.Close()
+		})
+		if err != nil {
+			return fmt.Errorf("テスト対象のソースを辿れない: %w", err)
+		}
+	}
+	return nil
 }
 
 type sandbox struct {
@@ -110,6 +136,9 @@ func newSandboxWithHomeDefaults(t *testing.T) *sandbox {
 
 func newBareSandbox(t *testing.T) *sandbox {
 	t.Helper()
+	if err := registerSourcesOnce(); err != nil {
+		t.Fatal(err)
+	}
 	// macOS の t.TempDir() は /var/... を返すが、子 process の cwd は /private/var/... に解決される。
 	// project scope の projectPath と cwd の照合を実環境どおりに通すため、実 path に揃える
 	root, err := filepath.EvalSymlinks(t.TempDir())

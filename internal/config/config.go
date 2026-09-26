@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -163,7 +164,7 @@ func Load(path, home string) (Config, error) {
 		sort.Strings(errs)
 		return Config{}, errorf("%s: %s", path, strings.Join(errs, " / "))
 	}
-	if !contains(SupportedTrackers, c.Tracker) {
+	if !slices.Contains(SupportedTrackers, c.Tracker) {
 		return Config{}, errorf("%s: [issue].tracker %q は未対応 (対応: %s)", path, c.Tracker, strings.Join(SupportedTrackers, ", "))
 	}
 	if c.TriageLabel == c.ReadyLabel {
@@ -191,7 +192,7 @@ func checkSchema(path string, doc map[string]any) error {
 		}
 		var unknown []string
 		for key := range keys {
-			if !contains(allowed, key) {
+			if !slices.Contains(allowed, key) {
 				unknown = append(unknown, key)
 			}
 		}
@@ -222,13 +223,4 @@ func expandHome(raw, home string) (string, bool) {
 		return raw, true
 	}
 	return "", false
-}
-
-func contains(list []string, s string) bool {
-	for _, x := range list {
-		if x == s {
-			return true
-		}
-	}
-	return false
 }

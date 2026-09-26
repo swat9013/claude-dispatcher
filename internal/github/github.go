@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -50,6 +51,10 @@ type Exec struct {
 func (g Exec) Run(args ...string) ([]byte, error) {
 	cmd := exec.Command(g.Path, args...)
 	cmd.Env = g.Env
+	// timeout で止めるときに gh が起こした子 (credential helper 等) も道連れにする。子が pipe を握ったままでも
+	// Wait が戻るよう、pipe の読み切りを待つ上限も置く
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.WaitDelay = 5 * time.Second
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Start(); err != nil {
@@ -70,7 +75,7 @@ func (g Exec) Run(args ...string) ([]byte, error) {
 		}
 		return stdout.Bytes(), nil
 	case <-time.After(g.Timeout):
-		_ = cmd.Process.Kill()
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		<-done
 		return nil, &Error{Args: args, Exit: -1, Stderr: fmt.Sprintf("%s を超えても終わらない", g.Timeout)}
 	}

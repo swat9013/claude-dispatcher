@@ -59,3 +59,29 @@ func LookPath(name, path string) string {
 	}
 	return ""
 }
+
+// Getenv は env ("KEY=value" の列) から key の値を返す。同じ key が複数あれば後ろが勝つ (exec と同じ)。
+func Getenv(env []string, key string) string {
+	prefix := key + "="
+	for i := len(env) - 1; i >= 0; i-- {
+		if strings.HasPrefix(env[i], prefix) {
+			return env[i][len(prefix):]
+		}
+	}
+	return ""
+}
+
+// WithEnv は env の set の key を置き換えた (無ければ足した) 新しい列を返す。
+func WithEnv(env []string, set map[string]string) []string {
+	out := make([]string, 0, len(env)+len(set))
+	for _, kv := range env {
+		key, _, _ := strings.Cut(kv, "=")
+		if _, replaced := set[key]; !replaced {
+			out = append(out, kv)
+		}
+	}
+	for key, value := range set {
+		out = append(out, key+"="+value)
+	}
+	return out
+}
