@@ -14,7 +14,7 @@ CLI の subcommand は役割で 3 群に分かれる。
 |---|---|---|
 | 駆動 | `tick` | state dir (log / 指示ファイル / lock / worker log)。外部 store には書かない |
 | 観測 | `status` / `paths` | 何も書かない (読み取り専用) |
-| 導入 | `setup` / `doctor` | `setup` だけが config の雛形・tracker label・crontab を書く (いずれも導入者の承認後)。Claude Code の settings はどちらも書かない |
+| 導入 | `setup` / `doctor` | `setup` だけが書く: config の雛形と state dir (config が無いときだけ作り、既存は上書きしない)・tracker label と crontab (導入者の承認後)。Claude Code の settings はどちらも書かない |
 
 `status` は log の `spawned` (起動記録) を起点に、wip の付いた issue と生きている worker process を 1 行ずつ並べ、process の生死・wip・紐づく CL を毎回読み直して出す。**process が死んでいるのに wip が残っている行が stale wip の手掛かり**になる (snapshot からは区別できないが、起動記録と process の生死を突き合わせる `status` からは見える)。
 

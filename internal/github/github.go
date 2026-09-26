@@ -1,14 +1,11 @@
-// Package github は gh CLI を撃って tracker と CL host を読む。書き込みは持たない (system.md §5)。
+// Package github は gh CLI を撃って tracker と CL host を読む。書くのは setup の label 作成 (CreateLabel) だけ (system.md §1)。
 package github
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os/exec"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/swat9013/claude-dispatcher/internal/config"
@@ -63,29 +60,16 @@ type Exec struct {
 }
 
 func (g Exec) Run(args ...string) ([]byte, error) {
-	cmd := exec.Command(g.Path, args...)
-	cmd.Env = g.Env
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	// process group の外へ逃げた孫が pipe を握ったままでも Wait が戻るよう、pipe の読み切りを待つ上限を置く
-	cmd.WaitDelay = 5 * time.Second
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	if err := cmd.Start(); err != nil {
-		return nil, &Error{Args: args, Exit: -1, Stderr: err.Error()}
-	}
-	timedOut, err := proc.Wait(cmd, g.Timeout)
-	if timedOut {
-		return nil, &Error{Args: args, Exit: -1, Stderr: fmt.Sprintf("%s を超えても終わらない", g.Timeout)}
-	}
-	if err != nil {
-		text := stderr.String()
+	out, err := proc.Command{Path: g.Path, Env: g.Env, Timeout: g.Timeout}.Output(args...)
+	var failed *proc.Error
+	if errors.As(err, &failed) {
 		return nil, &Error{
-			Args: args, Exit: cmd.ProcessState.ExitCode(), Stderr: text,
-			Auth:     cmd.ProcessState.ExitCode() == authExit || containsAny(text, authMarkers),
-			NotFound: containsAny(text, notFoundMarkers),
+			Args: args, Exit: failed.Exit, Stderr: failed.Stderr,
+			Auth:     failed.Exit == authExit || containsAny(failed.Stderr, authMarkers),
+			NotFound: containsAny(failed.Stderr, notFoundMarkers),
 		}
 	}
-	return stdout.Bytes(), nil
+	return []byte(out), err
 }
 
 func containsAny(text string, markers []string) bool {
@@ -293,4 +277,70 @@ func OpenPRs(gh Runner, repo, issueRepo config.Repo) ([]PR, error) {
 		prs = append(prs, pr)
 	}
 	return prs, nil
+}
+
+// WIPIssues は repo の open issue のうち wip label の付いた番号を返す (status が worker の wip を読む)。
+func WIPIssues(gh Runner, repo config.Repo) ([]int, error) {
+	out, err := gh.Run("issue", "list", "-R", repo.String(), "--label", config.WIPLabel, "--state", "open",
+		"--limit", fmt.Sprint(IssueListLimit), "--json", "number")
+	if err != nil {
+		return nil, err
+	}
+	var listed []struct{ Number int }
+	if err := json.Unmarshal(out, &listed); err != nil {
+		return nil, fmt.Errorf("gh issue list の出力を読めない: %w", err)
+	}
+	if len(listed) >= IssueListLimit {
+		return nil, fmt.Errorf("%w: wip の付いた issue が %d 件以上ある (%s)", ErrTruncated, IssueListLimit, repo)
+	}
+	numbers := make([]int, 0, len(listed))
+	for _, i := range listed {
+		numbers = append(numbers, i.Number)
+	}
+	return numbers, nil
+}
+
+// CLState は CL の番号と state (OPEN / CLOSED / MERGED)。
+type CLState struct {
+	Number int    `json:"number"`
+	State  string `json:"state"`
+}
+
+// LatestCLs は issue ごとに、head branch が branches[issue] の最新の CL を返す。無い issue は nil。
+func LatestCLs(gh Runner, repo config.Repo, branches map[int]string) (map[int]*CLState, error) {
+	var fields strings.Builder
+	for issue, branch := range branches {
+		fmt.Fprintf(&fields, ` i%d: pullRequests(headRefName: %q, first: 1, orderBy: {field: CREATED_AT, direction: DESC}) { nodes { number state } }`, issue, branch)
+	}
+	query := "query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) {" + fields.String() + " } }"
+	out, err := gh.Run("api", "graphql", "-f", "query="+query, "-f", "owner="+repo.Owner, "-f", "name="+repo.Name)
+	if err != nil {
+		return nil, err
+	}
+	var payload struct {
+		Data struct {
+			Repository map[string]struct{ Nodes []CLState }
+		}
+	}
+	if err := json.Unmarshal(out, &payload); err != nil {
+		return nil, fmt.Errorf("gh api graphql の出力を読めない: %w", err)
+	}
+	cls := map[int]*CLState{}
+	for issue := range branches {
+		found, ok := payload.Data.Repository[fmt.Sprintf("i%d", issue)]
+		if !ok {
+			return nil, fmt.Errorf("gh api graphql の出力に issue %d の CL が無い", issue)
+		}
+		cls[issue] = nil
+		if len(found.Nodes) > 0 {
+			cls[issue] = &found.Nodes[0]
+		}
+	}
+	return cls, nil
+}
+
+// CreateLabel は repo に label を作る。tracker に書く唯一の経路で、導入者が承認した setup だけが使う (system.md §1)。
+func CreateLabel(gh Runner, repo config.Repo, name, color, description string) error {
+	_, err := gh.Run("label", "create", name, "-R", repo.String(), "--color", color, "--description", description)
+	return err
 }

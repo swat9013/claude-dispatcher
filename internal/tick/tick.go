@@ -263,11 +263,7 @@ func (r *run) verifyOnce(cfg config.Config, gh github.Runner) error {
 // config_error にするのは gh が「repo が見えない」「label が無い」と答えたときだけ。gh を起動できない・認証が通らない・
 // 読み切れないといった失敗は綴りを直しても直らないので、そのまま返して classifyGhError に写させる (system.md §8)。
 func verifyConfig(cfg config.Config, gh github.Runner) error {
-	repos := []config.Repo{cfg.IssueRepo}
-	if cfg.CLRepo != cfg.IssueRepo {
-		repos = append(repos, cfg.CLRepo)
-	}
-	for _, repo := range repos {
+	for _, repo := range cfg.Repos() {
 		if err := github.RepoExists(gh, repo); err != nil {
 			if github.IsNotFound(err) {
 				return stopf(ResultConfigError, "%s: 置き場 repo %s が見えない (綴りか権限を確かめる) — %v", cfg.Path, repo, err)
@@ -275,18 +271,14 @@ func verifyConfig(cfg config.Config, gh github.Runner) error {
 			return err
 		}
 	}
-	required := []string{config.WIPLabel, config.HumanLabel}
-	if cfg.TriageLabel != "" {
-		required = append(required, cfg.TriageLabel)
-	}
 	var missing []string
-	for _, name := range required {
-		exists, err := github.LabelExists(gh, cfg.IssueRepo, name)
+	for _, label := range cfg.MechanismLabels() {
+		exists, err := github.LabelExists(gh, cfg.IssueRepo, label.Name)
 		if err != nil {
 			return err
 		}
 		if !exists {
-			missing = append(missing, name)
+			missing = append(missing, label.Name)
 		}
 	}
 	if len(missing) > 0 {

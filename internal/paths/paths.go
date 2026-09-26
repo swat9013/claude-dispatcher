@@ -2,8 +2,10 @@
 package paths
 
 import (
+	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 )
 
@@ -34,6 +36,29 @@ func ResolveRoots(getenv func(string) string) Roots {
 		state = filepath.Join(home, ".local", "state")
 	}
 	return Roots{Config: filepath.Join(config, appName), State: filepath.Join(state, appName)}
+}
+
+// Projects は config root の下で config.toml を持つ dir 名を昇順で返す (formats.md §9)。root が無ければ空。
+func (r Roots) Projects() ([]string, error) {
+	entries, err := os.ReadDir(r.Config)
+	if os.IsNotExist(err) {
+		return []string{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	projects := []string{}
+	for _, e := range entries {
+		// dotfiles 等から symlink で置いた project dir も数えるので、DirEntry の種別ではなく config.toml を stat で見る
+		if !ValidProjectName(e.Name()) {
+			continue
+		}
+		if info, err := os.Stat(r.Project(e.Name()).ConfigFile()); err == nil && !info.IsDir() {
+			projects = append(projects, e.Name())
+		}
+	}
+	sort.Strings(projects)
+	return projects, nil
 }
 
 // Project は 1 project の置き場。
@@ -76,4 +101,26 @@ func (p Project) WorkersDir() string { return filepath.Join(p.StateDir, "workers
 
 func (p Project) WorkerLog(issue int, stem string) string {
 	return filepath.Join(p.WorkersDir(), strconv.Itoa(issue)+"-"+stem+".log")
+}
+
+// ProjectDoc / RootsDoc は `paths --json` の形 (formats.md §9。外部の読み手を持つ公開契約)。
+type ProjectDoc struct {
+	Project    string `json:"project"`
+	ConfigFile string `json:"config_file"`
+	StateDir   string `json:"state_dir"`
+	LogFile    string `json:"log_file"`
+}
+
+type RootsDoc struct {
+	ConfigRoot string   `json:"config_root"`
+	StateRoot  string   `json:"state_root"`
+	Projects   []string `json:"projects"`
+}
+
+func (p Project) Doc() ProjectDoc {
+	return ProjectDoc{Project: p.Name, ConfigFile: p.ConfigFile(), StateDir: p.StateDir, LogFile: p.LogFile()}
+}
+
+func (r Roots) Doc(projects []string) RootsDoc {
+	return RootsDoc{ConfigRoot: r.Config, StateRoot: r.State, Projects: projects}
 }

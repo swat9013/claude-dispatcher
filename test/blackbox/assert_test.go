@@ -200,6 +200,21 @@ func mustWrite(t *testing.T, file, content string) {
 	}
 }
 
+func appendFile(t *testing.T, file, content string) {
+	t.Helper()
+	f, err := os.OpenFile(file, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = f.WriteString(content)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func mustRead(t *testing.T, file string) []byte {
 	t.Helper()
 	raw, err := os.ReadFile(file)

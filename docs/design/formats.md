@@ -242,3 +242,96 @@ project を渡すと 1 project の置き場を、省略すると root と既存 
 ```
 
 `projects` は config root の下で `config.toml` を持つ dir 名の昇順。
+
+## 10. `status`
+
+```
+claude-dispatcher status ps [<project>]
+claude-dispatcher status watch [<project>] [--interval <秒>]
+```
+
+project を省略すると、config root の下の全 project (§9 の `projects`) を並べる。`watch` は `ps` の表を `--interval` 秒 (既定 5、1 以上 86400 以下) ごとに描き直し、Ctrl-C で終わる。実装 repo の clone を cwd にして撃つ (BRANCH 列は cwd の clone の作業ツリーを読む)。
+
+- **読み取り専用**: state dir にも外部 store にも書かない。lock file も作らず、lock も取らない (取ると、その一瞬に重なった tick が `locked` の行を残す)。tick が走っているかは process の一覧 (`claude-dispatcher … tick <project>` の process) で見る
+- **載せる worker**: log.jsonl の tick 行の `spawned` のうち、issue ごとの最新の起動記録で issue に `dispatcher:wip` が付いているか process が生きているもの、と、それより古い起動記録で process が生きているもの (wip は issue の今の worker にだけ掛ける。古い起動記録に掛けると、再入で起こし直した issue の前回の worker が stale wip に見える)。process の生死は pid の command 行に `session_id` が在るかで見る (pid は再利用される)。process が死んでいて wip が残っている行が stale wip の手掛かり (system.md §1)
+- 外部 process (gh / git / claude / ps) が失敗した列は `?` にして表は出し、何を読めなかったかを `! <理由>` の注記行に残す
+
+表は project ごとに 1 段:
+
+```
+myproj  待機  最終 tick 2026-09-26T03:00:00Z ok
+  ! <注記>
+ISSUE  KIND   STATE    ELAPSED  SESSION  BRANCH  WIP  CL        TICK
+#42    start  running  12m      -        +3      yes  #57 OPEN  2026-09-26T02:48:00Z
+```
+
+| 列 | 中身 |
+|---|---|
+| ISSUE / KIND / TICK | 起動記録の issue・kind・起動した tick の `ts` (秒まで) |
+| STATE | `running` / `exited` |
+| ELAPSED | 起動した tick からの経過 (`45s` / `12m` / `3h05m` / `2d04h`) |
+| SESSION | `claude agents --json` に同じ session が居れば `<id> <status>/<state>`、居なければ `-` |
+| BRANCH | cwd の clone に `worktree-issue-<issue>` の作業ツリーがあれば `origin/HEAD` からの ahead 数 (`+3`)、無ければ `-` |
+| WIP | issue に `dispatcher:wip` が付いているか (`yes` / `no`) |
+| CL | head branch `worktree-issue-<issue>` の最新 CL (`#<番号> <state>`)、無ければ `-` |
+
+exit: 0。指定した project が無い / project が 1 つも無いときは 2。
+
+## 11. `setup`
+
+```
+claude-dispatcher setup <project>
+```
+
+実装 repo の clone を cwd にして撃つ。次の段を順に進め、段が済んでいれば何もせず次へ進む (再実行で同じ終状態に収束する)。
+
+1. **宣言 config の雛形と state dir**: config.toml が無ければ、雛形 (`[issue].repo` は cwd の clone の origin、`ready_label = "ready-for-agent"`、`max_wip = 1`) と state dir を作り、「埋めてから撃ち直す」と示して止まる。config.toml があれば上書きしない (state dir が無ければ作る)
+2. **config の検査**: `tick` と同じ検査。落ちたら名指しで止まる
+3. **label**: issue 置き場に `dispatcher:wip` / `ready-for-human` / 着手可 label / (書いてあれば) triage label が無ければ、作る label を示して承認を尋ね、承認されたら作る
+4. **試運転**: `tick <project> --dry-run` と `tick <project> --dry-run --cron-env` を順に撃ち、出力をそのまま示す
+5. **crontab**: 次の 1 行を組み、`crontab -l` と突き合わせる
+
+   ```
+   */5 * * * * cd <clone> && <claude-dispatcher の絶対 path> tick <project> >> <state dir>/cron.log 2>&1
+   ```
+
+   `<claude-dispatcher の絶対 path>` は撃たれたときの綴り (PATH で引いた path) を絶対 path にしたもの。symlink は解決しない — Homebrew 等の版つきの実体の path を書くと、更新で消える。`go run` の一時 build からは組めないので止まる。path と cron.log の `%` は cron が改行として読むので `\%` にする
+
+   周期の欄 (先頭 5 欄) を除いて同じ行があれば済み (周期は人が変えてよい)。この project の tick 行 (`tick <project>` か、移植元の `dispatcher-tick.py <project>` を含むコメントでない行) が別の形であれば、現行の行と組んだ行を並べて示すだけで**置き換えない**。無ければ足す行を示して承認を尋ね、承認されたら現行の表に 1 行足して登録し、`crontab -l` で登録を確かめる
+
+- **承認は stdin から `y` / `yes` を受けたときだけ**。それ以外 (空行・EOF・端末の無い実行) は承認なしとして書かず、自分で撃つコマンドを示して止まる
+- Claude Code の settings は書かない (`doctor` が要る entry を示す)
+
+exit: 0 = crontab に tick 行がある状態で終わった / 1 = 途中で止まった (雛形を書いた・承認されなかった・gh の失敗・既存の tick 行と食い違う) / 2 = 引数か config の誤り。試運転が落ちたときは試運転の exit code (§3) をそのまま返す。
+
+## 12. `doctor`
+
+```
+claude-dispatcher doctor <project>
+```
+
+導入の充足を検査して 1 項目 1 行で示す。**何も書かない** (state dir・config・settings・crontab・外部 store のどれにも)。
+
+```
+ok  config        <config.toml の path>
+NG  label         置き場 acme/widgets に dispatcher:wip が無い — `claude-dispatcher setup myproj` で作る
+--  最終 tick     2026-09-26T03:00:00Z ok
+```
+
+| 項目 | 見るもの |
+|---|---|
+| `config` | config.toml が在り、`tick` と同じ検査に通る |
+| `state dir` | state dir が在る |
+| `依存 CLI` | gh / claude / git が (PATH の自己解決の後で) 見つかる |
+| `置き場` | issue 置き場 (と CL 置き場) が gh から見える |
+| `label` | `dispatcher:wip` / `ready-for-human` / 着手可 label / (書いてあれば) triage label が在る |
+| `plugin` | plugin `swat-skills` が system.md §11 の選択順で 1 つに決まる (別 marketplace の重複は NG) |
+| `playbook` | 条件カタログ (system.md §6) の playbook が全部在る。start の選定母集合の本数も示す (0 本は `--`。tick は start を出さないだけで動く) |
+| `原則索引` | 原則索引の file が在る |
+| `試運転` | `tick <project> --dry-run --cron-env` (state dir に何も書かない) が exit 0 で終わる。NG なら出力を添える |
+| `crontab` | `setup` が組む行 (§11) と周期の欄を除いて同じ行がある。この project の tick 行が別の形なら現行の行と組む行を並べて NG。自分の絶対 path を組めない (`go run` の一時 build 等) ときもこの項目だけ NG にして、ほかの項目は検査する |
+| `最終 tick` | log.jsonl の最後の tick 行の `ts` と `result`、読めない行があればその件数 (情報。判定しない) |
+
+先頭の印は `ok` (充足) / `NG` (不足。理由と直し方を添える) / `--` (情報)。項目の後に、Claude Code の settings に要る entry (sandbox の `filesystem.allowWrite` に state dir、`excludedCommands` に `gh` と `claude-dispatcher`) を示す。
+
+exit: 0 = `NG` が無い / 1 = `NG` がある / 2 = 引数の誤り。
