@@ -1,0 +1,25 @@
+# GitHub Releases へ出す binary の定義。tag の push で .github/workflows/release.yml が撃つ
+version: 2
+
+builds:
+  - id: claude-dispatcher
+    main: ./cmd/claude-dispatcher
+    binary: claude-dispatcher
+    env:
+      # 外部の C library に依存しない静的な binary にして、cross build を Go の toolchain だけで済ませる
+      - CGO_ENABLED=0
+    goos: [darwin, linux]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags: [-s -w]
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files: [README.md, LICENSE]
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: github
