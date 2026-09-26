@@ -2,6 +2,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -31,7 +32,7 @@ const exitUsage = 2
 
 const usage = `usage:
   claude-dispatcher tick <project> [--dry-run [--cron-env]]
-  claude-dispatcher status ps [<project>] [--json]
+  claude-dispatcher status ps [<project>]
   claude-dispatcher status watch [<project>] [--interval <秒>]
   claude-dispatcher setup <project>
   claude-dispatcher doctor <project>
@@ -110,7 +111,7 @@ func (e environment) output(name string, args ...string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return c.Output("", args...)
+	return c.Output(args...)
 }
 
 func (e environment) command(name string) (proc.Command, error) {
@@ -253,12 +254,9 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 	}
 	watch := args[0] == "watch"
 	var project string
-	var asJSON bool
 	interval := defaultWatchInterval
 	for i := 1; i < len(args); i++ {
 		switch arg := args[i]; {
-		case arg == "--json" && !watch:
-			asJSON = true
 		case arg == "--interval" && watch && i+1 < len(args):
 			i++
 			seconds, err := strconv.ParseFloat(args[i], 64)
@@ -304,7 +302,10 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 	probes := status.Probes{Gh: e.ghFor, Git: e.git}
 	collect := func() []status.Report {
 		// process の一覧と claude のセッション一覧はマシンで 1 つなので、描画ごとに 1 度だけ読んで全 project で共有する
-		machine := status.ReadMachine(e.processes, func() (string, error) { return e.output("claude", "agents", "--json") })
+		var machine status.Machine
+		ps, err := e.output("ps", "-A", "-o", "pid=,command=")
+		machine.Processes, machine.ProcessesErr = status.ParseProcesses(ps), err
+		machine.Agents, machine.AgentsErr = e.output("claude", "agents", "--json")
 		reports := make([]status.Report, 0, len(projects))
 		for _, name := range projects {
 			reports = append(reports, status.Collect(e.roots.Project(name), e.home, machine, probes, time.Now()))
@@ -312,40 +313,15 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 		return reports
 	}
 
-	switch {
-	case watch:
-		// Ctrl-C (SIGINT) で終わる。片付けるものを持たないので signal は既定の扱いに任せる
-		for {
-			fmt.Fprintf(stdout, "\033[H\033[2J%s\n", status.RenderTable(collect()))
-			time.Sleep(interval)
-		}
-	case asJSON:
-		raw, err := status.RenderJSON(collect())
-		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		fmt.Fprintf(stdout, "%s\n", raw)
-	default:
+	if !watch {
 		fmt.Fprintln(stdout, status.RenderTable(collect()))
+		return 0
 	}
-	return 0
-}
-
-// processes は生きている process の pid → command 行。
-func (e environment) processes() (map[int]string, error) {
-	out, err := e.output("ps", "-A", "-o", "pid=,command=")
-	if err != nil {
-		return nil, err
+	// Ctrl-C (SIGINT) で終わる。片付けるものを持たないので signal は既定の扱いに任せる
+	for {
+		fmt.Fprintf(stdout, "\033[H\033[2J%s\n", status.RenderTable(collect()))
+		time.Sleep(interval)
 	}
-	processes := map[int]string{}
-	for _, line := range strings.Split(out, "\n") {
-		pid, command, _ := strings.Cut(strings.TrimSpace(line), " ")
-		if n, err := strconv.Atoi(pid); err == nil {
-			processes[n] = strings.TrimSpace(command)
-		}
-	}
-	return processes, nil
 }
 
 // --- setup / doctor ---
@@ -362,7 +338,7 @@ func runSetup(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	self, err := selfForCrontab(e.env)
+	self, err := selfForCrontab(os.Args[0], e.env)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -395,22 +371,33 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
+	self, err := selfForCrontab(os.Args[0], e.env)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
 	return doctor.Run(doctor.Options{
 		Project: e.roots.Project(args[0]),
 		Home:    e.home,
 		Clone:   e.cwd,
+		Self:    self,
 		Env:     e.env,
 		Stdout:  stdout,
 		Gh:      e.ghFor,
 		Crontab: e.crontab,
+		DryRun: func(args ...string) (string, int) {
+			var out bytes.Buffer
+			exit := runSelf(os.Environ(), &out, &out, args...)
+			return out.String(), exit
+		},
 	})
 }
 
 // selfForCrontab は crontab の行に埋める自分の絶対 path。撃たれたときの綴り (PATH で引いた path) を使う —
 // os.Executable は symlink を解決した実体 (Homebrew の版つき Cellar の path 等) を返すことがあり、更新で消える。
-// go run の一時 build は crontab から撃てないので拒む。
-func selfForCrontab(env []string) (string, error) {
-	self := os.Args[0]
+// go run の一時 build は crontab から撃てないので拒む。argv0 は撃たれたときの os.Args[0]。
+func selfForCrontab(argv0 string, env []string) (string, error) {
+	self := argv0
 	if !strings.Contains(self, string(os.PathSeparator)) {
 		found, err := deps.Lookup(self, env)
 		if err != nil {
@@ -430,20 +417,6 @@ func selfForCrontab(env []string) (string, error) {
 
 // --- paths ---
 
-// projectPaths / rootPaths は `paths --json` の形 (formats.md §9。外部の読み手を持つ公開契約)
-type projectPaths struct {
-	Project    string `json:"project"`
-	ConfigFile string `json:"config_file"`
-	StateDir   string `json:"state_dir"`
-	LogFile    string `json:"log_file"`
-}
-
-type rootPaths struct {
-	ConfigRoot string   `json:"config_root"`
-	StateRoot  string   `json:"state_root"`
-	Projects   []string `json:"projects"`
-}
-
 func runPaths(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 || args[0] != "--json" || len(args) > 2 {
 		return usageError(stderr, "paths は --json [<project>] を取る")
@@ -454,15 +427,14 @@ func runPaths(args []string, stdout, stderr io.Writer) int {
 		if !checkProject(stderr, args[1]) {
 			return exitUsage
 		}
-		p := roots.Project(args[1])
-		doc = projectPaths{Project: p.Name, ConfigFile: p.ConfigFile(), StateDir: p.StateDir, LogFile: p.LogFile()}
+		doc = roots.Project(args[1]).Doc()
 	} else {
 		projects, err := roots.Projects()
 		if err != nil {
 			fmt.Fprintf(stderr, "project の一覧を読めない: %v\n", err)
 			return 1
 		}
-		doc = rootPaths{ConfigRoot: roots.Config, StateRoot: roots.State, Projects: projects}
+		doc = roots.Doc(projects)
 	}
 	raw, err := json.Marshal(doc)
 	if err != nil {

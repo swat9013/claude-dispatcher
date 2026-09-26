@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"regexp"
 	"slices"
 	"strings"
 
@@ -21,9 +20,10 @@ import (
 	"github.com/swat9013/claude-dispatcher/internal/paths"
 )
 
-// exit code (formats.md §11)。試運転が落ちたときは試運転の exit code をそのまま返す
+// exit code (formats.md §11)。試運転が落ちたときは試運転の exit code をそのまま返す。段は exitDone を「次の段へ進む」の
+// 意味で返す
 const (
-	exitDone    = 0 // crontab に tick 行がある状態で終わった
+	exitDone    = 0 // crontab に tick 行がある状態で終わった / 段が済んだ
 	exitStopped = 1 // 途中で止まった (雛形を書いた / 承認されなかった / 外部 CLI の失敗 / 既存の tick 行と食い違う)
 	exitConfig  = 2
 )
@@ -55,7 +55,7 @@ type run struct {
 // Run は段を順に進めて exit code を返す。
 func Run(o Options) int {
 	r := &run{o: o, answers: bufio.NewReader(o.Stdin)}
-	if stopped, exit := r.ensureConfig(); stopped {
+	if exit := r.ensureConfig(); exit != exitDone {
 		return exit
 	}
 	cfg, err := config.Load(o.Project.ConfigFile(), o.Home)
@@ -92,6 +92,9 @@ func (r *run) approve(question string) bool {
 	line, err := r.answers.ReadString('\n')
 	if err != nil {
 		fmt.Fprintln(r.o.Stdout) // 端末の無い実行でも次の出力が同じ行に続かないように
+		if !errors.Is(err, io.EOF) {
+			fmt.Fprintf(r.o.Stderr, "答えを読めない (承認なしとして扱う): %v\n", err)
+		}
 	}
 	answer := strings.ToLower(strings.TrimSpace(line))
 	return answer == "y" || answer == "yes"
@@ -100,38 +103,38 @@ func (r *run) approve(question string) bool {
 // --- 1. config の雛形と state dir ---
 
 // ensureConfig は config.toml が無ければ雛形と state dir を作って止まる。あれば上書きせず、state dir だけを揃える。
-func (r *run) ensureConfig() (stopped bool, exit int) {
+func (r *run) ensureConfig() int {
 	file := r.o.Project.ConfigFile()
 	_, err := os.Stat(file)
 	switch {
 	case err == nil:
 		if err := os.MkdirAll(r.o.Project.StateDir, 0o755); err != nil {
-			return true, r.fail("state dir を作れない: %v", err)
+			return r.fail("state dir を作れない: %v", err)
 		}
-		return false, exitDone
+		return exitDone
 	case !errors.Is(err, os.ErrNotExist):
-		return true, r.fail("宣言 config を確かめられない: %s (%v)", file, err)
+		return r.fail("宣言 config を確かめられない: %s (%v)", file, err)
 	}
 	for _, dir := range []string{r.o.Project.ConfigDir, r.o.Project.StateDir} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return true, r.fail("置き場を作れない: %v", err)
+			return r.fail("置き場を作れない: %v", err)
 		}
 	}
 	// O_EXCL: 確かめてから書くまでの間に置かれた config も上書きしない
 	f, err := os.OpenFile(file, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
-		return true, r.fail("宣言 config の雛形を書けない: %v", err)
+		return r.fail("宣言 config の雛形を書けない: %v", err)
 	}
 	_, err = fmt.Fprintf(f, template, r.originRepo())
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
 	if err != nil {
-		return true, r.fail("宣言 config の雛形を書けない: %v", err)
+		return r.fail("宣言 config の雛形を書けない: %v", err)
 	}
 	r.say("宣言 config の雛形と state dir を作った: %s", file)
 	r.say("置き場・着手可 label・並列上限を確かめて直してから、もう一度 `claude-dispatcher setup %s` を撃つ", r.o.Project.Name)
-	return true, exitStopped
+	return exitStopped
 }
 
 const template = `# claude-dispatcher の宣言 config (形式は docs/design/formats.md §2)
@@ -149,36 +152,22 @@ ready_label = "ready-for-agent"
 max_wip = 1
 `
 
-var githubRemote = regexp.MustCompile(`github\.com[:/]([^/\s]+)/([^/\s]+?)(\.git)?/?$`)
-
-// originRepo は cwd の clone の origin を owner/name で返す。読めなければ "" (config の検査が埋め忘れとして落とす)。
+// originRepo は cwd の clone の origin を owner/name で返す。読めなければ理由を示して "" (config の検査が埋め忘れとして
+// 落とす)。
 func (r *run) originRepo() string {
-	out, err := r.o.Git("remote", "get-url", "origin")
+	url, err := r.o.Git("remote", "get-url", "origin")
+	var origin config.Repo
+	if err == nil {
+		origin, err = config.RepoFromRemote(url)
+	}
 	if err != nil {
+		r.say("cwd の clone の origin を読めない — 雛形の [issue].repo は空にした (%v)", err)
 		return ""
 	}
-	m := githubRemote.FindStringSubmatch(strings.TrimSpace(out))
-	if m == nil {
-		return ""
-	}
-	return m[1] + "/" + m[2]
+	return origin.String()
 }
 
 // --- 3. label ---
-
-type label struct{ name, color, description string }
-
-func requiredLabels(cfg config.Config) []label {
-	labels := []label{
-		{config.WIPLabel, "fbca04", "dispatcher: worker が着手中"},
-		{config.HumanLabel, "d93f0b", "dispatcher: 人の判断待ち"},
-		{cfg.ReadyLabel, "0e8a16", "dispatcher: 着手可"},
-	}
-	if cfg.TriageLabel != "" {
-		labels = append(labels, label{cfg.TriageLabel, "ededed", "dispatcher: worker の起票。triage 待ち"})
-	}
-	return labels
-}
 
 func (r *run) ensureLabels(cfg config.Config) int {
 	gh, err := r.o.Gh(cfg)
@@ -190,9 +179,9 @@ func (r *run) ensureLabels(cfg config.Config) int {
 	if err != nil {
 		return r.fail("gh を撃てない: %v", err)
 	}
-	var missing []label
-	for _, l := range requiredLabels(cfg) {
-		exists, err := github.LabelExists(gh, cfg.IssueRepo, l.name)
+	var missing []config.Label
+	for _, l := range cfg.Labels() {
+		exists, err := github.LabelExists(gh, cfg.IssueRepo, l.Name)
 		if err != nil {
 			return r.fail("label を確かめられない: %v", err)
 		}
@@ -206,8 +195,8 @@ func (r *run) ensureLabels(cfg config.Config) int {
 	}
 	var names, commands []string
 	for _, l := range missing {
-		names = append(names, l.name)
-		commands = append(commands, fmt.Sprintf("gh label create %q -R %s --color %s --description %q", l.name, cfg.IssueRepo, l.color, l.description))
+		names = append(names, l.Name)
+		commands = append(commands, fmt.Sprintf("gh label create %q -R %s --color %s --description %q", l.Name, cfg.IssueRepo, l.Color, l.Description))
 	}
 	r.say("issue 置き場 %s に無い label: %s", cfg.IssueRepo, strings.Join(names, ", "))
 	if !r.approve("作ってよいか") {
@@ -218,10 +207,10 @@ func (r *run) ensureLabels(cfg config.Config) int {
 		return exitStopped
 	}
 	for _, l := range missing {
-		if err := github.CreateLabel(gh, cfg.IssueRepo, l.name, l.color, l.description); err != nil {
-			return r.fail("label %s を作れない: %v", l.name, err)
+		if err := github.CreateLabel(gh, cfg.IssueRepo, l.Name, l.Color, l.Description); err != nil {
+			return r.fail("label %s を作れない: %v", l.Name, err)
 		}
-		r.say("label を作った: %s", l.name)
+		r.say("label を作った: %s", l.Name)
 	}
 	return exitDone
 }

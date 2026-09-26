@@ -17,13 +17,19 @@ import (
 	"github.com/swat9013/claude-dispatcher/internal/config"
 	"github.com/swat9013/claude-dispatcher/internal/github"
 	"github.com/swat9013/claude-dispatcher/internal/paths"
+	"github.com/swat9013/claude-dispatcher/internal/tick"
 	"github.com/swat9013/claude-dispatcher/internal/ticklog"
 )
 
-// Unknown は外部 process が失敗して確かめられなかった値 (表でも JSON でも同じ綴り)。
-const Unknown = "?"
+// Probed は外部 process から読んだ値。読めなかったら Known が false で、表では `?` になる (formats.md §10)。
+type Probed[T any] struct {
+	Value T
+	Known bool
+}
 
-// Probes は project ごとに撃つ外部 process の読み口。失敗したら error を返し、status はその列を Unknown にして注記を残す。
+func known[T any](v T) Probed[T] { return Probed[T]{Value: v, Known: true} }
+
+// Probes は project ごとに撃つ外部 process の読み口。
 type Probes struct {
 	// Gh は token を載せた env で gh を撃つ Runner を返す (config の token file を読むので config を受け取る)
 	Gh func(config.Config) (github.Runner, error)
@@ -31,7 +37,7 @@ type Probes struct {
 	Git func(args ...string) (string, error)
 }
 
-// Machine はマシン全体で 1 つの観測 (process の一覧と claude のセッション一覧)。1 回の描画で 1 度だけ読み、全 project で共有する。
+// Machine はマシン全体で 1 つの観測。1 回の描画で 1 度だけ読み、全 project で共有する。
 type Machine struct {
 	// Processes は生きている process の pid → command 行
 	Processes    map[int]string
@@ -41,130 +47,94 @@ type Machine struct {
 	AgentsErr error
 }
 
-// Report は 1 project の像。表と `--json` の共通の形。
+// ParseProcesses は `ps -A -o pid=,command=` の出力を pid → command 行にする。
+func ParseProcesses(out string) map[int]string {
+	processes := map[int]string{}
+	for _, line := range strings.Split(out, "\n") {
+		pid, command, _ := strings.Cut(strings.TrimSpace(line), " ")
+		if n, err := strconv.Atoi(pid); err == nil {
+			processes[n] = strings.TrimSpace(command)
+		}
+	}
+	return processes
+}
+
+// Report は 1 project の像。
 type Report struct {
-	Project string   `json:"project"`
-	Tick    Tick     `json:"tick"`
-	Workers []Worker `json:"workers"`
-	Notes   []string `json:"notes"`
+	Project string
+	Tick    Tick
+	Workers []Worker
+	Notes   []string
 }
 
+// Tick は tick の状態。Last.Value が nil なら tick 行がまだ無い。
 type Tick struct {
-	// Running は bool か Unknown
-	Running    any     `json:"running"`
-	LastTS     *string `json:"last_ts"`
-	LastResult *string `json:"last_result"`
+	Running Probed[bool]
+	Last    Probed[*ticklog.Line]
 }
 
-// Worker は表の 1 行。any の field は値か Unknown。
+// Worker は表の 1 行。
 type Worker struct {
-	Issue      int    `json:"issue"`
-	Kind       string `json:"kind"`
-	PID        int    `json:"pid"`
-	State      string `json:"state"`
-	ElapsedSec int    `json:"elapsed_sec"`
-	WIP        any    `json:"wip"`
-	TickTS     string `json:"tick_ts"`
-	Session    any    `json:"session"`
-	Branch     any    `json:"branch"`
-	CL         any    `json:"cl"`
-
-	sessionID string
+	Spawn   ticklog.Spawned
+	TickTS  string
+	Elapsed time.Duration
+	Alive   Probed[bool]
+	WIP     Probed[bool]
+	Session Probed[*Session]
+	Branch  Probed[*Branch]
+	CL      Probed[*github.CLState]
 }
 
 // Session は `claude agents --json` の行のうち表に出す分。
-type Session struct {
-	ID     string `json:"id"`
-	Status string `json:"status"`
-	State  string `json:"state"`
-}
+type Session struct{ ID, Status, State string }
 
-// Branch は cwd の clone にある worker の作業ツリーの branch。Ahead は数か Unknown。
+// Branch は cwd の clone にある worker の作業ツリーの branch。
 type Branch struct {
-	Name  string `json:"name"`
-	Ahead any    `json:"ahead"`
+	Name  string
+	Ahead Probed[int]
 }
 
 // Collect は 1 project の今を組む。
 func Collect(project paths.Project, home string, machine Machine, probes Probes, now time.Time) Report {
-	r := &collector{report: Report{Project: project.Name, Workers: []Worker{}, Notes: []string{}}, probes: probes, machine: machine}
-	processes, procErr := machine.Processes, machine.ProcessesErr
-	if procErr != nil {
-		r.note("process の一覧を読めない — tick の実行中と worker の生死は ? (%v)", procErr)
+	c := &collector{report: Report{Project: project.Name, Workers: []Worker{}, Notes: []string{}}, machine: machine, probes: probes}
+	if machine.ProcessesErr != nil {
+		c.note("process の一覧を読めない — tick の実行中と worker の生死は ? (%v)", machine.ProcessesErr)
 	}
+	c.report.Tick.Running = c.tickRunning(project.Name)
 	lines, broken, err := ticklog.Read(project.LogFile())
 	if err != nil {
 		// 途中までの行から最終 tick や起動記録を出すと古い像を今として見せるので、log からは何も出さない
-		r.note("log.jsonl を読めない — 最終 tick と worker は出さない (%v)", err)
-		unknown := Unknown
-		r.report.Tick = Tick{Running: tickRunning(project.Name, processes, procErr), LastTS: &unknown, LastResult: &unknown}
-		return r.report
+		c.note("log.jsonl を読めない — 最終 tick と worker は出さない (%v)", err)
+		return c.report
 	}
 	if broken > 0 {
-		r.note("%s の読めない %d 行を飛ばした", project.LogFile(), broken)
+		c.note("%s の読めない %d 行を飛ばした", project.LogFile(), broken)
 	}
-	r.report.Tick = Tick{Running: tickRunning(project.Name, processes, procErr)}
-	if last, ok := ticklog.Last(lines); ok {
-		r.report.Tick.LastTS, r.report.Tick.LastResult = &last.TS, &last.Result
+	var last *ticklog.Line
+	if l, ok := ticklog.Last(lines); ok {
+		last = &l
 	}
+	c.report.Tick.Last = known(last)
 
-	var spawns []spawnRecord
-	for _, line := range lines {
-		for _, s := range line.Spawned {
-			spawns = append(spawns, spawnRecord{Spawned: s, tick: line})
-		}
-	}
+	spawns := spawnRecords(lines)
 	if len(spawns) == 0 {
-		return r.report
+		return c.report
 	}
-
 	cfg, cfgErr := config.Load(project.ConfigFile(), home)
 	if cfgErr != nil {
-		r.note("config を読めない — WIP / BRANCH / CL は ? (%v)", cfgErr)
+		c.note("config を読めない — WIP / BRANCH / CL は ? (%v)", cfgErr)
 	}
 	var gh github.Runner
 	if cfgErr == nil {
 		if gh, err = probes.Gh(cfg); err != nil {
-			r.note("gh を撃てない — WIP / CL は ? (%v)", err)
+			c.note("gh を撃てない — WIP / CL は ? (%v)", err)
 		}
 	}
-	wip := r.wip(cfg, cfgErr, gh)
-
-	slices.SortStableFunc(spawns, func(a, b spawnRecord) int {
-		if a.Issue != b.Issue {
-			return a.Issue - b.Issue
-		}
-		return a.tick.At.Compare(b.tick.At)
-	})
-	for i, s := range spawns {
-		alive := any(Unknown)
-		if procErr == nil {
-			alive = isWorkerProcess(processes[s.PID], s.SessionID)
-		}
-		issueWIP := any(Unknown)
-		if wip != nil {
-			issueWIP = slices.Contains(wip, s.Issue)
-		}
-		// wip はその issue の今の worker (最新の起動記録) にだけ掛ける。古い起動記録に掛けると、再入で起こし直した
-		// issue の前回の worker が「exited + wip」(stale wip の手掛かり) に見える。古い起動は process が生きているときだけ載せる
-		latest := i == len(spawns)-1 || spawns[i+1].Issue != s.Issue
-		// 確かめられなかった (?) だけでは載せない — 載せると log に残る過去の起動が全部並ぶ
-		if alive != true && (!latest || issueWIP != true) {
-			continue
-		}
-		state := Unknown
-		if alive != Unknown {
-			state = map[bool]string{true: "running", false: "exited"}[alive.(bool)]
-		}
-		r.report.Workers = append(r.report.Workers, Worker{
-			Issue: s.Issue, Kind: s.Kind, PID: s.PID, State: state, ElapsedSec: int(now.Sub(s.tick.At).Seconds()),
-			WIP: issueWIP, TickTS: s.tick.TS, sessionID: s.SessionID,
-		})
+	c.report.Workers = listed(spawns, c.alive, c.wip(cfg, cfgErr, gh), now)
+	if len(c.report.Workers) > 0 {
+		c.fillDetails(cfg, cfgErr, gh)
 	}
-	if len(r.report.Workers) > 0 {
-		r.fillDetails(cfg, cfgErr, gh)
-	}
-	return r.report
+	return c.report
 }
 
 type spawnRecord struct {
@@ -172,64 +142,100 @@ type spawnRecord struct {
 	tick ticklog.Line
 }
 
+// spawnRecords は log の起動記録を issue ごと、起動した tick の順に並べる。
+func spawnRecords(lines []ticklog.Line) []spawnRecord {
+	var spawns []spawnRecord
+	for _, line := range lines {
+		for _, s := range line.Spawned {
+			spawns = append(spawns, spawnRecord{Spawned: s, tick: line})
+		}
+	}
+	slices.SortStableFunc(spawns, func(a, b spawnRecord) int {
+		if a.Issue != b.Issue {
+			return a.Issue - b.Issue
+		}
+		return a.tick.At.Compare(b.tick.At)
+	})
+	return spawns
+}
+
+// listed は載せる起動記録を選ぶ (formats.md §10)。issue ごとの最新の起動記録は wip が付いているか process が生きていれば、
+// それより古い起動記録は process が生きているときだけ載せる — wip は issue の今の worker にだけ掛け、再入で起こし直した
+// issue の前回の worker を「exited + wip」(stale wip の手掛かり) に見せない。確かめられなかった (?) だけでは載せない
+// (載せると log に残る過去の起動が全部並ぶ)。spawns は spawnRecords の順に並んでいること。
+func listed(spawns []spawnRecord, alive func(ticklog.Spawned) Probed[bool], wip func(issue int) Probed[bool], now time.Time) []Worker {
+	workers := []Worker{}
+	for i, s := range spawns {
+		latest := i == len(spawns)-1 || spawns[i+1].Issue != s.Issue
+		a, w := alive(s.Spawned), wip(s.Issue)
+		running := a.Known && a.Value
+		stale := latest && w.Known && w.Value
+		if !running && !stale {
+			continue
+		}
+		workers = append(workers, Worker{Spawn: s.Spawned, TickTS: s.tick.TS, Elapsed: now.Sub(s.tick.At), Alive: a, WIP: w})
+	}
+	return workers
+}
+
 type collector struct {
 	report  Report
-	probes  Probes
 	machine Machine
+	probes  Probes
 }
 
-func (r *collector) note(format string, args ...any) {
-	r.report.Notes = append(r.report.Notes, fmt.Sprintf(format, args...))
+func (c *collector) note(format string, args ...any) {
+	c.report.Notes = append(c.report.Notes, fmt.Sprintf(format, args...))
 }
 
-// wip は wip の付いた issue の番号。読めなければ nil。
-func (r *collector) wip(cfg config.Config, cfgErr error, gh github.Runner) []int {
+// alive は起動記録の process がその worker として生きているか。pid は再利用されるので、tick が渡した session id が
+// command 行に在るかで見る。
+func (c *collector) alive(s ticklog.Spawned) Probed[bool] {
+	if c.machine.ProcessesErr != nil {
+		return Probed[bool]{}
+	}
+	command := c.machine.Processes[s.PID]
+	return known(command != "" && s.SessionID != "" && strings.Contains(command, s.SessionID))
+}
+
+// wip は issue に wip が付いているかを返す関数。wip を読めなければどの issue も ?。
+func (c *collector) wip(cfg config.Config, cfgErr error, gh github.Runner) func(int) Probed[bool] {
+	unknown := func(int) Probed[bool] { return Probed[bool]{} }
 	if cfgErr != nil || gh == nil {
-		return nil
+		return unknown
 	}
 	numbers, err := github.WIPIssues(gh, cfg.IssueRepo)
 	if err != nil {
-		r.note("wip を読めない — process の生きている worker だけを載せた (%v)", err)
-		return nil
+		c.note("wip を読めない — WIP は ? で、process の生きている worker だけを載せた (%v)", err)
+		return unknown
 	}
-	return numbers
+	return func(issue int) Probed[bool] { return known(slices.Contains(numbers, issue)) }
 }
 
-func (r *collector) fillDetails(cfg config.Config, cfgErr error, gh github.Runner) {
-	var issues []int
-	for _, w := range r.report.Workers {
-		if !slices.Contains(issues, w.Issue) {
-			issues = append(issues, w.Issue)
-		}
+func (c *collector) fillDetails(cfg config.Config, cfgErr error, gh github.Runner) {
+	branchOf := map[int]string{}
+	for _, w := range c.report.Workers {
+		branchOf[w.Spawn.Issue] = tick.WorkerBranch(w.Spawn.Issue)
 	}
-	sessions := r.sessions()
-	branches := any(Unknown)
-	cls := any(Unknown)
+	sessions := c.sessions()
+	var branches Probed[map[int]*Branch]
+	var cls Probed[map[int]*github.CLState]
 	if cfgErr == nil {
-		branches = r.branches(cfg, issues)
+		branches = c.branches(cfg, branchOf)
 		if gh != nil {
-			cls = r.cls(cfg, gh, issues)
+			cls = c.cls(cfg, gh, branchOf)
 		}
 	}
-	for i := range r.report.Workers {
-		w := &r.report.Workers[i]
-		w.Session = lookup(sessions, w.sessionID)
-		w.Branch = lookup(branches, w.Issue)
-		w.CL = lookup(cls, w.Issue)
+	for i := range c.report.Workers {
+		w := &c.report.Workers[i]
+		w.Session = Probed[*Session]{Value: sessions.Value[w.Spawn.SessionID], Known: sessions.Known}
+		w.Branch = Probed[*Branch]{Value: branches.Value[w.Spawn.Issue], Known: branches.Known}
+		w.CL = Probed[*github.CLState]{Value: cls.Value[w.Spawn.Issue], Known: cls.Known}
 	}
 }
 
-// lookup は table が Unknown なら Unknown を、map なら key の値 (無ければ nil) を返す。
-func lookup[K comparable](table any, key K) any {
-	m, ok := table.(map[K]any)
-	if !ok {
-		return Unknown
-	}
-	return m[key]
-}
-
-func (r *collector) sessions() any {
-	out, err := r.machine.Agents, r.machine.AgentsErr
+func (c *collector) sessions() Probed[map[string]*Session] {
+	err := c.machine.AgentsErr
 	var rows []struct {
 		ID        string `json:"id"`
 		Status    string `json:"status"`
@@ -237,120 +243,96 @@ func (r *collector) sessions() any {
 		SessionID string `json:"sessionId"`
 	}
 	if err == nil {
-		err = json.Unmarshal([]byte(out), &rows)
+		err = json.Unmarshal([]byte(c.machine.Agents), &rows)
 	}
 	if err != nil {
-		r.note("claude agents を読めない — SESSION は ? (%v)", err)
-		return Unknown
+		c.note("claude agents を読めない — SESSION は ? (%v)", err)
+		return Probed[map[string]*Session]{}
 	}
-	sessions := map[string]any{}
+	sessions := map[string]*Session{}
 	for _, row := range rows {
 		if row.SessionID != "" {
-			sessions[row.SessionID] = Session{ID: row.ID, Status: row.Status, State: row.State}
+			sessions[row.SessionID] = &Session{ID: row.ID, Status: row.Status, State: row.State}
 		}
 	}
-	return sessions
+	return known(sessions)
 }
 
 // branches は issue → cwd の clone にある worker の作業ツリーの branch。cwd の clone が CL 置き場でなければ、同じ番号の
 // 別 repo の branch を拾うので引かない。
-func (r *collector) branches(cfg config.Config, issues []int) any {
-	origin, err := r.probes.Git("remote", "get-url", "origin")
+func (c *collector) branches(cfg config.Config, branchOf map[int]string) Probed[map[int]*Branch] {
+	url, err := c.probes.Git("remote", "get-url", "origin")
 	if err != nil {
-		r.note("cwd の clone を読めない — BRANCH は ? (%v)", err)
-		return Unknown
+		c.note("cwd の clone を読めない — BRANCH は ? (%v)", err)
+		return Probed[map[int]*Branch]{}
 	}
-	// GitHub の owner / name は大文字小文字を区別しない
-	origin = strings.TrimSuffix(strings.TrimSuffix(strings.TrimSpace(origin), "/"), ".git")
-	want := strings.ToLower(cfg.CLRepo.String())
-	if lower := strings.ToLower(origin); !strings.HasSuffix(lower, "/"+want) && !strings.HasSuffix(lower, ":"+want) {
-		r.note("cwd の clone (%s) は %s でない — BRANCH は ? (その clone を cwd にして撃つ)", origin, cfg.CLRepo)
-		return Unknown
+	if origin, err := config.RepoFromRemote(url); err != nil || !config.SameRepo(origin, cfg.CLRepo) {
+		c.note("cwd の clone (%s) は %s でない — BRANCH は ? (その clone を cwd にして撃つ)", strings.TrimSpace(url), cfg.CLRepo)
+		return Probed[map[int]*Branch]{}
 	}
-	listed, err := r.probes.Git("worktree", "list", "--porcelain")
+	trees, err := c.probes.Git("worktree", "list", "--porcelain")
 	if err != nil {
-		r.note("cwd の clone の作業ツリーを読めない — BRANCH は ? (%v)", err)
-		return Unknown
+		c.note("cwd の clone の作業ツリーを読めない — BRANCH は ? (%v)", err)
+		return Probed[map[int]*Branch]{}
 	}
 	var names []string
-	for _, line := range strings.Split(listed, "\n") {
+	for _, line := range strings.Split(trees, "\n") {
 		if name, ok := strings.CutPrefix(line, "branch refs/heads/"); ok {
 			names = append(names, name)
 		}
 	}
-	base, baseErr := r.probes.Git("rev-parse", "--abbrev-ref", "origin/HEAD")
+	base, baseErr := c.probes.Git("rev-parse", "--abbrev-ref", "origin/HEAD")
 	if baseErr != nil {
-		r.note("origin/HEAD を読めない — ahead は ? (%v)", baseErr)
+		c.note("origin/HEAD を読めない — ahead は ? (%v)", baseErr)
 	}
-	branches := map[int]any{}
-	for _, issue := range issues {
-		name := fmt.Sprintf("worktree-issue-%d", issue)
+	branches := map[int]*Branch{}
+	for issue, name := range branchOf {
 		if !slices.Contains(names, name) {
 			continue
 		}
-		ahead := any(Unknown)
+		b := &Branch{Name: name}
 		if baseErr == nil {
-			ahead = r.ahead(strings.TrimSpace(base), name)
+			b.Ahead = c.ahead(strings.TrimSpace(base), name)
 		}
-		branches[issue] = Branch{Name: name, Ahead: ahead}
+		branches[issue] = b
 	}
-	return branches
+	return known(branches)
 }
 
-func (r *collector) ahead(base, name string) any {
-	out, err := r.probes.Git("rev-list", "--count", base+".."+name)
+func (c *collector) ahead(base, name string) Probed[int] {
+	out, err := c.probes.Git("rev-list", "--count", base+".."+name)
 	if err == nil {
 		var n int
 		if n, err = strconv.Atoi(strings.TrimSpace(out)); err == nil {
-			return n
+			return known(n)
 		}
 	}
-	r.note("%s の ahead を数えられない (%v)", name, err)
-	return Unknown
+	c.note("%s の ahead を数えられない (%v)", name, err)
+	return Probed[int]{}
 }
 
-func (r *collector) cls(cfg config.Config, gh github.Runner, issues []int) any {
-	found, err := github.LatestCLs(gh, cfg.CLRepo, issues)
+func (c *collector) cls(cfg config.Config, gh github.Runner, branchOf map[int]string) Probed[map[int]*github.CLState] {
+	cls, err := github.LatestCLs(gh, cfg.CLRepo, branchOf)
 	if err != nil {
-		r.note("CL を読めない — CL は ? (%v)", err)
-		return Unknown
+		c.note("CL を読めない — CL は ? (%v)", err)
+		return Probed[map[int]*github.CLState]{}
 	}
-	cls := map[int]any{}
-	for issue, cl := range found {
-		if cl != nil {
-			cls[issue] = *cl
-		}
-	}
-	return cls
+	return known(cls)
 }
 
-// isWorkerProcess は pid の process がその worker か。pid は再利用されるので、tick が渡した session id が
-// command 行に在るかで見る。
-func isWorkerProcess(command, sessionID string) bool {
-	return command != "" && sessionID != "" && strings.Contains(command, sessionID)
-}
-
-// tickRunning は `claude-dispatcher … tick <project>` の process (試運転を除く) が居るか。一覧を読めなければ Unknown。
-func tickRunning(project string, processes map[int]string, procErr error) any {
-	if procErr != nil {
-		return Unknown
+// tickRunning は `claude-dispatcher … tick <project>` の process (試運転を除く) が居るか。
+func (c *collector) tickRunning(project string) Probed[bool] {
+	if c.machine.ProcessesErr != nil {
+		return Probed[bool]{}
 	}
-	for _, command := range processes {
+	for _, command := range c.machine.Processes {
 		fields := strings.Fields(command)
 		for i := 0; i+2 < len(fields); i++ {
 			if filepath.Base(fields[i]) == "claude-dispatcher" && fields[i+1] == "tick" && fields[i+2] == project &&
 				!slices.Contains(fields, "--dry-run") {
-				return true
+				return known(true)
 			}
 		}
 	}
-	return false
-}
-
-// ReadMachine はマシン全体の観測を 1 度読む。
-func ReadMachine(processes func() (map[int]string, error), agents func() (string, error)) Machine {
-	var m Machine
-	m.Processes, m.ProcessesErr = processes()
-	m.Agents, m.AgentsErr = agents()
-	return m
+	return known(false)
 }

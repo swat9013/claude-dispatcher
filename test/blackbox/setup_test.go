@@ -12,9 +12,9 @@ import (
 
 // `setup <project>` (formats.md §11)。書くもの (config の雛形・label・crontab) は導入者の承認の後だけ。
 
-// newSetupSandbox は setup が cron 相当の試運転まで通せる sandbox を作る。撃ち直しは XDG_* と親の PATH を剥がすので、
-// 置き場は $HOME の既定、依存 CLI は自己解決の置き場 (~/.local/bin) にも置く。
-func newSetupSandbox(t *testing.T) *sandbox {
+// newInstallSandbox は setup / doctor が cron 相当の試運転 (`tick --dry-run --cron-env`) まで通せる sandbox を作る。
+// 撃ち直しは XDG_* と親の PATH を剥がすので、置き場は $HOME の既定、依存 CLI は自己解決の置き場 (~/.local/bin) にも置く。
+func newInstallSandbox(t *testing.T) *sandbox {
 	s := newSandboxWithHomeDefaults(t)
 	s.installStubs(filepath.Join(s.home, ".local", "bin"))
 	s.respond("git", stubwire.Rule{ArgsPrefix: []string{"remote", "get-url", "origin"}, Stdout: "git@github.com:" + defaultIssueRepo + ".git\n"})
@@ -55,7 +55,7 @@ func (s *sandbox) labelCreates() []stubCall {
 }
 
 func TestSetupWritesAConfigTemplateAndTheStateDirThenStopsForTheHumanToFillIt(t *testing.T) {
-	s := newSetupSandbox(t)
+	s := newInstallSandbox(t)
 	for _, dir := range []string{s.configDir(), s.stateDir()} {
 		if err := os.RemoveAll(dir); err != nil {
 			t.Fatal(err)
@@ -78,7 +78,7 @@ func TestSetupWritesAConfigTemplateAndTheStateDirThenStopsForTheHumanToFillIt(t 
 }
 
 func TestSetupNeverOverwritesAnExistingConfig(t *testing.T) {
-	s := newSetupSandbox(t)
+	s := newInstallSandbox(t)
 	before := string(mustRead(t, s.configFile()))
 
 	s.setup("y\n")
@@ -89,7 +89,7 @@ func TestSetupNeverOverwritesAnExistingConfig(t *testing.T) {
 }
 
 func TestSetupWithAMisspelledConfigStopsNamingIt(t *testing.T) {
-	s := newSetupSandbox(t)
+	s := newInstallSandbox(t)
 	s.writeConfig(s.configWith(`readylabel = "x"`, "max_wip = 2"))
 
 	r := s.setup("y\n")
@@ -99,7 +99,7 @@ func TestSetupWithAMisspelledConfigStopsNamingIt(t *testing.T) {
 }
 
 func TestSetupWithAMissingTokenFileIsAConfigError(t *testing.T) {
-	s := newSetupSandbox(t)
+	s := newInstallSandbox(t)
 	s.writeConfig(s.defaultConfig() + "\n[auth]\ntoken_file = \"~/no-such-token\"\n")
 
 	r := s.setup("y\n")
@@ -108,39 +108,39 @@ func TestSetupWithAMissingTokenFileIsAConfigError(t *testing.T) {
 	s.assertNames(r.stderr, "token_file")
 }
 
-func TestSetupCreatesMissingLabelsOnlyWhenApproved(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		input   string
-		created bool
-	}{
-		{"no-answer", "", false},
-		{"n", "n\n", false},
-		{"y", "y\n", true},
-	} {
+func TestSetupCreatesMissingLabelsWhenApproved(t *testing.T) {
+	s := newInstallSandbox(t)
+	s.setLabels(humanLabel, defaultReadyLabel)
+	s.respond("gh", stubwire.Rule{ArgsPrefix: []string{"label", "create"}})
+
+	r := s.setup("y\n")
+
+	if creates := s.labelCreates(); len(creates) != 1 || !creates[0].hasArg(wipLabel) {
+		t.Fatalf("label create = %v\n%s%s", creates, r.stdout, r.stderr)
+	}
+}
+
+func TestSetupDoesNotCreateLabelsWithoutApprovalAndShowsTheCommands(t *testing.T) {
+	for _, tc := range []struct{ name, input string }{{"no-answer", ""}, {"n", "n\n"}} {
 		t.Run(tc.name, func(t *testing.T) {
-			s := newSetupSandbox(t)
+			s := newInstallSandbox(t)
 			s.setLabels(humanLabel, defaultReadyLabel)
-			s.respond("gh", stubwire.Rule{ArgsPrefix: []string{"label", "create"}})
 
 			r := s.setup(tc.input)
 
-			creates := s.labelCreates()
-			if tc.created != (len(creates) == 1 && creates[0].hasArg(wipLabel)) {
-				t.Fatalf("label create = %v\n%s%s", creates, r.stdout, r.stderr)
+			assertExit(t, r, 1)
+			if creates := s.labelCreates(); len(creates) != 0 {
+				t.Fatalf("承認なしに label を作った: %v", creates)
 			}
-			if !tc.created {
-				assertExit(t, r, 1)
-				if !strings.Contains(r.stdout+r.stderr, "gh label create") {
-					t.Fatalf("自分で作るコマンドを示していない:\n%s%s", r.stdout, r.stderr)
-				}
+			if !strings.Contains(r.stdout, "gh label create \""+wipLabel+"\"") {
+				t.Fatalf("自分で作るコマンドを示していない:\n%s%s", r.stdout, r.stderr)
 			}
 		})
 	}
 }
 
-func TestSetupRunsBothDryRunsBeforeTouchingTheCrontab(t *testing.T) {
-	s := newSetupSandbox(t)
+func TestSetupRunsBothDryRunsWithoutStartingClaude(t *testing.T) {
+	s := newInstallSandbox(t)
 	s.setIssues(readyIssue(42))
 
 	r := s.setup("")
@@ -152,7 +152,7 @@ func TestSetupRunsBothDryRunsBeforeTouchingTheCrontab(t *testing.T) {
 }
 
 func TestSetupStopsWhenADryRunFails(t *testing.T) {
-	s := newSetupSandbox(t)
+	s := newInstallSandbox(t)
 	s.ghFails([]string{"issue", "list"}, 1, "HTTP 502: Bad Gateway\n")
 
 	r := s.setup("y\n")
@@ -163,42 +163,51 @@ func TestSetupStopsWhenADryRunFails(t *testing.T) {
 	}
 }
 
-func TestSetupRegistersTheCrontabLineOnlyWhenApproved(t *testing.T) {
-	for _, tc := range []struct {
-		name       string
-		input      string
-		registered bool
-	}{
-		{"no-answer", "", false},
-		{"n", "n\n", false},
-		{"yes", "yes\n", true},
-	} {
+func TestSetupRegistersTheCrontabLineWhenApproved(t *testing.T) {
+	s := newInstallSandbox(t)
+	s.setCrontab("0 3 * * * /usr/bin/backup\n")
+
+	r := s.setup("yes\n")
+
+	assertExit(t, r, 0)
+	if got := s.crontab(); got != "0 3 * * * /usr/bin/backup\n"+s.tickCronLine()+"\n" {
+		t.Fatalf("crontab = %q", got)
+	}
+}
+
+func TestSetupDoesNotRegisterTheCrontabLineWithoutApprovalAndShowsIt(t *testing.T) {
+	for _, tc := range []struct{ name, input string }{{"no-answer", ""}, {"n", "n\n"}} {
 		t.Run(tc.name, func(t *testing.T) {
-			s := newSetupSandbox(t)
+			s := newInstallSandbox(t)
 			s.setCrontab("0 3 * * * /usr/bin/backup\n")
 
 			r := s.setup(tc.input)
 
-			if !tc.registered {
-				assertExit(t, r, 1)
-				if len(s.crontabWrites()) != 0 {
-					t.Fatal("承認なしに crontab を書いた")
-				}
-				if !strings.Contains(r.stdout, s.tickCronLine()) {
-					t.Fatalf("足す行を示していない:\n%s", r.stdout)
-				}
-				return
+			assertExit(t, r, 1)
+			if len(s.crontabWrites()) != 0 {
+				t.Fatal("承認なしに crontab を書いた")
 			}
-			assertExit(t, r, 0)
-			if got := s.crontab(); got != "0 3 * * * /usr/bin/backup\n"+s.tickCronLine()+"\n" {
-				t.Fatalf("crontab = %q", got)
+			if !strings.Contains(r.stdout, s.tickCronLine()) {
+				t.Fatalf("足す行を示していない:\n%s", r.stdout)
 			}
 		})
 	}
 }
 
+func TestSetupStopsWhenTheCrontabRefusesTheWrite(t *testing.T) {
+	s := newInstallSandbox(t)
+	mustWrite(t, stubwire.CrontabRefuseFile(s.stubRoot), "")
+
+	r := s.setup("y\n")
+
+	assertExit(t, r, 1)
+	if !strings.Contains(r.stderr, "crontab に書けない") || !strings.Contains(r.stdout, s.tickCronLine()) {
+		t.Fatalf("書けなかったことと自分で足す行を示していない:\n%s%s", r.stdout, r.stderr)
+	}
+}
+
 func TestSetupWithTheLineAlreadyRegisteredEndsWithoutAsking(t *testing.T) {
-	s := newSetupSandbox(t)
+	s := newInstallSandbox(t)
 	s.setCrontab(s.tickCronLine() + "\n")
 
 	r := s.setup("")
@@ -210,7 +219,7 @@ func TestSetupWithTheLineAlreadyRegisteredEndsWithoutAsking(t *testing.T) {
 }
 
 func TestSetupShowsButDoesNotReplaceADifferentTickLineOfTheProject(t *testing.T) {
-	s := newSetupSandbox(t)
+	s := newInstallSandbox(t)
 	existing := "*/10 * * * * cd /elsewhere && /old/claude-dispatcher tick " + s.project + " >> /tmp/cron.log 2>&1\n"
 	s.setCrontab(existing)
 
@@ -226,7 +235,7 @@ func TestSetupShowsButDoesNotReplaceADifferentTickLineOfTheProject(t *testing.T)
 }
 
 func TestSetupRunTwiceConvergesWithoutWritingAgain(t *testing.T) {
-	s := newSetupSandbox(t)
+	s := newInstallSandbox(t)
 	assertExit(t, s.setup("y\n"), 0)
 	writes := len(s.crontabWrites())
 

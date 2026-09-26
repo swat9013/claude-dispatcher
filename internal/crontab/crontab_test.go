@@ -30,16 +30,24 @@ func TestLineQuotesPathsThatTheShellWouldSplit(t *testing.T) {
 }
 
 func TestAppendKeepsTheCurrentLines(t *testing.T) {
-	for _, table := range []string{"", "0 3 * * * /usr/bin/backup", "0 3 * * * /usr/bin/backup\n"} {
-		got := crontab.Append(table, "L")
+	for _, tc := range []struct{ table, want string }{
+		{"", "L\n"},
+		{"0 3 * * * /usr/bin/backup", "0 3 * * * /usr/bin/backup\nL\n"},
+		{"0 3 * * * /usr/bin/backup\n", "0 3 * * * /usr/bin/backup\nL\n"},
+	} {
+		if got := crontab.Append(tc.table, "L"); got != tc.want {
+			t.Fatalf("Append(%q) = %q, want %q", tc.table, got, tc.want)
+		}
+	}
+}
 
-		want := "L\n"
-		if table != "" {
-			want = "0 3 * * * /usr/bin/backup\nL\n"
-		}
-		if got != want {
-			t.Fatalf("Append(%q) = %q", table, got)
-		}
+func TestTickLinesCountsTheLineOfTheScriptThisWasPortedFrom(t *testing.T) {
+	legacy := "*/5 * * * * cd /x && PATH=/u:$PATH ~/.claude/skills/swat-skills/skills/util/dispatcher/scripts/dispatcher-tick.py widgets >> ~/.claude/dispatcher/widgets/cron.log 2>&1"
+
+	got := crontab.TickLines(legacy+"\n", "widgets")
+
+	if !slices.Equal(got, []string{legacy}) {
+		t.Fatalf("TickLines = %q", got)
 	}
 }
 

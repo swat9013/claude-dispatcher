@@ -8,6 +8,7 @@
 //	calls/<name>/<unixnano>-<pid>.json  呼び出し 1 回の記録 (Call)
 //	responses/<name>.json               応答の rule 列 ([]Rule)。先頭から見て最初に当たった rule で応答する
 //	crontab                             crontab の fake が持つ表 (無ければ表が無い)
+//	crontab.refuse                      在れば crontab の fake が `crontab -` を拒む
 package stubwire
 
 import (
@@ -28,6 +29,9 @@ func CallsDir(root, name string) string { return filepath.Join(root, "calls", na
 // CrontabFile は crontab の fake が持つ表の置き場。crontab は rule で応答する stub ではなく、
 // `crontab -` で入った表を `crontab -l` が返す fake にする (登録した後に読み直す手順を実物どおりに通すため)。
 func CrontabFile(root string) string { return filepath.Join(root, "crontab") }
+
+// CrontabRefuseFile が在ると、crontab の fake は `crontab -` (表の置き換え) を exit 1 で拒む。
+func CrontabRefuseFile(root string) string { return filepath.Join(root, "crontab.refuse") }
 
 func ResponsesFile(root, name string) string {
 	return filepath.Join(root, "responses", name+".json")

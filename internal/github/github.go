@@ -60,7 +60,7 @@ type Exec struct {
 }
 
 func (g Exec) Run(args ...string) ([]byte, error) {
-	out, err := proc.Command{Path: g.Path, Env: g.Env, Timeout: g.Timeout}.Output("", args...)
+	out, err := proc.Command{Path: g.Path, Env: g.Env, Timeout: g.Timeout}.Output(args...)
 	var failed *proc.Error
 	if errors.As(err, &failed) {
 		return nil, &Error{
@@ -306,11 +306,11 @@ type CLState struct {
 	State  string `json:"state"`
 }
 
-// LatestCLs は issue ごとに、head branch が worker の規約 (`worktree-issue-<issue>`) の最新の CL を返す。無い issue は nil。
-func LatestCLs(gh Runner, repo config.Repo, issues []int) (map[int]*CLState, error) {
+// LatestCLs は issue ごとに、head branch が branches[issue] の最新の CL を返す。無い issue は nil。
+func LatestCLs(gh Runner, repo config.Repo, branches map[int]string) (map[int]*CLState, error) {
 	var fields strings.Builder
-	for _, issue := range issues {
-		fmt.Fprintf(&fields, ` i%d: pullRequests(headRefName: "worktree-issue-%d", first: 1, orderBy: {field: CREATED_AT, direction: DESC}) { nodes { number state } }`, issue, issue)
+	for issue, branch := range branches {
+		fmt.Fprintf(&fields, ` i%d: pullRequests(headRefName: %q, first: 1, orderBy: {field: CREATED_AT, direction: DESC}) { nodes { number state } }`, issue, branch)
 	}
 	query := "query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) {" + fields.String() + " } }"
 	out, err := gh.Run("api", "graphql", "-f", "query="+query, "-f", "owner="+repo.Owner, "-f", "name="+repo.Name)
@@ -326,15 +326,14 @@ func LatestCLs(gh Runner, repo config.Repo, issues []int) (map[int]*CLState, err
 		return nil, fmt.Errorf("gh api graphql の出力を読めない: %w", err)
 	}
 	cls := map[int]*CLState{}
-	for _, issue := range issues {
+	for issue := range branches {
 		found, ok := payload.Data.Repository[fmt.Sprintf("i%d", issue)]
 		if !ok {
 			return nil, fmt.Errorf("gh api graphql の出力に issue %d の CL が無い", issue)
 		}
+		cls[issue] = nil
 		if len(found.Nodes) > 0 {
 			cls[issue] = &found.Nodes[0]
-		} else {
-			cls[issue] = nil
 		}
 	}
 	return cls, nil

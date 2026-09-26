@@ -43,7 +43,7 @@ func (s *sandbox) satisfied() {
 }
 
 func TestDoctorOnASatisfiedProjectReportsNoNG(t *testing.T) {
-	s := newSandbox(t)
+	s := newInstallSandbox(t)
 	s.satisfied()
 
 	r := s.doctor()
@@ -55,7 +55,7 @@ func TestDoctorOnASatisfiedProjectReportsNoNG(t *testing.T) {
 }
 
 func TestDoctorWritesNothing(t *testing.T) {
-	s := newSandbox(t)
+	s := newInstallSandbox(t)
 	s.satisfied()
 	mustMkdir(t, filepath.Join(s.clone, ".claude"))
 	mustWrite(t, filepath.Join(s.clone, ".claude", "settings.json"), `{"sandbox": {}}`)
@@ -78,7 +78,7 @@ func TestDoctorWritesNothing(t *testing.T) {
 }
 
 func TestDoctorShowsTheSettingsEntriesItNeedsWithoutWritingThem(t *testing.T) {
-	s := newSandbox(t)
+	s := newInstallSandbox(t)
 	s.satisfied()
 
 	r := s.doctor()
@@ -94,7 +94,7 @@ func TestDoctorShowsTheSettingsEntriesItNeedsWithoutWritingThem(t *testing.T) {
 }
 
 func TestDoctorReportsPluginFromTwoMarketplacesAsNG(t *testing.T) {
-	s := newSandbox(t)
+	s := newInstallSandbox(t)
 	s.satisfied()
 	s.installPlugin("swat-skills@other", "user", "")
 
@@ -106,7 +106,7 @@ func TestDoctorReportsPluginFromTwoMarketplacesAsNG(t *testing.T) {
 }
 
 func TestDoctorFollowsThePluginScopeOrder(t *testing.T) {
-	s := newSandbox(t)
+	s := newInstallSandbox(t)
 	s.satisfied()
 	projectInstall := s.installPlugin("swat-skills@swat9013", "project", s.clone)
 
@@ -126,7 +126,7 @@ func TestDoctorReportsAMissingPlaybookOrPrincipleIndexAsNG(t *testing.T) {
 		{"原則索引", principleIndexPath},
 	} {
 		t.Run(tc.item, func(t *testing.T) {
-			s := newSandbox(t)
+			s := newInstallSandbox(t)
 			s.satisfied()
 			missing := tc.missing(s.defaultInstallPath())
 			if err := os.Remove(missing); err != nil {
@@ -144,7 +144,7 @@ func TestDoctorReportsAMissingPlaybookOrPrincipleIndexAsNG(t *testing.T) {
 }
 
 func TestDoctorReportsAMissingLabelAsNG(t *testing.T) {
-	s := newSandbox(t)
+	s := newInstallSandbox(t)
 	s.satisfied()
 	s.setLabels(humanLabel, defaultReadyLabel)
 
@@ -155,7 +155,7 @@ func TestDoctorReportsAMissingLabelAsNG(t *testing.T) {
 }
 
 func TestDoctorReportsAMissingTickLineAsNG(t *testing.T) {
-	s := newSandbox(t)
+	s := newInstallSandbox(t)
 
 	r := s.doctor()
 
@@ -164,7 +164,7 @@ func TestDoctorReportsAMissingTickLineAsNG(t *testing.T) {
 }
 
 func TestDoctorShowsTheLastTickAsInformation(t *testing.T) {
-	s := newSandbox(t)
+	s := newInstallSandbox(t)
 	s.satisfied()
 	s.writeSpawnedTickLine()
 
@@ -176,7 +176,7 @@ func TestDoctorShowsTheLastTickAsInformation(t *testing.T) {
 }
 
 func TestDoctorWithABrokenConfigStillChecksTheRest(t *testing.T) {
-	s := newSandbox(t)
+	s := newInstallSandbox(t)
 	s.satisfied()
 	s.writeConfig(s.configWith(`readylabel = "x"`, "max_wip = 2"))
 
@@ -185,4 +185,91 @@ func TestDoctorWithABrokenConfigStillChecksTheRest(t *testing.T) {
 	assertExit(t, r, 1)
 	s.assertNames(assertDoctorMark(t, r.stdout, "config", "NG"), "readylabel")
 	assertDoctorMark(t, r.stdout, "plugin", "ok")
+}
+
+func TestDoctorReportsARepoGhCannotSeeAsNG(t *testing.T) {
+	s := newInstallSandbox(t)
+	s.satisfied()
+	s.repoMissing()
+
+	r := s.doctor()
+
+	assertExit(t, r, 1)
+	s.assertNames(assertDoctorMark(t, r.stdout, "置き場", "NG"), defaultIssueRepo)
+}
+
+func TestDoctorReportsADependencyItCannotResolveAsNG(t *testing.T) {
+	s := newInstallSandbox(t)
+	s.satisfied()
+	// PATH の自己解決は HOME 配下と Homebrew 等の置き場を探す。実物があると解決できてしまうので検査できない
+	for _, dir := range []string{"/opt/homebrew/bin", "/usr/local/bin"} {
+		if _, err := os.Stat(filepath.Join(dir, "claude")); err == nil {
+			t.Skipf("PATH の自己解決が届く %s に claude の実物がある", dir)
+		}
+	}
+	for _, dir := range []string{s.binDir, filepath.Join(s.home, ".local", "bin")} {
+		if err := os.Remove(filepath.Join(dir, "claude")); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	r := s.doctor()
+
+	assertExit(t, r, 1)
+	s.assertNames(assertDoctorMark(t, r.stdout, "依存 CLI", "NG"), "claude")
+}
+
+func TestDoctorReportsAFailingCronEnvDryRunAsNGWithItsOutput(t *testing.T) {
+	s := newInstallSandbox(t)
+	s.satisfied()
+	s.ghFails([]string{"issue", "list"}, 1, "HTTP 502: Bad Gateway\n")
+
+	r := s.doctor()
+
+	assertExit(t, r, 1)
+	assertDoctorMark(t, r.stdout, "試運転", "NG")
+	if !strings.Contains(r.stdout, "--cron-env") || !strings.Contains(r.stdout, "502") {
+		t.Fatalf("撃った試運転と落ちた理由を示していない:\n%s", r.stdout)
+	}
+}
+
+func TestDoctorRunsTheCronEnvDryRunWithoutWritingTheStateDir(t *testing.T) {
+	s := newInstallSandbox(t)
+	s.satisfied()
+
+	r := s.doctor()
+
+	if line := assertDoctorMark(t, r.stdout, "試運転", "ok"); !strings.Contains(line, `"dry_run":true`) {
+		t.Fatalf("試運転の出力を示していない: %q", line)
+	}
+	s.assertNoClaude("doctor の試運転で")
+}
+
+func TestDoctorReportsATickLineThatDiffersFromTheOneSetupBuildsAsNG(t *testing.T) {
+	s := newInstallSandbox(t)
+	existing := "*/5 * * * * cd /elsewhere && /old/claude-dispatcher tick " + s.project + " >> /tmp/cron.log 2>&1"
+	s.setCrontab(existing + "\n")
+
+	r := s.doctor()
+
+	assertExit(t, r, 1)
+	assertDoctorMark(t, r.stdout, "crontab", "NG")
+	if !strings.Contains(r.stdout, existing) || !strings.Contains(r.stdout, s.tickCronLine()) {
+		t.Fatalf("現行の行と組む行を並べていない:\n%s", r.stdout)
+	}
+}
+
+func TestDoctorCountsTheLogLinesItCouldNotRead(t *testing.T) {
+	s := newInstallSandbox(t)
+	s.satisfied()
+	s.writeSpawnedTickLine()
+	appendFile(t, s.logFile(), "{\"ts\": \"2026-09-26T03:00\n")
+	// 後片付け (起動した worker を待つ) は log を JSON として読むので、読めない行を消してから渡す
+	t.Cleanup(s.writeSpawnedTickLine)
+
+	r := s.doctor()
+
+	if line := assertDoctorMark(t, r.stdout, "最終 tick", "--"); !strings.Contains(line, "読めない 1 行") {
+		t.Fatalf("読めない行の件数を示していない: %q", line)
+	}
 }

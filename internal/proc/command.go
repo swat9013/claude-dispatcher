@@ -31,11 +31,14 @@ func (e *Error) Error() string {
 	return fmt.Sprintf("%s %s failed (exit %d): %s", e.Name, head, e.Exit, strings.TrimSpace(e.Stderr))
 }
 
-// Output は stdin を渡して args で撃ち、stdout を返す。exit 0 以外は *Error。timeout を超えたら process group ごと止める。
-func (c Command) Output(stdin string, args ...string) (string, error) {
+// Output は args で撃ち、stdout を返す。exit 0 以外は *Error。timeout を超えたら process group ごと止める。
+func (c Command) Output(args ...string) (string, error) { return c.OutputWithInput("", args...) }
+
+// OutputWithInput は input を stdin に流して撃つ。それ以外は Output と同じ。
+func (c Command) OutputWithInput(input string, args ...string) (string, error) {
 	cmd := exec.Command(c.Path, args...)
 	cmd.Env, cmd.Dir = c.Env, c.Dir
-	cmd.Stdin = strings.NewReader(stdin)
+	cmd.Stdin = strings.NewReader(input)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	// process group の外へ逃げた孫が pipe を握ったままでも Wait が戻るよう、pipe の読み切りを待つ上限を置く
 	cmd.WaitDelay = 5 * time.Second

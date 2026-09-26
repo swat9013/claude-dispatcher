@@ -1,13 +1,17 @@
 package status
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/swat9013/claude-dispatcher/internal/github"
+	"github.com/swat9013/claude-dispatcher/internal/termtext"
+	"github.com/swat9013/claude-dispatcher/internal/ticklog"
 )
+
+// unknownCell は読めなかった値の表の綴り (formats.md §10)
+const unknownCell = "?"
 
 var columns = []string{"ISSUE", "KIND", "STATE", "ELAPSED", "SESSION", "BRANCH", "WIP", "CL", "TICK"}
 
@@ -20,23 +24,25 @@ func RenderTable(reports []Report) string {
 	return strings.Join(blocks, "\n\n")
 }
 
-// RenderJSON は `status ps --json` の 1 文書。
-func RenderJSON(reports []Report) ([]byte, error) {
-	return json.MarshalIndent(map[string][]Report{"projects": reports}, "", "  ")
+// cell は読めた値を format で、読めなかった値を `?` で表す。
+func cell[T any](p Probed[T], format func(T) string) string {
+	if !p.Known {
+		return unknownCell
+	}
+	return format(p.Value)
 }
 
 func renderProject(r Report) []string {
-	running := "待機"
-	switch r.Tick.Running {
-	case true:
-		running = "tick 実行中"
-	case Unknown:
-		running = "tick ?"
+	running := "tick " + unknownCell
+	if r.Tick.Running.Known {
+		running = map[bool]string{true: "tick 実行中", false: "待機"}[r.Tick.Running.Value]
 	}
-	last := "なし"
-	if r.Tick.LastTS != nil {
-		last = shortTS(*r.Tick.LastTS) + " " + *r.Tick.LastResult
-	}
+	last := cell(r.Tick.Last, func(l *ticklog.Line) string {
+		if l == nil {
+			return "なし"
+		}
+		return ticklog.ShortTS(l.TS) + " " + l.Result
+	})
 	lines := []string{fmt.Sprintf("%s  %s  最終 tick %s", r.Project, running, last)}
 	for _, note := range r.Notes {
 		lines = append(lines, "  ! "+note)
@@ -47,28 +53,29 @@ func renderProject(r Report) []string {
 	rows := [][]string{columns}
 	for _, w := range r.Workers {
 		rows = append(rows, []string{
-			fmt.Sprintf("#%d", w.Issue), w.Kind, w.State, formatElapsed(w.ElapsedSec), cellSession(w.Session),
-			cellBranch(w.Branch), cellWIP(w.WIP), cellCL(w.CL), shortTS(w.TickTS),
+			fmt.Sprintf("#%d", w.Spawn.Issue), w.Spawn.Kind, cell(w.Alive, state), formatElapsed(w.Elapsed),
+			cell(w.Session, session), cell(w.Branch, branch), cell(w.WIP, yesNo), cell(w.CL, cl), ticklog.ShortTS(w.TickTS),
 		})
 	}
 	widths := make([]int, len(columns))
 	for _, row := range rows {
-		for i, cell := range row {
-			widths[i] = max(widths[i], len([]rune(cell)))
+		for i, c := range row {
+			widths[i] = max(widths[i], termtext.Width(c))
 		}
 	}
 	for _, row := range rows {
 		cells := make([]string, len(row))
-		for i, cell := range row {
-			cells[i] = cell + strings.Repeat(" ", widths[i]-len([]rune(cell)))
+		for i, c := range row {
+			cells[i] = termtext.Pad(c, widths[i])
 		}
 		lines = append(lines, strings.TrimRight(strings.Join(cells, "  "), " "))
 	}
 	return lines
 }
 
-// formatElapsed は経過秒を `45s` / `12m` / `3h05m` / `2d04h` にする。
-func formatElapsed(seconds int) string {
+// formatElapsed は経過を `45s` / `12m` / `3h05m` / `2d04h` にする。
+func formatElapsed(d time.Duration) string {
+	seconds := int(d.Seconds())
 	switch {
 	case seconds < 60:
 		return fmt.Sprintf("%ds", seconds)
@@ -80,19 +87,23 @@ func formatElapsed(seconds int) string {
 	return fmt.Sprintf("%dd%02dh", seconds/86400, seconds%86400/3600)
 }
 
-// shortTS は log の ts (マイクロ秒まで) を秒までにする。読めなければそのまま。
-func shortTS(ts string) string {
-	at, err := time.Parse(time.RFC3339Nano, ts)
-	if err != nil {
-		return ts
+func state(alive bool) string {
+	if alive {
+		return "running"
 	}
-	return at.UTC().Format("2006-01-02T15:04:05Z")
+	return "exited"
 }
 
-func cellSession(v any) string {
-	s, ok := v.(Session)
-	if !ok {
-		return orDash(v)
+func yesNo(v bool) string {
+	if v {
+		return "yes"
+	}
+	return "no"
+}
+
+func session(s *Session) string {
+	if s == nil {
+		return "-"
 	}
 	var progress []string
 	for _, part := range []string{s.Status, s.State} {
@@ -103,36 +114,23 @@ func cellSession(v any) string {
 	return orDash(s.ID) + " " + orDash(strings.Join(progress, "/"))
 }
 
-func cellBranch(v any) string {
-	b, ok := v.(Branch)
-	if !ok {
-		return orDash(v)
-	}
-	return fmt.Sprintf("+%v", b.Ahead)
-}
-
-func cellWIP(v any) string {
-	switch v {
-	case true:
-		return "yes"
-	case false:
-		return "no"
-	}
-	return orDash(v)
-}
-
-func cellCL(v any) string {
-	cl, ok := v.(github.CLState)
-	if !ok {
-		return orDash(v)
-	}
-	return fmt.Sprintf("#%d %s", cl.Number, cl.State)
-}
-
-// orDash は nil と空文字を `-` に、それ以外 (Unknown 等) を文字列にする。
-func orDash(v any) string {
-	if v == nil || v == "" {
+func branch(b *Branch) string {
+	if b == nil {
 		return "-"
 	}
-	return fmt.Sprint(v)
+	return "+" + cell(b.Ahead, func(n int) string { return fmt.Sprint(n) })
+}
+
+func cl(c *github.CLState) string {
+	if c == nil {
+		return "-"
+	}
+	return fmt.Sprintf("#%d %s", c.Number, c.State)
+}
+
+func orDash(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
 }

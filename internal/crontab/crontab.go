@@ -31,9 +31,10 @@ func shellQuote(s string) string {
 	return quote + strings.ReplaceAll(s, quote, quote+`\`+quote+quote) + quote
 }
 
-// TickLines は table のうち project の tick を撃つ行 (`tick <project>` を含む、コメントでない行) を返す。
+// TickLines は table のうち project の tick を撃つ行 (コメントでない行) を返す。`tick <project>` の行に加えて、
+// 移植元の `dispatcher-tick.py <project>` の行も数える — 見落とすと隣に行を足し、同じ project を 2 重に tick する。
 func TickLines(table, project string) []string {
-	pattern := regexp.MustCompile(`(^|\s)tick\s+` + regexp.QuoteMeta(project) + `(\s|$)`)
+	pattern := regexp.MustCompile(`(^|[\s/])(tick|dispatcher-tick\.py)\s+` + regexp.QuoteMeta(project) + `(\s|$)`)
 	var lines []string
 	for _, line := range strings.Split(table, "\n") {
 		trimmed := strings.TrimSpace(line)
@@ -60,7 +61,7 @@ type Client struct{ Command proc.Command }
 
 // Read は今の表を返す。表が無ければ "" (`crontab -l` は "no crontab for" を出して exit 1 で終わる)。
 func (c Client) Read() (string, error) {
-	out, err := c.Command.Output("", "-l")
+	out, err := c.Command.Output("-l")
 	var failed *proc.Error
 	if errors.As(err, &failed) && failed.Exit == 1 && strings.Contains(failed.Stderr, "no crontab") {
 		return "", nil
@@ -71,6 +72,6 @@ func (c Client) Read() (string, error) {
 // Write は表を丸ごと置き換える。`crontab` は表全体を受け取るので、現行の行を落とさないよう呼び出し側が全体を渡す
 // (file の path で渡すと macOS の crontab は長い path を途中で切るので stdin で渡す)。
 func (c Client) Write(table string) error {
-	_, err := c.Command.Output(table, "-")
+	_, err := c.Command.OutputWithInput(table, "-")
 	return err
 }

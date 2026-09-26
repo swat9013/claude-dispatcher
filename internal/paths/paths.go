@@ -102,3 +102,25 @@ func (p Project) WorkersDir() string { return filepath.Join(p.StateDir, "workers
 func (p Project) WorkerLog(issue int, stem string) string {
 	return filepath.Join(p.WorkersDir(), strconv.Itoa(issue)+"-"+stem+".log")
 }
+
+// ProjectDoc / RootsDoc は `paths --json` の形 (formats.md §9。外部の読み手を持つ公開契約)。
+type ProjectDoc struct {
+	Project    string `json:"project"`
+	ConfigFile string `json:"config_file"`
+	StateDir   string `json:"state_dir"`
+	LogFile    string `json:"log_file"`
+}
+
+type RootsDoc struct {
+	ConfigRoot string   `json:"config_root"`
+	StateRoot  string   `json:"state_root"`
+	Projects   []string `json:"projects"`
+}
+
+func (p Project) Doc() ProjectDoc {
+	return ProjectDoc{Project: p.Name, ConfigFile: p.ConfigFile(), StateDir: p.StateDir, LogFile: p.LogFile()}
+}
+
+func (r Roots) Doc(projects []string) RootsDoc {
+	return RootsDoc{ConfigRoot: r.Config, StateRoot: r.State, Projects: projects}
+}

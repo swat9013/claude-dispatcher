@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/swat9013/claude-dispatcher/internal/config"
@@ -17,22 +18,27 @@ import (
 	"github.com/swat9013/claude-dispatcher/internal/github"
 	"github.com/swat9013/claude-dispatcher/internal/paths"
 	"github.com/swat9013/claude-dispatcher/internal/plugin"
+	"github.com/swat9013/claude-dispatcher/internal/termtext"
 	"github.com/swat9013/claude-dispatcher/internal/tick"
 	"github.com/swat9013/claude-dispatcher/internal/ticklog"
 )
 
-// Options は doctor の入力。Gh / Crontab は外部 CLI の起動口。
+// Options は doctor の入力。Gh / Crontab / DryRun は外部 CLI の起動口。
 type Options struct {
 	Project paths.Project
 	Home    string
-	// Clone は実装 repo の clone (cwd)。plugin の project scope を照合する
+	// Clone は実装 repo の clone (cwd)。plugin の project scope の照合と、crontab の行の cd 先
 	Clone string
+	// Self は claude-dispatcher の絶対 path。crontab の行を setup と同じ形に組んで突き合わせる
+	Self string
 	// Env は依存 CLI の PATH を解決した後の env
 	Env    []string
 	Stdout io.Writer
 
 	Gh      func(config.Config) (github.Runner, error)
 	Crontab func() (crontab.Client, error)
+	// DryRun は `claude-dispatcher <args>` を撃ち、stdout と stderr を合わせた出力と exit code を返す
+	DryRun func(args ...string) (output string, exit int)
 }
 
 // 行の先頭の印 (formats.md §12)
@@ -51,21 +57,7 @@ func (r *report) line(mark, item, format string, args ...any) {
 	if mark == markNG {
 		r.ng = true
 	}
-	pad := max(0, 10-displayWidth(item))
-	fmt.Fprintf(r.out, "%s  %s%s  %s\n", mark, item, strings.Repeat(" ", pad), fmt.Sprintf(format, args...))
-}
-
-// displayWidth は端末での表示幅。項目名の日本語 (全角) は 2 桁で数える
-func displayWidth(s string) int {
-	width := 0
-	for _, r := range s {
-		if r >= 0x2E80 {
-			width += 2
-		} else {
-			width++
-		}
-	}
-	return width
+	fmt.Fprintf(r.out, "%s  %s  %s\n", mark, termtext.Pad(item, 10), fmt.Sprintf(format, args...))
 }
 
 // Run は検査を回し、NG が 1 つでもあれば 1 を返す。
@@ -81,6 +73,7 @@ func Run(o Options) int {
 	checkDeps(r, o.Env)
 	checkTracker(r, o, cfg, cfgErr)
 	checkPlugin(r, o)
+	checkDryRun(r, o, cfgErr)
 	checkCrontab(r, o)
 	checkLastTick(r, o.Project)
 	showSettings(o.Stdout, o.Project)
@@ -128,12 +121,8 @@ func checkTracker(r *report, o Options, cfg config.Config, cfgErr error) {
 		r.line(markInfo, "label", "gh を撃てないので確かめられない")
 		return
 	}
-	repos := []config.Repo{cfg.IssueRepo}
-	if cfg.CLRepo != cfg.IssueRepo {
-		repos = append(repos, cfg.CLRepo)
-	}
 	var names []string
-	for _, repo := range repos {
+	for _, repo := range cfg.Repos() {
 		if err := github.RepoExists(gh, repo); err != nil {
 			if github.IsNotFound(err) {
 				r.line(markNG, "置き場", "%s が gh から見えない (綴りか権限を確かめる)", repo)
@@ -147,19 +136,16 @@ func checkTracker(r *report, o Options, cfg config.Config, cfgErr error) {
 	}
 	r.line(markOK, "置き場", "%s", strings.Join(names, " / "))
 
-	required := []string{config.WIPLabel, config.HumanLabel, cfg.ReadyLabel}
-	if cfg.TriageLabel != "" {
-		required = append(required, cfg.TriageLabel)
-	}
-	var missing []string
-	for _, name := range required {
-		exists, err := github.LabelExists(gh, cfg.IssueRepo, name)
+	var required, missing []string
+	for _, label := range cfg.Labels() {
+		required = append(required, label.Name)
+		exists, err := github.LabelExists(gh, cfg.IssueRepo, label.Name)
 		if err != nil {
 			r.line(markNG, "label", "確かめられない: %v", err)
 			return
 		}
 		if !exists {
-			missing = append(missing, name)
+			missing = append(missing, label.Name)
 		}
 	}
 	if len(missing) > 0 {
@@ -183,20 +169,21 @@ func checkPlugin(r *report, o Options) {
 
 	var problems []string
 	starts, err := install.StartPlaybooks()
-	switch {
-	case err != nil:
+	if err != nil {
 		problems = append(problems, err.Error())
-	case len(starts) == 0:
-		problems = append(problems, "start の選定母集合 (metadata.deliverable: cl の playbook) が 1 本も無い")
 	}
 	for _, c := range tick.Conditions {
 		if file := install.Playbook(c.Playbook); !isFile(file) {
 			problems = append(problems, fmt.Sprintf("条件 %s の playbook が無い: %s", c.Name, file))
 		}
 	}
-	if len(problems) > 0 {
+	switch {
+	case len(problems) > 0:
 		r.line(markNG, "playbook", "%s", strings.Join(problems, " / "))
-	} else {
+	case len(starts) == 0:
+		// 母集合が空でも tick は動く (start を出さないだけ)。空を導入の不足とするかは決めていないので判定しない
+		r.line(markInfo, "playbook", "start の選定母集合 (metadata.deliverable: cl の playbook) が 0 本 — tick は start を出さない。条件 %d 本は在る", len(tick.Conditions))
+	default:
 		r.line(markOK, "playbook", "start %d 本 + 条件 %d 本", len(starts), len(tick.Conditions))
 	}
 
@@ -212,6 +199,23 @@ func isFile(path string) bool {
 	return err == nil && !info.IsDir()
 }
 
+// checkDryRun は cron 相当の最小環境の試運転 (`tick --dry-run --cron-env`) を撃つ。試運転は state dir に何も書かない
+// (system.md §9)。config が読めなければ試運転も同じところで落ちるので撃たない。
+func checkDryRun(r *report, o Options, cfgErr error) {
+	if cfgErr != nil {
+		r.line(markInfo, "試運転", "config を直してから確かめる")
+		return
+	}
+	args := []string{"tick", o.Project.Name, "--dry-run", "--cron-env"}
+	out, exit := o.DryRun(args...)
+	out = strings.TrimSpace(out)
+	if exit != 0 {
+		r.line(markNG, "試運転", "`claude-dispatcher %s` が exit %d で落ちた:\n  %s", strings.Join(args, " "), exit, strings.ReplaceAll(out, "\n", "\n  "))
+		return
+	}
+	r.line(markOK, "試運転", "%s", out)
+}
+
 func checkCrontab(r *report, o Options) {
 	client, err := o.Crontab()
 	var table string
@@ -222,26 +226,36 @@ func checkCrontab(r *report, o Options) {
 		r.line(markNG, "crontab", "読めない: %v", err)
 		return
 	}
+	want := crontab.Line(o.Clone, o.Self, o.Project.Name, o.Project.CronLog())
 	lines := crontab.TickLines(table, o.Project.Name)
-	if len(lines) == 0 {
+	switch {
+	case slices.Contains(lines, want):
+		r.line(markOK, "crontab", "%s", want)
+	case len(lines) == 0:
 		r.line(markNG, "crontab", "%s の tick 行が無い — `claude-dispatcher setup %s` で登録する", o.Project.Name, o.Project.Name)
-		return
+	default:
+		// cd 先・binary・cron.log のどれかが setup の組む行と違う。周期を人が変えた行もここに落ちる
+		r.line(markNG, "crontab", "%s の tick 行が setup の組む行と違う — 意図した変更でなければ `crontab -e` で直す\n  現行:   %s\n  組む行: %s",
+			o.Project.Name, strings.Join(lines, "\n  現行:   "), want)
 	}
-	r.line(markOK, "crontab", "%s", strings.Join(lines, " / "))
 }
 
 func checkLastTick(r *report, project paths.Project) {
-	lines, _, err := ticklog.Read(project.LogFile())
+	lines, broken, err := ticklog.Read(project.LogFile())
 	if err != nil {
 		r.line(markInfo, "最終 tick", "log.jsonl を読めない: %v", err)
 		return
 	}
+	var skipped string
+	if broken > 0 {
+		skipped = fmt.Sprintf(" (読めない %d 行を飛ばした)", broken)
+	}
 	last, ok := ticklog.Last(lines)
 	if !ok {
-		r.line(markInfo, "最終 tick", "なし")
+		r.line(markInfo, "最終 tick", "なし%s", skipped)
 		return
 	}
-	r.line(markInfo, "最終 tick", "%s %s", last.At.UTC().Format("2006-01-02T15:04:05Z"), last.Result)
+	r.line(markInfo, "最終 tick", "%s %s%s", ticklog.ShortTS(last.TS), last.Result, skipped)
 }
 
 // showSettings は Claude Code の settings に要る entry を示す (system.md §11)。settings は書かない。

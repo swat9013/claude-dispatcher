@@ -1,10 +1,11 @@
 package blackbox_test
 
 import (
-	"encoding/json"
 	"fmt"
 	"maps"
 	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -82,21 +83,33 @@ func TestStatusWritesNothing(t *testing.T) {
 	s.statusScenario()
 	s.workerAlive()
 	s.setWip(42)
-	before := fileFingerprints(t, s.stateDir())
-	configBefore := fileFingerprints(t, s.configRoot)
+	before := map[string]map[string]string{}
+	for _, dir := range []string{s.stateDir(), s.configRoot, s.home, s.clone} {
+		before[dir] = fileFingerprints(t, dir)
+	}
 
 	r := s.statusPS()
 
 	assertExit(t, r, 0)
-	if !maps.Equal(before, fileFingerprints(t, s.stateDir())) || !maps.Equal(configBefore, fileFingerprints(t, s.configRoot)) {
-		t.Fatal("status が state dir か config root に書いた")
+	for dir, fingerprints := range before {
+		if !maps.Equal(fingerprints, fileFingerprints(t, dir)) {
+			t.Fatalf("status が %s の下に書いた", dir)
+		}
 	}
 	if _, err := os.Stat(s.lockFile()); !os.IsNotExist(err) {
 		t.Fatal("status が lock file を作った")
 	}
-	for _, c := range s.calls("gh") {
-		if !c.hasPrefix("issue", "list") && !c.hasPrefix("api", "graphql") {
-			t.Fatalf("status が読み取り以外の gh を撃った: %v", c.args())
+	readOnly := map[string][][]string{
+		"gh":     {{"issue", "list"}, {"api", "graphql"}},
+		"git":    {{"remote", "get-url"}, {"worktree", "list"}, {"rev-parse"}, {"rev-list"}},
+		"claude": {{"agents", "--json"}},
+		"ps":     {{"-A"}},
+	}
+	for name, prefixes := range readOnly {
+		for _, c := range s.calls(name) {
+			if !slices.ContainsFunc(prefixes, func(p []string) bool { return c.hasPrefix(p...) }) {
+				t.Fatalf("status が読み取り以外の %s を撃った: %v", name, c.args())
+			}
 		}
 	}
 }
@@ -162,12 +175,7 @@ func TestStatusListsOnlyTheLatestSpawnOfAnIssueWhoseEarlierWorkerExited(t *testi
 		"ts": "2026-09-26T03:30:00.000000Z", "project": s.project, "cwd": s.clone, "result": "ok",
 		"spawned": []map[string]any{{"issue": 42, "kind": "reenter", "pid": workerPID + 1, "log": "/y.log", "session_id": "later-session"}},
 	}
-	f, err := os.OpenFile(s.logFile(), os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		t.Fatal(err)
-	}
-	fmt.Fprintln(f, mustJSON(t, later))
-	f.Close()
+	appendFile(t, s.logFile(), mustJSON(t, later)+"\n")
 	s.setProcesses(fmt.Sprintf("%d claude -p x --session-id later-session", workerPID+1))
 	s.setWip(42)
 
@@ -192,33 +200,36 @@ func TestStatusMatchesTheCloneToTheCLRepoIgnoringCase(t *testing.T) {
 	}
 }
 
-func TestStatusJSONCarriesTheWorkers(t *testing.T) {
+func TestStatusWithoutAProjectListsEveryProject(t *testing.T) {
 	s := newSandbox(t)
 	s.statusScenario()
 	s.workerAlive()
 	s.setWip(42)
+	other := filepath.Join(s.configRoot, "other")
+	mustMkdir(t, other)
+	mustWrite(t, filepath.Join(other, "config.toml"), s.defaultConfig())
 
-	r := s.statusPS("--json")
+	r := s.run("status", "ps")
 
-	var doc struct {
-		Projects []struct {
-			Project string
-			Tick    struct {
-				LastTS string `json:"last_ts"`
-			}
-			Workers []map[string]any
-		}
+	assertExit(t, r, 0)
+	var headers []string
+	for _, block := range strings.Split(r.stdout, "\n\n") {
+		headers = append(headers, strings.Fields(block)[0])
 	}
-	if err := json.Unmarshal([]byte(r.stdout), &doc); err != nil {
-		t.Fatalf("stdout が JSON でない: %v\n%s", err, r.stdout)
+	if !slices.Equal(headers, []string{"other", s.project}) || workerRow(r.stdout, 42) == nil {
+		t.Fatalf("全 project を名前順に並べていない (%v):\n%s", headers, r.stdout)
 	}
-	if len(doc.Projects) != 1 || len(doc.Projects[0].Workers) != 1 || doc.Projects[0].Tick.LastTS != spawnedTS {
-		t.Fatalf("status --json = %s", r.stdout)
+}
+
+func TestStatusWithNoProjectsIsAUsageError(t *testing.T) {
+	s := newSandbox(t)
+	if err := os.RemoveAll(s.configRoot); err != nil {
+		t.Fatal(err)
 	}
-	w := doc.Projects[0].Workers[0]
-	if number(t, w["issue"]) != 42 || w["state"] != "running" || w["wip"] != true || number(t, asMap(t, w["cl"])["number"]) != 57 {
-		t.Fatalf("worker = %v", w)
-	}
+
+	r := s.run("status", "ps")
+
+	assertExit(t, r, 2)
 }
 
 func TestStatusReadsARunningTickFromTheProcessList(t *testing.T) {
@@ -243,11 +254,15 @@ func TestStatusMarksWhatItCouldNotReadWithAQuestionMarkAndANote(t *testing.T) {
 	r := s.statusPS()
 
 	assertExit(t, r, 0)
-	if row := workerRow(r.stdout, 42); len(row) == 0 || !strings.Contains(strings.Join(row, " "), "?") {
-		t.Fatalf("読めなかった wip が ? になっていない: %v\n%s", row, r.stdout)
+	// ISSUE KIND STATE ELAPSED SESSION BRANCH WIP CL TICK (SESSION は claude agents に居ないので `-` の 1 語)
+	if row := workerRow(r.stdout, 42); len(row) < 7 || row[6] != "?" {
+		t.Fatalf("読めなかった WIP 列が ? になっていない: %v\n%s", row, r.stdout)
 	}
-	if !strings.Contains(r.stdout, "! ") || !strings.Contains(r.stdout, "wip") {
-		t.Fatalf("読めなかった理由の注記が無い:\n%s", r.stdout)
+	noted := slices.ContainsFunc(strings.Split(r.stdout, "\n"), func(line string) bool {
+		return strings.HasPrefix(line, "  ! ") && strings.Contains(line, "wip")
+	})
+	if !noted {
+		t.Fatalf("wip を読めなかった注記の行が無い:\n%s", r.stdout)
 	}
 }
 

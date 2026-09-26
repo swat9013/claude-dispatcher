@@ -86,3 +86,12 @@ func Last(lines []Line) (Line, bool) {
 	}
 	return lines[len(lines)-1], true
 }
+
+// ShortTS は tick 行の ts を人が読む秒までの形にする (読めなければそのまま)。
+func ShortTS(ts string) string {
+	at, err := time.Parse(time.RFC3339Nano, ts)
+	if err != nil {
+		return ts
+	}
+	return at.UTC().Format("2006-01-02T15:04:05Z")
+}

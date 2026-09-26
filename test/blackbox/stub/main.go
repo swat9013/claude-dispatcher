@@ -89,6 +89,10 @@ func crontab(root string, args []string, stdin string) int {
 		fmt.Print(string(raw))
 		return 0
 	case slices.Equal(args, []string{"-"}):
+		if _, err := os.Stat(stubwire.CrontabRefuseFile(root)); err == nil {
+			fmt.Fprintln(os.Stderr, "crontab: stub refuses to install the table")
+			return 1
+		}
 		if err := os.WriteFile(file, []byte(stdin), 0o644); err != nil {
 			fail("crontab", err)
 		}
