@@ -392,3 +392,38 @@ func TestGhAuthFailureDuringObservationIsAnAuthError(t *testing.T) {
 
 	s.assertOutcome(r, outcomeAuthError)
 }
+
+// 綴りを直しても直らない gh の失敗を config_error にすると、読み手が config を探し回る (system.md §8)
+func TestGhFailureOtherThanAnUnseenRepoDuringVerificationIsAnError(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		prefix []string
+		stderr string
+	}{
+		{"repo view が 5xx", []string{"repo", "view"}, "HTTP 502: Bad Gateway\n"},
+		{"label list が network 断", []string{"label", "list"}, "error connecting to api.github.com\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newSandbox(t)
+			s.ghFails(tc.prefix, 1, tc.stderr)
+
+			r := s.tick()
+
+			s.assertOutcome(r, outcomeError)
+		})
+	}
+}
+
+// label を名前で 1 つずつ確かめるので、repo の label の総数では止まらない
+func TestRepoWithManyLabelsPassesTheVerification(t *testing.T) {
+	s := newSandbox(t)
+	names := []string{wipLabel, humanLabel, defaultReadyLabel}
+	for i := len(names); i < 1000; i++ {
+		names = append(names, fmt.Sprintf("label-%d", i))
+	}
+	s.setLabels(names...)
+
+	r := s.tick()
+
+	s.assertOutcome(r, outcomeOK)
+}
