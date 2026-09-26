@@ -11,6 +11,8 @@ import (
 	"os/exec"
 	"syscall"
 	"time"
+
+	"github.com/swat9013/claude-dispatcher/internal/proc"
 )
 
 // Launcher は orchestrator と worker を起動する seam。
@@ -78,19 +80,11 @@ func (c ClaudePrint) RunOrchestrator(prompt, logFile string, timeout time.Durati
 	if err != nil {
 		return OrchestratorRun{}, err
 	}
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
-	run := OrchestratorRun{SessionID: sessionID}
-	select {
-	case <-done:
-	case <-time.After(timeout):
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		<-done
-		run.TimedOut = true
-	}
-	run.Seconds = time.Since(started).Seconds()
-	run.ExitCode = cmd.ProcessState.ExitCode()
-	return run, nil
+	// 異常終了は exit code で log に残すので、Wait の error は見ない
+	timedOut, _ := proc.Wait(cmd, timeout)
+	return OrchestratorRun{
+		ExitCode: cmd.ProcessState.ExitCode(), Seconds: time.Since(started).Seconds(), TimedOut: timedOut, SessionID: sessionID,
+	}, nil
 }
 
 func (c ClaudePrint) SpawnWorker(prompt, logFile string) (WorkerLaunch, error) {
@@ -103,6 +97,7 @@ func (c ClaudePrint) SpawnWorker(prompt, logFile string) (WorkerLaunch, error) {
 }
 
 // newSessionID は UUID v4 を返す (claude の --session-id に渡し、log から transcript へ辿る鍵にする)。
+// 要るのは乱数 16 byte に version / variant の bit を立てる 1 関数だけなので、UUID の library への依存は足さない。
 func newSessionID() (string, error) {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {

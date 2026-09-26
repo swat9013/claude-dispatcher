@@ -18,21 +18,17 @@ type Decisions struct {
 
 type Decision struct {
 	Issue  int    `json:"issue"`
-	Action string `json:"action"`
+	Action Action `json:"action"`
 	Reason string `json:"reason"`
 }
 
+// Spawn は起動する worker 1 つ。Kind は同じ issue の採否 (start / reenter) と同じ綴り。
 type Spawn struct {
 	Issue     int      `json:"issue"`
-	Kind      string   `json:"kind"`
+	Kind      Action   `json:"kind"`
 	Prompt    string   `json:"prompt"`
 	Playbooks []string `json:"playbooks"`
 }
-
-var (
-	decisionActions = []string{"start", "reenter", "skip", "ready-for-human"}
-	spawnKinds      = []string{"start", "reenter"}
-)
 
 // ReadDecisions は決定ファイルを読んで検査する。検査に落ちたら 1 件も起動しない (半分起動した残骸を作らない)。
 // 網羅の検査は起動の後に行うので、ここでは扱わない (CoverageGap)。
@@ -51,12 +47,12 @@ func ReadDecisions(file string, instructions []Instruction) (Decisions, error) {
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		return Decisions{}, fmt.Errorf("決定ファイルが JSON として読めない (%s): %w", file, err)
 	}
+	// decisions / spawn の欠落は 0 件として読む。採否の欠けは網羅の検査が拾う
 	d := Decisions{Raw: doc.Decisions, Spawn: doc.Spawn}
-	if len(doc.Decisions) == 0 || doc.Spawn == nil {
-		return Decisions{}, fmt.Errorf("決定ファイルに decisions と spawn の両方が要る (%s)", file)
-	}
-	if err := json.Unmarshal(doc.Decisions, &d.Decisions); err != nil {
-		return Decisions{}, fmt.Errorf("決定ファイルの decisions が読めない (%s): %w", file, err)
+	if len(doc.Decisions) > 0 {
+		if err := json.Unmarshal(doc.Decisions, &d.Decisions); err != nil {
+			return Decisions{}, fmt.Errorf("決定ファイルの decisions が読めない (%s): %w", file, err)
+		}
 	}
 	if err := validate(d, instructions); err != nil {
 		return Decisions{}, fmt.Errorf("決定ファイルが検査に落ちた (%s): %w", file, err)
@@ -64,48 +60,43 @@ func ReadDecisions(file string, instructions []Instruction) (Decisions, error) {
 	return d, nil
 }
 
+// validate は formats.md §5.2 の起動前の検査。採否はその issue の指示が許す語彙に入っていなければならない
+// (どの指示にも無い issue への採否は、指示の外で worker を起動する経路になる)。
 func validate(d Decisions, instructions []Instruction) error {
-	actionOf := map[int]string{}
+	instructionsOf := map[int][]Instruction{}
+	for _, i := range instructions {
+		for _, n := range i.DecisionIssues() {
+			instructionsOf[n] = append(instructionsOf[n], i)
+		}
+	}
+	// allowing は issue の指示のうち action を許すもの。無ければ nil
+	allowing := func(issue int, action Action) Instruction {
+		for _, i := range instructionsOf[issue] {
+			if slices.Contains(i.AllowedActions(), action) {
+				return i
+			}
+		}
+		return nil
+	}
+
+	actionOf := map[int]Action{}
 	for _, entry := range d.Decisions {
-		if !slices.Contains(decisionActions, entry.Action) {
-			return fmt.Errorf("issue %d の action %q は %s のいずれかでない", entry.Issue, entry.Action, strings.Join(decisionActions, " / "))
+		if allowing(entry.Issue, entry.Action) == nil {
+			return fmt.Errorf("issue %d の action %q はその issue の指示が許す採否でない (%s)", entry.Issue, entry.Action, allowedText(instructionsOf[entry.Issue]))
 		}
 		actionOf[entry.Issue] = entry.Action
 	}
 
-	// reenter の worker へ渡してよい playbook は、指示に載せた条件の playbook を条件の順に並べたもの
-	reenterPlaybooks := map[int][]string{}
-	// start の worker へ渡してよい playbook は、指示に載せた選定母集合の 1 本
-	var startPlaybooks []string
-	for _, i := range instructions {
-		switch i := i.(type) {
-		case ReenterInstruction:
-			for _, c := range i.Conditions {
-				reenterPlaybooks[i.Issue] = append(reenterPlaybooks[i.Issue], c.Playbook)
-			}
-		case StartInstruction:
-			for _, p := range i.Playbooks {
-				startPlaybooks = append(startPlaybooks, p.Path)
-			}
-		}
-	}
-
 	for _, s := range d.Spawn {
-		if !slices.Contains(spawnKinds, s.Kind) {
-			return fmt.Errorf("spawn (issue %d) の kind %q は %s のいずれかでない", s.Issue, s.Kind, strings.Join(spawnKinds, " / "))
+		if s.Kind != ActionStart && s.Kind != ActionReenter {
+			return fmt.Errorf("spawn (issue %d) の kind %q は start / reenter のいずれかでない", s.Issue, s.Kind)
 		}
 		if actionOf[s.Issue] != s.Kind {
 			return fmt.Errorf("spawn (issue %d, kind %s) に同じ action の decision が無い", s.Issue, s.Kind)
 		}
-		if s.Prompt == "" {
-			return fmt.Errorf("spawn (issue %d) の prompt が空", s.Issue)
-		}
 		if strings.Contains(s.Prompt, "${") {
 			// 未展開の変数は worker から解決できず、playbook も索引も届かないまま走る
 			return fmt.Errorf("spawn (issue %d) の prompt に未展開の変数が残っている", s.Issue)
-		}
-		if len(s.Playbooks) == 0 {
-			return fmt.Errorf("spawn (issue %d) の playbooks が空", s.Issue)
 		}
 		for _, p := range s.Playbooks {
 			// worker が読むのは prompt の path だけ。列挙と prompt の食い違い・消えた playbook は起動前に落とす
@@ -116,35 +107,36 @@ func validate(d Decisions, instructions []Instruction) error {
 				return fmt.Errorf("spawn (issue %d) の playbook が実在しない: %s", s.Issue, p)
 			}
 		}
-		switch s.Kind {
-		case "start":
-			if len(s.Playbooks) != 1 || !slices.Contains(startPlaybooks, s.Playbooks[0]) {
-				return fmt.Errorf("start の spawn (issue %d) の playbooks が指示の選定母集合の 1 本でない: %v", s.Issue, s.Playbooks)
-			}
-		case "reenter":
-			// 読み直しで外れた条件は落としてよいが、指示に無い playbook・順序の入れ替えは写し間違い
-			if !isSubsequence(s.Playbooks, reenterPlaybooks[s.Issue]) {
-				return fmt.Errorf("reenter の spawn (issue %d) の playbooks が指示の条件の playbook を条件の順に並べたものでない: %v", s.Issue, s.Playbooks)
-			}
+		if err := allowing(s.Issue, s.Kind).checkSpawnPlaybooks(s.Playbooks); err != nil {
+			return fmt.Errorf("spawn (issue %d): %w", s.Issue, err)
 		}
 	}
 	return nil
 }
 
-func isSubsequence(sub, of []string) bool {
-	i := 0
-	for _, x := range of {
-		if i < len(sub) && sub[i] == x {
-			i++
-		}
+func allowedText(instructions []Instruction) string {
+	if len(instructions) == 0 {
+		return "どの指示にも無い issue"
 	}
-	return i == len(sub)
+	var parts []string
+	for _, i := range instructions {
+		parts = append(parts, fmt.Sprintf("%s: %s", i.label(), joinActions(i.AllowedActions())))
+	}
+	return strings.Join(parts, "; ")
+}
+
+func joinActions(actions []Action) string {
+	names := make([]string, 0, len(actions))
+	for _, a := range actions {
+		names = append(names, string(a))
+	}
+	return strings.Join(names, " / ")
 }
 
 // CoverageGap は指示ごとに採否が書かれているかを見て、欠けを 1 文で返す (無ければ "")。
 // 判断不能を orchestrator が黙って落とせないようにする検査。
 func CoverageGap(d Decisions, instructions []Instruction) string {
-	actionOf := map[int]string{}
+	actionOf := map[int]Action{}
 	for _, entry := range d.Decisions {
 		actionOf[entry.Issue] = entry.Action
 	}
@@ -158,7 +150,7 @@ func CoverageGap(d Decisions, instructions []Instruction) string {
 		}
 		if len(undecided) > 0 {
 			gaps = append(gaps, fmt.Sprintf("%s の issue [%s] に採否 (%s) が無い",
-				i.label(), strings.Join(undecided, ", "), strings.Join(i.AllowedActions(), " / ")))
+				i.label(), strings.Join(undecided, ", "), joinActions(i.AllowedActions())))
 		}
 	}
 	return strings.Join(gaps, " / ")

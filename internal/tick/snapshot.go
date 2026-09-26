@@ -3,7 +3,6 @@ package tick
 import (
 	"fmt"
 	"slices"
-	"strconv"
 	"time"
 
 	"github.com/swat9013/claude-dispatcher/internal/config"
@@ -18,9 +17,9 @@ type Snapshot struct {
 	Limits     Limits         `json:"limits"`
 	Observed   ObservedCounts `json:"observed"`
 	Issues     IssueBuckets   `json:"issues"`
-	// LinkedCLs は open issue → 紐づく open CL の番号 (key は issue 番号の文字列)
-	LinkedCLs map[string][]int `json:"linked_cls"`
-	CLs       []CL             `json:"cls"`
+	// LinkedCLs は open issue → 紐づく open CL の番号 (JSON の key は issue 番号の文字列)
+	LinkedCLs map[int][]int `json:"linked_cls"`
+	CLs       []CL          `json:"cls"`
 }
 
 type Limits struct {
@@ -112,18 +111,14 @@ func Classify(cfg config.Config, issues []github.Issue, prs []github.PR, now tim
 		}
 	}
 
-	linkedCLs := map[string][]int{}
-	for n, numbers := range linked {
-		linkedCLs[strconv.Itoa(n)] = numbers
-	}
 	return Snapshot{
 		ObservedAt: now.UTC().Format(logTimeLayout),
-		IssueRepo:  cfg.IssueRepo,
-		CLRepo:     cfg.CLRepo,
+		IssueRepo:  cfg.IssueRepo.String(),
+		CLRepo:     cfg.CLRepo.String(),
 		Limits:     Limits{MaxWIP: cfg.MaxWIP, WIPCount: len(buckets.WIP)},
 		Observed:   ObservedCounts{Issues: len(issues), CLs: len(prs)},
 		Issues:     buckets,
-		LinkedCLs:  linkedCLs,
+		LinkedCLs:  linked,
 		CLs:        cls,
 	}
 }

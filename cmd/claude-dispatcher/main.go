@@ -126,19 +126,19 @@ func reexecInCronEnv(project string, stdout, stderr io.Writer) int {
 
 const ghTimeout = 120 * time.Second
 
-func newGh(env []string) github.Runner {
-	path := deps.LookPath("gh", deps.Getenv(env, "PATH"))
-	if path == "" {
-		path = "gh" // 起動で失敗させ、観測できなかった tick として残す
+func newGh(env []string) (github.Runner, error) {
+	gh, err := deps.Lookup("gh", env)
+	if err != nil {
+		return nil, err
 	}
-	return github.Exec{Path: path, Env: env, Timeout: ghTimeout}
+	return github.Exec{Path: gh, Env: env, Timeout: ghTimeout}, nil
 }
 
 func newLauncher(cwd string) func(env []string) (launch.Launcher, error) {
 	return func(env []string) (launch.Launcher, error) {
-		claude := deps.LookPath("claude", deps.Getenv(env, "PATH"))
-		if claude == "" {
-			return nil, fmt.Errorf("claude が PATH に無い (PATH=%s)", deps.Getenv(env, "PATH"))
+		claude, err := deps.Lookup("claude", env)
+		if err != nil {
+			return nil, err
 		}
 		return launch.ClaudePrint{Claude: claude, Env: env, Cwd: cwd}, nil
 	}

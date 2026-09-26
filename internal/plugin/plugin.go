@@ -41,17 +41,6 @@ type entry struct {
 // 選択順: projectPath が cwd と一致する project scope → user scope → ~/.claude/skills/swat-skills。
 // 別 marketplace 由来の entry が複数あれば、どれを使うか決められないので止める。
 func Resolve(home, cwd string) (Install, error) {
-	install, err := resolvePath(home, cwd)
-	if err != nil {
-		return Install{}, err
-	}
-	if _, err := os.Stat(install.PrincipleIndex()); err != nil {
-		return Install{}, fmt.Errorf("plugin %s の原則索引が無い: %s", name, install.PrincipleIndex())
-	}
-	return install, nil
-}
-
-func resolvePath(home, cwd string) (Install, error) {
 	file := filepath.Join(home, ".claude", "plugins", "installed_plugins.json")
 	raw, err := os.ReadFile(file)
 	if err != nil && !os.IsNotExist(err) {
@@ -117,8 +106,8 @@ func samePath(a, b string) bool {
 
 // StartPlaybook は start の選定母集合の 1 本。
 type StartPlaybook struct {
-	Path         string `json:"path"`
-	DispatchWhen string `json:"dispatch_when"`
+	Path         string
+	DispatchWhen string
 }
 
 // StartPlaybooks は frontmatter の metadata に `deliverable: cl` を持つ playbook を集める。
@@ -152,14 +141,13 @@ func (i Install) StartPlaybooks() ([]StartPlaybook, error) {
 		}
 		playbooks = append(playbooks, StartPlaybook{Path: file, DispatchWhen: meta.Metadata.DispatchWhen})
 	}
-	if len(playbooks) == 0 {
-		return nil, fmt.Errorf("start の選定母集合が空 (%s)", filepath.Join(i.procedureDir(), "playbook-*", "SKILL.md"))
-	}
 	return playbooks, nil
 }
 
 var errNoFrontmatter = errors.New("frontmatter が無い")
 
+// frontmatter は先頭の `---` 行から次の `---` 行までの YAML を切り出す。解釈は yaml.v3 に任せ、ここは切り出しだけを持つ
+// (frontmatter の library は切り出しと YAML の decode を束ねたもので、yaml.v3 に既に依存している分を上回る得が無い)。
 func frontmatter(file string) ([]byte, error) {
 	raw, err := os.ReadFile(file)
 	if err != nil {

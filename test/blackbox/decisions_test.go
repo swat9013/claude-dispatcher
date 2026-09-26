@@ -97,6 +97,18 @@ func TestDecisionsWithoutSpawnLaunchNoWorker(t *testing.T) {
 	}
 }
 
+func TestDecisionsFileWithoutTheSpawnKeyReadsAsNoSpawn(t *testing.T) {
+	s := newSandbox(t)
+	s.setIssues(readyIssue(42))
+	s.orchestratorWritesRaw(`{"decisions": [{"issue": 42, "action": "skip", "reason": "r"}]}`)
+
+	r := s.tick()
+
+	if spawned := asList(t, s.assertOutcome(r, outcomeOK)["spawned"]); len(spawned) != 0 {
+		t.Fatalf("spawned = %v", spawned)
+	}
+}
+
 func TestMissingDecisionsFileLaunchesNothing(t *testing.T) {
 	s := newSandbox(t)
 	s.setIssues(readyIssue(42))
@@ -168,6 +180,38 @@ func TestInvalidSpawnRejectsTheWholeDecisionsFile(t *testing.T) {
 			s.setIssues(readyIssue(42))
 			d, sp := tc.make(s.defaultInstallPath())
 			s.orchestratorWrites(decisions{Decisions: []decision{d}, Spawn: []spawn{sp}})
+
+			r := s.tick()
+
+			s.assertRejectedBeforeLaunch(r)
+		})
+	}
+}
+
+func TestSpawnOutsideWhatItsIssuesInstructionAllowsRejectsTheWholeDecisionsFile(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(s *sandbox)
+		issue int
+	}{
+		{"どの指示にも無い issue", func(s *sandbox) { s.setIssues(readyIssue(42)) }, 99},
+		{"anomaly の issue", func(s *sandbox) {
+			s.setIssues(readyIssue(42), issue{number: 5, labels: []string{wipLabel, humanLabel}})
+		}, 5},
+		{"reenter の issue", func(s *sandbox) {
+			reenterScenario(s)
+			s.setIssues(issue{number: 39}, readyIssue(42))
+		}, 39},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newSandbox(t)
+			tc.setup(s)
+			// start 候補 42 は見送り、指示が start を許さない issue へ選定母集合の playbook で start を書く
+			p := playbookPath(s.defaultInstallPath(), "playbook-implementation")
+			s.orchestratorWrites(decisions{
+				Decisions: []decision{{Issue: 42, Action: "skip", Reason: "r"}, {Issue: tc.issue, Action: "start", Reason: "r"}},
+				Spawn:     []spawn{startSpawn(tc.issue, p)},
+			})
 
 			r := s.tick()
 
@@ -307,7 +351,7 @@ func TestEachInstructionKindAcceptsOnlyItsOwnActions(t *testing.T) {
 				s.assertOutcome(r, outcomeOK)
 				return
 			}
-			// 網羅の欠けとして落ちたこと (他の検査で落ちたのではないこと) を、欠けた issue の名指しで見る
+			// 許されない採否は起動前の検査で、欠けは網羅の検査で落ちる。どちらでも採否の要る issue を名指しする
 			s.assertErrorNames(s.assertOutcome(r, outcomeError), strconv.Itoa(tc.decision.Issue))
 		})
 	}

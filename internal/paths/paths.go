@@ -71,6 +71,9 @@ func (p Project) HandoffFilePattern(stem string) string {
 	return filepath.Join(p.StateDir, "decisions", stem+".handoff-<N>.md")
 }
 
+// WorkersDir は worker log の置き場
+func (p Project) WorkersDir() string { return filepath.Join(p.StateDir, "workers") }
+
 func (p Project) WorkerLog(issue int, stem string) string {
-	return filepath.Join(p.StateDir, "workers", strconv.Itoa(issue)+"-"+stem+".log")
+	return filepath.Join(p.WorkersDir(), strconv.Itoa(issue)+"-"+stem+".log")
 }

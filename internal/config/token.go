@@ -5,8 +5,11 @@ import (
 	"strings"
 )
 
-// gh が認証に読む環境変数。どちらかがあれば token_file は読まない (env が勝つ)
-var ghTokenEnvs = []string{"GH_TOKEN", "GITHUB_TOKEN"}
+// gh が認証に読む環境変数。どちらかがあれば token_file は読まない (env が勝つ)。token_file の中身は GHTokenEnv に載せる
+const (
+	GHTokenEnv     = "GH_TOKEN"
+	GitHubTokenEnv = "GITHUB_TOKEN"
+)
 
 // ClaudeTokenEnv は claude が長期 token を読む環境変数
 const ClaudeTokenEnv = "CLAUDE_CODE_OAUTH_TOKEN"
@@ -22,14 +25,14 @@ type TokenEnv struct {
 // claude_token_file の中身を CLAUDE_CODE_OAUTH_TOKEN として載せる。env にあればその file は読みもしない。
 func (c Config) Tokens(getenv func(string) string) (TokenEnv, error) {
 	tokens := TokenEnv{GH: map[string]string{}, Claude: map[string]string{}}
-	if c.TokenFile != "" && getenv(ghTokenEnvs[0]) == "" && getenv(ghTokenEnvs[1]) == "" {
+	if c.TokenFile != "" && getenv(GHTokenEnv) == "" && getenv(GitHubTokenEnv) == "" {
 		token, err := c.readToken("token_file", c.TokenFile)
 		if err != nil {
 			return TokenEnv{}, err
 		}
 		// orchestrator / worker も gh を撃つので、claude にも同じ token を渡す
-		tokens.GH["GH_TOKEN"] = token
-		tokens.Claude["GH_TOKEN"] = token
+		tokens.GH[GHTokenEnv] = token
+		tokens.Claude[GHTokenEnv] = token
 	}
 	if c.ClaudeTokenFile != "" && getenv(ClaudeTokenEnv) == "" {
 		token, err := c.readToken("claude_token_file", c.ClaudeTokenFile)

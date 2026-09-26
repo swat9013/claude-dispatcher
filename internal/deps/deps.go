@@ -1,17 +1,24 @@
-// Package deps は依存 CLI (gh / claude) の path を解決する。cron の最小環境では PATH が通らない (system.md §9)。
+// Package deps は依存 CLI (gh / claude / git) の path を解決する。cron の最小環境では PATH が通らない (system.md §9)。
 package deps
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 )
 
-// Names は tick が起動する依存 CLI
-var Names = []string{"gh", "claude"}
+// Names は PATH を自己解決する依存 CLI。git は tick 自身は撃たないが、同じ PATH を継ぐ orchestrator / worker が撃つ
+var Names = []string{"gh", "claude", "git"}
 
-// candidates は PATH に無いときに足す置き場。前に居るものから探す
-var candidates = []string{"~/.local/bin", "~/.local/share/mise/shims", "/opt/homebrew/bin", "/usr/local/bin"}
+// Invoked は tick 自身が起動する依存 CLI。試運転は起動の手前で止まるので、これらが解決できるかを代わりに検査する
+var Invoked = []string{"gh", "claude"}
+
+// candidates は PATH に無いときに足す置き場。前に居るものから探す (Homebrew は macOS の 2 つと Linux の prefix)
+var candidates = []string{
+	"~/.local/bin", "~/.local/share/mise/shims",
+	"/opt/homebrew/bin", "/usr/local/bin", "/home/linuxbrew/.linuxbrew/bin",
+}
 
 // ResolvePATH は依存 CLI がすべて PATH で見つかれば PATH をそのまま、見つからないものがあれば
 // 実在する候補の置き場を前置した PATH を返す。
@@ -58,6 +65,15 @@ func LookPath(name, path string) string {
 		}
 	}
 	return ""
+}
+
+// Lookup は env の PATH から name を探して絶対 path を返す。見つからなければ PATH を添えた error。
+func Lookup(name string, env []string) (string, error) {
+	path := Getenv(env, "PATH")
+	if file := LookPath(name, path); file != "" {
+		return file, nil
+	}
+	return "", fmt.Errorf("%s が PATH に無い (PATH=%s)", name, path)
 }
 
 // Getenv は env ("KEY=value" の列) から key の値を返す。同じ key が複数あれば後ろが勝つ (exec と同じ)。

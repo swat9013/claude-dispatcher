@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/swat9013/claude-dispatcher/internal/launch"
 )
 
 const (
@@ -32,9 +35,84 @@ var (
 	ResultAuthError   = Result{"auth_error", 4}
 )
 
-// record は tick 行 (formats.md §4.1)。tick は段階ごとに中身を積み、最後に 1 行で書き出す。
-// どこで止まっても、それまでに確定した key (instruction_file / orchestrator / 起動済みの spawned) が行に残る。
-type record map[string]any
+// tickLine は tick 行 (formats.md §4.1)。tick は段階ごとに中身を積み、最後に 1 行で書き出す。
+// どこで止まっても、それまでに確定した段階の key が行に残る。段階ごとの key は embed した pointer で持ち、
+// nil ならその段階の key は行に載らない (観測に至らなかった tick に observed は無く、起動しなかった tick に orchestrator は無い)。
+type tickLine struct {
+	TS      string `json:"ts"`
+	Project string `json:"project"`
+	Cwd     string `json:"cwd"`
+	Result  string `json:"result"`
+	Error   string `json:"error,omitempty"`
+	*observedKeys
+	*launchedKeys
+}
+
+// observedKeys は観測に至った tick の key。
+type observedKeys struct {
+	Observed     ObservedCounts `json:"observed"`
+	Candidates   int            `json:"candidates"`
+	WIP          int            `json:"wip"`
+	Instructions map[string]int `json:"instructions"`
+	// InstructionFile は指示 0 件なら null
+	InstructionFile *string `json:"instruction_file"`
+}
+
+func newObservedKeys(obs observation) *observedKeys {
+	return &observedKeys{
+		Observed:     obs.snapshot.Observed,
+		Candidates:   len(obs.snapshot.Issues.Candidates),
+		WIP:          obs.snapshot.Limits.WIPCount,
+		Instructions: Counts(obs.instructions),
+	}
+}
+
+// launchedKeys は claude を起動した tick の key。Spawned は起動済みの worker (0 件なら [])。
+type launchedKeys struct {
+	Orchestrator orchestratorRecord `json:"orchestrator"`
+	Spawned      []spawned          `json:"spawned"`
+}
+
+type orchestratorRecord struct {
+	ExitCode  int     `json:"exit_code"`
+	Seconds   float64 `json:"seconds"`
+	TimedOut  bool    `json:"timed_out"`
+	SessionID string  `json:"session_id"`
+}
+
+func newOrchestratorRecord(run launch.OrchestratorRun) orchestratorRecord {
+	// 秒は log を読む人の目安なので 0.1 秒まで
+	return orchestratorRecord{ExitCode: run.ExitCode, Seconds: math.Round(run.Seconds*10) / 10, TimedOut: run.TimedOut, SessionID: run.SessionID}
+}
+
+type spawned struct {
+	Issue     int    `json:"issue"`
+	Kind      Action `json:"kind"`
+	PID       int    `json:"pid"`
+	Log       string `json:"log"`
+	SessionID string `json:"session_id"`
+}
+
+// orchestratorLine は orchestrator の採否を写す行 (formats.md §4.2)。ts は同じ tick の tick 行と同じ値。
+type orchestratorLine struct {
+	TS              string          `json:"ts"`
+	Project         string          `json:"project"`
+	Actor           string          `json:"actor"`
+	InstructionFile string          `json:"instruction_file"`
+	Decisions       json.RawMessage `json:"decisions"`
+}
+
+// dryRunLine は試運転の stdout の 1 行 (formats.md §7)。
+type dryRunLine struct {
+	TS           string         `json:"ts"`
+	Project      string         `json:"project"`
+	DryRun       bool           `json:"dry_run"`
+	Result       string         `json:"result"`
+	Observed     ObservedCounts `json:"observed"`
+	Candidates   int            `json:"candidates"`
+	WIP          int            `json:"wip"`
+	Instructions map[string]int `json:"instructions"`
+}
 
 // foldLines は複数行の error を ` / ` で 1 行に畳む。
 func foldLines(s string) string {
@@ -56,6 +134,12 @@ func marshalLine(v any) ([]byte, error) {
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+// marshalCompact は v を HTML escape せずに JSON にする (末尾の改行なし)。MarshalJSON の中から使う。
+func marshalCompact(v any) ([]byte, error) {
+	line, err := marshalLine(v)
+	return bytes.TrimSuffix(line, []byte("\n")), err
 }
 
 // appendLine は log.jsonl へ 1 行 append する。

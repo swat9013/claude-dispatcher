@@ -91,7 +91,7 @@ func (e *env) run(gh fakeGh, launcher *fakeLauncher) int {
 	return tick.Run(tick.Options{
 		Project: "widgets", Roots: e.roots, Home: e.home, Cwd: e.cwd, Env: []string{"HOME=" + e.home},
 		Now: now, Stdout: &bytes.Buffer{}, Stderr: &e.stderr,
-		Gh:       func([]string) github.Runner { return gh },
+		Gh:       func([]string) (github.Runner, error) { return gh, nil },
 		Launcher: func([]string) (launch.Launcher, error) { return launcher, nil },
 	})
 }
@@ -122,55 +122,64 @@ func (e *env) writesDecisions(prompt string) launch.OrchestratorRun {
 const twoCandidates = `[{"number":42,"title":"a","url":"u","body":"b","labels":[{"name":"ready-for-agent"}]},
 {"number":43,"title":"b","url":"u","body":"b","labels":[{"name":"ready-for-agent"}]}]`
 
-func TestTickLaunchesSessionsOnlyThroughTheLauncherSeam(t *testing.T) {
+func launchesWorkers(n int) (launch.WorkerLaunch, error) {
+	return launch.WorkerLaunch{PID: 1000 + n, SessionID: fmt.Sprintf("worker-%d", n)}, nil
+}
+
+func TestOrchestratorIsLaunchedThroughTheSeamWithTheInstructionFile(t *testing.T) {
 	e := newEnv(t)
-	launcher := &fakeLauncher{orchestrate: e.writesDecisions, spawn: func(n int) (launch.WorkerLaunch, error) {
-		return launch.WorkerLaunch{PID: 1000 + n, SessionID: fmt.Sprintf("worker-%d", n)}, nil
-	}}
+	launcher := &fakeLauncher{orchestrate: e.writesDecisions, spawn: launchesWorkers}
 
 	exit := e.run(fakeGh{issues: twoCandidates}, launcher)
 
-	if exit != 0 {
-		t.Fatalf("exit %d\n%s", exit, e.stderr.String())
-	}
-	if len(launcher.prompts) != 1 || len(launcher.workers) != 2 {
-		t.Fatalf("orchestrator %d 回 / worker %d 回", len(launcher.prompts), len(launcher.workers))
-	}
-	if !strings.Contains(launcher.prompts[0], e.project.InstructionFile(stem)) {
-		t.Fatal("orchestrator の prompt に指示ファイルの path が無い")
-	}
-	if spawned := e.tickLine()["spawned"].([]any); len(spawned) != 2 {
-		t.Fatalf("spawned = %v", spawned)
+	if exit != 0 || len(launcher.prompts) != 1 || !strings.Contains(launcher.prompts[0], e.project.InstructionFile(stem)) {
+		t.Fatalf("exit %d / orchestrator の prompt %d 件 (指示ファイルの path を含むこと)\n%s", exit, len(launcher.prompts), e.stderr.String())
 	}
 }
 
-func TestPanicMidTickLeavesTheSettledKeysAndAPrefixedLastLine(t *testing.T) {
+func TestDecidedWorkersAreLaunchedThroughTheSeamAndLogged(t *testing.T) {
 	e := newEnv(t)
-	launcher := &fakeLauncher{orchestrate: e.writesDecisions, spawn: func(n int) (launch.WorkerLaunch, error) {
+	launcher := &fakeLauncher{orchestrate: e.writesDecisions, spawn: launchesWorkers}
+
+	e.run(fakeGh{issues: twoCandidates}, launcher)
+
+	if spawned := e.tickLine()["spawned"].([]any); len(launcher.workers) != 2 || len(spawned) != 2 {
+		t.Fatalf("worker の起動 %d 件 / spawned = %v", len(launcher.workers), spawned)
+	}
+}
+
+// panicsOnSecondWorker は 2 件目の worker の起動で壊れる launcher (1 件目は起動済み)。
+func (e *env) panicsOnSecondWorker() *fakeLauncher {
+	return &fakeLauncher{orchestrate: e.writesDecisions, spawn: func(n int) (launch.WorkerLaunch, error) {
 		if n == 2 {
 			panic("worker 起動の途中で壊れた")
 		}
-		return launch.WorkerLaunch{PID: 1000 + n, SessionID: "worker-1"}, nil
+		return launchesWorkers(n)
 	}}
+}
 
-	exit := e.run(fakeGh{issues: twoCandidates}, launcher)
+func TestPanicMidTickLeavesAnErrorLineWithTheSettledKeys(t *testing.T) {
+	e := newEnv(t)
 
-	if exit != 1 {
-		t.Fatalf("exit %d, want 1", exit)
-	}
+	exit := e.run(fakeGh{issues: twoCandidates}, e.panicsOnSecondWorker())
+
 	line := e.tickLine()
-	if line["result"] != "error" || line["instruction_file"] != e.project.InstructionFile(stem) || line["orchestrator"] == nil {
-		t.Fatalf("想定外の失敗で止まった tick の行から確定済みの key が落ちた: %v", line)
+	spawned, _ := line["spawned"].([]any)
+	msg, _ := line["error"].(string)
+	if exit != 1 || line["result"] != "error" || !strings.HasPrefix(msg, "想定外の失敗で止まった: ") ||
+		line["instruction_file"] != e.project.InstructionFile(stem) || line["orchestrator"] == nil || len(spawned) != 1 {
+		t.Fatalf("exit %d / 想定外の失敗で止まった tick の行から確定済みの key が落ちた: %v", exit, line)
 	}
-	if spawned := line["spawned"].([]any); len(spawned) != 1 {
-		t.Fatalf("止まる前に起動した worker が spawned に無い: %v", spawned)
-	}
-	if msg, _ := line["error"].(string); !strings.HasPrefix(msg, "想定外の失敗で止まった: ") {
-		t.Fatalf("error = %q", msg)
-	}
+}
+
+func TestPanicMidTickEndsStderrWithThePrefixedLineAfterTheStackTrace(t *testing.T) {
+	e := newEnv(t)
+
+	e.run(fakeGh{issues: twoCandidates}, e.panicsOnSecondWorker())
+
 	lines := strings.Split(strings.TrimRight(e.stderr.String(), "\n"), "\n")
 	last := lines[len(lines)-1]
-	if !strings.Contains(e.stderr.String(), "goroutine") || !strings.Contains(last, "tick="+line["ts"].(string)+" result=error 想定外の失敗で止まった: ") {
+	if !strings.Contains(e.stderr.String(), "goroutine") || !strings.Contains(last, "tick="+e.tickLine()["ts"].(string)+" result=error 想定外の失敗で止まった: ") {
 		t.Fatalf("stack trace の後ろに前置付きの 1 行が無い: %q", last)
 	}
 }

@@ -42,9 +42,8 @@ type Options struct {
 	Stdout io.Writer
 	Stderr io.Writer
 
-	Gh                  func(env []string) github.Runner
-	Launcher            func(env []string) (launch.Launcher, error)
-	OrchestratorTimeout time.Duration
+	Gh       func(env []string) (github.Runner, error)
+	Launcher func(env []string) (launch.Launcher, error)
 }
 
 // stop は tick を止める失敗。result と error 文を持つ。
@@ -59,13 +58,32 @@ func stopf(result Result, format string, args ...any) error {
 	return &stop{result, fmt.Sprintf(format, args...)}
 }
 
+// resultOf は tick を止めた失敗の result と error 文を返す (nil なら ok)。stop 以外の失敗は error。
+func resultOf(err error) (Result, string) {
+	if err == nil {
+		return ResultOK, ""
+	}
+	var s *stop
+	if errors.As(err, &s) {
+		return s.result, err.Error()
+	}
+	return ResultError, err.Error()
+}
+
+// onPanic は panic を想定外の失敗として end へ渡す。stack trace を先に出し、前置付きの 1 行は end が最後に置く
+// (cron.log は末尾から読まれる)。defer で直に呼ぶ。
+func onPanic(stderr io.Writer, end func(error)) {
+	if v := recover(); v != nil {
+		fmt.Fprintf(stderr, "panic: %v\n%s", v, debug.Stack())
+		end(stopf(ResultError, "想定外の失敗で止まった: %v", v))
+	}
+}
+
 type run struct {
 	o       Options
 	project paths.Project
 	stem    string
-	rec     record
-	// lock は tick 行を書き終えるまで持つ (log.jsonl の行の並びを tick の順に保つ)
-	lock *os.File
+	line    tickLine
 }
 
 func newRun(o Options) *run {
@@ -74,81 +92,84 @@ func newRun(o Options) *run {
 		o:       o,
 		project: o.Roots.Project(o.Project),
 		stem:    now.Format(stemLayout),
-		rec:     record{"ts": now.Format(logTimeLayout), "project": o.Project, "cwd": o.Cwd},
+		line:    tickLine{TS: now.Format(logTimeLayout), Project: o.Project, Cwd: o.Cwd},
 	}
 }
 
 func (r *run) getenv(key string) string { return deps.Getenv(r.o.Env, key) }
 
 // Run は 1 tick を回して exit code を返す。どこで止まっても log.jsonl に 1 行を残す (書ける限り)。
+//
+// lock は tick 行を書き終えてから外す (system.md §9)。先に外すと、次の tick の行が前の tick の行より先に書かれうる。
 func Run(o Options) (exit int) {
 	r := newRun(o)
+	var lock *os.File
+	// 後に積んだ defer から走るので、onPanic が行を書いた後に lock を外す
 	defer func() {
-		if r.lock != nil {
-			r.lock.Close()
+		if lock != nil {
+			lock.Close() // 閉じると flock も外れる
 		}
 	}()
-	defer func() {
-		if v := recover(); v != nil {
-			// stack trace を先に出し、前置付きの 1 行を最後に置く (cron.log は末尾から読まれる)
-			fmt.Fprintf(o.Stderr, "panic: %v\n%s", v, debug.Stack())
-			exit = r.finish(&stop{ResultError, fmt.Sprintf("想定外の失敗で止まった: %v", v)})
-		}
-	}()
+	defer onPanic(o.Stderr, func(err error) { exit = r.finish(err) })
+
+	if err := r.requireStateDir(); err != nil {
+		return r.finish(err)
+	}
+	lock, err := r.acquireLock()
+	if err != nil {
+		return r.finish(err)
+	}
 	return r.finish(r.tick())
 }
 
-// finish は tick 行を書き、失敗なら cron.log の行を stderr に出して exit code を返す。
-func (r *run) finish(err error) int {
-	result, msg := ResultOK, ""
+// requireStateDir は config と state dir の実在を確かめる。state dir が無いと log.jsonl を置く先も無い。
+func (r *run) requireStateDir() error {
+	if err := config.RequireFile(r.project.ConfigFile()); err != nil {
+		return stopf(ResultConfigError, "%s", err.Error())
+	}
+	if info, err := os.Stat(r.project.StateDir); err != nil || !info.IsDir() {
+		return stopf(ResultError, "state dir が無い: %s (`claude-dispatcher setup %s` が作る)", r.project.StateDir, r.o.Project)
+	}
+	return nil
+}
+
+// acquireLock は単一実行の lock を取る。取れなければ locked (前 tick が長引いている間も log は進める —
+// 最終行の時刻で cron の死活を見るため)。
+func (r *run) acquireLock() (*os.File, error) {
+	lock, err := os.OpenFile(r.project.LockFile(), os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
-		result, msg = ResultError, err.Error()
-		var s *stop
-		if errors.As(err, &s) {
-			result = s.result
-		}
+		return nil, fmt.Errorf("lock file を開けない (%s): %w", r.project.LockFile(), err)
 	}
-	r.rec["result"] = result.Name
-	if msg != "" {
-		r.rec["error"] = foldLines(msg)
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		lock.Close()
+		return nil, stopf(ResultLocked, "前の tick がまだ走っている (%s)", r.project.LockFile())
 	}
-	loggedTS := ""
-	if appendLine(r.project.LogFile(), r.rec) == nil {
-		loggedTS, _ = r.rec["ts"].(string)
+	return lock, nil
+}
+
+// finish は tick 行を書き、失敗なら cron.log の行を stderr に出して exit code を返す。
+// 行を書けなかったときは、result に関わらず書けなかった理由を cron.log の行で残す (log.jsonl が死活の手掛かりなので)。
+func (r *run) finish(err error) int {
+	result, msg := resultOf(err)
+	r.line.Result = result.Name
+	r.line.Error = foldLines(msg)
+	loggedTS := r.line.TS
+	if werr := appendLine(r.project.LogFile(), r.line); werr != nil {
+		loggedTS = ""
+		msg = strings.TrimSpace(msg + "\nlog.jsonl に書けない: " + werr.Error())
 	}
-	if result != ResultOK {
+	if result != ResultOK || loggedTS == "" {
 		fmt.Fprintln(r.o.Stderr, cronLogLine(time.Now(), r.o.Project, loggedTS, result, msg))
 	}
 	return result.Exit
 }
 
 func (r *run) tick() error {
-	if _, err := os.Stat(r.project.ConfigFile()); os.IsNotExist(err) {
-		return stopf(ResultConfigError, "宣言 config が無い: %s", r.project.ConfigFile())
-	}
-	if info, err := os.Stat(r.project.StateDir); err != nil || !info.IsDir() {
-		// log.jsonl を置く先も無い。state dir は setup が作る
-		return stopf(ResultError, "state dir が無い: %s (`claude-dispatcher setup %s` が作る)", r.project.StateDir, r.o.Project)
-	}
-	lock, err := os.OpenFile(r.project.LockFile(), os.O_CREATE|os.O_RDWR, 0o644)
-	if err != nil {
-		return fmt.Errorf("lock file を開けない (%s): %w", r.project.LockFile(), err)
-	}
-	r.lock = lock // Run が tick 行を書いた後に閉じる (閉じると flock も外れる)
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		// 前 tick が長引いている間も log は進める (最終行の時刻で cron の死活を見るため)
-		return stopf(ResultLocked, "前の tick がまだ走っている (%s)", r.project.LockFile())
-	}
-
 	obs, err := r.observe(r.verifyOnce)
 	if err != nil {
 		return err
 	}
-	r.rec["observed"] = obs.snapshot.Observed
-	r.rec["candidates"] = len(obs.snapshot.Issues.Candidates)
-	r.rec["wip"] = obs.snapshot.Limits.WIPCount
-	r.rec["instructions"] = Counts(obs.instructions)
-	r.rec["instruction_file"] = nil
+	r.line.observedKeys = newObservedKeys(obs)
 	if len(obs.instructions) == 0 {
 		return nil
 	}
@@ -157,7 +178,7 @@ func (r *run) tick() error {
 	if err := writeJSON(instructionFile, map[string]any{"snapshot": obs.snapshot, "instructions": obs.instructions}); err != nil {
 		return fmt.Errorf("指示ファイルを書けない: %w", err)
 	}
-	r.rec["instruction_file"] = instructionFile
+	r.line.InstructionFile = &instructionFile
 	return r.driveOrchestrator(obs, instructionFile)
 }
 
@@ -179,9 +200,12 @@ func (r *run) observe(verify func(config.Config, github.Runner) error) (observat
 	if err != nil {
 		return observation{}, stopf(ResultConfigError, "%s", err.Error())
 	}
-	gh := r.o.Gh(deps.WithEnv(r.o.Env, tokens.GH))
+	gh, err := r.o.Gh(deps.WithEnv(r.o.Env, tokens.GH))
+	if err != nil {
+		return observation{}, stopf(ResultError, "観測できなかった: %v", err)
+	}
 	if err := verify(cfg, gh); err != nil {
-		return observation{}, classifyGhError(err, "")
+		return observation{}, classifyGhError(err, "置き場を検査できなかった: ")
 	}
 
 	issues, err := github.OpenIssues(gh, cfg.IssueRepo)
@@ -193,22 +217,21 @@ func (r *run) observe(verify func(config.Config, github.Runner) error) (observat
 		return observation{}, classifyGhError(err, "観測できなかった: ")
 	}
 	snapshot := Classify(cfg, issues, prs, r.o.Now)
-
-	playbooks := &lazyPlaybooks{home: r.o.Home, cwd: r.o.Cwd}
-	instructions, err := Derive(snapshot, playbooks)
-	if err != nil {
+	obs := observation{config: cfg, claudeEnv: deps.WithEnv(r.o.Env, tokens.Claude), snapshot: snapshot, instructions: Derive(snapshot)}
+	if len(obs.instructions) == 0 {
+		// 静止した tick は plugin を読まない
+		return obs, nil
+	}
+	if obs.install, err = plugin.Resolve(r.o.Home, r.o.Cwd); err != nil {
 		return observation{}, stopf(ResultError, "指示を導出できなかった: %v", err)
 	}
-	obs := observation{config: cfg, claudeEnv: deps.WithEnv(r.o.Env, tokens.Claude), snapshot: snapshot, instructions: instructions}
-	if len(instructions) > 0 {
-		// orchestrator の契約に原則索引の path を埋めるので、指示があれば plugin を必ず解決しておく
-		if obs.install, err = playbooks.resolve(); err != nil {
-			return observation{}, stopf(ResultError, "指示を導出できなかった: %v", err)
-		}
+	if obs.instructions, err = WithPlaybooks(obs.instructions, obs.install); err != nil {
+		return observation{}, stopf(ResultError, "指示を導出できなかった: %v", err)
 	}
 	return obs, nil
 }
 
+// classifyGhError は gh の失敗を result へ写す。認証の失敗は config の綴りの失敗とも観測の失敗とも取り違えない。
 func classifyGhError(err error, prefix string) error {
 	var s *stop
 	switch {
@@ -216,42 +239,8 @@ func classifyGhError(err error, prefix string) error {
 		return err
 	case github.IsAuth(err):
 		return stopf(ResultAuthError, "gh の認証が通らない: %v", err)
-	case config.IsError(err):
-		return stopf(ResultConfigError, "%s", err.Error())
 	}
 	return stopf(ResultError, "%s%v", prefix, err)
-}
-
-// lazyPlaybooks は plugin の解決を初めて要るときに 1 度だけ行う (静止した tick は plugin を読まない)。
-type lazyPlaybooks struct {
-	home, cwd string
-	done      bool
-	install   plugin.Install
-	err       error
-}
-
-func (l *lazyPlaybooks) resolve() (plugin.Install, error) {
-	if !l.done {
-		l.install, l.err = plugin.Resolve(l.home, l.cwd)
-		l.done = true
-	}
-	return l.install, l.err
-}
-
-func (l *lazyPlaybooks) Playbook(name string) (string, error) {
-	install, err := l.resolve()
-	if err != nil {
-		return "", err
-	}
-	return install.Playbook(name), nil
-}
-
-func (l *lazyPlaybooks) StartPlaybooks() ([]plugin.StartPlaybook, error) {
-	install, err := l.resolve()
-	if err != nil {
-		return nil, err
-	}
-	return install.StartPlaybooks()
 }
 
 // verifyOnce は verifyConfig を config の内容ごとに 1 度だけ通す。通った config の hash を marker に残す。
@@ -272,29 +261,24 @@ func (r *run) verifyOnce(cfg config.Config, gh github.Runner) error {
 }
 
 // verifyConfig は置き場 repo の実在と、機構が付ける label の実在を loud に検査する (何も書かない)。
-// gh の認証の失敗は config の綴りと取り違えないよう、そのまま返す。
+// config_error にするのは gh が「repo が見えない」「label が無い」と答えたときだけ。gh を起動できない・認証が通らない・
+// 読み切れないといった失敗は綴りを直しても直らないので、そのまま返して classifyGhError に写させる (system.md §8)。
 func verifyConfig(cfg config.Config, gh github.Runner) error {
-	repos := []string{cfg.IssueRepo}
+	repos := []github.Repo{cfg.IssueRepo}
 	if cfg.CLRepo != cfg.IssueRepo {
 		repos = append(repos, cfg.CLRepo)
 	}
 	for _, repo := range repos {
 		if err := github.RepoExists(gh, repo); err != nil {
-			if github.IsAuth(err) {
-				return err
+			if github.IsNotFound(err) {
+				return stopf(ResultConfigError, "%s: 置き場 repo %s が見えない (綴りか権限を確かめる) — %v", cfg.Path, repo, err)
 			}
-			return stopf(ResultConfigError, "%s: 置き場 repo %s を確認できない — %v", cfg.Path, repo, err)
+			return err
 		}
 	}
 	labels, err := github.Labels(gh, cfg.IssueRepo)
 	if err != nil {
-		if github.IsAuth(err) {
-			return err
-		}
-		return stopf(ResultConfigError, "%s: 置き場 %s の label を読めない — %v", cfg.Path, cfg.IssueRepo, err)
-	}
-	if len(labels) >= github.LabelListLimit {
-		return stopf(ResultConfigError, "%s: 置き場 %s の label が %d 件以上あり検査できない", cfg.Path, cfg.IssueRepo, github.LabelListLimit)
+		return err
 	}
 	required := []string{config.WIPLabel, config.HumanLabel}
 	if cfg.TriageLabel != "" {
@@ -313,14 +297,6 @@ func verifyConfig(cfg config.Config, gh github.Runner) error {
 	return nil
 }
 
-type spawned struct {
-	Issue     int    `json:"issue"`
-	Kind      string `json:"kind"`
-	PID       int    `json:"pid"`
-	Log       string `json:"log"`
-	SessionID string `json:"session_id"`
-}
-
 // driveOrchestrator は orchestrator を起動して待ち、決定ファイルの採否を log に写し、決定どおり worker を起動する。
 func (r *run) driveOrchestrator(obs observation, instructionFile string) error {
 	decisionsFile := r.project.DecisionsFile(r.stem)
@@ -331,8 +307,8 @@ func (r *run) driveOrchestrator(obs observation, instructionFile string) error {
 		InstructionFile: instructionFile,
 		DecisionsFile:   decisionsFile,
 		HandoffFile:     r.project.HandoffFilePattern(r.stem),
-		IssueRepo:       obs.config.IssueRepo,
-		CLRepo:          obs.config.CLRepo,
+		IssueRepo:       obs.config.IssueRepo.String(),
+		CLRepo:          obs.config.CLRepo.String(),
 		ReadyLabel:      obs.config.ReadyLabel,
 		TriageLabel:     obs.config.TriageLabel,
 		PrincipleIndex:  obs.install.PrincipleIndex(),
@@ -344,55 +320,55 @@ func (r *run) driveOrchestrator(obs observation, instructionFile string) error {
 	if err != nil {
 		return err
 	}
-	timeout := r.o.OrchestratorTimeout
-	if timeout == 0 {
-		timeout = OrchestratorTimeout
-	}
-	run, err := launcher.RunOrchestrator(prompt, r.project.OrchestratorLog(r.stem), timeout)
+	orchestratorLog := r.project.OrchestratorLog(r.stem)
+	run, err := launcher.RunOrchestrator(prompt, orchestratorLog, OrchestratorTimeout)
 	if err != nil {
 		return err
 	}
-	r.rec["orchestrator"] = map[string]any{
-		"exit_code": run.ExitCode, "seconds": float64(int(run.Seconds*10)) / 10, "timed_out": run.TimedOut, "session_id": run.SessionID,
-	}
-	launched := []spawned{}
-	r.rec["spawned"] = launched
+	r.line.launchedKeys = &launchedKeys{Orchestrator: newOrchestratorRecord(run), Spawned: []spawned{}}
 	if run.TimedOut || run.ExitCode != 0 {
 		// 途中で死んだ orchestrator の決定ファイルは信用しない (wip を付けた後に書き切れていない可能性)。
 		// 付いた wip は機械では剥がさない — stale wip として人が回収する
-		return fmt.Errorf("orchestrator が正常終了しなかった (exit %d, timed_out=%t)。決定ファイルは読まない", run.ExitCode, run.TimedOut)
+		return fmt.Errorf("orchestrator が正常終了しなかった (exit %d, timed_out=%t)。決定ファイルは読まない。"+
+			"経過は %s。この tick で wip を付けたまま残った issue があれば、人が確かめて剥がす", run.ExitCode, run.TimedOut, orchestratorLog)
 	}
 	decisions, err := ReadDecisions(decisionsFile, obs.instructions)
 	if err != nil {
 		return err
 	}
-	orchestratorLine := map[string]any{
-		"ts": r.rec["ts"], "project": r.o.Project, "actor": "orchestrator",
-		"instruction_file": instructionFile, "decisions": decisions.Raw,
-	}
-	if err := appendLine(r.project.LogFile(), orchestratorLine); err != nil {
+	if err := appendLine(r.project.LogFile(), orchestratorLine{
+		TS: r.line.TS, Project: r.o.Project, Actor: "orchestrator", InstructionFile: instructionFile, Decisions: decisions.Raw,
+	}); err != nil {
 		return fmt.Errorf("orchestrator の判断を log に写せない: %w", err)
 	}
 
 	// 網羅の欠けは error にするが、書かれた分の起動は先に行う — orchestrator が wip を付けた issue を起動せずに
 	// 残すと、次 tick では普通の wip に見えて誰も拾わない
 	gap := CoverageGap(decisions, obs.instructions)
-	if len(decisions.Spawn) > 0 {
-		if err := os.MkdirAll(filepath.Dir(r.project.WorkerLog(0, r.stem)), 0o755); err != nil {
-			return fmt.Errorf("worker log の置き場を作れない: %w", err)
-		}
+	if err := r.spawnWorkers(launcher, decisions.Spawn); err != nil {
+		return err
 	}
-	for _, s := range decisions.Spawn {
+	if gap != "" {
+		return errors.New(gap)
+	}
+	return nil
+}
+
+// spawnWorkers は決定どおり worker を起動し、起動できた分から tick 行の spawned に積む。
+func (r *run) spawnWorkers(launcher launch.Launcher, spawns []Spawn) error {
+	if len(spawns) == 0 {
+		return nil
+	}
+	if err := os.MkdirAll(r.project.WorkersDir(), 0o755); err != nil {
+		return fmt.Errorf("worker log の置き場を作れない: %w", err)
+	}
+	for _, s := range spawns {
 		logFile := r.project.WorkerLog(s.Issue, r.stem)
 		w, err := launcher.SpawnWorker(s.Prompt, logFile)
 		if err != nil {
 			return fmt.Errorf("issue %d の worker を起動できない: %w", s.Issue, err)
 		}
-		launched = append(launched, spawned{Issue: s.Issue, Kind: s.Kind, PID: w.PID, Log: logFile, SessionID: w.SessionID})
-		r.rec["spawned"] = launched
-	}
-	if gap != "" {
-		return errors.New(gap)
+		r.line.Spawned = append(r.line.Spawned, spawned{Issue: s.Issue, Kind: s.Kind, PID: w.PID, Log: logFile, SessionID: w.SessionID})
 	}
 	return nil
 }
@@ -414,46 +390,40 @@ func writeJSON(file string, v any) error {
 // 止めて、指示の種別と件数を stdout に 1 行で出す。state dir には何も書かない (system.md §9)。
 func DryRun(o Options) (exit int) {
 	r := newRun(o)
-	fail := func(result Result, msg string) int {
+	fail := func(err error) int {
+		result, msg := resultOf(err)
 		fmt.Fprintln(o.Stderr, cronLogLine(time.Now(), o.Project, "", result, msg))
 		return result.Exit
 	}
-	defer func() {
-		if v := recover(); v != nil {
-			fmt.Fprintf(o.Stderr, "panic: %v\n%s", v, debug.Stack())
-			exit = fail(ResultError, fmt.Sprintf("想定外の失敗で止まった: %v", v))
-		}
-	}()
-	if _, err := os.Stat(r.project.ConfigFile()); os.IsNotExist(err) {
-		return fail(ResultConfigError, "宣言 config が無い: "+r.project.ConfigFile())
+	defer onPanic(o.Stderr, func(err error) { exit = fail(err) })
+
+	if err := config.RequireFile(r.project.ConfigFile()); err != nil {
+		return fail(stopf(ResultConfigError, "%s", err.Error()))
 	}
-	// claude の起動経路を通らない分の代わりに、起動に要る依存が最終的な PATH で解決できるかを見る
+	// claude の起動経路を通らない分の代わりに、tick が起動する依存が最終的な PATH で解決できるかを見る
 	var unresolved []string
-	for _, name := range deps.Names {
-		if deps.LookPath(name, r.getenv("PATH")) == "" {
-			unresolved = append(unresolved, name)
+	for _, name := range deps.Invoked {
+		if _, err := deps.Lookup(name, o.Env); err != nil {
+			unresolved = append(unresolved, err.Error())
 		}
 	}
 	if len(unresolved) > 0 {
-		return fail(ResultError, fmt.Sprintf("%s が PATH に無い (PATH=%s)", strings.Join(unresolved, " / "), r.getenv("PATH")))
+		return fail(errors.New(strings.Join(unresolved, "\n")))
 	}
 	obs, err := r.observe(verifyConfig)
 	if err != nil {
-		var s *stop
-		result := ResultError
-		if errors.As(err, &s) {
-			result = s.result
-		}
-		return fail(result, err.Error())
+		return fail(err)
 	}
-	line, err := marshalLine(map[string]any{
-		"ts": r.rec["ts"], "project": o.Project, "dry_run": true, "result": ResultOK.Name,
-		"observed": obs.snapshot.Observed, "candidates": len(obs.snapshot.Issues.Candidates),
-		"wip": obs.snapshot.Limits.WIPCount, "instructions": Counts(obs.instructions),
+	line, err := marshalLine(dryRunLine{
+		TS: r.line.TS, Project: o.Project, DryRun: true, Result: ResultOK.Name,
+		Observed: obs.snapshot.Observed, Candidates: len(obs.snapshot.Issues.Candidates),
+		WIP: obs.snapshot.Limits.WIPCount, Instructions: Counts(obs.instructions),
 	})
 	if err != nil {
-		return fail(ResultError, err.Error())
+		return fail(err)
 	}
-	o.Stdout.Write(line)
+	if _, err := o.Stdout.Write(line); err != nil {
+		return fail(fmt.Errorf("stdout に書けない: %w", err))
+	}
 	return ResultOK.Exit
 }

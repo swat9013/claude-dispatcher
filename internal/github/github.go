@@ -10,6 +10,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/swat9013/claude-dispatcher/internal/proc"
 )
 
 // Runner は gh を 1 回撃ち、stdout を返す。失敗は *Error。
@@ -17,12 +19,14 @@ type Runner interface {
 	Run(args ...string) ([]byte, error)
 }
 
-// Error は gh の失敗 (観測不能)。Auth は認証が通らない失敗で、config の綴りの失敗と取り違えないために分ける。
+// Error は gh の失敗 (観測不能)。Auth は認証が通らない失敗、NotFound は repo が見えない失敗で、
+// どちらも他の失敗 (起動できない・timeout・network) と取り違えないために分ける (system.md §8)。
 type Error struct {
-	Args   []string
-	Exit   int
-	Stderr string
-	Auth   bool
+	Args     []string
+	Exit     int
+	Stderr   string
+	Auth     bool
+	NotFound bool
 }
 
 func (e *Error) Error() string {
@@ -36,10 +40,19 @@ func IsAuth(err error) bool {
 	return errors.As(err, &e) && e.Auth
 }
 
+// IsNotFound は err が「repo が見えない」(綴りの誤りか、権限が無い) という gh の答えかを返す。
+func IsNotFound(err error) bool {
+	var e *Error
+	return errors.As(err, &e) && e.NotFound
+}
+
 // 認証が要るときの gh の exit code と、未認証 / token 失効のときに stderr へ出る文言 (system.md §8)
 const authExit = 4
 
 var authMarkers = []string{"HTTP 401", "gh auth login"}
+
+// repo が見えないときに stderr へ出る文言 (GraphQL 経由の `repo view` と REST 経由の呼び出し)
+var notFoundMarkers = []string{"Could not resolve to a Repository", "HTTP 404"}
 
 // Exec は gh の実物を撃つ Runner。Path は解決済みの絶対 path、Env は子プロセスの env。
 type Exec struct {
@@ -51,54 +64,59 @@ type Exec struct {
 func (g Exec) Run(args ...string) ([]byte, error) {
 	cmd := exec.Command(g.Path, args...)
 	cmd.Env = g.Env
-	// timeout で止めるときに gh が起こした子 (credential helper 等) も道連れにする。子が pipe を握ったままでも
-	// Wait が戻るよう、pipe の読み切りを待つ上限も置く
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// process group の外へ逃げた孫が pipe を握ったままでも Wait が戻るよう、pipe の読み切りを待つ上限を置く
 	cmd.WaitDelay = 5 * time.Second
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Start(); err != nil {
 		return nil, &Error{Args: args, Exit: -1, Stderr: err.Error()}
 	}
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
-	select {
-	case err := <-done:
-		if err != nil {
-			exit := cmd.ProcessState.ExitCode()
-			text := stderr.String()
-			auth := exit == authExit
-			for _, marker := range authMarkers {
-				auth = auth || strings.Contains(text, marker)
-			}
-			return nil, &Error{Args: args, Exit: exit, Stderr: text, Auth: auth}
-		}
-		return stdout.Bytes(), nil
-	case <-time.After(g.Timeout):
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		<-done
+	timedOut, err := proc.Wait(cmd, g.Timeout)
+	if timedOut {
 		return nil, &Error{Args: args, Exit: -1, Stderr: fmt.Sprintf("%s を超えても終わらない", g.Timeout)}
 	}
+	if err != nil {
+		text := stderr.String()
+		return nil, &Error{
+			Args: args, Exit: cmd.ProcessState.ExitCode(), Stderr: text,
+			Auth:     cmd.ProcessState.ExitCode() == authExit || containsAny(text, authMarkers),
+			NotFound: containsAny(text, notFoundMarkers),
+		}
+	}
+	return stdout.Bytes(), nil
+}
+
+func containsAny(text string, markers []string) bool {
+	for _, m := range markers {
+		if strings.Contains(text, m) {
+			return true
+		}
+	}
+	return false
 }
 
 // RepoExists は repo が見えるかを確かめる。
-func RepoExists(gh Runner, repo string) error {
-	_, err := gh.Run("repo", "view", repo, "--json", "nameWithOwner")
+func RepoExists(gh Runner, repo Repo) error {
+	_, err := gh.Run("repo", "view", repo.String(), "--json", "nameWithOwner")
 	return err
 }
 
-// LabelListLimit は 1 往復で読む label の上限。上限に達したら検査できないとして落とす
+// LabelListLimit は 1 往復で読む label の上限
 const LabelListLimit = 500
 
-// Labels は repo の label 名を返す。
-func Labels(gh Runner, repo string) ([]string, error) {
-	out, err := gh.Run("label", "list", "-R", repo, "--json", "name", "--limit", fmt.Sprint(LabelListLimit))
+// Labels は repo の label 名を全件返す。
+func Labels(gh Runner, repo Repo) ([]string, error) {
+	out, err := gh.Run("label", "list", "-R", repo.String(), "--json", "name", "--limit", fmt.Sprint(LabelListLimit))
 	if err != nil {
 		return nil, err
 	}
 	var labels []struct{ Name string }
 	if err := json.Unmarshal(out, &labels); err != nil {
 		return nil, fmt.Errorf("gh label list の出力を読めない: %w", err)
+	}
+	if len(labels) >= LabelListLimit {
+		return nil, fmt.Errorf("%w: label が %d 件以上ある (%s)", ErrTruncated, LabelListLimit, repo)
 	}
 	names := make([]string, 0, len(labels))
 	for _, l := range labels {
@@ -123,8 +141,8 @@ type Issue struct {
 }
 
 // OpenIssues は repo の open issue を全件返す。
-func OpenIssues(gh Runner, repo string) ([]Issue, error) {
-	out, err := gh.Run("issue", "list", "-R", repo, "--state", "open",
+func OpenIssues(gh Runner, repo Repo) ([]Issue, error) {
+	out, err := gh.Run("issue", "list", "-R", repo.String(), "--state", "open",
 		"--limit", fmt.Sprint(IssueListLimit), "--json", "number,title,labels,url,body")
 	if err != nil {
 		return nil, err
@@ -198,10 +216,9 @@ type PR struct {
 }
 
 // OpenPRs は repo の open PR を全件返す。closing reference は issueRepo を指すものだけを数える。
-func OpenPRs(gh Runner, repo, issueRepo string) ([]PR, error) {
-	owner, name, _ := strings.Cut(repo, "/")
+func OpenPRs(gh Runner, repo, issueRepo Repo) ([]PR, error) {
 	// -f は生文字列。-F だと数字だけの owner / name が Int に型付けされ String! 変数に入らない
-	out, err := gh.Run("api", "graphql", "-f", "query="+prQuery, "-f", "owner="+owner, "-f", "name="+name)
+	out, err := gh.Run("api", "graphql", "-f", "query="+prQuery, "-f", "owner="+repo.Owner, "-f", "name="+repo.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -257,7 +274,7 @@ func OpenPRs(gh Runner, repo, issueRepo string) ([]PR, error) {
 		}
 		pr := PR{Number: n.Number, URL: n.URL, Head: n.HeadRefName, Base: n.BaseRefName, Draft: n.IsDraft, Mergeable: n.Mergeable, Closes: []int{}}
 		for _, ref := range n.ClosingIssuesReferences.Nodes {
-			if ref.Repository.NameWithOwner == issueRepo {
+			if ref.Repository.NameWithOwner == issueRepo.String() {
 				pr.Closes = append(pr.Closes, ref.Number)
 			}
 		}

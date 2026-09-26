@@ -14,6 +14,8 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+
+	"github.com/swat9013/claude-dispatcher/internal/github"
 )
 
 // 機構が付ける label。着手可 label と triage label だけが config で綴りを変えられる
@@ -24,14 +26,6 @@ const (
 
 // SupportedTrackers は観測を実装済みの tracker。他は名指しで落とす (silent に空を観測しない)
 var SupportedTrackers = []string{"gh"}
-
-// schema は許す table と key。未知の綴りは名指しで落とす (「宣言していない」と同じ挙動にしない)
-var schema = map[string][]string{
-	"issue":  {"repo", "ready_label", "triage_label", "tracker"},
-	"cl":     {"repo"},
-	"limits": {"max_wip"},
-	"auth":   {"token_file", "claude_token_file"},
-}
 
 // Error は config 起因の失敗。観測を開始しない。
 type Error struct{ msg string }
@@ -50,120 +44,105 @@ func IsError(err error) bool {
 type Config struct {
 	Path        string
 	Tracker     string
-	IssueRepo   string
+	IssueRepo   github.Repo
 	ReadyLabel  string
-	TriageLabel string // 空なら残タスクの起票に label を付けない
-	CLRepo      string // [cl] を省くと IssueRepo
+	TriageLabel string      // 空なら残タスクの起票に label を付けない
+	CLRepo      github.Repo // [cl] を省くと IssueRepo
 	MaxWIP      int
 	// TokenFile / ClaudeTokenFile は `~` を展開した絶対 path。空なら書かれていない
 	TokenFile       string
 	ClaudeTokenFile string
 }
 
+// document は config.toml の綴り (formats.md §2)。値は書かれたかどうかを区別するため pointer で受ける。
+// ここに無い table / key は未知の綴りとして名指しで落とす (「宣言していない」と同じ挙動にしない)。
+type document struct {
+	Issue struct {
+		Repo        *string `toml:"repo"`
+		ReadyLabel  *string `toml:"ready_label"`
+		TriageLabel *string `toml:"triage_label"`
+		Tracker     *string `toml:"tracker"`
+	} `toml:"issue"`
+	CL struct {
+		Repo *string `toml:"repo"`
+	} `toml:"cl"`
+	Limits struct {
+		MaxWIP *int64 `toml:"max_wip"`
+	} `toml:"limits"`
+	Auth struct {
+		TokenFile       *string `toml:"token_file"`
+		ClaudeTokenFile *string `toml:"claude_token_file"`
+	} `toml:"auth"`
+}
+
+// RequireFile は宣言 config の file が在ることを確かめる。無ければ config 起因の失敗。
+func RequireFile(path string) error {
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return errorf("宣言 config が無い: %s", path)
+	}
+	return nil
+}
+
 // Load は path の config を読んで検査する。home は token file の `~` の展開先。
 func Load(path, home string) (Config, error) {
-	raw, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return Config{}, errorf("宣言 config が無い: %s", path)
+	if err := RequireFile(path); err != nil {
+		return Config{}, err
 	}
+	raw, err := os.ReadFile(path)
 	if err != nil {
 		return Config{}, errorf("宣言 config を読めない: %s (%v)", path, err)
 	}
-	var doc map[string]any
-	if _, err := toml.Decode(string(raw), &doc); err != nil {
-		return Config{}, errorf("%s: TOML として読めない: %v", path, err)
+	var doc document
+	md, err := toml.Decode(string(raw), &doc)
+	if err != nil {
+		return Config{}, errorf("%s: TOML として読めないか、値の型が違う: %v", path, err)
 	}
-	if err := checkSchema(path, doc); err != nil {
-		return Config{}, err
+	if unknown := md.Undecoded(); len(unknown) > 0 {
+		names := make([]string, 0, len(unknown))
+		for _, key := range unknown {
+			names = append(names, key.String())
+		}
+		return Config{}, errorf("%s: 未知の綴り %s (許すのは [issue] repo / ready_label / triage_label / tracker, [cl] repo, [limits] max_wip, [auth] token_file / claude_token_file)",
+			path, strings.Join(names, ", "))
 	}
 
-	issue, _ := doc["issue"].(map[string]any)
 	c := Config{Path: path, Tracker: "gh"}
 	var errs []string
-	requireString := func(table map[string]any, name, key string, dst *string) {
-		v, ok := table[key]
-		if !ok {
-			errs = append(errs, fmt.Sprintf("[%s].%s は必須", name, key))
-			return
-		}
-		s, ok := v.(string)
-		if !ok || s == "" {
-			errs = append(errs, fmt.Sprintf("[%s].%s は非空の文字列", name, key))
-			return
-		}
-		*dst = s
-	}
-	optionalString := func(table map[string]any, name, key string, dst *string) {
-		v, ok := table[key]
-		if !ok {
-			return
-		}
-		s, ok := v.(string)
-		if !ok || s == "" {
-			errs = append(errs, fmt.Sprintf("[%s].%s は非空の文字列", name, key))
-			return
-		}
-		*dst = s
-	}
-
-	if issue == nil {
-		errs = append(errs, "[issue] は必須 (repo と ready_label を書く)")
-		issue = map[string]any{}
-	}
-	requireString(issue, "issue", "repo", &c.IssueRepo)
-	requireString(issue, "issue", "ready_label", &c.ReadyLabel)
-	optionalString(issue, "issue", "triage_label", &c.TriageLabel)
-	optionalString(issue, "issue", "tracker", &c.Tracker)
-
-	c.CLRepo = c.IssueRepo
-	if cl, ok := doc["cl"].(map[string]any); ok {
-		if _, has := cl["repo"]; !has {
-			errs = append(errs, "[cl] を書くなら [cl].repo は必須 (空の [cl] は「同じ」ではなく誤り)")
-		} else {
-			requireString(cl, "cl", "repo", &c.CLRepo)
+	str := func(name string, v *string, required bool, dst *string) {
+		switch {
+		case v == nil && required:
+			errs = append(errs, name+" は必須")
+		case v != nil && *v == "":
+			errs = append(errs, name+" は非空の文字列")
+		case v != nil:
+			*dst = *v
 		}
 	}
-
-	limits, _ := doc["limits"].(map[string]any)
-	switch v := limits["max_wip"].(type) {
-	case int64:
-		if v < 1 {
-			errs = append(errs, "[limits].max_wip は 1 以上の整数")
-		}
-		c.MaxWIP = int(v)
-	case nil:
+	var issueRepo, clRepo, tokenFile, claudeTokenFile string
+	str("[issue].repo", doc.Issue.Repo, true, &issueRepo)
+	str("[issue].ready_label", doc.Issue.ReadyLabel, true, &c.ReadyLabel)
+	str("[issue].triage_label", doc.Issue.TriageLabel, false, &c.TriageLabel)
+	str("[issue].tracker", doc.Issue.Tracker, false, &c.Tracker)
+	// 空の [cl] / [auth] は「省いた」ではなく書きかけの誤り
+	str("[cl].repo", doc.CL.Repo, md.IsDefined("cl"), &clRepo)
+	if md.IsDefined("auth") && doc.Auth.TokenFile == nil && doc.Auth.ClaudeTokenFile == nil {
+		errs = append(errs, "[auth] を書くなら token_file か claude_token_file の少なくとも 1 つは必須")
+	}
+	str("[auth].token_file", doc.Auth.TokenFile, false, &tokenFile)
+	str("[auth].claude_token_file", doc.Auth.ClaudeTokenFile, false, &claudeTokenFile)
+	switch {
+	case doc.Limits.MaxWIP == nil:
 		errs = append(errs, "[limits].max_wip は必須 (1 以上の整数)")
+	case *doc.Limits.MaxWIP < 1:
+		errs = append(errs, "[limits].max_wip は 1 以上の整数")
 	default:
-		errs = append(errs, fmt.Sprintf("[limits].max_wip は 1 以上の整数 (%T が書かれている)", v))
+		c.MaxWIP = int(*doc.Limits.MaxWIP)
 	}
-
-	if auth, ok := doc["auth"].(map[string]any); ok {
-		if len(auth) == 0 {
-			errs = append(errs, "[auth] を書くなら token_file か claude_token_file の少なくとも 1 つは必須")
-		}
-		for key, dst := range map[string]*string{"token_file": &c.TokenFile, "claude_token_file": &c.ClaudeTokenFile} {
-			if _, has := auth[key]; !has {
-				continue
-			}
-			var raw string
-			optionalString(auth, "auth", key, &raw)
-			if raw == "" {
-				continue
-			}
-			file, ok := expandHome(raw, home)
-			if !ok {
-				// 相対 path は cwd (cron の cd 先) で指す先が変わる
-				errs = append(errs, fmt.Sprintf("[auth].%s は絶対 path か ~ 始まり: %s", key, raw))
-				continue
-			}
-			*dst = file
-		}
-	}
-
 	if len(errs) > 0 {
 		sort.Strings(errs)
 		return Config{}, errorf("%s: %s", path, strings.Join(errs, " / "))
 	}
+
 	if !slices.Contains(SupportedTrackers, c.Tracker) {
 		return Config{}, errorf("%s: [issue].tracker %q は未対応 (対応: %s)", path, c.Tracker, strings.Join(SupportedTrackers, ", "))
 	}
@@ -171,46 +150,30 @@ func Load(path, home string) (Config, error) {
 		// 同じだと worker の起票が次 tick の候補になり、dispatcher が自分の作業を自己増殖させる
 		return Config{}, errorf("%s: [issue].triage_label が ready_label と同じ綴り %q", path, c.ReadyLabel)
 	}
-	for _, repo := range []string{c.IssueRepo, c.CLRepo} {
-		parts := strings.Split(repo, "/")
-		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-			return Config{}, errorf("%s: repo %q は owner/name の形でなければならない", path, repo)
+	if c.IssueRepo, err = github.ParseRepo(issueRepo); err != nil {
+		return Config{}, errorf("%s: [issue].%v", path, err)
+	}
+	c.CLRepo = c.IssueRepo
+	if clRepo != "" {
+		if c.CLRepo, err = github.ParseRepo(clRepo); err != nil {
+			return Config{}, errorf("%s: [cl].%v", path, err)
 		}
+	}
+	for key, file := range map[string]struct {
+		raw string
+		dst *string
+	}{"token_file": {tokenFile, &c.TokenFile}, "claude_token_file": {claudeTokenFile, &c.ClaudeTokenFile}} {
+		if file.raw == "" {
+			continue
+		}
+		abs, ok := expandHome(file.raw, home)
+		if !ok {
+			// 相対 path は cwd (cron の cd 先) で指す先が変わる
+			return Config{}, errorf("%s: [auth].%s は絶対 path か ~ 始まり: %s", path, key, file.raw)
+		}
+		*file.dst = abs
 	}
 	return c, nil
-}
-
-func checkSchema(path string, doc map[string]any) error {
-	for table, value := range doc {
-		allowed, known := schema[table]
-		if !known {
-			return errorf("%s: 未知の table [%s] (許すのは %s)", path, table, tableNames())
-		}
-		keys, ok := value.(map[string]any)
-		if !ok {
-			return errorf("%s: [%s] は table でなければならない", path, table)
-		}
-		var unknown []string
-		for key := range keys {
-			if !slices.Contains(allowed, key) {
-				unknown = append(unknown, key)
-			}
-		}
-		if len(unknown) > 0 {
-			sort.Strings(unknown)
-			return errorf("%s: [%s] に未知の key %s (許すのは %s)", path, table, strings.Join(unknown, ", "), strings.Join(allowed, ", "))
-		}
-	}
-	return nil
-}
-
-func tableNames() string {
-	names := make([]string, 0, len(schema))
-	for name := range schema {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return strings.Join(names, ", ")
 }
 
 func expandHome(raw, home string) (string, bool) {
