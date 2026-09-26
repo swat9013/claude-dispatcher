@@ -18,6 +18,7 @@
 - commit 時: `pre-commit install` 済みなら、gitleaks が staged の内容を自動で検査し、秘匿情報を検出すると commit を止める (検査対象は staged だけなので、手で走らせるなら stage した後に `pre-commit run`)
 - push 前: `go vet ./...` と `go test ./...` が通ること。`pre-commit install` 済みなら push 時に hook が走り、落ちると push を止める
   - `test/blackbox` は binary を build して外から撃つ black-box テスト (外から観測できる契約の検査。正本は [docs/design/formats.md](docs/design/formats.md))。外部 CLI (gh / claude) は stub に差し替えるので、network も認証も要らない
+- release: tag (`v*`) は main の commit に打つ。push すると [.github/workflows/release.yml](.github/workflows/release.yml) が、tag の commit が main に在ることと `go vet` を確かめてから GoReleaser で GitHub Releases に binary を出す ([.goreleaser.yaml](.goreleaser.yaml))。テストは release では走らせず、上の push 前の gate が担う (Linux の runner で通すまで。#18)
 
 ## commit・PR 規約
 
