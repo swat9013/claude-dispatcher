@@ -149,7 +149,7 @@ CLI が導出する指示は 3 種。**カタログに無い事象は指示に�
 - **依存 CLI (gh / claude / git) の path は CLI が自分で解決する** — cron の最小環境では PATH が通らない。よく使われる置き場 (`~/.local/bin`・mise の shims・Homebrew の prefix 等) を探す
 - **crontab の出力先 `cron.log` が、CLI 自身が起動できなかった失敗の唯一の観測点**。CLI が出す行は、log.jsonl の行を指す前置を付けた 1 行 (想定外の失敗で止まった tick も log.jsonl に行を残し、cron.log の行が指す先を失敗の種類で変えない)。前置は crontab の行ではなく CLI が持つ (利用者に crontab の書式を増やさせない)。CLI の手前の失敗 (shell が出す行) だけは前置できない。state dir ごと無いと cron.log も書けないので、`setup` が dir を先に作る
 - **死活は 2 段で読む**: log.jsonl 最終行の `ts` が周期の 2 倍より古ければ tick が走っていない。そのとき cron.log の更新時刻が log.jsonl 最終行より新しければ CLI の手前の問題 (末尾に起動失敗)、cron.log も古ければ cron 自体 (crontab が無い / マシンがスリープ) の問題。cron.log には失敗 tick の出力も溜まるので中身の有無では判定しない
-- `flock` で単一実行を保証する (前 tick の orchestrator が長引いても tick は重ねない)
+- `flock` で単一実行を保証する (前 tick の orchestrator が長引いても tick は重ねない)。lock は tick 行を log.jsonl に書き終えるまで持つ — 先に外すと、次の tick の行が前の tick の行より先に書かれうる
 - **`tick --dry-run` は副作用の無い試運転** — config の検査 (検査済み hash を読まず毎回全部。書きもしない) → 観測 → 指示の導出までを通し、claude を起動する直前で止めて、指示の種別と件数を stdout に 1 行で出す。**state dir に何も書かない**ので、実 config のまま撃ってよく、走っている cron の tick とも衝突しない。claude と gh が最終的な PATH で解決できることも検査する
 - **`tick --dry-run --cron-env` は CLI が自分を最小環境で撃ち直す** — `HOME` と `PATH=/usr/bin:/bin` だけを残した環境で起動し直すので、PATH の自己解決と、親 shell の環境変数 (`GH_TOKEN` 等) に頼った認証の両方を cron と同じ条件で落とせる。撃ち直しを CLI が持つのは、Claude Code の sandbox の除外指定が Bash 呼び出しの先頭 token だけで照合されるため — 呼び出し側が `env -i …` を前置すると CLI が sandbox 内に落ち、gh が credential を読めない偽の失敗になる。**cron を完全には再現しない**: keyring は環境変数でなくログイン session に従うので、対話 session から撃つと cron では読めない keyring を読めてしまう。keyring 保存の認証は登録後の死活 (log.jsonl 最終行の `ts`) でしか確かめられない
 - crontab の登録は `setup` が cron 相当の試運転が通った後、導入者の承認を得て代行する (既存の tick 行は差分提示にとどめ、黙って置き換えない)

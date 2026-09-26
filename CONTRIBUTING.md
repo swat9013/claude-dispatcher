@@ -5,7 +5,7 @@
 ## セットアップ
 
 - 前提ツールは [README の「前提」](README.md#前提) のとおり (Claude Code / plugin `swat-skills@swat9013` / `gh`)
-- 加えて `pre-commit` を入れ、clone ごとに 1 回 `pre-commit install` を撃つ。gitleaks は pre-commit が hook 環境として build するので別途の導入は要らない (初回の build に network が要る)
+- 加えて `pre-commit` を入れ、clone ごとに 1 回 `pre-commit install` を撃つ (commit 時と push 前の hook が両方入る)。gitleaks は pre-commit が hook 環境として build するので別途の導入は要らない (初回の build に network が要る)
 
 ## branch・worktree 運用
 
@@ -16,7 +16,7 @@
 ## gate (品質チェック)
 
 - commit 時: `pre-commit install` 済みなら、gitleaks が staged の内容を自動で検査し、秘匿情報を検出すると commit を止める (検査対象は staged だけなので、手で走らせるなら stage した後に `pre-commit run`)
-- push 前: `go vet ./...` と `go test ./...` が通ること
+- push 前: `go vet ./...` と `go test ./...` が通ること。`pre-commit install` 済みなら push 時に hook が走り、落ちると push を止める
   - `test/blackbox` は binary を build して外から撃つ black-box テスト (外から観測できる契約の検査。正本は [docs/design/formats.md](docs/design/formats.md))。外部 CLI (gh / claude) は stub に差し替えるので、network も認証も要らない
 
 ## commit・PR 規約
