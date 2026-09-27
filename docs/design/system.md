@@ -200,7 +200,7 @@ spawn prompt の文面は同梱の契約 file が正本。本節は構造の決�
 
 - **merge 後の deploy** — merge 自体が人間ゲートのため範囲外
 - **triage** — 着手可の付与・`ready-for-human` の解消・stale wip の回収は人間の領分
-- **着手可 issue の本文の規範レビュー** — 着手可 label を付ける経路 (triage) の責務。orchestrator の `start` の採否では掛けない。本文の信頼の根拠は着手可 label を付けた人の triage が持つ (§10)。加えて、`start` から人待ちへ倒す `action` が無く (formats.md §5.2)、候補ごとのレビューは orchestrator の上限時間 (§9) に収まる保証が無い (理由の記録: #29)
+- **着手可 issue の本文の規範整合性レビュー** (plugin `swat-skills` の `ready-for-agent-review`) — 着手可 label を付ける経路 (triage) の責務で、orchestrator の `start` の採否では掛けない (理由: #29)。採否で orchestrator が見る「本文が自己完結しているか」(契約 file) はこれに含まない
 - **stale wip の自動解消 / orchestrator の常駐運用** — 拡張候補として認知だけしておく
 - **loop の監督** (boot 時の起動・落ちた loop の起こし直し) — 人が同じコマンドで撃ち直す (ADR 0006)
 - **gh 以外の tracker / CL host** (GitLab / Jira) — 拡張候補。置き場の宣言は tracker 種別と識別子の組で持つので、CLI の観測は置き場の部品に adapter を足し (§13、ADR 0008)、LLM の gh 操作は契約 file と playbook に種別ごとに足す形で広げられる。issue の同一性 (今は番号) を key に広げるときは、公開形式 (formats.md) を合わせて直す
