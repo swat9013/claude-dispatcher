@@ -232,6 +232,46 @@ func TestOneInvalidSpawnKeepsTheValidOnesFromLaunching(t *testing.T) {
 	s.assertRejectedBeforeLaunch(r)
 }
 
+func TestStartSpawnsBeyondFreeSlotsRejectTheWholeDecisionsFile(t *testing.T) {
+	s := newSandbox(t)
+	// max_wip 2・wip 0 なので free_slots は 2。3 件に start を書く
+	s.setIssues(readyIssue(42), readyIssue(43), readyIssue(44))
+	s.orchestratorWrites(startDecisions(playbookPath(s.defaultInstallPath(), "playbook-implementation"), 42, 43, 44))
+
+	r := s.tick()
+
+	s.assertRejectedBeforeLaunch(r)
+}
+
+func TestTwoSpawnsForOneIssueRejectTheWholeDecisionsFile(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(s *sandbox) decisions
+	}{
+		{"start", func(s *sandbox) decisions {
+			s.setIssues(readyIssue(42))
+			d := startDecisions(playbookPath(s.defaultInstallPath(), "playbook-implementation"), 42)
+			d.Spawn = append(d.Spawn, d.Spawn[0])
+			return d
+		}},
+		{"reenter", func(s *sandbox) decisions {
+			conflict, review := reenterScenario(s)
+			d := reenterDecisions(39, conflict, review)
+			d.Spawn = append(d.Spawn, d.Spawn[0])
+			return d
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newSandbox(t)
+			s.orchestratorWrites(tc.setup(s))
+
+			r := s.tick()
+
+			s.assertRejectedBeforeLaunch(r)
+		})
+	}
+}
+
 // --- reenter の spawn ---
 
 // reenterScenario は issue 39 の CL に conflict と review を立て、reenter 指示を出させる。

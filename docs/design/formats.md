@@ -182,6 +182,8 @@ CLI は orchestrator の正常終了後に次を検査する (timeout / 異常�
 |---|---|
 | file があり JSON として読める (spawn 0 件でも file は要る) | 1 件も起動せず `error` |
 | `action` と `spawn[].kind` が上の語彙に入り、`spawn[].kind` が同じ issue の `action` と一致する | 1 件も起動せず `error` |
+| `spawn[].issue` が重複しない (同じ issue の worker は worker log の path と作業ツリーの branch を取り合う) | 1 件も起動せず `error` |
+| `kind: start` の spawn が start 指示の `free_slots` 件以下 (並列上限 N を起動前に守る) | 1 件も起動せず `error` |
 | `spawn[].prompt` に未展開の変数 (`${`) が残っていない | 1 件も起動せず `error` |
 | `spawn[].playbooks` (prompt に載せた playbook の絶対 path の列) の各 path が prompt 本文に含まれ、file として実在する。`start` は指示の選定母集合の 1 本、`reenter` は指示の条件の playbook を条件順に並べた列の部分列 (読み直しで外れた条件は落としてよい) | 1 件も起動せず `error` |
 | 網羅: 上の表の issue 1 件ごとに採否がある | 書かれた `spawn` を起動してから `error` |

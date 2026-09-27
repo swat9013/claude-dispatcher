@@ -87,7 +87,17 @@ func validate(d Decisions, instructions []Instruction) error {
 		actionOf[entry.Issue] = entry.Action
 	}
 
+	spawned := map[int]bool{}
+	starts := 0
 	for _, s := range d.Spawn {
+		if spawned[s.Issue] {
+			// worker log (workers/<issue>-<stem>.log) と worktree-issue-<N> を 2 つの worker が取り合う
+			return fmt.Errorf("spawn に issue %d が 2 件ある", s.Issue)
+		}
+		spawned[s.Issue] = true
+		if s.Kind == ActionStart {
+			starts++
+		}
 		if s.Kind != ActionStart && s.Kind != ActionReenter {
 			return fmt.Errorf("spawn (issue %d) の kind %q は start / reenter のいずれかでない", s.Issue, s.Kind)
 		}
@@ -109,6 +119,13 @@ func validate(d Decisions, instructions []Instruction) error {
 		}
 		if err := allowing(s.Issue, s.Kind).checkSpawnPlaybooks(s.Playbooks); err != nil {
 			return fmt.Errorf("spawn (issue %d): %w", s.Issue, err)
+		}
+	}
+	// start の spawn は上のループで start 指示に許されたものだけなので、start 指示があるときだけ数えれば足りる
+	for _, i := range instructions {
+		if start, ok := i.(StartInstruction); ok && starts > start.FreeSlots {
+			// 並列上限 N を orchestrator の判断だけに任せない (起動した後の wip_over_limit では遅い)
+			return fmt.Errorf("start の spawn が %d 件あり、指示の free_slots (%d) を超える", starts, start.FreeSlots)
 		}
 	}
 	return nil
