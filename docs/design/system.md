@@ -189,7 +189,7 @@ spawn prompt の文面は同梱の契約 file が正本。本節は構造の決�
 - **orchestrator の契約 file は binary に埋め込む**。契約と `tick` の版が必ず一致する
 - **playbook・原則索引・two-axis-review は plugin `swat-skills` (marketplace `swat9013`) に実行時に依存する**。CLI は Claude Code の `~/.claude/plugins/installed_plugins.json` から plugin 名 `swat-skills` の `installPath` を引き、次の絶対 path を解決して LLM に渡す (plugin 内の配置に依存する interface)
   - playbook: `<installPath>/skills/procedure/playbook-*/SKILL.md`
-  - 原則索引: `<installPath>/skills/knowledge/principle-index/SKILL.md`。**orchestrator を起動する tick (指示が 1 件以上残った tick) で file が無ければ、tick を error にする** (`result: error`、「指示を導出できなかった」。formats.md §3)。無いまま起動すると、worker は原則を 1 つも受け取らずに黙って走る。静止した tick は plugin を読まないので確かめない
+  - 原則索引: `<installPath>/skills/knowledge/principle-index/SKILL.md`。**orchestrator を起動する tick (指示が 1 件以上残った tick) で file が無ければ、tick を error にする** (`result: error`、「指示を導出できなかった」。formats.md §3)。無いまま起動すると、worker は原則を 1 つも受け取らずに黙って走る。orchestrator を起動しない tick (静止した tick と、空の母集合で `start` を落として指示が残らなかった tick) は索引を prompt に載せないので確かめない
   - scope の選択順: `projectPath` が cwd と一致する project scope の entry → user scope の entry → どちらも無ければ `~/.claude/skills/swat-skills` (Claude Code が in-place で読む skills ディレクトリ)
   - 別 marketplace 由来の `swat-skills` entry が複数あれば、どれを使うか決められないので loud に止める
   - 版の照合・互換検査はしない。常に install 済みの版を使う

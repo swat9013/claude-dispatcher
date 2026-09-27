@@ -144,7 +144,7 @@ func TestUnreadableFrontmatterStopsTheTickNamingThePlaybook(t *testing.T) {
 	s.assertErrorNames(s.assertOutcome(r, outcomeError), filepath.Join(broken, "SKILL.md"))
 }
 
-func TestMissingPrincipleIndexStopsTheTickWithoutLaunchingTheOrchestrator(t *testing.T) {
+func TestUnusablePrincipleIndexStopsTheTickWithoutLaunchingTheOrchestrator(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		breakIndex func(t *testing.T, index string)
@@ -170,20 +170,32 @@ func TestMissingPrincipleIndexStopsTheTickWithoutLaunchingTheOrchestrator(t *tes
 			r := s.tick()
 
 			s.assertErrorNames(s.assertOutcome(r, outcomeError), index)
-			s.assertNoClaude("原則索引が無いのに")
+			s.assertNoClaude("原則索引が " + tc.name + "のに")
 		})
 	}
 }
 
-// unmarkStartPlaybooks は install の playbook 全部から選定母集合の印 (metadata.deliverable: cl) を外し、母集合を空にする。
+// unmarkStartPlaybooks は選定母集合の印 (metadata.deliverable: cl) を持つ playbook を、印の無い SKILL.md に書き換えて母集合を空にする。
 func (s *sandbox) unmarkStartPlaybooks() {
 	s.t.Helper()
-	dirs, err := filepath.Glob(filepath.Join(s.defaultInstallPath(), "skills", "procedure", "playbook-*"))
-	if err != nil || len(dirs) == 0 {
-		s.t.Fatalf("playbook が見つからない: %v", err)
+	files, err := filepath.Glob(filepath.Join(s.defaultInstallPath(), "skills", "procedure", "playbook-*", "SKILL.md"))
+	if err != nil {
+		s.t.Fatal(err)
 	}
-	for _, dir := range dirs {
-		writeSkill(s.t, dir, "name: "+filepath.Base(dir)+"\n")
+	unmarked := 0
+	for _, file := range files {
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			s.t.Fatal(err)
+		}
+		if strings.Contains(string(raw), "deliverable: cl") {
+			dir := filepath.Dir(file)
+			writeSkill(s.t, dir, "name: "+filepath.Base(dir)+"\n")
+			unmarked++
+		}
+	}
+	if unmarked == 0 {
+		s.t.Fatal("印の付いた playbook が無い")
 	}
 }
 
@@ -215,6 +227,21 @@ func TestEmptyStartSetWithOnlyCandidatesLaunchesNoOrchestrator(t *testing.T) {
 	s.assertOutcome(r, outcomeOK)
 	s.assertNoInstructionFile("選定母集合が空で start しか無いのに")
 	s.assertNoClaude("選定母集合が空で start しか無いのに")
+}
+
+func TestTickThatLaunchesNoOrchestratorDoesNotRequireThePrincipleIndex(t *testing.T) {
+	s := newSandbox(t)
+	if err := os.Remove(principleIndexPath(s.defaultInstallPath())); err != nil {
+		t.Fatal(err)
+	}
+	// 母集合が空なので start が落ち、指示が残らない
+	s.unmarkStartPlaybooks()
+	s.setIssues(readyIssue(42))
+
+	r := s.tick()
+
+	s.assertOutcome(r, outcomeOK)
+	s.assertNoClaude("orchestrator を起動しない tick なのに")
 }
 
 func TestOrchestratorPromptCarriesTheResolvedPrincipleIndexPath(t *testing.T) {
