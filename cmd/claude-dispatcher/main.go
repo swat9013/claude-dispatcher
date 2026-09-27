@@ -66,7 +66,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 0
 	case "--version":
 		// config も state dir も読まない。不具合の報告に版を貼れるよう、導入が壊れていても撃てる
-		fmt.Fprintf(stdout, "claude-dispatcher %s\n", version.Read())
+		fmt.Fprintf(stdout, "claude-dispatcher %s\n", version.Line())
 		return 0
 	}
 	return usageError(stderr, "未知の subcommand: %s", args[0])

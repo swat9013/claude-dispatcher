@@ -66,7 +66,7 @@ func (r *report) line(mark, item, format string, args ...any) {
 func Run(o Options) int {
 	r := &report{out: o.Stdout}
 	// 導入検査の結果と一緒に版を貼れるように先頭に置く (情報。判定しない)
-	r.line(markInfo, "版", "%s", version.Read())
+	r.line(markInfo, "版", "%s", version.Line())
 	cfg, cfgErr := config.Load(o.Project.ConfigFile(), o.Home)
 	if cfgErr != nil {
 		r.line(markNG, "config", "%v", cfgErr)

@@ -9,8 +9,8 @@ var (
 	commit  string
 )
 
-// Read は `--version` と doctor の版の行に出す綴り (`<版> (<commit>)`) を返す。
-func Read() string {
+// Line は `--version` と doctor の版の行に出す 1 行 (`<版> (<commit>)`) を返す。
+func Line() string {
 	built, _ := debug.ReadBuildInfo()
 	return describe(version, commit, built)
 }
