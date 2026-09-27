@@ -98,6 +98,23 @@ func TestCollectObservesTheMachineOnceForEveryProject(t *testing.T) {
 	}
 }
 
+func TestCollectMeasuresElapsedFromATimeTakenAfterObservingTheMachine(t *testing.T) {
+	machine := quietMachine()
+	observedAt := time.Date(2026, 9, 26, 3, 0, 0, 0, time.UTC)
+	clock := func() time.Time {
+		if machine.observed == 0 {
+			return observedAt.Add(-time.Hour) // 観測より前に取った時刻
+		}
+		return observedAt
+	}
+
+	r := Collect([]paths.Project{projectWithSpawn(t, "acme")}, t.TempDir(), probesWith(machine, answers(4242)), clock)[0]
+
+	if got, want := r.Workers[0].Elapsed, observedAt.Sub(time.Date(2026, 9, 26, 2, 48, 0, 0, time.UTC)); got != want {
+		t.Fatalf("elapsed = %v, want 観測の後の時刻から測った %v", got, want)
+	}
+}
+
 func TestCollectNotesFirstThatTheProcessListCannotBeRead(t *testing.T) {
 	machine := &fakeMachine{machine: launch.Machine{ProcessesErr: errors.New("ps failed"), Agents: "[]"}}
 
@@ -153,6 +170,18 @@ func TestReportNoteLinesMarkEachNote(t *testing.T) {
 func TestReportTableLinesAreEmptyWithoutWorkers(t *testing.T) {
 	if got := (Report{}).TableLines(); len(got) != 0 {
 		t.Fatalf("table lines = %q, want 載せる worker が居なければ表を出さない", got)
+	}
+}
+
+func TestRenderTablePutsHeadingNotesTableInOrderAndABlankLineBetweenProjects(t *testing.T) {
+	noted := Report{Project: "acme", Notes: []string{"wip を読めない"}}
+	quiet := Report{Project: "beta"}
+
+	got := RenderTable([]Report{noted, quiet})
+
+	want := "acme  tick ?  最終 tick ?\n  ! wip を読めない\n\nbeta  tick ?  最終 tick ?"
+	if got != want {
+		t.Fatalf("RenderTable = %q, want %q", got, want)
 	}
 }
 

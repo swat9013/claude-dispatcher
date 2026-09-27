@@ -108,7 +108,8 @@ type Branch struct {
 }
 
 // Collect は project ごとの今を組む。機械の観測はマシンで 1 つなので、1 度だけ読んで全 project で共有する。
-// 経過の基準の時刻は観測を読んだ後に clock から取る。
+// 経過の基準の時刻は観測を読んだ後に clock から取る — 観測 (ps / claude) に時間が掛かっても、経過を観測より前の
+// 時刻で測って短く見せないため。
 func Collect(projects []paths.Project, home string, probes Probes, clock func() time.Time) []Report {
 	machine := probes.Machine.Observe()
 	alive, aliveErr := probes.Workers(machine)
@@ -116,7 +117,7 @@ func Collect(projects []paths.Project, home string, probes Probes, clock func() 
 	for _, project := range projects {
 		c := &collector{
 			report:  Report{Project: project.Name, Workers: []Worker{}, Notes: []string{}},
-			machine: machine, workers: alive, workersErr: aliveErr, probes: probes,
+			machine: machine, isAlive: alive, isAliveErr: aliveErr, probes: probes,
 		}
 		reports = append(reports, c.collect(project, home, clock()))
 	}
@@ -127,8 +128,8 @@ func Collect(projects []paths.Project, home string, probes Probes, clock func() 
 func (c *collector) collect(project paths.Project, home string, now time.Time) Report {
 	if c.machine.ProcessesErr != nil {
 		c.note("process の一覧を読めない — tick の実行中と worker の生死は ? (%v)", c.machine.ProcessesErr)
-	} else if c.workersErr != nil {
-		c.note("worker の生死を読めない — STATE は ? (%v)", c.workersErr)
+	} else if c.isAliveErr != nil {
+		c.note("worker の生死を読めない — STATE は ? (%v)", c.isAliveErr)
 	}
 	c.report.Tick.Running = c.tickRunning(project.Name)
 	lines, broken, err := ticklog.Read(project.LogFile())
@@ -211,9 +212,9 @@ func listed(spawns []spawnRecord, alive func(ticklog.Spawned) Probed[bool], wip 
 type collector struct {
 	report  Report
 	machine launch.Machine
-	// workers は起動部が組んだ今生きている worker の一覧。組めなければ workersErr
-	workers    launch.Alive
-	workersErr error
+	// isAlive は起動部が組んだ今生きている worker の一覧。組めなければ isAliveErr
+	isAlive    launch.Alive
+	isAliveErr error
 	probes     Probes
 }
 
@@ -223,10 +224,10 @@ func (c *collector) note(format string, args ...any) {
 
 // alive は起動記録の worker が今生きているかを起動部の一覧に尋ねる。一覧を組めなければ ?。
 func (c *collector) alive(s ticklog.Spawned) Probed[bool] {
-	if c.workersErr != nil {
+	if c.isAliveErr != nil {
 		return Probed[bool]{}
 	}
-	return known(c.workers(launch.WorkerLaunch{PID: s.PID, SessionID: s.SessionID}))
+	return known(c.isAlive(launch.WorkerLaunch{PID: s.PID, SessionID: s.SessionID}))
 }
 
 // wip は issue に wip が付いているかを返す関数。wip を読めなければどの issue も ?。
