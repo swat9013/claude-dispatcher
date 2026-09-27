@@ -36,7 +36,7 @@ Homebrew・`go install`・GitHub Releases のどれかで `claude-dispatcher` �
 
 ```sh
 brew install --cask swat9013/tap/claude-dispatcher
-brew upgrade --cask claude-dispatcher   # 新しい版が出たとき
+brew upgrade --cask swat9013/tap/claude-dispatcher   # 新しい版が出たとき
 ```
 
 binary は署名していないので、macOS では cask が install 時に quarantine (Gatekeeper の検査対象にする拡張属性) を外す。走っている `loop` は起動した時点の binary で回り続けるので、`brew upgrade` の後は撃ち直す。

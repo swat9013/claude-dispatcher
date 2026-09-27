@@ -24,6 +24,10 @@ checksum:
 changelog:
   use: github
 
+# prerelease の tag (v1.2.0-rc.1 等) の Release を prerelease にし、Latest にしない (tap の skip_upload: auto と揃える)
+release:
+  prerelease: auto
+
 # 形の決定は docs/adr/0007-homebrew-tap-cask.md、token と prerelease の扱いは CONTRIBUTING.md の「release」
 homebrew_casks:
   - name: claude-dispatcher
