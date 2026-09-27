@@ -11,6 +11,9 @@
 
 - 作業は issue 単位で行い、main から `worktree-issue-<n>` (`<n>` は issue 番号) の branch を切る
   - dispatcher はこの綴りの head branch で worker 由来の CL を見分け、issue と紐づける ([docs/design/system.md](docs/design/system.md) §4)。綴りを崩すと二重着手の防止が効かない
+- ファイルを変更する実装は、main の checkout で直接行わず、worktree を作ってその中で行う
+  - Claude Code では `EnterWorktree` に name `issue-<n>` を渡す。branch 名は `worktree-` が前置されて `worktree-issue-<n>` になる
+- 実装が終わったら、worktree の branch を push して PR を作る
 - main へは PR 経由でだけ入れる
 
 ## gate (品質チェック)
