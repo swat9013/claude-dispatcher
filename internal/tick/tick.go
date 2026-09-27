@@ -224,6 +224,11 @@ func (r *run) observe(verify func(config.Config, github.Runner) error) (observat
 	if obs.install, err = plugin.Resolve(r.o.Home, r.o.Cwd); err != nil {
 		return observation{}, stopf(ResultError, "指示を導出できなかった: %v", err)
 	}
+	if err := obs.install.RequirePrincipleIndex(); err != nil {
+		// 無いまま起動すると worker は原則を 1 つも受け取らずに黙って走る (system.md §11)
+		return observation{}, stopf(ResultError, "指示を導出できなかった: %v", err)
+	}
+	// 選定母集合が空の start はここで落ちる。残りが 0 件なら静止した tick と同じ扱い (orchestrator を起動しない)
 	if obs.instructions, err = WithPlaybooks(obs.instructions, obs.install); err != nil {
 		return observation{}, stopf(ResultError, "指示を導出できなかった: %v", err)
 	}

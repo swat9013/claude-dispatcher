@@ -24,6 +24,19 @@ func (i Install) PrincipleIndex() string {
 	return filepath.Join(i.Path, "skills", "knowledge", "principle-index", "SKILL.md")
 }
 
+// RequirePrincipleIndex は原則索引の file が在ることを確かめる。無ければ path を名指しして失敗にする。
+func (i Install) RequirePrincipleIndex() error {
+	file := i.PrincipleIndex()
+	info, err := os.Stat(file)
+	if err != nil {
+		return fmt.Errorf("原則索引が無い: %s: %w", file, err)
+	}
+	if info.IsDir() {
+		return fmt.Errorf("原則索引が file でない: %s", file)
+	}
+	return nil
+}
+
 func (i Install) procedureDir() string { return filepath.Join(i.Path, "skills", "procedure") }
 
 // Playbook は名前の playbook の SKILL.md の path。
@@ -40,7 +53,7 @@ type entry struct {
 // Resolve は installed_plugins.json から swat-skills の installPath を選ぶ。
 // 選択順: projectPath が cwd と一致する project scope → user scope → ~/.claude/skills/swat-skills。
 // 別 marketplace 由来の entry が複数あれば、どれを使うか決められないので止める。
-// 原則索引の file の実在は見ない (設計 doc に無い。error にするかは #15 で決める)。無いと worker は原則を受け取らずに走る。
+// 原則索引の file の実在は見ない (tick は RequirePrincipleIndex で、doctor は自分の検査項目で見る)。
 func Resolve(home, cwd string) (Install, error) {
 	file := filepath.Join(home, ".claude", "plugins", "installed_plugins.json")
 	raw, err := os.ReadFile(file)
@@ -113,7 +126,7 @@ type StartPlaybook struct {
 
 // StartPlaybooks は frontmatter の metadata に `deliverable: cl` を持つ playbook を集める。
 // 印があるのに `dispatch-when` が無い / frontmatter が読めない playbook は黙って外さず失敗にする。
-// 母集合が空でも失敗にしない (設計 doc に無い。error にするかは #15 で決める)。空だと start は全候補の見送りになる。
+// 母集合が空でも失敗にしない (tick は start 指示を出さないだけで動く。system.md §10)。
 func (i Install) StartPlaybooks() ([]StartPlaybook, error) {
 	files, err := filepath.Glob(filepath.Join(i.procedureDir(), "playbook-*", "SKILL.md"))
 	if err != nil {

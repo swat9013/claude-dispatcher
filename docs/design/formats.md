@@ -63,7 +63,7 @@ claude_token_file = "~/.config/claude-dispatcher/<project>/claude-token"
 | exit | `result` | 意味 |
 |---|---|---|
 | 0 | `ok` | 観測して指示を導出した (orchestrator を起動したなら、正常終了して決定どおり worker を起動した) |
-| 1 | `error` | 観測できなかった / 指示を導出できなかった / orchestrator が正常終了しなかった / claude を起動できなかった / 決定ファイルの検査に落ちた / 想定外の失敗 |
+| 1 | `error` | 観測できなかった / 指示を導出できなかった (plugin を解決できない・原則索引の file が無い・選定母集合の playbook が読めない) / orchestrator が正常終了しなかった / claude を起動できなかった / 決定ファイルの検査に落ちた / 想定外の失敗 |
 | 2 | `config_error` | config 起因で観測していない (無い / 読めない / 未知 key / 置き場や label が実在しない / token file の不備) |
 | 3 | `locked` | 前 tick が走っていたので見送った |
 | 4 | `auth_error` | gh の認証が通らず観測していない (綴りを直しても直らない) |

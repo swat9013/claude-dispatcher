@@ -50,8 +50,9 @@ type Instruction interface {
 	// AllowedActions はその issue に許される採否
 	AllowedActions() []Action
 	label() string
-	// withPlaybooks は指示に添える playbook を plugin の install 先の絶対 path で埋めた指示を返す
-	withPlaybooks(plugin.Install) (Instruction, error)
+	// withPlaybooks は指示に添える playbook を plugin の install 先の絶対 path で埋めた指示を返す。
+	// 添える playbook が無く指示として成り立たないなら空を返す (0 本か 1 本)
+	withPlaybooks(plugin.Install) ([]Instruction, error)
 	// checkSpawnPlaybooks は spawn に載った playbook の列がこの指示から渡してよいものかを検査する
 	checkSpawnPlaybooks([]string) error
 }
@@ -86,16 +87,20 @@ func (i StartInstruction) DecisionIssues() []int {
 	return out
 }
 
-func (i StartInstruction) withPlaybooks(install plugin.Install) (Instruction, error) {
+// 選定母集合が空なら start は出さない。orchestrator は選べる playbook が無く、全候補を見送るしかない (system.md §10)
+func (i StartInstruction) withPlaybooks(install plugin.Install) ([]Instruction, error) {
 	found, err := install.StartPlaybooks()
 	if err != nil {
 		return nil, err
+	}
+	if len(found) == 0 {
+		return nil, nil
 	}
 	i.Playbooks = make([]StartPlaybook, 0, len(found))
 	for _, p := range found {
 		i.Playbooks = append(i.Playbooks, StartPlaybook{Path: p.Path, DispatchWhen: p.DispatchWhen})
 	}
-	return i, nil
+	return []Instruction{i}, nil
 }
 
 // start の worker へ渡してよい playbook は、指示に載せた選定母集合の 1 本
@@ -138,13 +143,13 @@ func (i ReenterInstruction) MarshalJSON() ([]byte, error) {
 	}{i.Kind(), plain(i)})
 }
 
-func (i ReenterInstruction) withPlaybooks(install plugin.Install) (Instruction, error) {
+func (i ReenterInstruction) withPlaybooks(install plugin.Install) ([]Instruction, error) {
 	conditions := make([]ConditionPointer, 0, len(i.Conditions))
 	for _, c := range i.Conditions {
 		conditions = append(conditions, ConditionPointer{Name: c.Name, Playbook: install.Playbook(c.Playbook)})
 	}
 	i.Conditions = conditions
-	return i, nil
+	return []Instruction{i}, nil
 }
 
 // reenter の worker へ渡してよい playbook は、指示に載せた条件の playbook を条件の順に並べた列の部分列。
@@ -177,7 +182,9 @@ func (i AnomalyInstruction) MarshalJSON() ([]byte, error) {
 		plain
 	}{i.Kind(), plain(i)})
 }
-func (i AnomalyInstruction) withPlaybooks(plugin.Install) (Instruction, error) { return i, nil }
+func (i AnomalyInstruction) withPlaybooks(plugin.Install) ([]Instruction, error) {
+	return []Instruction{i}, nil
+}
 
 // anomaly の採否 (skip / ready-for-human) は worker を起動しない
 func (i AnomalyInstruction) checkSpawnPlaybooks([]string) error {
@@ -194,7 +201,7 @@ func isSubsequence(sub, of []string) bool {
 	return i == len(sub)
 }
 
-// WithPlaybooks は指示に添える playbook を install 先の絶対 path で埋める。
+// WithPlaybooks は指示に添える playbook を install 先の絶対 path で埋める。添える playbook が無い指示は落とす。
 func WithPlaybooks(instructions []Instruction, install plugin.Install) ([]Instruction, error) {
 	out := make([]Instruction, 0, len(instructions))
 	for _, i := range instructions {
@@ -202,7 +209,7 @@ func WithPlaybooks(instructions []Instruction, install plugin.Install) ([]Instru
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, resolved)
+		out = append(out, resolved...)
 	}
 	return out, nil
 }

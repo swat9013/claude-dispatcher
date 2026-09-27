@@ -144,6 +144,59 @@ func TestUnreadableFrontmatterStopsTheTickNamingThePlaybook(t *testing.T) {
 	s.assertErrorNames(s.assertOutcome(r, outcomeError), filepath.Join(broken, "SKILL.md"))
 }
 
+func TestMissingPrincipleIndexStopsTheTickWithoutLaunchingTheOrchestrator(t *testing.T) {
+	s := newSandbox(t)
+	index := principleIndexPath(s.defaultInstallPath())
+	if err := os.Remove(index); err != nil {
+		t.Fatal(err)
+	}
+	s.setIssues(readyIssue(42))
+
+	r := s.tick()
+
+	s.assertErrorNames(s.assertOutcome(r, outcomeError), index)
+	s.assertNoClaude("原則索引が無いのに")
+}
+
+// unmarkStartPlaybooks は選定母集合の印 (metadata.deliverable: cl) を持つ playbook から印を外し、母集合を空にする。
+func (s *sandbox) unmarkStartPlaybooks() {
+	s.t.Helper()
+	procedure := filepath.Join(s.defaultInstallPath(), "skills", "procedure")
+	for _, name := range []string{"playbook-implementation", "playbook-docs"} {
+		writeSkill(s.t, filepath.Join(procedure, name), "name: "+name+"\n")
+	}
+}
+
+func TestEmptyStartSetYieldsNoStartButStillYieldsReenter(t *testing.T) {
+	s := newSandbox(t)
+	s.unmarkStartPlaybooks()
+	reenterScenario(s)
+	s.setIssues(issue{number: 39}, readyIssue(42))
+	s.orchestratorSkips(39)
+
+	assertExit(t, s.tick(), 0)
+
+	file := s.onlyInstructionFile()
+	if starts := instructionsOfKind(t, file, "start"); len(starts) != 0 {
+		t.Fatalf("選定母集合が空なのに start を出した: %v", starts)
+	}
+	if reenters := instructionsOfKind(t, file, "reenter"); len(reenters) != 1 {
+		t.Fatalf("reenter = %v, want 1 件", reenters)
+	}
+}
+
+func TestEmptyStartSetWithOnlyCandidatesLaunchesNoOrchestrator(t *testing.T) {
+	s := newSandbox(t)
+	s.unmarkStartPlaybooks()
+	s.setIssues(readyIssue(42))
+
+	r := s.tick()
+
+	s.assertOutcome(r, outcomeOK)
+	s.assertNoInstructionFile("選定母集合が空で start しか無いのに")
+	s.assertNoClaude("選定母集合が空で start しか無いのに")
+}
+
 func TestOrchestratorPromptCarriesTheResolvedPrincipleIndexPath(t *testing.T) {
 	s := newSandbox(t)
 

@@ -182,7 +182,7 @@ func checkPlugin(r *report, o Options) {
 	case len(problems) > 0:
 		r.line(markNG, "playbook", "%s", strings.Join(problems, " / "))
 	case len(starts) == 0:
-		// 母集合が空でも tick は動く (start を出さないだけ) ので情報にする (formats.md §12)。空の母集合で tick を止めるかは #15
+		// 母集合が空でも tick は動く (start を出さないだけ) ので情報にする (formats.md §12)
 		r.line(markInfo, "playbook", "start の選定母集合 (metadata.deliverable: cl の playbook) が 0 本 — tick は start を出さない。条件 %d 本は在る", len(tick.Conditions))
 	default:
 		r.line(markOK, "playbook", "start %d 本 + 条件 %d 本", len(starts), len(tick.Conditions))
