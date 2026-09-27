@@ -1,11 +1,13 @@
 # PR と main への push で、push 前の gate (go vet / go test) を配布対象の OS (linux / darwin) の runner で撃ち、
-# .goreleaser.yaml を検査する。gate の方針は CONTRIBUTING.md の「gate」
+# .goreleaser.yaml を検査する。release.yml も publish の前段としてこの workflow を呼ぶ (gate を 1 箇所に置く)。
+# gate の方針は CONTRIBUTING.md の「gate」
 name: ci
 
 on:
   pull_request:
   push:
     branches: [main]
+  workflow_call:
 
 permissions:
   contents: read
@@ -27,9 +29,10 @@ jobs:
       # shell: bash は pipefail で撃つので、go test が落ちれば tee を挟んでも step は落ちる
       - run: go test -count=1 -v ./... 2>&1 | tee test.log
         shell: bash
+      # skip の理由 (t.Skipf の文) は --- SKIP の行の直前に出るので、1 行前も並べる
       - name: skip したテスト
         if: always()
-        run: grep -- '--- SKIP' test.log || echo "skip なし"
+        run: grep -B1 -- '--- SKIP' test.log || echo "skip なし"
         shell: bash
 
   goreleaser-check:

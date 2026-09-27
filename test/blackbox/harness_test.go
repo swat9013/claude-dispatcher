@@ -44,7 +44,8 @@ const (
 var stubNames = []string{"gh", "claude", "git", "ps", "crontab"}
 
 // selfResolutionDirs は PATH の自己解決 (internal/deps の candidates) が探す置き場のうち、sandbox の HOME の外にあるもの。
-// sandbox の PATH は stub だけで閉じているが、自己解決はここまで探しに行くので、ここにある実物には stub で蓋ができない
+// sandbox の PATH は stub だけで閉じているが (newBareSandbox)、自己解決はここまで探しに行くので、ここにある実物には stub で蓋ができない。
+// black-box テストは internal を import せず外から撃つので、一覧は candidates と重複させて持つ (変えるときは両方を揃える)
 var selfResolutionDirs = []string{"/opt/homebrew/bin", "/usr/local/bin", "/home/linuxbrew/.linuxbrew/bin"}
 
 // skipIfSelfResolutionReachesARealOne は、自己解決が届く置き場に name の実物があれば t を skip する。
@@ -181,7 +182,8 @@ func newBareSandbox(t *testing.T) *sandbox {
 	s.env = map[string]string{
 		"HOME": s.home,
 		// PATH は stub だけで閉じる。CLI が撃つ外部 CLI はすべて stub にあるので、/usr/bin 等を足すと
-		// stub を消したテストで runner の実物 (/usr/bin/gh 等) に届いてしまう
+		// stub を消したテストで runner の実物 (/usr/bin/gh 等) に届いてしまう。PATH の自己解決が HOME の外へ
+		// 探しに行く置き場は閉じられないので、skipIfSelfResolutionReachesARealOne が受け持つ
 		"PATH": s.binDir,
 	}
 	return s

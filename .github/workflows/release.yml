@@ -9,7 +9,12 @@ permissions:
   contents: write
 
 jobs:
+  # PR と同じ gate (go vet / go test を ubuntu と macOS で、goreleaser check) を tag の commit で通してから publish する
+  gate:
+    uses: ./.github/workflows/ci.yml
+
   release:
+    needs: gate
     runs-on: ubuntu-latest
     steps:
       # release の書き込み権限を持つ job なので、action は commit SHA で固定する
@@ -21,8 +26,6 @@ jobs:
           go-version-file: go.mod
       # push 前の gate を通った main の commit にだけ release を出す (tag を main の外の commit に打ったら止める)
       - run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
-      - run: go vet ./...
-      - run: go test -count=1 ./...
       # Releases に binary を出した後の tap への push で落ちて release が半端に止まるのを、publish の前に止める (未登録と失効)
       - name: tap の token が使えるか確かめる
         run: |
