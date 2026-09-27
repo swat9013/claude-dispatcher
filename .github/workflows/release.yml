@@ -1,4 +1,4 @@
-# `v*` の tag を push すると、GoReleaser で GitHub Releases に binary を出す。gate の方針は CONTRIBUTING.md の「release」
+# `v*` の tag を push すると、GoReleaser で GitHub Releases に binary を出し、tap の cask を更新する。gate と token の方針は CONTRIBUTING.md の「release」
 name: release
 
 on:
@@ -22,11 +22,20 @@ jobs:
       # push 前の gate を通った main の commit にだけ release を出す (tag を main の外の commit に打ったら止める)
       - run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
       - run: go vet ./...
+      # 以下の 2 段は、Releases に binary を出した後の tap への push で落ちて release が半端に止まるのを、publish の前に止める
+      - name: tap の token が secret にあるか確かめる
+        run: test -n "$HOMEBREW_TAP_GITHUB_TOKEN" || { echo "::error::secret HOMEBREW_TAP_GITHUB_TOKEN が未登録 (CONTRIBUTING.md の「release」)"; exit 1; }
+        env:
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
       - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           version: v2.18.2
-          args: release --clean
+          install-only: true
+      - name: 生成される cask が quarantine を外す step を持つか確かめる
+        run: |
+          goreleaser release --snapshot --clean
+          grep -F '"{{staged_path}}/claude-dispatcher"' dist/homebrew/Casks/claude-dispatcher.rb
+      - run: goreleaser release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # tap `swat9013/homebrew-tap` の cask を更新する token (.goreleaser.yaml の homebrew_casks)
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
