@@ -10,33 +10,33 @@ Cockburn『ユースケース実践ガイド』(Writing Effective Use Cases) の
 - **Main Success Scenario (MSS)**: 番号付きリスト。1 ステップ 1 文・アクターを明記・**意図**を書く (コマンドの綴りや schema の詳細は書かない)。**3〜9 ステップ**に収める。超えるならユースケースを分割する
 - **Extensions**: 分岐点を `<step 番号><英字>` で示し (例 `2a.`)、内部ステップは `2a1.` 形式。復帰先を明記する
 - **Level は user-goal (sea) 固定**
-- Scope は原則 **dispatcher (機械システム = CLI とその入出力)**。LLM (orchestrator / worker)・人間・cron は境界の外のアクター。**例外は UC-4** — worker の終了処理そのものを描く UC なので、Scope を dispatcher 運用全体 (機械システム + 外部 store) に取る
+- Scope は原則 **dispatcher (機械システム = CLI とその入出力)**。LLM (orchestrator / worker)・人間は境界の外のアクター。**例外は UC-4** — worker の終了処理そのものを描く UC なので、Scope を dispatcher 運用全体 (機械システム + 外部 store) に取る
 
 ---
 
 ## UC-1 静止した project の tick を無音で終える
 
-- **Primary Actor**: cron
+- **Primary Actor**: 人間 (loop を起動した運用者)
 - **Scope**: dispatcher (機械システム)
 - **Level**: user-goal (sea)
-- **Trigger**: cron の定期起動
+- **Trigger**: loop の周期が来た
 - **事前条件**: 宣言 config が検査済みで置かれている
 - **成功保証**: LLM が 1 度も起動せず、log に実行記録が 1 行残っている
 
 **Main Success Scenario**
 
-1. cron が CLI の tick を起動する
+1. loop が周期の到来で tick を始める
 2. CLI が単一実行 lock を取り、宣言 config を読む
 3. CLI が tracker と CL host を観測し、snapshot を作る
 4. CLI が指示を導出し、0 件であることを確定する
-5. CLI が実行記録を log へ 1 行 append し、claude を起動せずに終了する
+5. CLI が実行記録を log へ 1 行 append し、claude を起動せずに tick を終えて次の周期を待つ
 
 **Extensions**
 
-- **2a.** 前 tick がまだ走っている (lock が取れない)
-  - 2a1. CLI は「見送った」ことだけを log に残して終了する (次の cron 起動が拾う)
+- **2a.** 単発の tick がまだ走っている (lock が取れない)
+  - 2a1. CLI は「見送った」ことだけを log に残して tick を終える (次の周期が拾う)
 - **3a.** 外部 store の観測に失敗した
-  - 3a1. CLI は「観測できなかった」をエラーとして log に残し、指示 0 件と混同せずに終了する
+  - 3a1. CLI は「観測できなかった」をエラーとして log に残し、指示 0 件と混同せずに tick を終える。loop は止まらず次の周期へ進む
 
 ## UC-2 候補 issue に着手させ CL へ到達させる
 
@@ -155,7 +155,7 @@ Cockburn『ユースケース実践ガイド』(Writing Effective Use Cases) の
 - **Level**: user-goal (sea)
 - **Trigger**: 新しい project で dispatcher を使い始める
 - **事前条件**: claude-dispatcher・Claude Code・plugin `swat-skills`・gh が導入され、gh と claude が認証済み
-- **成功保証**: 綴り誤りの config で観測が始まっていない。試運転で worker が着手していない。crontab 1 行で無人 tick が回っている
+- **成功保証**: 綴り誤りの config で観測が始まっていない。試運転で worker が着手していない。loop が回り始めている
 
 **Main Success Scenario**
 
@@ -163,18 +163,40 @@ Cockburn『ユースケース実践ガイド』(Writing Effective Use Cases) の
 2. 導入者が宣言 config (issue 置き場 / CL 置き場 / 着手可 label / 上限 N) を埋める
 3. CLI が導入者の承認を得て、機構が付ける label を issue 置き場に作る
 4. CLI が config を検査して置き場 repo の実在を loud に確かめ、観測と指示の導出までを試運転し、何も起動せず何も書かずに指示の件数を示す
-5. CLI が cron 相当の最小環境で同じ試運転を撃ち直し、同じ結果を得る
-6. CLI が自分の絶対 path を埋めた crontab の 1 行と既存の crontab との差分を示し、導入者の承認を得て登録する
-7. 導入者が `doctor` で Claude Code の settings に要る entry を確かめて自分で足し、log.jsonl 最終行の `ts` で最初の無人 tick が走ったことを確かめる
+5. CLI が loop の起動コマンドを示して終わる
+6. 導入者が `doctor` で Claude Code の settings に要る entry を確かめて自分で足す
+7. 導入者が clone で loop を起動し、画面で最初の tick が回ったことを確かめる
 
 **Extensions**
 
 - **4a.** config の綴りが誤っている (未知 key / 実在しない repo)
   - 4a1. CLI が名指しで失敗し、観測を開始しない。導入者が直して step 4 へ戻る
-- **5a.** cron 相当の環境でだけ失敗する (依存 CLI が見つからない / gh の認証が親 shell の環境変数にしか無い)
-  - 5a1. 導入者が依存 CLI の置き場を直すか、宣言 config に token file を足して step 5 へ戻る
-- **6a.** crontab に同じ project の tick 行が既にある
-  - 6a1. CLI は差分を示すだけで黙って置き換えない。導入者が置き換えるかを決める
-- **7a.** 周期の 2 倍待っても log.jsonl の最終行が進まない
-  - 7a1. 導入者が cron.log の更新時刻を見る。log.jsonl より新しければ末尾の起動失敗 (binary の path / clone の path) を直す。古ければ cron 自体が撃っていない (crontab の登録 / マシンのスリープ) ので crontab を確かめる
-  - 7a2. keyring に置いた認証が cron から読めない (試運転では再現しない) ときは、token file を config に足す
+- **7a.** 同じ project の loop が既に走っている
+  - 7a1. CLI は 2 本目の loop を起動時に拒む。導入者は走っている loop の画面を見る
+- **7b.** loop の画面で tick が `auth_error` になる (起動した環境から認証を取れない — ssh 越しの session 等)
+  - 7b1. 導入者が宣言 config に token file を足す。loop は撃ち直さなくてよい (次の tick が config を読み直す)
+
+## UC-7 loop を止める
+
+- **Primary Actor**: 人間 (loop を起動した運用者)
+- **Scope**: dispatcher (機械システム)
+- **Level**: user-goal (sea)
+- **Trigger**: 運用者が dispatcher を止めたい (端末を閉じる・binary を更新する・使うのをやめる)
+- **事前条件**: loop が走っている
+- **成功保証**: 新しい tick が始まらない。止めた時点で走っていた tick は log.jsonl に行を残している。起動済みの worker は止めずに走り続け、CL を出すか人へ返して wip を剥がす
+
+**Main Success Scenario**
+
+1. 運用者が loop に停止を求める (Ctrl+C)
+2. loop が停止待ちを画面に示し、実行中の tick を最後まで進める (orchestrator の終了を待ち、決定どおり worker を起動し、tick 行を書く)
+3. loop が画面を残し、停止の理由と、止めずに走っている worker の本数を 1 行足して終わる
+
+**Extensions**
+
+- **1a.** tick の合間 (sleep 中) に停止を求めた
+  - 1a1. loop は tick を始めずに step 3 へ進む
+- **1b.** 端末を閉じた (SIGHUP)
+  - 1b1. 1 回目の停止要求と同じく step 2 へ進む。画面は見えないので、止まったことは別の端末の `status` で確かめる
+- **2a.** 運用者が tick の終わりを待てず、もう一度停止を求めた
+  - 2a1. loop は orchestrator を起動する前ならそれを起動せず、起動中ならその process group を止め、決定ファイルを読まずに error の tick 行を書く
+  - 2a2. loop は終了行に orchestrator log の path を示し、wip を付けたまま残った issue を確かめるよう促して終わる。残った wip は stale wip として人が回収する

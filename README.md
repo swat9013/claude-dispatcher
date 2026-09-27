@@ -5,11 +5,12 @@ issue tracker の「着手可」の issue を Claude Code に無人で実装さ�
 ## 仕組み
 
 ```
-cron ─▶ claude-dispatcher tick ─指示─▶ orchestrator (claude -p) ─決定ファイル─▶ tick ─起動─▶ worker (claude -p)
-        観測 + 指示の導出              選定 + wip label の付与              決定どおり起動      実装 → CL
+claude-dispatcher loop ─周期ごと─▶ tick ─指示─▶ orchestrator (claude -p) ─決定ファイル─▶ tick ─起動─▶ worker (claude -p)
+(端末で起動し Ctrl+C で止める)      観測 + 指示の導出  選定 + wip label の付与              決定どおり起動      実装 → CL
 ```
 
 - 専用の台帳を持たない。状態は tracker の label (`dispatcher:wip` / `ready-for-human`) と open CL の存在に置き、tick ごとに読み直す
+- 定期起動は cron ではなく、端末で撃つ `loop` が持つ。止めるのも撃ち直すのも人が行う
 - CLI は tracker にも CL host にも書かない。選ぶ・見送る・人へ返すは LLM が決める
 - 指示が無い tick は LLM を起動しない (静止時のコストはゼロ)
 - 続行できない worker は、issue に引き渡しコメントを書き `ready-for-human` を付けて人へ返す
@@ -18,7 +19,7 @@ cron ─▶ claude-dispatcher tick ─指示─▶ orchestrator (claude -p) ─�
 
 ## 前提
 
-- macOS か Linux と、cron
+- macOS か Linux
 - [Claude Code](https://docs.claude.com/en/docs/claude-code) と、その認証
 - Claude Code plugin `swat-skills@swat9013` ([swat9013/claude-skills](https://github.com/swat9013/claude-skills))。worker が使う playbook・原則索引・レビュー skill を提供する
   ```
@@ -29,7 +30,7 @@ cron ─▶ claude-dispatcher tick ─指示─▶ orchestrator (claude -p) ─�
 
 ## install
 
-どちらかで `claude-dispatcher` を PATH の通った場所に置く。crontab には置いた場所の絶対 path が書かれるので、`go run` の一時 build からは導入できない。
+どちらかで `claude-dispatcher` を PATH の通った場所に置く。
 
 **`go install`** (Go は [go.mod](go.mod) の `go` 行の版以上):
 
@@ -62,8 +63,8 @@ claude-dispatcher setup myproj
 1. **宣言 config の雛形**: `~/.config/claude-dispatcher/myproj/config.toml` が無ければ雛形を書いて止まる。issue 置き場 (`[issue].repo`)・着手可 label (`ready_label`)・並列上限 (`[limits].max_wip`) を確かめて直す。書ける項目は [`docs/design/formats.md`](docs/design/formats.md) §2
 2. **config の検査**: 綴りの誤りや実在しない置き場を名指しで止める
 3. **label**: issue 置き場に無い label (`dispatcher:wip` / `ready-for-human` / 着手可 label / `triage_label`) を示し、`y` と答えたら作る
-4. **試運転**: `tick --dry-run` と、cron と同じ最小の環境で撃ち直す `tick --dry-run --cron-env` を撃ち、指示の件数を示す。何も起動せず、何も書かない
-5. **crontab**: 5 分ごとに tick を撃つ 1 行を示し、`y` と答えたら登録する。この project の tick 行が別の形で既にあれば、並べて示すだけで置き換えない
+4. **試運転**: `tick --dry-run` を撃ち、指示の件数を示す。何も起動せず、何も書かない
+5. **loop の起動コマンド**: 試運転が通ったら、次に撃つ `loop` のコマンドを示して終わる
 
 承認を尋ねる段は `y` / `yes` のときだけ書く。それ以外の答えと端末の無い実行では書かずに、自分で撃つコマンドを示して止まる。
 
@@ -73,20 +74,24 @@ claude-dispatcher setup myproj
 claude-dispatcher doctor myproj
 ```
 
-cron からは親 shell の環境変数も keyring も読めないことがある。試運転の `--cron-env` だけが落ちるとき、または登録後に tick が `auth_error` で止まるときは、config の `[auth]` に token file を書く (formats.md §2)。
+## 回す
+
+実装 repo の clone で `loop` を撃つ。起動直後に 1 回、以後は tick が終わるたびに指定の間隔 (`90s` / `5m` / `1h` 等。1m〜24h) を空けて tick を回す。
+
+```sh
+cd ~/src/widgets
+claude-dispatcher loop myproj 5m
+```
+
+端末には今の worker の表と、loop の状態 (次の tick の時刻・直近の tick の結果) が描き直され続ける。loop は自分では起き直さないので、端末を閉じたりマシンを再起動したりしたら、同じコマンドを撃ち直す。同じ project の loop は 1 本しか起動できない。
+
+ssh 越しの session 等で keyring の認証が読めず tick が `auth_error` になるときは、config の `[auth]` に token file を書く (formats.md §2)。loop は撃ち直さなくてよい (次の tick が config を読み直す)。
 
 ## 動いているかを見る
 
-**死活は 2 段で読む** (正本は [`docs/design/system.md`](docs/design/system.md) §9)。置き場は `claude-dispatcher paths --json myproj` で引ける。
+loop を撃った端末の画面が一番早い。1 行目に loop の状態 (待機と次の tick の時刻 / tick 実行中 / 停止待ち)、2 行目に直近の tick の結果が出る。tick が失敗していれば、その理由が `!` の行に出る (形式は [`docs/design/formats.md`](docs/design/formats.md) §13)。
 
-1. `log.jsonl` の最終行の `ts` が周期 (5 分) の 2 倍より新しければ、tick は回っている
-2. 古ければ `cron.log` の更新時刻を見る
-   - `cron.log` が `log.jsonl` の最終行より新しい: cron は撃っているが CLI の手前か起動で落ちている。`cron.log` の末尾の行に理由が出る (binary や clone の path、認証)
-   - `cron.log` も古い: cron 自体が撃っていない (crontab の行が無い / マシンがスリープしている)。`crontab -l` と `doctor` で確かめる
-
-`cron.log` には失敗した tick の出力と、CLI の手前で shell が出した行が溜まる。溜まった中身は過去の失敗かもしれないので、中身の有無ではなく更新時刻で見る。
-
-**今の worker** は `status` で見る。log.jsonl の起動記録を起点に、process の生死・wip label・作業ツリー・CL を読み直して並べる。
+別の端末からは `status` で見る。見出しに loop が生きているか (`loop 稼働中` / `loop なし`) と最終 tick を出し、log.jsonl の起動記録を起点に、process の生死・wip label・作業ツリー・CL を読み直して今の worker を並べる。
 
 ```sh
 claude-dispatcher status ps myproj      # 1 回だけ
@@ -95,11 +100,14 @@ claude-dispatcher status watch          # 全 project を 5 秒ごとに描き�
 
 `STATE` が `exited` なのに `WIP` が `yes` の行は、worker が wip を剥がさずに死んだ issue (stale wip)。issue を確かめて、wip label を手で外す。
 
+過去の tick の結果は log.jsonl に 1 行ずつ残る。置き場は `claude-dispatcher paths --json myproj` で引ける。
+
 ## 止める
 
-1. `crontab -e` で `tick myproj` の行を消す (コメントにしてもよい)。次の tick から何も起動しなくなる
-2. 走っている worker はそのまま最後まで進み、CL を出すか人へ返して wip を剥がす。すぐ止めたいときは `status ps myproj` で `running` の issue を確かめ、log.jsonl の `spawned` にある `pid` の process を止めてから、その issue の `dispatcher:wip` を手で外す
-3. 使うのをやめるなら、`paths --json myproj` が返す `config_file` の dir と `state_dir` を消す。issue 置き場の label は残る
+1. loop の端末で Ctrl+C を押す。tick の合間ならすぐ止まる。tick の実行中なら、その tick を最後まで進めて (orchestrator の判断を待ち、決まった worker を起動して) から止まる
+2. 待てないときはもう一度 Ctrl+C を押す。orchestrator を止めて止まる。orchestrator が wip を付けた後だと、worker の起動されない wip が残りうる。終了行が示す orchestrator log を読み、残った wip を手で外す (起動記録が無いので `status` には出ない)
+3. 走っている worker はどちらでも止まらず、最後まで進んで CL を出すか人へ返して wip を剥がす。すぐ止めたいときは `status ps myproj` で `running` の issue を確かめ、log.jsonl の `spawned` にある `pid` の process を止めてから、その issue の `dispatcher:wip` を手で外す
+4. 使うのをやめるなら、`paths --json myproj` が返す `config_file` の dir と `state_dir` を消す。issue 置き場の label は残る
 
 ## License
 

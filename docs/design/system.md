@@ -6,27 +6,26 @@
 
 ## 1. システム境界
 
-機械システムは **CLI `claude-dispatcher` 1 つと、その入出力 (宣言 config / snapshot / 指示ファイル / 決定ファイル / log)** だけ。LLM (orchestrator / worker)・人間・cron・外部 store はすべて境界の外のアクター。
+機械システムは **CLI `claude-dispatcher` 1 つと、その入出力 (宣言 config / snapshot / 指示ファイル / 決定ファイル / log)** だけ。LLM (orchestrator / worker)・人間・外部 store はすべて境界の外のアクター。
 
 CLI の subcommand は役割で 3 群に分かれる。
 
 | 群 | subcommand | 書くもの |
 |---|---|---|
-| 駆動 | `tick` | state dir (log / 指示ファイル / lock / worker log)。外部 store には書かない |
+| 駆動 | `loop` / `tick` | state dir (log / 指示ファイル / lock / worker log)。外部 store には書かない。`loop` は `tick` を周期ごとに回す (§9) |
 | 観測 | `status` / `paths` | 何も書かない (読み取り専用) |
-| 導入 | `setup` / `doctor` | `setup` だけが書く: config の雛形と state dir (config が無いときだけ作り、既存は上書きしない)・tracker label と crontab (導入者の承認後)。Claude Code の settings はどちらも書かない |
+| 導入 | `setup` / `doctor` | `setup` だけが書く: config の雛形と state dir (config が無いときだけ作り、既存は上書きしない)・tracker label (導入者の承認後)。Claude Code の settings はどちらも書かない |
 
-`status` は log の `spawned` (起動記録) を起点に、wip の付いた issue と生きている worker process を 1 行ずつ並べ、process の生死・wip・紐づく CL を毎回読み直して出す。**process が死んでいるのに wip が残っている行が stale wip の手掛かり**になる (snapshot からは区別できないが、起動記録と process の生死を突き合わせる `status` からは見える)。
+`status` は log の `spawned` (起動記録) を起点に、wip の付いた issue と生きている worker process を 1 行ずつ並べ、process の生死・wip・紐づく CL を毎回読み直して出す。**process が死んでいるのに wip が残っている行が stale wip の手掛かり**になる (snapshot からは区別できないが、起動記録と process の生死を突き合わせる `status` からは見える)。起動記録を持たない wip (orchestrator が付けた後に止まり、worker が起動されなかったもの) は `status` にも出ない。見出しには project の loop が生きているか (process の一覧で見る) と最終 tick を出す。
 
 | アクター | 方向 | 関わり |
 |---|---|---|
-| cron | → | `tick` を定期起動する。取りこぼしは補償しない (次 tick が現実を読み直す) |
 | tracker | ← 観測 / LLM が書く | issue・label の置き場。`tick` は**読むだけ**で、状態を表す label を書かない。例外は導入時の `setup` が導入者の承認を得て label を作ることだけ |
 | CL host | ← 観測 / LLM が書く | CL の置き場。CLI は**読むだけ** |
 | orchestrator (LLM) | ← 起動される / → 決定ファイル | 指示ファイルを読み、採否判断と実行 (wip 付与 / 見送り / 人へ返す) を行う。worker の起動は**決定ファイルに書く**だけで、プロセスは起こさない (§9) |
 | worker (LLM) | — | 機械システムと直接やり取りしない。実装・CL 作成・終端信号 (label / issue コメント)・残タスクの issue 起票はすべて外部 store へ書く |
 | plugin `swat-skills` | ← 読む | playbook と原則索引の置き場。CLI は path を解決して LLM に渡すだけで、中身を解釈しない (§11) |
-| 人間 | — | triage (着手可の付与・人待ちの解消・stale wip の回収) と CL の merge。機械システムとの接点は log・`status`・`doctor` の読みだけ |
+| 人間 | → | triage (着手可の付与・人待ちの解消・stale wip の回収) と CL の merge。機械システムとの接点は `loop` の起動と停止、loop の画面・log・`status`・`doctor` の読みだけ |
 
 ## 2. 全体図
 
@@ -40,7 +39,7 @@ CLI の subcommand は役割で 3 群に分かれる。
  └───────▲──────────────▲───────────▲──────────────▲─────────────────┘
          │観測           │wip付与    │CL作成・終端処理│観測
          │               │           │               │
- cron ──▶ tick           │           │               │
+ loop ──▶ tick           │           │               │
          │ config読み     │           │               │
          │ snapshot+指示  │           │               │
          │ log 1行append  │           │               │
@@ -48,6 +47,8 @@ CLI の subcommand は役割で 3 群に分かれる。
          └─ 指示あり ──▶ orchestrator ──決定ファイル──▶ tick ──spawn──▶ worker ─┘
             (claude -p)   採否判断+wip付与   (決定どおり起動) (headless)  実装→CL→worktree削除
 ```
+
+loop は人が clone で起動し、止めるまで tick を周期ごとに回す (§9)。
 
 ## 3. 解く問題と解き方
 
@@ -128,31 +129,33 @@ CLI が導出する指示は 3 種。**カタログに無い事象は指示に�
 
 ## 8. 宣言 config
 
-`${XDG_CONFIG_HOME:-~/.config}/claude-dispatcher/<project>/config.toml`。必須項目は 3 つ: **issue 置き場 / 着手可 label の綴り / 並列上限 N**。任意項目は CL 置き場 (省略すると issue 置き場を継ぐ)・triage label の綴り・cron へ認証を渡す token file (下記)。項目の書式は formats.md §2。
+`${XDG_CONFIG_HOME:-~/.config}/claude-dispatcher/<project>/config.toml`。必須項目は 3 つ: **issue 置き場 / 着手可 label の綴り / 並列上限 N**。任意項目は CL 置き場 (省略すると issue 置き場を継ぐ)・triage label の綴り・認証を渡す token file (下記)。項目の書式は formats.md §2。
 
-- 置き場は repo の外 (ホーム配下)。issue 置き場 ≠ 実装 repo の構成で「どの clone の宣言が効くか」を曖昧にしないため。clone の path は config に持たせず、crontab の `cd` が決める (§9)
+- 置き場は repo の外 (ホーム配下)。issue 置き場 ≠ 実装 repo の構成で「どの clone の宣言が効くか」を曖昧にしないため。clone の path は config に持たせず、loop を撃つ cwd が決める (§9)
 - **config が新しいか変わったときに、置き場 repo の実在と、機構が付ける label (`dispatcher:wip` / `ready-for-human`) の実在を loud に検査する**。検査に失敗した config では観測を開始しない。検査済みの config は hash を state dir に残し、変わるまで再検査しない。label を後から消しても次の変更まで再検査しない — 付与の失敗は orchestrator の見送りとして log に現れる。label を作るのは導入者 (`setup`) で、`tick` は tracker に書かない
 - 未知の table / key は名指しで失敗させる (綴り違いが「宣言していない」と同じ挙動になるのを防ぐ)
 - **triage label (`[issue].triage_label`)** は worker が残タスクを起票するときに付ける唯一の label。省略すると label なしで起票する (§10)。**着手可 label と同じ綴りなら `config_error` にする** — 同じだと worker の起票が次 tick の候補になり、dispatcher が自分の作業を自己増殖させる。宣言の誤りで起きるこの経路だけは CLI が決定的に塞げる
-- **token file (`[auth].token_file` / `[auth].claude_token_file`)** は cron へ gh と claude の認証を渡す任意の経路。gh は `GH_TOKEN` / `GITHUB_TOKEN` → `hosts.yml` → OS keyring の順で認証を解決し、macOS の Claude Code はログインを Keychain に置く。keyring は cron の非ログイン session から読めないことがある。CLI は env に該当の変数が無いときだけ file を読み、`GH_TOKEN` / `CLAUDE_CODE_OAUTH_TOKEN` として子プロセスへ渡す (env が勝つ)。file が無い / group・other から読める mode / 中身が空 / 相対 path のときは config 起因として止める。token はどの出力にも出さない。中身の空白は途中も除いて読む (端末で折り返された token には改行が入り、改行入りの token では認証 header を組めない)
+- **token file (`[auth].token_file` / `[auth].claude_token_file`)** は、起動した環境から認証を取れないとき (ssh 越しの session 等) に gh と claude の認証を渡す任意の経路。gh は `GH_TOKEN` / `GITHUB_TOKEN` → `hosts.yml` → OS keyring の順で認証を解決し、macOS の Claude Code はログインを Keychain に置く。keyring はログインしていない session から読めないことがある。CLI は env に該当の変数が無いときだけ file を読み、`GH_TOKEN` / `CLAUDE_CODE_OAUTH_TOKEN` として子プロセスへ渡す (env が勝つ)。file が無い / group・other から読める mode / 中身が空 / 相対 path のときは config 起因として止める。token はどの出力にも出さない。中身の空白は途中も除いて読む (端末で折り返された token には改行が入り、改行入りの token では認証 header を組めない)
 - **gh の認証が通らない失敗は config 起因と分けて `auth_error` にする** — 綴りを直しても直らない失敗を綴りの失敗として報告すると、読み手が config を探し回る。判定は gh の終了 (exit 4 / `HTTP 401` / `gh auth login` の案内) を CLI が 1 箇所で読んで行う
 
 ## 9. 駆動
 
-- **cron が `tick` を定期実行する**。claude の起動は tick 末尾の条件分岐 (指示 0 件なら起動しない) — 静止時の LLM コストはゼロ
-- **crontab の 1 行は `cd <実装 repo の clone> && <claude-dispatcher の絶対 path> tick <project>`** に、stdout / stderr を state dir の `cron.log` へ append する形。cron の PATH には `~/go/bin` も `~/.local/bin` も無いので、binary は絶対 path で書く。`setup` は自分の実行 path を解決してこの行に埋める
-- **orchestrator の起動**: 同梱の契約 file と指示ファイル・決定ファイルの path を渡して `claude -p … --permission-mode auto --session-id <CLI が発行した UUID>` を clone を cwd にして起動し、終了を待つ (lock は保持したまま。上限 15 分を超えたら kill して log に残す)。契約は skill として登録せず prompt として直接渡す (ADR 0003)
+- **loop が `tick` を周期ごとに回す** (ADR 0006)。人が実装 repo の clone を cwd にして `loop <project> <interval>` を撃ち、止めるまで回り続ける。claude の起動は tick 末尾の条件分岐 (指示 0 件なら起動しない) — 静止時の LLM コストはゼロ。単発の `tick` は 1 回分を撃って終わる (手で 1 回回すとき)
+- **周期は tick の終了から数える**。起動直後に 1 回撃ち、以後は tick が終わってから interval だけ待つ。tick は loop の process の中で同期に回るので重ならない。次の tick の時刻は壁時計で判定する (スリープ中に monotonic clock が進まない OS がある)。取りこぼした周期とスリープ中の周期は追い掛けない — 次の tick が現実を読み直すので実害にならない (ADR 0001)
+- **tick の result が何であっても次の周期へ進む**。config と token は tick ごとに読み直すので、直せば撃ち直さずに戻る。loop が起動時に止まるのは前提の欠け (引数・project 名・config の実在・state dir の実在・loop の lock) だけ
+- **loop は自分では起き直さない**。端末を閉じる・マシンを再起動する・loop が落ちると tick は止まり、人が同じコマンドで撃ち直すまで回らない。boot 時の起動や crash 時の再起動という監督は持たない (ADR 0006)
+- **停止は段階的にする**。1 回目の SIGINT / SIGTERM / SIGHUP は、sleep 中なら即、tick の実行中ならその tick を最後まで進めて (orchestrator の終了を待ち、決定どおり worker を起動し、tick 行を書いて) から止まる。2 回目は、orchestrator を起動する前ならそれを起動せず、起動中ならその process group を止め、どちらも決定ファイルを読まずに `result: error` の tick 行を書いて止まる (timeout と同じ扱い)。orchestrator は新しい process session で起動しているので端末の signal が届かず、loop だけが死ぬと、孤児の orchestrator が付けた wip を決定ファイルごと読む者がいないまま stale wip になる。worker はどちらの停止でも止めない。stdout への書き込みが失敗しても停止処理は続ける (読み手が端末ごと消えた pipe の SIGPIPE で倒れない)
+- **二重起動は loop の生存期間の lock で拒む**。同じ project の 2 本目の loop は起動時に止まる。tick 単位の `flock` は残し、単発の `tick` と loop の tick を直列化する。tick の lock は tick 行を log.jsonl に書き終えるまで持つ — 先に外すと、次の tick の行が前の tick の行より先に書かれうる
+- **tick は loop の process の中で回す**。binary と同梱の契約は loop を起動した時点の版に固定され、更新は撃ち直しで拾う
+- **loop は起動した worker の終了を回収する** — loop は長く生きるので、回収しないと終わった worker が zombie として残る
+- **loop の画面が第一の観測点**。`status` の表に loop の見出し (状態・次の tick の時刻・直近の tick の result と error) と停止の操作案内を足し、一定の間隔と tick の直後に描き直す。止まったら画面を残して停止の理由を 1 行足す。stdout が端末でなければ画面を消さず、tick の直後に追記する。loop の中の tick は失敗行 (formats.md §6) を stderr に出さず、見出しに error を出す。形式は formats.md §13
+- **別の端末から死活を見るのは `status`** — process の一覧から loop を探して「loop 稼働中 / loop なし」と最終 tick を出す (§1)。lock を覗いて確かめることはしない (flock に覗くだけの操作は無く、取ると、その一瞬に重なった tick が `locked` で流れる)
+- **orchestrator の起動**: 同梱の契約 file と指示ファイル・決定ファイルの path を渡して `claude -p … --permission-mode auto --session-id <CLI が発行した UUID>` を clone を cwd にして起動し、終了を待つ (tick の lock は保持したまま。上限 15 分を超えたら kill して log に残す)。契約は skill として登録せず prompt として直接渡す (ADR 0003)
 - **worker の起動**: 決定ファイルの spawn ごとに `claude -p "<spawn prompt>" --permission-mode auto --session-id <UUID>` を同じ cwd で**新しい process session (setsid) として detach 起動**し、stdout / stderr を worker log へ落として tick を終える。起動した pid・log path・session id は tick の log 行に載る
 - **セッションの起動は差し替え可能な 1 つの部品に閉じる** (ADR 0005)。今の実装は `claude -p` だけ。`claude --bg` 等への差し替えが部品 1 つの追加で済む形に保つ
 - **permission posture は `auto`** (orchestrator / worker とも)。`-p` では人の確認へ落ちる経路が無く、classifier が止めた操作は実行されずセッションは続くので、sandbox と permission 層を保ったまま無人で走る。permission 層を外す起動は採らない (ADR 0002 / 0005)。止められた worker は続行不能として人へ返す (§10)
-- 定期起動は cron だけに頼る (取りこぼしを追い掛けない性質で足りる理由と、他の scheduler を採らない理由は ADR 0001)
-- **依存 CLI (gh / claude / git) の path は CLI が自分で解決する** — cron の最小環境では PATH が通らない。よく使われる置き場 (`~/.local/bin`・mise の shims・Homebrew の prefix 等) を探す
-- **crontab の出力先 `cron.log` が、CLI 自身が起動できなかった失敗の唯一の観測点**。CLI が出す行は、log.jsonl の行を指す前置を付けた 1 行 (想定外の失敗で止まった tick も log.jsonl に行を残し、cron.log の行が指す先を失敗の種類で変えない)。前置は crontab の行ではなく CLI が持つ (利用者に crontab の書式を増やさせない)。CLI の手前の失敗 (shell が出す行) だけは前置できない。state dir ごと無いと cron.log も書けないので、`setup` が dir を先に作る
-- **死活は 2 段で読む**: log.jsonl 最終行の `ts` が周期の 2 倍より古ければ tick が走っていない。そのとき cron.log の更新時刻が log.jsonl 最終行より新しければ CLI の手前の問題 (末尾に起動失敗)、cron.log も古ければ cron 自体 (crontab が無い / マシンがスリープ) の問題。cron.log には失敗 tick の出力も溜まるので中身の有無では判定しない
-- `flock` で単一実行を保証する (前 tick の orchestrator が長引いても tick は重ねない)。lock は tick 行を log.jsonl に書き終えるまで持つ — 先に外すと、次の tick の行が前の tick の行より先に書かれうる
-- **`tick --dry-run` は副作用の無い試運転** — config の検査 (検査済み hash を読まず毎回全部。書きもしない) → 観測 → 指示の導出までを通し、claude を起動する直前で止めて、指示の種別と件数を stdout に 1 行で出す。**state dir に何も書かない**ので、実 config のまま撃ってよく、走っている cron の tick とも衝突しない。claude と gh が最終的な PATH で解決できることも検査する
-- **`tick --dry-run --cron-env` は CLI が自分を最小環境で撃ち直す** — `HOME` と `PATH=/usr/bin:/bin` だけを残した環境で起動し直すので、PATH の自己解決と、親 shell の環境変数 (`GH_TOKEN` 等) に頼った認証の両方を cron と同じ条件で落とせる。撃ち直しを CLI が持つのは、Claude Code の sandbox の除外指定が Bash 呼び出しの先頭 token だけで照合されるため — 呼び出し側が `env -i …` を前置すると CLI が sandbox 内に落ち、gh が credential を読めない偽の失敗になる。**cron を完全には再現しない**: keyring は環境変数でなくログイン session に従うので、対話 session から撃つと cron では読めない keyring を読めてしまう。keyring 保存の認証は登録後の死活 (log.jsonl 最終行の `ts`) でしか確かめられない
-- crontab の登録は `setup` が cron 相当の試運転が通った後、導入者の承認を得て代行する (既存の tick 行は差分提示にとどめ、黙って置き換えない)
+- **依存 CLI (gh / claude / git) の path は CLI が自分でも解決する** — loop は起動した shell の PATH を継ぐが、最小の PATH の shell (ssh 越し等) から撃たれても動くように、よく使われる置き場 (`~/.local/bin`・mise の shims・Homebrew の prefix 等) を探す
+- **`tick --dry-run` は副作用の無い試運転** — config の検査 (検査済み hash を読まず毎回全部。書きもしない) → 観測 → 指示の導出までを通し、claude を起動する直前で止めて、指示の種別と件数を stdout に 1 行で出す。**state dir に何も書かない**ので、実 config のまま撃ってよく、走っている loop とも衝突しない。claude と gh が最終的な PATH で解決できることも検査する
 
 ## 10. worker 契約 (spawn prompt)
 
@@ -187,11 +190,11 @@ spawn prompt の文面は同梱の契約 file が正本。本節は構造の決�
   - 版の照合・互換検査はしない。常に install 済みの版を使う
 - worker は plugin の skill (two-axis-review) と agent を名前で呼ぶので、worker が動く clone で plugin `swat-skills` が有効になっている必要がある。`doctor` はこれを検査する
 - **Claude Code の settings は CLI が書かない**。`doctor` は要る entry を表示する: sandbox の `filesystem.allowWrite` に state dir (orchestrator が決定ファイルを書く先)、`excludedCommands` に `gh` (orchestrator / worker の tracker 操作) と `claude-dispatcher` (セッション内から `status` / `doctor` を撃つとき、中の gh が credential を読めるように)
-- cron entry は `setup` が承認を得て登録する (§9)
 
 ## 12. スコープ外
 
 - **merge 後の deploy** — merge 自体が人間ゲートのため範囲外
 - **triage** — 着手可の付与・`ready-for-human` の解消・stale wip の回収は人間の領分
 - **stale wip の自動解消 / orchestrator の常駐運用** — 拡張候補として認知だけしておく
+- **loop の監督** (boot 時の起動・落ちた loop の起こし直し) — 人が同じコマンドで撃ち直す (ADR 0006)
 - **gh 以外の tracker / CL host** (GitLab / Jira) — 拡張候補。置き場の宣言は tracker 種別と識別子の組で持つので、観測と LLM の gh 操作を種別ごとに足す形で広げられる

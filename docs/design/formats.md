@@ -19,8 +19,8 @@ macOS でも XDG に揃える (`~/Library` は使わない)。project ごとに�
 
 <state root>/<project>/
   log.jsonl                           tick 行と orchestrator 行 (§4)
-  cron.log                            crontab の行が append する stdout / stderr (§6)
-  tick.lock                           flock の対象
+  tick.lock                           tick の flock の対象
+  loop.lock                           loop の生存期間の flock の対象 (§13)
   config-verified                     実在検査に通った config.toml の sha256 (hex 1 行)
   instructions/<stem>.json            指示ファイル (§5.1)。指示があった tick だけ
   decisions/<stem>.json               決定ファイル (§5.2)
@@ -29,9 +29,9 @@ macOS でも XDG に揃える (`~/Library` は使わない)。project ごとに�
   workers/<issue>-<stem>.log          worker の stdout / stderr
 ```
 
-- `<project>` は `[A-Za-z0-9._-]+`。crontab の行と subcommand の引数で同じ綴りを使う
+- `<project>` は `[A-Za-z0-9._-]+`。subcommand の引数で使う綴り
 - `<stem>` は tick の開始時刻 (UTC) の `YYYYMMDDTHHMMSS.ffffffZ`。マイクロ秒まで入れるのは、同じ秒に 2 tick 走ったときに前の file を上書きしないため
-- 時刻は RFC 3339 の UTC (`Z` 表記) で、log.jsonl の `ts` はマイクロ秒まで、cron.log の前置は秒まで
+- 時刻は RFC 3339 の UTC (`Z` 表記) で、log.jsonl の `ts` はマイクロ秒まで、tick の失敗行 (§6) の前置と画面 (§10 / §13) は秒まで
 
 ## 2. config.toml
 
@@ -48,7 +48,7 @@ repo = "owner/other"           # [cl] を書くなら必須 (空の [cl] は誤�
 [limits]
 max_wip = 2                    # 必須。1 以上の整数。並列上限 N
 
-[auth]                         # 任意。cron から認証が読めない環境だけ書く。書くなら 2 key の少なくとも 1 つ
+[auth]                         # 任意。起動した環境から認証を取れないとき (ssh 越し等) だけ書く。書くなら 2 key の少なくとも 1 つ
 token_file = "~/.config/claude-dispatcher/<project>/gh-token"
 claude_token_file = "~/.config/claude-dispatcher/<project>/claude-token"
 ```
@@ -68,7 +68,7 @@ claude_token_file = "~/.config/claude-dispatcher/<project>/claude-token"
 | 3 | `locked` | 前 tick が走っていたので見送った |
 | 4 | `auth_error` | gh の認証が通らず観測していない (綴りを直しても直らない) |
 
-`tick` 以外の subcommand も 0 = 成功、1 = 失敗、2 = 引数・config 起因を使う。
+`tick` 以外の subcommand も 0 = 成功、1 = 失敗、2 = 引数・config 起因を使う。`loop` は起動時に同じ project の loop が走っていれば 3 で終わる (§13)。
 
 ## 4. log.jsonl
 
@@ -97,7 +97,7 @@ claude_token_file = "~/.config/claude-dispatcher/<project>/claude-token"
 
 | key | いつ載るか |
 |---|---|
-| `ts` / `project` / `cwd` / `result` | 常に。`ts` は tick の開始時刻。最終行の `ts` が死活の手掛かり |
+| `ts` / `project` / `cwd` / `result` | 常に。`ts` は tick の開始時刻。最終行の `ts` が最後に回った tick の時刻 |
 | `error` | `result` が `ok` 以外のとき。複数行の error は ` / ` で 1 行に畳む |
 | `observed` / `candidates` / `wip` / `instructions` | 観測に至った tick。`instructions` は指示の種別 → 件数 (0 件なら `{}`) |
 | `instruction_file` | 観測に至った tick。指示 0 件なら `null` |
@@ -184,9 +184,9 @@ CLI は orchestrator の正常終了後に次を検査する (timeout / 異常�
 | `spawn[].playbooks` (prompt に載せた playbook の絶対 path の列) の各 path が prompt 本文に含まれ、file として実在する。`start` は指示の選定母集合の 1 本、`reenter` は指示の条件の playbook を条件順に並べた列の部分列 (読み直しで外れた条件は落としてよい) | 1 件も起動せず `error` |
 | 網羅: 上の表の issue 1 件ごとに採否がある | 書かれた `spawn` を起動してから `error` |
 
-## 6. cron.log の行
+## 6. tick の失敗行
 
-CLI が失敗 tick で stderr に出す 1 行:
+単発の `tick` が失敗したときに stderr へ出す 1 行 (loop の中の tick は出さず、loop の見出しに出す — §13):
 
 ```
 <時刻 (UTC, 秒まで)> [<project>] tick=<log.jsonl の ts か -> result=<result> <error>
@@ -194,7 +194,7 @@ CLI が失敗 tick で stderr に出す 1 行:
 
 - `tick=-` は log.jsonl を書けなかった tick (state dir が無い等)
 - 想定外の失敗 (panic 等) で止まった tick は、stack trace 等の後ろにこの 1 行を置く (`<error>` は `想定外の失敗で止まった: <内容>`)。末尾の行だけで読めるようにするため
-- 正常な tick は何も書かない。前置の無い行は CLI 以外 (shell) が出したもの
+- 正常な tick は何も書かない
 
 ## 7. `tick --dry-run` の stdout
 
@@ -250,20 +250,22 @@ claude-dispatcher status ps [<project>]
 claude-dispatcher status watch [<project>] [--interval <秒>]
 ```
 
-project を省略すると、config root の下の全 project (§9 の `projects`) を並べる。`watch` は `ps` の表を `--interval` 秒 (既定 5、1 以上 86400 以下) ごとに描き直し、Ctrl-C で終わる。実装 repo の clone を cwd にして撃つ (BRANCH 列は cwd の clone の作業ツリーを読む)。
+project を省略すると、config root の下の全 project (§9 の `projects`) を並べる。`watch` は `ps` の表を `--interval` 秒 (既定 5、1 以上 86400 以下) ごとに描き直し、Ctrl-C で終わる。loop の画面 (§13) も同じ表を使う。実装 repo の clone を cwd にして撃つ (BRANCH 列は cwd の clone の作業ツリーを読む)。
 
-- **読み取り専用**: state dir にも外部 store にも書かない。lock file も作らず、lock も取らない (取ると、その一瞬に重なった tick が `locked` の行を残す)。tick が走っているかは process の一覧 (`claude-dispatcher … tick <project>` の process) で見る
+- **読み取り専用**: state dir にも外部 store にも書かない。lock file も作らず、lock も取らない (取ると、その一瞬に重なった tick が `locked` の行を残し、起動しようとした loop が拒まれる)。loop が生きているかは process の一覧 (`claude-dispatcher … loop <project>` の process) で見る
 - **載せる worker**: log.jsonl の tick 行の `spawned` のうち、issue ごとの最新の起動記録で issue に `dispatcher:wip` が付いているか process が生きているもの、と、それより古い起動記録で process が生きているもの (wip は issue の今の worker にだけ掛ける。古い起動記録に掛けると、再入で起こし直した issue の前回の worker が stale wip に見える)。process の生死は pid の command 行に `session_id` が在るかで見る (pid は再利用される)。process が死んでいて wip が残っている行が stale wip の手掛かり (system.md §1)
 - 外部 process (gh / git / claude / ps) が失敗した列は `?` にして表は出し、何を読めなかったかを `! <理由>` の注記行に残す
 
 表は project ごとに 1 段:
 
 ```
-myproj  待機  最終 tick 2026-09-26T03:00:00Z ok
+myproj  loop 稼働中  最終 tick 2026-09-26T03:00:00Z ok
   ! <注記>
 ISSUE  KIND   STATE    ELAPSED  SESSION  BRANCH  WIP  CL        TICK
 #42    start  running  12m      -        +3      yes  #57 OPEN  2026-09-26T02:48:00Z
 ```
+
+見出しの 2 欄目は、この project の loop の process が在れば `loop 稼働中`、無ければ `loop なし`、process の一覧を読めなければ `loop ?`。
 
 | 列 | 中身 |
 |---|---|
@@ -288,21 +290,13 @@ claude-dispatcher setup <project>
 1. **宣言 config の雛形と state dir**: config.toml が無ければ、雛形 (`[issue].repo` は cwd の clone の origin、`ready_label = "ready-for-agent"`、`max_wip = 1`) と state dir を作り、「埋めてから撃ち直す」と示して止まる。config.toml があれば上書きしない (state dir が無ければ作る)
 2. **config の検査**: `tick` と同じ検査。落ちたら名指しで止まる
 3. **label**: issue 置き場に `dispatcher:wip` / `ready-for-human` / 着手可 label / (書いてあれば) triage label が無ければ、作る label を示して承認を尋ね、承認されたら作る
-4. **試運転**: `tick <project> --dry-run` と `tick <project> --dry-run --cron-env` を順に撃ち、出力をそのまま示す
-5. **crontab**: 次の 1 行を組み、`crontab -l` と突き合わせる
-
-   ```
-   */5 * * * * cd <clone> && <claude-dispatcher の絶対 path> tick <project> >> <state dir>/cron.log 2>&1
-   ```
-
-   `<claude-dispatcher の絶対 path>` は撃たれたときの綴り (PATH で引いた path) を絶対 path にしたもの。symlink は解決しない — Homebrew 等の版つきの実体の path を書くと、更新で消える。`go run` の一時 build からは組めないので止まる。path と cron.log の `%` は cron が改行として読むので `\%` にする
-
-   周期の欄 (先頭 5 欄) を除いて同じ行があれば済み (周期は人が変えてよい)。この project の tick 行 (`tick <project>` か、移植元の `dispatcher-tick.py <project>` を含むコメントでない行) が別の形であれば、現行の行と組んだ行を並べて示すだけで**置き換えない**。無ければ足す行を示して承認を尋ね、承認されたら現行の表に 1 行足して登録し、`crontab -l` で登録を確かめる
+4. **試運転**: `tick <project> --dry-run` を撃ち、出力をそのまま示す
+5. **loop の起動コマンド**: 試運転が通ったら `cd <clone> && claude-dispatcher loop <project> 5m` を示して終わる。setup は loop を起動しない
 
 - **承認は stdin から `y` / `yes` を受けたときだけ**。それ以外 (空行・EOF・端末の無い実行) は承認なしとして書かず、自分で撃つコマンドを示して止まる
 - Claude Code の settings は書かない (`doctor` が要る entry を示す)
 
-exit: 0 = crontab に tick 行がある状態で終わった / 1 = 途中で止まった (雛形を書いた・承認されなかった・gh の失敗・既存の tick 行と食い違う) / 2 = 引数か config の誤り。試運転が落ちたときは試運転の exit code (§3) をそのまま返す。
+exit: 0 = 試運転が通り、loop の起動コマンドを示して終わった / 1 = 途中で止まった (雛形を書いた・承認されなかった・gh の失敗) / 2 = 引数か config の誤り。試運転が落ちたときは試運転の exit code (§3) をそのまま返す。
 
 ## 12. `doctor`
 
@@ -310,7 +304,7 @@ exit: 0 = crontab に tick 行がある状態で終わった / 1 = 途中で止�
 claude-dispatcher doctor <project>
 ```
 
-導入の充足を検査して 1 項目 1 行で示す。**何も書かない** (state dir・config・settings・crontab・外部 store のどれにも)。
+導入の充足を検査して 1 項目 1 行で示す。**何も書かない** (state dir・config・settings・外部 store のどれにも)。
 
 ```
 ok  config        <config.toml の path>
@@ -328,10 +322,84 @@ NG  label         置き場 acme/widgets に dispatcher:wip が無い — `claud
 | `plugin` | plugin `swat-skills` が system.md §11 の選択順で 1 つに決まる (別 marketplace の重複は NG) |
 | `playbook` | 条件カタログ (system.md §6) の playbook が全部在る。start の選定母集合の本数も示す (0 本は `--`。tick は start を出さないだけで動く) |
 | `原則索引` | 原則索引の file が在る |
-| `試運転` | `tick <project> --dry-run --cron-env` (state dir に何も書かない) が exit 0 で終わる。NG なら出力を添える |
-| `crontab` | `setup` が組む行 (§11) と周期の欄を除いて同じ行がある。この project の tick 行が別の形なら現行の行と組む行を並べて NG。自分の絶対 path を組めない (`go run` の一時 build 等) ときもこの項目だけ NG にして、ほかの項目は検査する |
+| `試運転` | `tick <project> --dry-run` (state dir に何も書かない) が exit 0 で終わる。NG なら出力を添える |
 | `最終 tick` | log.jsonl の最後の tick 行の `ts` と `result`、読めない行があればその件数 (情報。判定しない) |
 
 先頭の印は `ok` (充足) / `NG` (不足。理由と直し方を添える) / `--` (情報)。項目の後に、Claude Code の settings に要る entry (sandbox の `filesystem.allowWrite` に state dir、`excludedCommands` に `gh` と `claude-dispatcher`) を示す。
 
 exit: 0 = `NG` が無い / 1 = `NG` がある / 2 = 引数の誤り。
+
+## 13. `loop`
+
+```
+claude-dispatcher loop <project> <interval>
+```
+
+実装 repo の clone を cwd にして撃つ。`<interval>` は Go の duration の綴り (`90s` / `5m` / `1h30m`) で、1m 以上 24h 以下。起動直後に tick を 1 回撃ち、以後は tick の終了から `<interval>` 待って次を撃つ。tick の `result` が何であっても次の周期へ進む。tick は単発の `tick` と同じ 1 回分で、log.jsonl に同じ形の行を残す (§4)。
+
+**起動時の検査** (落ちたら画面を出さず、stderr に理由を 1 行出して終わる):
+
+| 検査 | exit |
+|---|---|
+| 引数の数・project 名の綴り・`<interval>` の綴りと範囲 | 2 |
+| config.toml が在る | 2 |
+| state dir が在る (`setup` が作る) | 1 |
+| 同じ project の loop が走っていない (`loop.lock` を取れる) | 3 |
+
+config の中身は起動時に検査しない。tick ごとに読み直し、落ちた tick は `config_error` として見出しに出る (直せば撃ち直さずに戻る)。
+
+### 13.1 画面
+
+stdout が端末のとき、`status ps <project>` の表 (§10) の見出し行を loop の見出しに差し替え、末尾に操作案内を足した画面を描く。15 秒ごと・tick の直後・停止を求められたときに、画面を消して (`\033[H\033[2J`) 描き直す。
+
+```
+myproj  loop 5m  待機 · 次の tick 2026-09-26T03:05:00Z (あと 3m)
+最終 tick 2026-09-26T03:00:00Z ok · 指示 start 1 · 起動 #42
+  ! <注記>
+ISSUE  KIND   STATE    ELAPSED  SESSION  BRANCH  WIP  CL        TICK
+#42    start  running  12m      -        +3      yes  #57 OPEN  2026-09-26T02:48:00Z
+
+Ctrl+C で停止
+```
+
+| 行 | 中身 |
+|---|---|
+| 1 行目 | project・`loop <interval>`・状態 (下表) |
+| `最終 tick` | loop が回した直近の tick の `ts`・`result`・指示の種別と件数 (0 件なら `指示 0`)・起動した worker の issue (無ければ省く)。まだ 1 回も終えていなければ `最終 tick なし` |
+| `!` 行 | 直近の tick の `error` (`result` が `ok` 以外のとき) と、`status` の注記 (§10) |
+| 表 | `status` と同じ (§10)。載せる worker が居なければ出さない |
+| 最終行 | 操作案内 (下表) |
+
+| 状態 | 1 行目の状態欄 | 操作案内 |
+|---|---|---|
+| 待機 | `待機 · 次の tick <時刻> (あと <残り>)` | `Ctrl+C で停止` |
+| tick 実行中 | `tick 実行中 · <経過>`。orchestrator を待つ間は `tick 実行中 · orchestrator <経過> (上限 15m)` | `Ctrl+C: この tick を終えてから停止` |
+| 停止待ち | `停止待ち · ` に tick 実行中と同じ経過 | `停止待ち: この tick を終えたら止まる。もう一度 Ctrl+C で orchestrator を止めて止まる (付いた wip は残りうる)` |
+
+`<残り>` と `<経過>` は §10 の ELAPSED と同じ綴り。
+
+stdout が端末でないときは画面を消さず、tick の直後と止まったときにだけ、操作案内を除いた同じ中身を空行で区切って追記する。
+
+### 13.2 停止
+
+SIGINT / SIGTERM / SIGHUP を同じに扱う。
+
+| 受けたとき | 振る舞い |
+|---|---|
+| 1 回目・tick の合間 | tick を始めずに止まる |
+| 1 回目・tick の実行中 | 状態を停止待ちにし、その tick を最後まで進めて (orchestrator の終了を待ち、決定どおり worker を起動し、tick 行を書いて) から止まる |
+| 2 回目 | orchestrator を起動する前ならそれを起動せず、起動中ならその process group を止め、決定ファイルを読まずに `result: error` の tick 行を書いて止まる |
+
+- 起動済みの worker はどちらの停止でも止めない
+- 止まったら画面を消さずに残し、終了行を 1 行足す
+
+  ```
+  <時刻 (UTC, 秒まで)> [<project>] loop を止めた (<理由>)。止めずに走っている worker: <n> 本
+  ```
+
+  - `<理由>` は `停止要求 <signal 名>` (例 `停止要求 SIGINT`)。2 回目の停止要求で止めたときは `2 回目の停止要求で orchestrator を止めた — 経過は <orchestrator log の path>。wip を付けたまま残った issue が無いか確かめる` (orchestrator を起動する前なら `2 回目の停止要求で orchestrator を起動せずに止めた`)
+  - `<n>` は `status` の STATE が `running` の行の数。process の一覧を読めなければ `?`
+- 2 回目の停止要求で止めた tick 行の `error` は `停止要求で orchestrator を止めた` か `停止要求で orchestrator を起動しなかった`
+- stdout への書き込みの失敗 (読み手の消えた pipe 等) では止まらない。描画を捨てて続け、停止要求で止まる
+
+exit: 0 = 停止要求で止まった / 1・2・3 = 起動時の検査 (上表)。想定外の失敗で loop 自身が止まったときは 1。

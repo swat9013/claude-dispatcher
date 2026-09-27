@@ -1,6 +1,6 @@
 # ADR 0001: 台帳を持たず、cron 駆動の tick で毎回外部 store を読み直す
 
-- Status: Accepted
+- Status: Accepted (定期起動を cron に頼る決定と、自作 scheduler の却下は ADR 0006 が置き換えた)
 - Date: 2026-09-26
 
 ## Context

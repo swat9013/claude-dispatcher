@@ -13,8 +13,12 @@ dispatcher を回す単位。issue 置き場・CL 置き場・着手可 label・
 _Avoid_: workspace, repo (実装 repo と置き場を指す語と紛れる)
 
 **tick**:
-cron による CLI の 1 回の起動。外部 store を読み直し、指示を導出し、指示があるときだけ LLM を起こす。
+CLI の 1 回分の仕事。外部 store を読み直し、指示を導出し、指示があるときだけ LLM を起こす。loop が周期ごとに回すほか、単発でも撃てる。
 _Avoid_: run, cycle, poll
+
+**loop**:
+人が起動してから人が止めるまで、1 つの project の tick を周期ごとに回し続ける CLI の process。落ちても自分では起き直さない。
+_Avoid_: daemon, scheduler (監督を持つ常駐物と紛れる)
 
 **snapshot**:
 1 tick で読んだ外部 store の正規化像。tick を跨いで持ち越さない。
@@ -56,7 +60,7 @@ LLM が続行不能として人へ返した印の label。人が外すまで候�
 _Avoid_: blocked, escalated
 
 **stale wip**:
-worker が剥がさずに死んで残った wip。snapshot からは着手中と区別できず、回収は人が行う。
+付けた LLM が剥がさずに止まって残った wip。worker の異常死のほか、wip を付けた後に orchestrator が止まったとき (timeout・loop への 2 回目の停止要求) にも残る。snapshot からは着手中と区別できず、回収は人が行う。
 
 ## 役とやり取り
 
