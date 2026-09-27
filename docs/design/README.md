@@ -8,7 +8,7 @@
 |---|---|
 | [`system.md`](system.md) | システム境界 / 全体図 / 解く問題 / 状態の表現 / 機械と LLM の線 / 指示カタログ / 各 file の責務 / 宣言 config / 駆動 / worker 契約 / 配布と外部依存 / スコープ外 |
 | [`usecases.md`](usecases.md) | Cockburn 縮約テンプレートによるユースケース。冒頭に記述規約 |
-| [`formats.md`](formats.md) | 置き場・config・exit code・log.jsonl・指示ファイル・決定ファイル・cron.log・dry-run の出力・引き渡しコメント・`paths --json`。black-box テストの参照先 |
+| [`formats.md`](formats.md) | 置き場・config・exit code・log.jsonl・指示ファイル・決定ファイル・tick の失敗行・dry-run の出力・引き渡しコメント・`paths --json`・`status` / `setup` / `doctor` / `loop` の出力。black-box テストの参照先 |
 
 用語は [`CONTEXT.md`](../../CONTEXT.md)。
 
