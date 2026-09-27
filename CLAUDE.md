@@ -1,6 +1,6 @@
 ## 開発フロー
 
-branch を切る・commit する・PR を出す前に `CONTRIBUTING.md` を読み、そこに書かれた branch 規約・gate・commit / PR 規約に従う。
+ファイル変更・branch 作成・commit・PR 作成のいずれかに入る前に `CONTRIBUTING.md` を読み、「branch・worktree 運用」「gate」「commit・PR 規約」の各節に従う。
 
 ## Agent skills
 
