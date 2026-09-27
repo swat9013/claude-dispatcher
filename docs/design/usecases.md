@@ -198,5 +198,5 @@ Cockburn『ユースケース実践ガイド』(Writing Effective Use Cases) の
 - **1b.** 端末を閉じた (SIGHUP)
   - 1b1. 1 回目の停止要求と同じく step 2 へ進む。画面は見えないので、止まったことは別の端末の `status` で確かめる
 - **2a.** 運用者が tick の終わりを待てず、もう一度停止を求めた
-  - 2a1. loop は orchestrator を起動する前ならそれを起動せず、起動中ならその process group を止め、決定ファイルを読まずに error の tick 行を書く
+  - 2a1. loop は orchestrator を起動する前ならそれを起動せず、起動中ならその process group を止め、決定ファイルを読まずに error の tick 行を書く。orchestrator が正常終了した後なら、決定どおりの worker の起動を終えてから止まる (step 3 へ)
   - 2a2. loop は終了行に orchestrator log の path を示し、wip を付けたまま残った issue を確かめるよう促して終わる。残った wip は stale wip として人が回収する

@@ -388,7 +388,8 @@ SIGINT / SIGTERM / SIGHUP を同じに扱う。
 |---|---|
 | 1 回目・tick の合間 | tick を始めずに止まる |
 | 1 回目・tick の実行中 | 状態を停止待ちにし、その tick を最後まで進めて (orchestrator の終了を待ち、決定どおり worker を起動し、tick 行を書いて) から止まる |
-| 2 回目 | orchestrator を起動する前ならそれを起動せず、起動中ならその process group を止め、決定ファイルを読まずに `result: error` の tick 行を書いて止まる |
+| 2 回目・orchestrator の起動前か起動中 | 起動前ならそれを起動せず、起動中ならその process group を止め、決定ファイルを読まずに `result: error` の tick 行を書いて止まる |
+| 2 回目・orchestrator の正常終了後 | 1 回目と同じ。決定ファイルの検査と決定どおりの worker の起動を終え、tick 行を書いてから止まる (起動を途中で打ち切ると、付いた wip が worker の無いまま残る) |
 
 - 起動済みの worker はどちらの停止でも止めない
 - 止まったら画面を消さずに残し、終了行を 1 行足す
