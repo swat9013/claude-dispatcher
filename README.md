@@ -30,7 +30,16 @@ claude-dispatcher loop ─周期ごと─▶ tick ─指示─▶ orchestrator (
 
 ## install
 
-今は `go install` か GitHub Releases のどちらかで `claude-dispatcher` を PATH の通った場所に置く。
+Homebrew・`go install`・GitHub Releases のどれかで `claude-dispatcher` を PATH の通った場所に置く。
+
+**Homebrew** (macOS / Linux): tap `swat9013/tap` の cask で入れる。tap 名付きの完全修飾名 (`swat9013/tap/claude-dispatcher`) で撃つと、Homebrew の tap trust (第三者 tap の中身を読む前に求める明示の信頼) がこの cask にだけ与えられる。
+
+```sh
+brew install --cask swat9013/tap/claude-dispatcher
+brew upgrade --cask claude-dispatcher   # 新しい版が出たとき
+```
+
+binary は署名していないので、macOS では cask が install 時に quarantine (Gatekeeper の検査対象にする拡張属性) を外す。走っている `loop` は起動した時点の binary で回り続けるので、`brew upgrade` の後は撃ち直す。
 
 **`go install`** (Go は [go.mod](go.mod) の `go` 行の版以上):
 
@@ -48,8 +57,6 @@ mkdir -p ~/.local/bin && install -m 755 claude-dispatcher ~/.local/bin/
 ```
 
 binary は署名していない。macOS でブラウザから取った archive は Gatekeeper に起動を止められるので、`gh release download` か `curl -LO` で取る (ブラウザで取ったなら `xattr -d com.apple.quarantine ~/.local/bin/claude-dispatcher`)。
-
-**Homebrew** (準備中): tap `swat9013/tap` の cask から macOS / Linux に入れられるようにする。手順は公開したらここに書く ([#10](https://github.com/swat9013/claude-dispatcher/issues/10))。
 
 ## 導入
 

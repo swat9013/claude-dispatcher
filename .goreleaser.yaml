@@ -23,3 +23,26 @@ checksum:
 
 changelog:
   use: github
+
+# tap `swat9013/tap` の cask を tag ごとに更新する。形の決定は docs/adr/0007-homebrew-tap-cask.md
+homebrew_casks:
+  - name: claude-dispatcher
+    repository:
+      owner: swat9013
+      name: homebrew-tap
+      # Actions の GITHUB_TOKEN は別 repo に push できないので、tap の Contents に書ける token を使う (#9)
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    homepage: https://github.com/swat9013/claude-dispatcher
+    description: issue tracker の着手可の issue を Claude Code に無人で実装させ、CL まで運ぶ CLI
+    # prerelease の tag (v1.2.0-rc.1 等) では tap を更新しない
+    skip_upload: auto
+    # 署名していない binary の quarantine を外す。legacy の postflight (hooks.post.install) は第三者 tap で
+    # 2027-12-11 までしか受け付けられないので、宣言的な postflight_steps で書く。
+    # 全体が GoReleaser の template を 1 度通るので、Homebrew の install 時の token は文字列 literal で包む
+    custom_block: |
+      postflight_steps do
+        on_macos do
+          run "/usr/bin/xattr",
+              args: ["-dr", "com.apple.quarantine", "{{ "{{staged_path}}" }}/claude-dispatcher"]
+        end
+      end
