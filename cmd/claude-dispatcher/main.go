@@ -299,19 +299,18 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "project が 1 つも無い: %s\n", e.roots.Config)
 		return exitUsage
 	}
-	probes := status.Probes{Gh: e.ghFor, Git: e.git}
-	collect := func() []status.Report {
-		// process の一覧と claude のセッション一覧はマシンで 1 つなので、描画ごとに 1 度だけ読んで全 project で共有する
-		var machine status.Machine
-		ps, err := e.output("ps", "-A", "-o", "pid=,command=")
-		machine.Processes, machine.ProcessesErr = status.ParseProcesses(ps), err
-		machine.Agents, machine.AgentsErr = e.output("claude", "agents", "--json")
-		reports := make([]status.Report, 0, len(projects))
-		for _, name := range projects {
-			reports = append(reports, status.Collect(e.roots.Project(name), e.home, machine, probes, time.Now()))
-		}
-		return reports
+	probes := status.Probes{
+		Machine: status.Commands{Output: e.output},
+		// worker は newLauncher の ClaudePrint で起動するので、生死もその形で見分ける
+		Workers: launch.ClaudePrintWorkers,
+		Gh:      e.ghFor,
+		Git:     e.git,
 	}
+	places := make([]paths.Project, 0, len(projects))
+	for _, name := range projects {
+		places = append(places, e.roots.Project(name))
+	}
+	collect := func() []status.Report { return status.Collect(places, e.home, probes, time.Now()) }
 
 	if !watch {
 		fmt.Fprintln(stdout, status.RenderTable(collect()))

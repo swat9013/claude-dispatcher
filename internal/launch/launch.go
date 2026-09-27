@@ -1,6 +1,7 @@
 // Package launch は Claude Code セッションの起動を 1 つの部品に閉じる (ADR 0005)。
 //
-// 今の実装は `claude -p` (ClaudePrint) の 1 つだけ。`claude --bg` 等へ変えるときは Launcher の実装を 1 つ足す。
+// 今の実装は `claude -p` (ClaudePrint と、その worker の生死を見分ける ClaudePrintWorkers) の 1 つだけ。
+// `claude --bg` 等へ変えるときは Launcher と Census の実装を 1 つずつ足す。
 package launch
 
 import (
