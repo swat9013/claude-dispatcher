@@ -188,10 +188,10 @@ func checkPlugin(r *report, o Options) {
 		r.line(markOK, "playbook", "start %d 本 + 条件 %d 本", len(starts), len(tick.Conditions))
 	}
 
-	if file := install.PrincipleIndex(); !isFile(file) {
-		r.line(markNG, "原則索引", "無い: %s", file)
+	if err := install.RequirePrincipleIndex(); err != nil {
+		r.line(markNG, "原則索引", "%v", err)
 	} else {
-		r.line(markOK, "原則索引", "%s", file)
+		r.line(markOK, "原則索引", "%s", install.PrincipleIndex())
 	}
 }
 

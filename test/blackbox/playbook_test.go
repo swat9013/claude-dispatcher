@@ -145,25 +145,45 @@ func TestUnreadableFrontmatterStopsTheTickNamingThePlaybook(t *testing.T) {
 }
 
 func TestMissingPrincipleIndexStopsTheTickWithoutLaunchingTheOrchestrator(t *testing.T) {
-	s := newSandbox(t)
-	index := principleIndexPath(s.defaultInstallPath())
-	if err := os.Remove(index); err != nil {
-		t.Fatal(err)
+	for _, tc := range []struct {
+		name       string
+		breakIndex func(t *testing.T, index string)
+	}{
+		{"file が無い", func(t *testing.T, index string) {
+			if err := os.Remove(index); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"file でなくディレクトリ", func(t *testing.T, index string) {
+			if err := os.Remove(index); err != nil {
+				t.Fatal(err)
+			}
+			mustMkdir(t, index)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newSandbox(t)
+			index := principleIndexPath(s.defaultInstallPath())
+			tc.breakIndex(t, index)
+			s.setIssues(readyIssue(42))
+
+			r := s.tick()
+
+			s.assertErrorNames(s.assertOutcome(r, outcomeError), index)
+			s.assertNoClaude("原則索引が無いのに")
+		})
 	}
-	s.setIssues(readyIssue(42))
-
-	r := s.tick()
-
-	s.assertErrorNames(s.assertOutcome(r, outcomeError), index)
-	s.assertNoClaude("原則索引が無いのに")
 }
 
-// unmarkStartPlaybooks は選定母集合の印 (metadata.deliverable: cl) を持つ playbook から印を外し、母集合を空にする。
+// unmarkStartPlaybooks は install の playbook 全部から選定母集合の印 (metadata.deliverable: cl) を外し、母集合を空にする。
 func (s *sandbox) unmarkStartPlaybooks() {
 	s.t.Helper()
-	procedure := filepath.Join(s.defaultInstallPath(), "skills", "procedure")
-	for _, name := range []string{"playbook-implementation", "playbook-docs"} {
-		writeSkill(s.t, filepath.Join(procedure, name), "name: "+name+"\n")
+	dirs, err := filepath.Glob(filepath.Join(s.defaultInstallPath(), "skills", "procedure", "playbook-*"))
+	if err != nil || len(dirs) == 0 {
+		s.t.Fatalf("playbook が見つからない: %v", err)
+	}
+	for _, dir := range dirs {
+		writeSkill(s.t, dir, "name: "+filepath.Base(dir)+"\n")
 	}
 }
 
