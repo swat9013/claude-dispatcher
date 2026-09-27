@@ -174,6 +174,7 @@ query($owner: String!, $name: String!) {
         number
         url
         headRefName
+        isCrossRepository
         baseRefName
         isDraft
         mergeable
@@ -193,6 +194,7 @@ type PR struct {
 	Number    int
 	URL       string
 	Head      string
+	Fork      bool // head branch が fork の repo にある (isCrossRepository)
 	Base      string
 	Draft     bool
 	Mergeable string
@@ -218,6 +220,7 @@ func OpenPRs(gh Runner, repo, issueRepo config.Repo) ([]PR, error) {
 						Number                  int
 						URL                     string
 						HeadRefName             string
+						IsCrossRepository       bool
 						BaseRefName             string
 						IsDraft                 bool
 						Mergeable               string
@@ -259,7 +262,7 @@ func OpenPRs(gh Runner, repo, issueRepo config.Repo) ([]PR, error) {
 		if n.ReviewThreads.TotalCount > reviewThreadsSize {
 			return nil, fmt.Errorf("%w: PR #%d の review thread が %d 件を超えた", ErrTruncated, n.Number, reviewThreadsSize)
 		}
-		pr := PR{Number: n.Number, URL: n.URL, Head: n.HeadRefName, Base: n.BaseRefName, Draft: n.IsDraft, Mergeable: n.Mergeable, Closes: []int{}}
+		pr := PR{Number: n.Number, URL: n.URL, Head: n.HeadRefName, Fork: n.IsCrossRepository, Base: n.BaseRefName, Draft: n.IsDraft, Mergeable: n.Mergeable, Closes: []int{}}
 		for _, ref := range n.ClosingIssuesReferences.Nodes {
 			if ref.Repository.NameWithOwner == issueRepo.String() {
 				pr.Closes = append(pr.Closes, ref.Number)
@@ -306,11 +309,15 @@ type CLState struct {
 	State  string `json:"state"`
 }
 
-// LatestCLs は issue ごとに、head branch が branches[issue] の最新の CL を返す。無い issue は nil。
+// latestCLsWindow は LatestCLs が branch ごとに新しい順に読む CL の本数。fork の CL を読み飛ばす分の余裕
+const latestCLsWindow = 10
+
+// LatestCLs は issue ごとに、repo 自身の head branch (fork でない) が branches[issue] の最新の CL を返す。無い issue は nil。
+// headRefName の絞り込みは fork の CL も拾うので、新しい順に読んで fork の CL を読み飛ばす。
 func LatestCLs(gh Runner, repo config.Repo, branches map[int]string) (map[int]*CLState, error) {
 	var fields strings.Builder
 	for issue, branch := range branches {
-		fmt.Fprintf(&fields, ` i%d: pullRequests(headRefName: %q, first: 1, orderBy: {field: CREATED_AT, direction: DESC}) { nodes { number state } }`, issue, branch)
+		fmt.Fprintf(&fields, ` i%d: pullRequests(headRefName: %q, first: %d, orderBy: {field: CREATED_AT, direction: DESC}) { totalCount nodes { number state isCrossRepository } }`, issue, branch, latestCLsWindow)
 	}
 	query := "query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) {" + fields.String() + " } }"
 	out, err := gh.Run("api", "graphql", "-f", "query="+query, "-f", "owner="+repo.Owner, "-f", "name="+repo.Name)
@@ -319,7 +326,13 @@ func LatestCLs(gh Runner, repo config.Repo, branches map[int]string) (map[int]*C
 	}
 	var payload struct {
 		Data struct {
-			Repository map[string]struct{ Nodes []CLState }
+			Repository map[string]struct {
+				TotalCount int
+				Nodes      []struct {
+					CLState
+					IsCrossRepository bool
+				}
+			}
 		}
 	}
 	if err := json.Unmarshal(out, &payload); err != nil {
@@ -332,8 +345,15 @@ func LatestCLs(gh Runner, repo config.Repo, branches map[int]string) (map[int]*C
 			return nil, fmt.Errorf("gh api graphql の出力に issue %d の CL が無い", issue)
 		}
 		cls[issue] = nil
-		if len(found.Nodes) > 0 {
-			cls[issue] = &found.Nodes[0]
+		for _, n := range found.Nodes {
+			if !n.IsCrossRepository {
+				cls[issue] = &n.CLState
+				break
+			}
+		}
+		if cls[issue] == nil && found.TotalCount > len(found.Nodes) {
+			// 窓の外に repo 自身の CL が残っているかもしれない。無いと言い切らない
+			return nil, fmt.Errorf("%w: issue %d の branch %s の CL が fork だけで %d 本を超えた", ErrTruncated, issue, branches[issue], latestCLsWindow)
 		}
 	}
 	return cls, nil

@@ -130,6 +130,24 @@ func TestStatusListsARunningWorkerWithItsWipBranchAndCL(t *testing.T) {
 	}
 }
 
+func TestStatusCLColumnSkipsAForkCLOnTheWorkerBranchName(t *testing.T) {
+	s := newSandbox(t)
+	s.statusScenario()
+	s.workerAlive()
+	s.setWip(42)
+	// 最新は fork から同じ branch 名で開かれた #60。worker の CL は #57
+	s.respond("gh", stubwire.Rule{ArgsPrefix: []string{"api", "graphql"}, ArgContains: "headRefName",
+		Stdout: `{"data":{"repository":{"i42":{"totalCount":2,"nodes":[` +
+			`{"number":60,"state":"OPEN","isCrossRepository":true},{"number":57,"state":"MERGED","isCrossRepository":false}]}}}}`})
+
+	r := s.statusPS()
+
+	row := strings.Join(workerRow(r.stdout, 42), " ")
+	if !strings.Contains(row, "#57 MERGED") || strings.Contains(row, "#60") {
+		t.Fatalf("#42 の CL 列が fork でない最新の CL (#57 MERGED) でない: %s\n%s", row, r.stdout)
+	}
+}
+
 func TestStatusShowsAWorkerWhoseProcessIsGoneButWipRemainsAsExited(t *testing.T) {
 	s := newSandbox(t)
 	s.statusScenario()

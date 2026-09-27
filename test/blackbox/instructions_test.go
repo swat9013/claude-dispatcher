@@ -168,6 +168,45 @@ func TestClosingReferenceToAnotherRepoDoesNotLink(t *testing.T) {
 	}
 }
 
+func TestForkCLOnAWorkerBranchNameDoesNotLinkByBranch(t *testing.T) {
+	s := newSandbox(t)
+	s.setIssues(readyIssue(5))
+	s.setPRs(pullRequest{number: 105, branch: workerBranch(5), fork: true})
+	s.orchestratorSkips(5)
+
+	s.tick()
+
+	snapshot := asMap(t, s.onlyInstructionFile()["snapshot"])
+	if linked := asMap(t, snapshot["linked_cls"]); len(linked) != 0 {
+		t.Fatalf("fork の CL が branch 名で紐づいた: %v", linked)
+	}
+	var got []int
+	for _, c := range asList(t, asMap(t, snapshot["issues"])["candidates"]) {
+		got = append(got, number(t, asMap(t, c)["number"]))
+	}
+	if !slices.Equal(got, []int{5}) {
+		t.Fatalf("候補 = %v, want [5]", got)
+	}
+}
+
+func TestForkCLWithAClosingReferenceStaysLinkedButYieldsNoReenter(t *testing.T) {
+	s := newSandbox(t)
+	// 42 は指示ファイルを書かせるための候補
+	s.setIssues(issue{number: 39}, readyIssue(42))
+	s.setPRs(pullRequest{number: 100, branch: workerBranch(39), closes: []int{39}, mergeable: "CONFLICTING", fork: true})
+	s.orchestratorSkips(42)
+
+	s.tick()
+
+	file := s.onlyInstructionFile()
+	if linked := asMap(t, asMap(t, file["snapshot"])["linked_cls"]); !slices.Equal(numbers(t, linked["39"]), []int{100}) {
+		t.Fatalf("closing reference で紐づいていない: %v", linked)
+	}
+	if reenters := instructionsOfKind(t, file, "reenter"); len(reenters) != 0 {
+		t.Fatalf("fork の CL へ reenter を出した: %v", reenters)
+	}
+}
+
 func TestNoFreeSlotYieldsNoInstruction(t *testing.T) {
 	s := newSandbox(t)
 	s.setIssues(readyIssue(42), issue{number: 40, labels: []string{wipLabel}}, issue{number: 41, labels: []string{wipLabel}})

@@ -99,6 +99,7 @@ type pullRequest struct {
 	checks     string // SUCCESS / PENDING / FAILURE / ERROR。空なら checks なし (null)
 	unresolved int
 	resolved   int
+	fork       bool // head branch が fork の repo にある (isCrossRepository)
 }
 
 // setPRs は `gh api graphql` が返す open PR を決める (GitHub GraphQL の repository.pullRequests の形)。
@@ -157,6 +158,7 @@ func (pr pullRequest) graphqlNode() map[string]any {
 		"number":                  pr.number,
 		"url":                     fmt.Sprintf("https://github.com/%s/pull/%d", defaultIssueRepo, pr.number),
 		"headRefName":             pr.branch,
+		"isCrossRepository":       pr.fork,
 		"baseRefName":             base,
 		"isDraft":                 false,
 		"mergeable":               mergeable,
