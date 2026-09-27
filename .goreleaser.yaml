@@ -1,4 +1,4 @@
-# GitHub Releases へ出す binary の定義。tag の push で .github/workflows/release.yml が撃つ
+# GitHub Releases へ出す binary と、tap `swat9013/homebrew-tap` の cask の定義。tag の push で .github/workflows/release.yml が撃つ
 version: 2
 
 builds:
@@ -23,3 +23,28 @@ checksum:
 
 changelog:
   use: github
+
+# prerelease の tag (v1.2.0-rc.1 等) の Release を prerelease にし、Latest にしない (tap の skip_upload: auto と揃える)
+release:
+  prerelease: auto
+
+# 形の決定は docs/adr/0007-homebrew-tap-cask.md、token と prerelease の扱いは CONTRIBUTING.md の「release」
+homebrew_casks:
+  - name: claude-dispatcher
+    repository:
+      owner: swat9013
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    homepage: https://github.com/swat9013/claude-dispatcher
+    description: issue tracker の着手可の issue を Claude Code に無人で実装させ、CL まで運ぶ CLI
+    skip_upload: auto
+    # 署名していない binary の quarantine を外す。GoReleaser に postflight_steps の設定は無いので custom_block で書く。
+    # 全体が GoReleaser の template を 1 度通るので、Homebrew の install 時の token は文字列 literal で包む
+    # (release.yml が publish の前に、生成された cask に literal の {{staged_path}} が残ることを確かめる)
+    custom_block: |
+      postflight_steps do
+        on_macos do
+          run "/usr/bin/xattr",
+              args: ["-dr", "com.apple.quarantine", "{{ "{{staged_path}}" }}/claude-dispatcher"]
+        end
+      end

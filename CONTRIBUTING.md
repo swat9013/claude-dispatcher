@@ -22,7 +22,10 @@
 - commit 時: `pre-commit install` 済みなら、gitleaks が staged の内容を自動で検査し、秘匿情報を検出すると commit を止める (検査対象は staged だけなので、手で走らせるなら stage した後に `pre-commit run`)
 - push 前: `go vet ./...` と `go test ./...` が通ること。`pre-commit install` 済みなら push 時に hook が走り、落ちると push を止める
   - `test/blackbox` は binary を build して外から撃つ black-box テスト (外から観測できる契約の検査。正本は [docs/design/formats.md](docs/design/formats.md))。外部 CLI (gh / claude) は stub に差し替えるので、network も認証も要らない
-- release: tag (`v*`) は main の commit に打つ。push すると [.github/workflows/release.yml](.github/workflows/release.yml) が、tag の commit が main に在ることと `go vet` を確かめてから GoReleaser で GitHub Releases に binary を出す ([.goreleaser.yaml](.goreleaser.yaml))。テストは release では走らせず、上の push 前の gate が担う (Linux の runner で通すまで。#18)
+- release: tag (`v*`) は main の commit に打つ。push すると [.github/workflows/release.yml](.github/workflows/release.yml) が、tag の commit が main に在ることと `go vet` を確かめてから GoReleaser で GitHub Releases に binary を出し、tap `swat9013/homebrew-tap` の cask を更新する ([.goreleaser.yaml](.goreleaser.yaml))。テストは release では走らせず、上の push 前の gate が担う (Linux の runner で通すまで。#18)
+  - prerelease の tag (`v1.2.0-rc.1` 等) は、Release を prerelease として出し、tap を更新しない
+  - tap への push には Actions secret `HOMEBREW_TAP_GITHUB_TOKEN` を使う。Actions の `GITHUB_TOKEN` は別 repo に push できないので、`swat9013/homebrew-tap` の Contents だけに read/write を持つ fine-grained token を人が発行して登録する
+  - token には失効日がある。失効したら同じ権限で発行し直し、同じ名前の secret を上書きする。secret が未登録か失効していれば、release workflow は publish の前に止まる
 
 ## commit・PR 規約
 
