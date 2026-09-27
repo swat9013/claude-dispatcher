@@ -309,7 +309,7 @@ claude-dispatcher doctor <project>
 導入の充足を検査して 1 項目 1 行で示す。**何も書かない** (state dir・config・settings・外部 store のどれにも)。
 
 ```
---  版            0.3.0 (<commit>)
+--  版            v0.3.0 (<commit>)
 ok  config        <config.toml の path>
 NG  label         置き場 acme/widgets に dispatcher:wip が無い — `claude-dispatcher setup myproj` で作る
 --  最終 tick     2026-09-26T03:00:00Z ok
@@ -317,7 +317,7 @@ NG  label         置き場 acme/widgets に dispatcher:wip が無い — `claud
 
 | 項目 | 見るもの |
 |---|---|
-| `版` | この binary の版と commit (情報。判定しない)。`--version` と同じ綴り (§14) |
+| `版` | この binary の版と commit (情報。判定しない)。綴りは §14 |
 | `config` | config.toml が在り、`tick` と同じ検査に通る |
 | `state dir` | state dir が在る |
 | `依存 CLI` | gh / claude / git が (PATH の自己解決の後で) 見つかる |
@@ -418,11 +418,11 @@ claude-dispatcher --version
 binary の版と commit を stdout に 1 行で出す。config も state dir も読まないので、導入が壊れていても撃てる (不具合の報告に貼る)。
 
 ```
-claude-dispatcher 0.3.0 (<commit の hash>)
+claude-dispatcher v0.3.0 (<commit の hash>)
 ```
 
-- 版: Releases の binary は GoReleaser が埋めた tag の版 (先頭の `v` を除く)。`go install <module>@<版>` の binary は module の版 (`v0.3.0`)。手元の build は `(devel)`
-- commit: Releases の binary は tag の commit。それ以外は build 情報の `vcs.revision`。引けなければ `unknown`
+- 版: Releases の binary は GoReleaser が埋めた tag (`v0.3.0`)。`go install <module>@<版>` の binary は module の版 (同じ `v0.3.0`)。git の作業ツリーでの `go build` は Go が VCS から刻む pseudo-version (`v0.1.1-0.<日時>-<hash>`、未 commit の変更があれば `+dirty`)。VCS の情報が無い build (`go run`・`-buildvcs=false` 等) は `(devel)`
+- commit: Releases の binary は tag の commit。git の作業ツリーでの `go build` は build 情報の `vcs.revision`。`go install <module>@<版>` の binary は module cache から build するので commit を持たず `unknown`
 - doctor の `版` の行 (§12) も同じ綴りを出す
 
 exit: 0。

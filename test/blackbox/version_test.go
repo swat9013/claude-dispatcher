@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"text/template"
 
 	"gopkg.in/yaml.v3"
 )
@@ -58,27 +59,27 @@ func goreleaserLdflags(t *testing.T, values map[string]string) string {
 	if err := yaml.Unmarshal(raw, &doc); err != nil || len(doc.Builds) != 1 {
 		t.Fatalf(".goreleaser.yaml の builds を読めない (%d 件): %v", len(doc.Builds), err)
 	}
-	flags := strings.Join(doc.Builds[0].Ldflags, " ")
-	return regexp.MustCompile(`\{\{\s*\.(\w+)\s*\}\}`).ReplaceAllStringFunc(flags, func(tmpl string) string {
-		name := regexp.MustCompile(`\w+`).FindString(tmpl)
-		value, ok := values[name]
-		if !ok {
-			t.Fatalf(".goreleaser.yaml の ldflags に、テストが値を持たない template がある: %s", tmpl)
-		}
-		return value
-	})
+	flags, err := template.New("ldflags").Option("missingkey=error").Parse(strings.Join(doc.Builds[0].Ldflags, " "))
+	if err != nil {
+		t.Fatalf(".goreleaser.yaml の ldflags を template として読めない: %v", err)
+	}
+	var out strings.Builder
+	if err := flags.Execute(&out, values); err != nil {
+		t.Fatalf(".goreleaser.yaml の ldflags に、テストが値を持たない template がある: %v", err)
+	}
+	return out.String()
 }
 
 func TestReleaseBuildCarriesTheVersionAndCommitGoreleaserInjects(t *testing.T) {
 	bin := filepath.Join(t.TempDir(), "claude-dispatcher")
-	ldflags := goreleaserLdflags(t, map[string]string{"Version": "9.8.7", "Commit": "0123456789abcdef"})
+	ldflags := goreleaserLdflags(t, map[string]string{"Tag": "v9.8.7", "Commit": "0123456789abcdef"})
 	if out, err := exec.Command("go", "build", "-ldflags", ldflags, "-o", bin, dispatcherPackage).CombinedOutput(); err != nil {
 		t.Fatalf(".goreleaser.yaml の ldflags で build できない (%s): %v\n%s", ldflags, err, out)
 	}
 
 	out, err := exec.Command(bin, "--version").Output()
 
-	if err != nil || string(out) != "claude-dispatcher 9.8.7 (0123456789abcdef)\n" {
+	if err != nil || string(out) != "claude-dispatcher v9.8.7 (0123456789abcdef)\n" {
 		t.Fatalf("--version = %q (%v), want GoReleaser が埋めた版と commit", out, err)
 	}
 }
