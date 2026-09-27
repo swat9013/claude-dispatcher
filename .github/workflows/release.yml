@@ -22,19 +22,23 @@ jobs:
       # push 前の gate を通った main の commit にだけ release を出す (tag を main の外の commit に打ったら止める)
       - run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
       - run: go vet ./...
-      # 以下の 2 段は、Releases に binary を出した後の tap への push で落ちて release が半端に止まるのを、publish の前に止める
-      - name: tap の token が secret にあるか確かめる
-        run: test -n "$HOMEBREW_TAP_GITHUB_TOKEN" || { echo "::error::secret HOMEBREW_TAP_GITHUB_TOKEN が未登録 (CONTRIBUTING.md の「release」)"; exit 1; }
+      # Releases に binary を出した後の tap への push で落ちて release が半端に止まるのを、publish の前に止める (未登録と失効)
+      - name: tap の token が使えるか確かめる
+        run: |
+          test -n "$GH_TOKEN" || { echo "::error::secret HOMEBREW_TAP_GITHUB_TOKEN が未登録 (CONTRIBUTING.md の「release」)"; exit 1; }
+          gh api repos/swat9013/homebrew-tap --silent || { echo "::error::secret HOMEBREW_TAP_GITHUB_TOKEN で tap repo を読めない。失効していれば発行し直す (CONTRIBUTING.md の「release」)"; exit 1; }
         env:
-          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
       - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           version: v2.18.2
           install-only: true
-      - name: 生成される cask が quarantine を外す step を持つか確かめる
+      # 壊れた cask を tap へ publish するのを止める。.goreleaser.yaml の custom_block の template escape が崩れると、
+      # Homebrew が install 時に展開する {{staged_path}} が literal で残らない
+      - name: 生成される cask に literal の {{staged_path}} が残るか確かめる
         run: |
           goreleaser release --snapshot --clean
-          grep -F '"{{staged_path}}/claude-dispatcher"' dist/homebrew/Casks/claude-dispatcher.rb
+          grep -qF '{{staged_path}}' dist/homebrew/Casks/*.rb || { echo "::error::.goreleaser.yaml の custom_block の template escape が崩れ、cask に {{staged_path}} が残っていない"; exit 1; }
       - run: goreleaser release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
