@@ -68,10 +68,10 @@ type latestCL struct {
 	fork   bool
 }
 
-// latestCLPage は 1 issue 分の応答。total を省くと cls の本数 (続きなし)
+// latestCLPage は 1 issue 分の応答。hasMore は cls の後にまだ古い CL が続く (totalCount が cls の本数を超える)
 type latestCLPage struct {
-	total int
-	cls   []latestCL
+	cls     []latestCL
+	hasMore bool
 }
 
 // respondLatestCLs は `gh api graphql` の headRefName の問い合わせに、issue ごとの CL の列を返す (GitHub GraphQL の形)。
@@ -83,9 +83,9 @@ func (s *sandbox) respondLatestCLs(pages map[int]latestCLPage) {
 		for _, cl := range page.cls {
 			nodes = append(nodes, map[string]any{"number": cl.number, "state": cl.state, "isCrossRepository": cl.fork})
 		}
-		total := page.total
-		if total == 0 {
-			total = len(page.cls)
+		total := len(page.cls)
+		if page.hasMore {
+			total++
 		}
 		repository[fmt.Sprintf("i%d", issue)] = map[string]any{"totalCount": total, "nodes": nodes}
 	}
@@ -196,7 +196,7 @@ func TestStatusCLColumnIsUnknownOnlyForAnIssueWhoseWindowHoldsOnlyForkCLs(t *tes
 	}
 	// 42 は新しい 10 本が fork の CL だけで、まだ続きがある。43 は worker の CL #58 がある
 	s.respondLatestCLs(map[int]latestCLPage{
-		42: {total: 11, cls: forks},
+		42: {cls: forks, hasMore: true},
 		43: {cls: []latestCL{{number: 58, state: "OPEN"}}},
 	})
 

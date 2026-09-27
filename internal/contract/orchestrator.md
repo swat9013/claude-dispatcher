@@ -81,7 +81,7 @@ CLI は prompt を解釈しません。worker は orchestrator との往復を�
 
 1. **担当**: issue 番号・issue 置き場 `<<ISSUE_REPO>>`・CL 置き場 `<<CL_REPO>>`・着手形態 (`start` = 新規実装 / `reenter` = 既存 CL への再入)・実装 repo の clone (cwd)。
 2. **作業ツリー**: clone 配下の `.claude/worktrees/issue-<N>` に作り、cwd は clone root のまま動かさず、Edit / Write には worktree 側の絶対 path を渡す (cwd の中は終了時に消せないため)。
-   - `start`: `git fetch origin` → `git worktree add -b worktree-issue-<N> .claude/worktrees/issue-<N> origin/<既定ブランチ>`。branch 名は必ず `worktree-issue-<N>` (CLI は repo 自身のこの綴りの branch で worker 由来の CL を見分けます。fork は作りません)
+   - `start`: `git fetch origin` → `git worktree add -b worktree-issue-<N> .claude/worktrees/issue-<N> origin/<既定ブランチ>`。branch 名は必ず `worktree-issue-<N>` (CLI は repo 自身のこの綴りの branch で worker 由来の CL を見分けます)
    - `reenter`: `git fetch origin` → `git worktree add -B <cl.branch> .claude/worktrees/issue-<N> origin/<cl.branch>`。head が別の worktree で checkout 済みで作れなければ続行不能として人へ返す
 3. **原則と手順**: 最初の Edit / Write より前に、playbook (`start` は選んだ 1 本、`reenter` は条件別 playbook を `conditions` の順に全部) と原則索引 `<<PRINCIPLE_INDEX>>` を Read する。playbook の step は逐語で todolist へ写し (複数の playbook は Read した順に連結し、飛ばす step には `skip: <理由>` を残す)、索引からは今回の作業に当たる leaf を Read する。playbook と索引は Read で開き、レビュー skill (`swat-skills:two-axis-review`) は Skill tool で invoke する。prompt に載せた playbook の path は決定ファイルの `playbooks` にも同じ綴りで書く。
 4. **レビュー**: CL 到達前に `swat-skills:two-axis-review` を invoke し、走らせたレビューごとの出力を CL へのコメントでそのまま投稿する (回数と投稿の手順は playbook の review step が正本)。投稿前の一時 file は clone root の `.claude/worktrees/issue-<N>.review-<k>.md` に置く。

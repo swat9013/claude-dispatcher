@@ -168,20 +168,20 @@ func TestClosingReferenceToAnotherRepoDoesNotLink(t *testing.T) {
 	}
 }
 
-func TestForkCLOnAWorkerBranchNameDoesNotLinkByBranch(t *testing.T) {
-	s := newSandbox(t)
+// forkCLOnBranchScenario は issue 5 に、worker の branch 名で closing reference の無い fork の CL (#105、conflict あり) を置く。
+func forkCLOnBranchScenario(s *sandbox) {
 	s.setIssues(readyIssue(5))
-	// 条件 (conflict) を立てても、紐づかない CL には reenter が出ない
 	s.setPRs(pullRequest{number: 105, branch: workerBranch(5), mergeable: "CONFLICTING", fork: true})
 	s.orchestratorSkips(5)
+}
+
+func TestForkCLOnAWorkerBranchNameDoesNotLinkByBranch(t *testing.T) {
+	s := newSandbox(t)
+	forkCLOnBranchScenario(s)
 
 	s.tick()
 
-	file := s.onlyInstructionFile()
-	if reenters := instructionsOfKind(t, file, "reenter"); len(reenters) != 0 {
-		t.Fatalf("fork の CL へ reenter を出した: %v", reenters)
-	}
-	snapshot := asMap(t, file["snapshot"])
+	snapshot := asMap(t, s.onlyInstructionFile()["snapshot"])
 	if linked := asMap(t, snapshot["linked_cls"]); len(linked) != 0 {
 		t.Fatalf("fork の CL が branch 名で紐づいた: %v", linked)
 	}
@@ -191,6 +191,17 @@ func TestForkCLOnAWorkerBranchNameDoesNotLinkByBranch(t *testing.T) {
 	}
 	if !slices.Equal(got, []int{5}) {
 		t.Fatalf("候補 = %v, want [5]", got)
+	}
+}
+
+func TestForkCLOnAWorkerBranchNameYieldsNoReenter(t *testing.T) {
+	s := newSandbox(t)
+	forkCLOnBranchScenario(s)
+
+	s.tick()
+
+	if reenters := instructionsOfKind(t, s.onlyInstructionFile(), "reenter"); len(reenters) != 0 {
+		t.Fatalf("fork の CL へ reenter を出した: %v", reenters)
 	}
 }
 
@@ -224,22 +235,34 @@ func TestForkCLWithAClosingReferenceYieldsNoReenter(t *testing.T) {
 	}
 }
 
-func TestWorkerCLBesideAForkCLOfTheSameBranchNameYieldsReenterWithoutAnomaly(t *testing.T) {
-	s := newSandbox(t)
+// workerAndForkCLScenario は issue 39 に、worker の CL (#100、conflict あり) と同じ branch 名の fork の CL (#101) を並べる。
+func workerAndForkCLScenario(s *sandbox) {
 	s.setIssues(issue{number: 39})
 	s.setPRs(
 		pullRequest{number: 100, branch: workerBranch(39), mergeable: "CONFLICTING"},
 		pullRequest{number: 101, branch: workerBranch(39), fork: true},
 	)
 	s.orchestratorSkips(39)
+}
+
+func TestForkCLBesideAWorkerCLOfTheSameBranchNameRaisesNoAnomaly(t *testing.T) {
+	s := newSandbox(t)
+	workerAndForkCLScenario(s)
 
 	s.tick()
 
-	file := s.onlyInstructionFile()
-	if anomalies := instructionsOfKind(t, file, "anomaly"); len(anomalies) != 0 {
+	if anomalies := instructionsOfKind(t, s.onlyInstructionFile(), "anomaly"); len(anomalies) != 0 {
 		t.Fatalf("fork の CL を数えて anomaly を出した: %v", anomalies)
 	}
-	reenters := instructionsOfKind(t, file, "reenter")
+}
+
+func TestWorkerCLBesideAForkCLOfTheSameBranchNameYieldsReenter(t *testing.T) {
+	s := newSandbox(t)
+	workerAndForkCLScenario(s)
+
+	s.tick()
+
+	reenters := instructionsOfKind(t, s.onlyInstructionFile(), "reenter")
 	if len(reenters) != 1 || number(t, asMap(t, reenters[0]["cl"])["number"]) != 100 {
 		t.Fatalf("worker の CL #100 への reenter = %v", reenters)
 	}

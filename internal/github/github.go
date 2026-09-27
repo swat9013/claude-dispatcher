@@ -310,16 +310,17 @@ type CLState struct {
 	State  string `json:"state"`
 }
 
-// latestCLsWindow は LatestCLs が branch ごとに新しい順に読む CL の本数。fork の CL を読み飛ばす分の余裕
-const latestCLsWindow = 10
+// LatestCLsWindow は LatestCLs が branch ごとに新しい順に読む CL の本数。fork の CL を読み飛ばす分の余裕。
+// 本数は formats.md §10 (status の CL 列) にも書いてあるので、変えるときは一緒に直す
+const LatestCLsWindow = 10
 
 // LatestCLs は issue ごとに、repo 自身の head branch (fork でない) が branches[issue] の最新の CL を返す。無い issue は nil。
-// headRefName の絞り込みは fork の CL も拾うので、新しい順に latestCLsWindow 本まで読んで fork の CL を読み飛ばす。
+// headRefName の絞り込みは fork の CL も拾うので、新しい順に LatestCLsWindow 本まで読んで fork の CL を読み飛ばす。
 // 窓の中が fork だけで続きがある issue は、CL が無いと言い切れないので undetermined に返す (cls には載せない)。
 func LatestCLs(gh Runner, repo config.Repo, branches map[int]string) (cls map[int]*CLState, undetermined []int, err error) {
 	var fields strings.Builder
 	for issue, branch := range branches {
-		fmt.Fprintf(&fields, ` i%d: pullRequests(headRefName: %q, first: %d, orderBy: {field: CREATED_AT, direction: DESC}) { totalCount nodes { number state isCrossRepository } }`, issue, branch, latestCLsWindow)
+		fmt.Fprintf(&fields, ` i%d: pullRequests(headRefName: %q, first: %d, orderBy: {field: CREATED_AT, direction: DESC}) { totalCount nodes { number state isCrossRepository } }`, issue, branch, LatestCLsWindow)
 	}
 	query := "query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) {" + fields.String() + " } }"
 	out, err := gh.Run("api", "graphql", "-f", "query="+query, "-f", "owner="+repo.Owner, "-f", "name="+repo.Name)

@@ -327,7 +327,7 @@ func (c *collector) cls(cfg config.Config, gh github.Runner, branchOf map[int]st
 		return Probed[map[int]*github.CLState]{}
 	}
 	for _, issue := range undetermined {
-		c.note("#%d の CL を決められない — CL は ? (branch %s の新しい CL が fork の CL だけで窓を超えた)", issue, branchOf[issue])
+		c.note("#%d の CL を決められない — CL は ? (branch %s の新しい順の %d 本がすべて fork の CL で、まだ続きがある)", issue, branchOf[issue], github.LatestCLsWindow)
 	}
 	return known(cls)
 }
