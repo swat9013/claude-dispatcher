@@ -16,7 +16,7 @@ CLI の subcommand は役割で 3 群に分かれる。
 | 観測 | `status` / `paths` | 何も書かない (読み取り専用) |
 | 導入 | `setup` / `doctor` | `setup` だけが書く: config の雛形と state dir (config が無いときだけ作り、既存は上書きしない)・tracker label (導入者の承認後)。Claude Code の settings はどちらも書かない |
 
-`status` は log の `spawned` (起動記録) を起点に、wip の付いた issue と生きている worker process を 1 行ずつ並べ、process の生死・wip・紐づく CL を毎回読み直して出す。**process が死んでいるのに wip が残っている行が stale wip の手掛かり**になる (snapshot からは区別できないが、起動記録と process の生死を突き合わせる `status` からは見える)。起動記録を持たない wip (orchestrator が付けた後に止まり、worker が起動されなかったもの) は `status` にも出ない。見出しには project の loop が生きているか (process の一覧で見る) と最終 tick を出す。
+`status` は log の `spawned` (起動記録) を起点に、wip の付いた issue と生きている worker process を 1 行ずつ並べ、worker の生死 (起動部が答える — §13)・wip・紐づく CL を毎回読み直して出す。**process が死んでいるのに wip が残っている行が stale wip の手掛かり**になる (snapshot からは区別できないが、起動記録と process の生死を突き合わせる `status` からは見える)。起動記録を持たない wip (orchestrator が付けた後に止まり、worker が起動されなかったもの) は `status` にも出ない。見出しには project の loop が生きているか (process の一覧で見る) と最終 tick を出す。
 
 | アクター | 方向 | 関わり |
 |---|---|---|
@@ -110,6 +110,7 @@ CLI が導出する指示は 3 種。**カタログに無い事象は指示に�
 | `review` | 未解決の review thread が 1 本以上 | `playbook-review-response` |
 | `ci` | head commit の checks が `FAILURE` / `ERROR` | `playbook-ci-fix` |
 
+- 述語が比べる `mergeable` / `checks` の値は指示ファイルの語彙 (formats.md §5.1) で、CL host の綴りではない。CL 置き場の部品が host の応答をこの語彙へ写す (§13)
 - 指示の発火条件は **snapshot (§7) から導出できるものに限る** — 観測経路を持たない事実 (プロセスの生死等) を条件に使わない
 - 同一 CL に複数条件が立つときは 1 指示にまとめ、カタログの順に併記する (worker は 1 回の再入で全部見る)
 - **人が開いた CL には再入しない** (head の branch 名が worker の規約と違えば指示を出さない)。worker が他人の branch へ push する経路を持たないための線で、人の CL の conflict は人が解く。人の CL は統治対象外なので、この沈黙は anomaly にもしない
@@ -147,12 +148,12 @@ CLI が導出する指示は 3 種。**カタログに無い事象は指示に�
 - **停止は段階的にする**。1 回目の SIGINT / SIGTERM / SIGHUP は、sleep 中なら即、tick の実行中ならその tick を最後まで進めて (orchestrator の終了を待ち、決定どおり worker を起動し、tick 行を書いて) から止まる。2 回目は、orchestrator を起動する前ならそれを起動せず、起動中ならその process group を止め、どちらも決定ファイルを読まずに `result: error` の tick 行を書いて止まる (timeout と同じ扱い)。orchestrator が正常終了した後に届いた 2 回目は 1 回目と同じに扱い、決定どおりの worker の起動を終えてから止まる (起動を途中で打ち切ると、orchestrator が付けた wip が worker の無いまま残る)。orchestrator は新しい process session で起動しているので端末の signal が届かず、loop だけが死ぬと、孤児の orchestrator が付けた wip を決定ファイルごと読む者がいないまま stale wip になる。worker はどちらの停止でも止めない。stdout への書き込みが失敗しても停止処理は続ける (読み手が端末ごと消えた pipe の SIGPIPE で倒れない)
 - **二重起動は loop の生存期間の lock で拒む**。同じ project の 2 本目の loop は起動時に止まる。tick 単位の `flock` は残し、単発の `tick` と loop の tick を直列化する。tick の lock は tick 行を log.jsonl に書き終えるまで持つ — 先に外すと、次の tick の行が前の tick の行より先に書かれうる
 - **tick は loop の process の中で回す**。binary と同梱の契約は loop を起動した時点の版に固定され、更新は撃ち直しで拾う
-- **loop は起動した worker の終了を回収する** — loop は長く生きるので、回収しないと終わった worker が zombie として残る
+- **起動した worker の終了は起動部が回収する** (§13) — loop は長く生きるので、回収しないと終わった worker が zombie として残る
 - **loop の画面が第一の観測点**。`status` の表に loop の見出し (状態・次の tick の時刻・直近の tick の result と error) と停止の操作案内を足し、一定の間隔と tick の直後に描き直す。止まったら画面を残して停止の理由を 1 行足す。stdout が端末でなければ画面を消さず、tick の直後に追記する。loop の中の tick は失敗行 (formats.md §6) を stderr に出さず、見出しに error を出す。形式は formats.md §13
 - **別の端末から死活を見るのは `status`** — process の一覧から loop を探して「loop 稼働中 / loop なし」と最終 tick を出す (§1)。lock を覗いて確かめることはしない (flock に覗くだけの操作は無く、取ると、その一瞬に重なった tick が `locked` で流れる)
 - **orchestrator の起動**: 同梱の契約 file と指示ファイル・決定ファイルの path を渡して `claude -p … --permission-mode auto --session-id <CLI が発行した UUID>` を clone を cwd にして起動し、終了を待つ (tick の lock は保持したまま。上限 15 分を超えたら kill して log に残す)。契約は skill として登録せず prompt として直接渡す (ADR 0003)
 - **worker の起動**: 決定ファイルの spawn ごとに `claude -p "<spawn prompt>" --permission-mode auto --session-id <UUID>` を同じ cwd で**新しい process session (setsid) として detach 起動**し、stdout / stderr を worker log へ落として tick を終える。起動した pid・log path・session id は tick の log 行に載る
-- **セッションの起動は差し替え可能な 1 つの部品に閉じる** (ADR 0005)。今の実装は `claude -p` だけ。`claude --bg` 等への差し替えが部品 1 つの追加で済む形に保つ
+- **セッションの起動・待ち・停止・回収・生死の判定は差し替え可能な 1 つの部品 (起動部) に閉じる** (ADR 0005、§13)。今の実装は `claude -p` だけ。`claude --bg` 等への差し替えが adapter 1 つの追加で済む形に保つ
 - **permission posture は `auto`** (orchestrator / worker とも)。`-p` では人の確認へ落ちる経路が無く、classifier が止めた操作は実行されずセッションは続くので、sandbox と permission 層を保ったまま無人で走る。permission 層を外す起動は採らない (ADR 0002 / 0005)。止められた worker は続行不能として人へ返す (§10)
 - **依存 CLI (gh / claude / git) の path は CLI が自分でも解決する** — loop は起動した shell の PATH を継ぐが、最小の PATH の shell (ssh 越し等) から撃たれても動くように、よく使われる置き場 (`~/.local/bin`・mise の shims・Homebrew の prefix 等) を探す
 - **`tick --dry-run` は副作用の無い試運転** — config の検査 (検査済み hash を読まず毎回全部。書きもしない) → 観測 → 指示の導出までを通し、claude を起動する直前で止めて、指示の種別と件数を stdout に 1 行で出す。**state dir に何も書かない**ので、実 config のまま撃ってよく、走っている loop とも衝突しない。claude と gh が最終的な PATH で解決できることも検査する
@@ -201,4 +202,30 @@ spawn prompt の文面は同梱の契約 file が正本。本節は構造の決�
 - **triage** — 着手可の付与・`ready-for-human` の解消・stale wip の回収は人間の領分
 - **stale wip の自動解消 / orchestrator の常駐運用** — 拡張候補として認知だけしておく
 - **loop の監督** (boot 時の起動・落ちた loop の起こし直し) — 人が同じコマンドで撃ち直す (ADR 0006)
-- **gh 以外の tracker / CL host** (GitLab / Jira) — 拡張候補。置き場の宣言は tracker 種別と識別子の組で持つので、観測と LLM の gh 操作を種別ごとに足す形で広げられる
+- **gh 以外の tracker / CL host** (GitLab / Jira) — 拡張候補。置き場の宣言は tracker 種別と識別子の組で持つので、CLI の観測は置き場の部品に adapter を足し (§13、ADR 0008)、LLM の gh 操作は契約 file と playbook に種別ごとに足す形で広げられる。issue の同一性 (今は番号) を key に広げるときは、公開形式 (formats.md) を合わせて直す
+
+## 13. CLI の seam
+
+CLI の中で呼び出し側から中身を隠す部品と、差し替えの口 (seam) を置く位置。部品の中の分け方は実装に任せ、本節は部品の責務と seam の位置だけを持つ。**seam は本番とテストで 2 つ以上の adapter を持つところにだけ置く**。
+
+| 部品 | 呼び出し側 | 呼び出し側から隠すもの | adapter |
+|---|---|---|---|
+| tick の 1 回分 | `loop` / `tick` / `setup` と `doctor` の試運転 | 観測から worker の起動までの段取りと、停止要求の段階の解釈 | (seam を置かない) |
+| 起動部 | tick の 1 回分 / status の現況 | セッションの起動の形 (argv・process session・pid・生死の見分け方) | `claude -p` / テストの fake。`claude --bg` はここに足す |
+| issue 置き場の部品 | tick の 1 回分 / status の現況 / `setup` / `doctor` | tracker の呼び方・応答の綴り・失敗の見分け方 | gh / テストの in-memory |
+| CL 置き場の部品 | tick の 1 回分 / status の現況 / `doctor` | CL host の呼び方・応答の綴り・失敗の見分け方 | gh / テストの in-memory |
+| status の現況 | `status` / loop の画面 | 機械の観測 (process 一覧・claude のセッション一覧) と、載せる worker の選び方 | 機械の観測: `ps` と `claude` / テストの fake |
+
+- **tick の 1 回分は停止要求を 1 つだけ受け、段階を自分で解釈する**。呼び出し側が渡せるのは「orchestrator を止めよ」だけで、orchestrator の起動前に届けば起動せず、起動中なら起動部に止めさせて決定ファイルを読まず、正常終了の後なら無視して決定どおりの worker の起動を終える (§9 の 2 回目の停止要求)。1 回目の停止要求は次の tick を始めないことなので loop だけが扱う。観測の途中に届いた要求で観測は打ち切らない — 観測は gh の上限時間で終わり、打ち切っても orchestrator の前で止まる結果は変わらない
+- **tick の 1 回分は確定した tick 行を返す**。中身は log.jsonl に書いたものと同じで、書けなかったときはその理由を含む。exit code と失敗行 (formats.md §6) を stderr に出すかは呼び出し側が行から決める — 単発の `tick` は出し、loop は出さずに見出しへ載せる。loop の見出しの最終 tick はこの行から描き、log.jsonl を読み直さない
+- **`setup` / `doctor` の試運転は tick の 1 回分の試運転を process 内で呼ぶ**。自分の binary を撃ち直さない
+- **起動部はセッションの起動・待ち・停止・回収・生死の判定を 1 つの部品に閉じる** (ADR 0005)。orchestrator は上限時間か停止要求で process group ごと止め、どちらで止まったかを区別して返す。worker は detach 起動し、その終了を起動した process の中で回収する。「今生きている worker の一覧」を 1 回で読む口を持ち、status の現況は起動記録をこれと突き合わせるだけにする — 生死の見分け方 (`claude -p` では pid の command 行に session id が在るか、formats.md §10) は起動の形ごとに違うので、部品の外に出さない
+- **issue 置き場の部品と CL 置き場の部品は、config から組み立てて中立の事実と分類済みの失敗を返す** (ADR 0008)
+  - issue 置き場: open issue と label / wip の付いた issue / 置き場の検査 / label の作成 (`setup` だけが使う)
+  - CL 置き場: open CL (紐づく issue・`mergeable`・`checks`・未解決の review thread の数) / branch ごとの最新の CL (merge 済みを含む) / 置き場の検査。組み立てのときに issue 置き場を受け取り、紐づく issue をその置き場のものに絞って返す
+  - CL の状態の語彙 (`mergeable` / `checks` / CL の state) は formats.md §5.1 / §10 が正本。adapter が host の応答をその語彙へ写す (gh の応答は同じ綴り)。条件カタログ (§6) の述語はこの語彙を比べる
+  - 失敗は 認証 (`auth_error` へ写す — §8) / 見えない / 読み切れない に分けて返す
+  - 置き場の検査は、置き場 repo の実在と、呼び出し側が渡す label の集合の実在を、見えない repo と無い label のデータで返す。集合は tick が機構の label (§8)、`setup` / `doctor` が着手可 label を含む全部。文言は呼び出し側が組み、人が自分で label を作るときの手順の文面だけは adapter が出す
+  - 範囲は CLI だけ。orchestrator の契約 file と playbook は gh を直接撃ち、この部品を通らない
+  - issue の同一性は番号 (整数)。log.jsonl・決定ファイル・worker の branch 名が同じ前提に立つ
+- **status の現況は 1 project の今を組み、描画を見出し・注記・表に分けて返す**。今とは loop の生死・最終 tick・載せる worker の行・注記のこと。`status ps` / `status watch` / loop の画面は見出しを選んで組み立てる (formats.md §10 / §13.1)。機械の観測は部品の中で行う。loop の終了行の「止めずに走っている worker」の数 (formats.md §13.2) も同じ組み立てから数える
