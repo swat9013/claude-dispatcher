@@ -88,7 +88,7 @@ tap (Homebrew の第三者 repository) として `swat9013/homebrew-tap` を用�
 
 ### formula (`brews`) で配る
 
-- 却下理由: GoReleaser が deprecated とした仕組みで、deprecated な option は次の major 版で消えうる [G2]。Homebrew が quarantine を付けると明記しているのは cask の download だけ [H2] なので、formula なら論点 3 が起きないかもしれない (**未検証**)。それでも、なくなる予定の仕組みに新しい経路を載せる理由にはならない
+- 却下理由: GoReleaser が deprecated とした仕組みで、deprecated な option は次の major 版で消えうる [G2]。Homebrew が quarantine を付けると明記しているのは cask の download だけ [H2] なので、formula なら論点 3 が起きないかもしれない (**未検証**)。それでも、deprecated な仕組みに新しい経路を載せる理由にはならない
 
 ### macOS だけを対象にする
 
