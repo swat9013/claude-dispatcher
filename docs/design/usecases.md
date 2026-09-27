@@ -54,7 +54,7 @@ Cockburn『ユースケース実践ガイド』(Writing Effective Use Cases) の
 3. orchestrator が issue に wip を付け、spawn prompt を決定ファイルに書いて終了する。CLI が決定ファイルを検査し、headless worker を detach 起動して tick を終える
 4. worker が worktree を作り、playbook と原則索引を読んで実装する
 5. worker が two-axis-review を通し、自律判断を説明文に載せた closing reference 付き CL を作成して、レビュー出力を CL へコメントする
-6. worker が残タスク・範囲外の欠陥・直さなかった指摘を triage 待ちの issue にし (着手可 label は付けない — 次 tick が拾って自己増殖しない)、CL 本文の「user に残る作業」節から番号で指す
+6. worker が system.md §10 の対象を triage 待ちの issue にし、CL 本文の「user に残る作業」節から番号で指す (着手可 label は付けない)
 7. worker が終了処理として wip を剥がし、worktree を消して終了する
 
 **Extensions**
@@ -69,7 +69,7 @@ Cockburn『ユースケース実践ガイド』(Writing Effective Use Cases) の
 - **6a.** issue にするものが無い
   - 6a1. 何も起票せず step 7 へ進む
 - **6b.** 同じ title の open issue が既にある
-  - 6b1. 新しく作らず、その issue に発端 (担当 issue と CL の番号) をコメントで足し、その番号を CL 本文から指す。step 7 へ進む
+  - 6b1. system.md §10 の重複規則に従い、step 7 へ進む
 
 ## UC-3 CL イベントに worker を再入させる
 
@@ -112,7 +112,7 @@ Cockburn『ユースケース実践ガイド』(Writing Effective Use Cases) の
 
 1. worker が続行不能の根拠と、解決に要ることを整理する
 2. worker が途中までの成果 (あれば) を commit して push する (成果の所在をコメントに書けるようにする)
-3. worker が担当範囲の外で見つけた欠陥と直さなかった指摘を triage 待ちの issue にする (着手可 label は付けない。担当 issue 自身の残りは issue にせず、引き渡しコメントが持つ)
+3. worker が system.md §10 の対象を triage 待ちの issue にする (着手可 label は付けない)
 4. worker が issue へ引き渡しコメントを書く (step 3 で作った issue を番号で指す)
 5. worker が issue に `ready-for-human` を付け、wip を剥がす (コメントの後 — label を先に動かすと成果の所在を書く前に人が動く)
 6. worker が worktree を消して終了する (branch が永続)
@@ -125,7 +125,7 @@ Cockburn『ユースケース実践ガイド』(Writing Effective Use Cases) の
 - **3a.** issue にするものが無い
   - 3a1. 何も起票せず step 4 へ進む
 - **3b.** 同じ title の open issue が既にある
-  - 3b1. 新しく作らず、その issue に発端をコメントで足す。step 4 へ進む
+  - 3b1. system.md §10 の重複規則に従い、step 4 へ進む
 
 ## UC-5 判断不能な観測を握り潰さずに上げる
 
