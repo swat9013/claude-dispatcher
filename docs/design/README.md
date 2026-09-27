@@ -6,7 +6,7 @@
 
 | file | 中身 |
 |---|---|
-| [`system.md`](system.md) | システム境界 / 全体図 / 解く問題 / 状態の表現 / 機械と LLM の線 / 指示カタログ / 各 file の責務 / 宣言 config / 駆動 / worker 契約 / 配布と外部依存 / スコープ外 |
+| [`system.md`](system.md) | システム境界 / 全体図 / 解く問題 / 状態の表現 / 機械と LLM の線 / 指示カタログ / 各 file の責務 / 宣言 config / 駆動 / worker 契約 / 配布と外部依存 / スコープ外 / CLI の seam |
 | [`usecases.md`](usecases.md) | Cockburn 縮約テンプレートによるユースケース。冒頭に記述規約 |
 | [`formats.md`](formats.md) | 置き場・config・exit code・log.jsonl・指示ファイル・決定ファイル・tick の失敗行・dry-run の出力・引き渡しコメント・`paths --json`・`status` / `setup` / `doctor` / `loop` の出力。black-box テストの参照先 |
 
@@ -18,7 +18,7 @@
 
 | 変えるもの | 正本 |
 |---|---|
-| 状態の表現と書き手、候補の定義式、機械と LLM の線、指示カタログ、宣言 config の項目と検査の姿勢、駆動、worker 契約の構造、配布と外部依存 | `system.md` |
+| 状態の表現と書き手、候補の定義式、機械と LLM の線、指示カタログ、宣言 config の項目と検査の姿勢、駆動、worker 契約の構造、配布と外部依存、CLI の seam (部品の責務と seam の位置) | `system.md` |
 | ユースケース | `usecases.md` |
 | 外から観測できる形式 | `formats.md` |
 

@@ -153,7 +153,9 @@ claude_token_file = "~/.config/claude-dispatcher/<project>/claude-token"
 - 指示の並びは `reenter` → `start` → `anomaly`
 - 候補だけが issue 本文 `body` を持つ (orchestrator の playbook 選定の信号)
 - `linked_cls` と `cls[].issues` の紐づきは、closing reference が指す issue と、head branch `worktree-issue-<issue>` が示す issue の和 (system.md §4)
-- `checks` は head commit の checks の集約 (`SUCCESS` / `PENDING` / `FAILURE` / `ERROR` / `null`)
+- `mergeable` は CL を base へ merge できるか (`MERGEABLE` / `CONFLICTING` / `UNKNOWN`)
+- `checks` は head commit の checks の集約 (`SUCCESS` / `PENDING` / `EXPECTED` / `FAILURE` / `ERROR` / `null`。`EXPECTED` は必須の checks がまだ報告されていない状態)
+- `mergeable` / `checks` の語彙は本 file が正本で、CL host の綴りではない。CL 置き場の部品が host の応答をこの語彙へ写す (gh の応答は同じ綴り。system.md §13)
 - `anomaly.reason` は `wip_over_limit` / `wip_and_ready_for_human` / `multiple_open_cls`。`multiple_open_cls` だけが `cls` を持つ
 - 取得上限に達した tick は指示ファイルを書かず `result: error` にする — 切り詰めた像から指示を出すと、窓の外の open CL を持つ issue が候補へ戻って二重着手になる
 
@@ -253,7 +255,7 @@ claude-dispatcher status watch [<project>] [--interval <秒>]
 project を省略すると、config root の下の全 project (§9 の `projects`) を並べる。`watch` は `ps` の表を `--interval` 秒 (既定 5、1 以上 86400 以下) ごとに描き直し、Ctrl-C で終わる。loop の画面 (§13) も同じ表を使う。実装 repo の clone を cwd にして撃つ (BRANCH 列は cwd の clone の作業ツリーを読む)。
 
 - **読み取り専用**: state dir にも外部 store にも書かない。lock file も作らず、lock も取らない (取ると、その一瞬に重なった tick が `locked` の行を残し、起動しようとした loop が拒まれる)。loop が生きているかは process の一覧 (`claude-dispatcher … loop <project>` の process) で見る
-- **載せる worker**: log.jsonl の tick 行の `spawned` のうち、issue ごとの最新の起動記録で issue に `dispatcher:wip` が付いているか process が生きているもの、と、それより古い起動記録で process が生きているもの (wip は issue の今の worker にだけ掛ける。古い起動記録に掛けると、再入で起こし直した issue の前回の worker が stale wip に見える)。process の生死は pid の command 行に `session_id` が在るかで見る (pid は再利用される)。process が死んでいて wip が残っている行が stale wip の手掛かり (system.md §1)
+- **載せる worker**: log.jsonl の tick 行の `spawned` のうち、issue ごとの最新の起動記録で issue に `dispatcher:wip` が付いているか process が生きているもの、と、それより古い起動記録で process が生きているもの (wip は issue の今の worker にだけ掛ける。古い起動記録に掛けると、再入で起こし直した issue の前回の worker が stale wip に見える)。process の生死は起動部が見分ける。`claude -p` では pid の command 行に `session_id` が在るかで見る (pid は再利用される。system.md §13)。process が死んでいて wip が残っている行が stale wip の手掛かり (system.md §1)
 - 外部 process (gh / git / claude / ps) が失敗した列は `?` にして表は出し、何を読めなかったかを `! <理由>` の注記行に残す
 
 表は project ごとに 1 段:
@@ -275,7 +277,7 @@ ISSUE  KIND   STATE    ELAPSED  SESSION  BRANCH  WIP  CL        TICK
 | SESSION | `claude agents --json` に同じ session が居れば `<id> <status>/<state>`、居なければ `-` |
 | BRANCH | cwd の clone に `worktree-issue-<issue>` の作業ツリーがあれば `origin/HEAD` からの ahead 数 (`+3`)、無ければ `-` |
 | WIP | issue に `dispatcher:wip` が付いているか (`yes` / `no`) |
-| CL | head branch `worktree-issue-<issue>` の最新 CL (`#<番号> <state>`)、無ければ `-` |
+| CL | head branch `worktree-issue-<issue>` の最新 CL (`#<番号> <state>`。state は `OPEN` / `CLOSED` / `MERGED`)、無ければ `-` |
 
 exit: 0。指定した project が無い / project が 1 つも無いときは 2。
 
@@ -290,7 +292,7 @@ claude-dispatcher setup <project>
 1. **宣言 config の雛形と state dir**: config.toml が無ければ、雛形 (`[issue].repo` は cwd の clone の origin、`ready_label = "ready-for-agent"`、`max_wip = 1`) と state dir を作り、「埋めてから撃ち直す」と示して止まる。config.toml があれば上書きしない (state dir が無ければ作る)
 2. **config の検査**: `tick` と同じ検査。落ちたら名指しで止まる
 3. **label**: issue 置き場に `dispatcher:wip` / `ready-for-human` / 着手可 label / (書いてあれば) triage label が無ければ、作る label を示して承認を尋ね、承認されたら作る
-4. **試運転**: `tick <project> --dry-run` を撃ち、出力をそのまま示す
+4. **試運転**: `tick <project> --dry-run` と同じ試運転を行い、出力をそのまま示す
 5. **loop の起動コマンド**: 試運転が通ったら `cd <clone> && claude-dispatcher loop <project> 5m` を示して終わる。setup は loop を起動しない
 
 - **承認は stdin から `y` / `yes` を受けたときだけ**。それ以外 (空行・EOF・端末の無い実行) は承認なしとして書かず、自分で撃つコマンドを示して止まる
@@ -322,7 +324,7 @@ NG  label         置き場 acme/widgets に dispatcher:wip が無い — `claud
 | `plugin` | plugin `swat-skills` が system.md §11 の選択順で 1 つに決まる (別 marketplace の重複は NG) |
 | `playbook` | 条件カタログ (system.md §6) の playbook が全部在る。start の選定母集合の本数も示す (0 本は `--`。tick は start を出さないだけで動く) |
 | `原則索引` | 原則索引の file が在る |
-| `試運転` | `tick <project> --dry-run` (state dir に何も書かない) が exit 0 で終わる。NG なら出力を添える |
+| `試運転` | `tick <project> --dry-run` と同じ試運転 (state dir に何も書かない) が exit 0 で終わる。NG なら出力を添える |
 | `最終 tick` | log.jsonl の最後の tick 行の `ts` と `result`、読めない行があればその件数 (情報。判定しない) |
 
 先頭の印は `ok` (充足) / `NG` (不足。理由と直し方を添える) / `--` (情報)。項目の後に、Claude Code の settings に要る entry (sandbox の `filesystem.allowWrite` に state dir、`excludedCommands` に `gh` と `claude-dispatcher`) を示す。

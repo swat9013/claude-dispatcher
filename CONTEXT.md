@@ -20,6 +20,10 @@ _Avoid_: run, cycle, poll
 人が起動してから人が止めるまで、1 つの project の tick を周期ごとに回し続ける CLI の process。落ちても自分では起き直さない。
 _Avoid_: daemon, scheduler (監督を持つ常駐物と紛れる)
 
+**停止要求**:
+人が loop に送る停止の合図。1 回目は走っている tick を終えてから loop を止め、2 回目は orchestrator を止めて (起動前なら起動せずに) loop を止める。
+_Avoid_: kill, shutdown
+
 **snapshot**:
 1 tick で読んだ外部 store の正規化像。tick を跨いで持ち越さない。
 _Avoid_: state, cache
@@ -95,6 +99,10 @@ orchestrator が書く唯一の出力。指示ごとの採否と、起動する 
 
 **spawn prompt**:
 worker に渡す prompt の全文。worker が自走して CL に着くまでに要る情報をすべて文面に持つ。
+
+**起動記録**:
+CLI が worker を起動したときに tick の log に残す 1 件の記録。worker の生死と stale wip を突き合わせる起点。
+_Avoid_: spawn log
 
 **引き渡し**:
 LLM が人へ返すときに issue へ書くコメント。停止理由・ここまでの成果・人が次にやることの 3 節からなる。
