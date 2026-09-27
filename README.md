@@ -49,6 +49,8 @@ mkdir -p ~/.local/bin && install -m 755 claude-dispatcher ~/.local/bin/
 
 binary は署名していない。macOS でブラウザから取った archive は Gatekeeper に起動を止められるので、`gh release download` か `curl -LO` で取る (ブラウザで取ったなら `xattr -d com.apple.quarantine ~/.local/bin/claude-dispatcher`)。
 
+**Homebrew** (準備中): tap `swat9013/tap` の cask から macOS / Linux に入れられるようにする。手順は公開したらここに書く。
+
 ## 導入
 
 実装 repo の clone を cwd にして、project 名 (`[A-Za-z0-9._-]+`。以下 `myproj`) を決めて撃つ。流れの正本は [`docs/design/usecases.md`](docs/design/usecases.md) の UC-6、各段の形式は [`docs/design/formats.md`](docs/design/formats.md) §11 / §12。

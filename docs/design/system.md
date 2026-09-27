@@ -180,7 +180,10 @@ spawn prompt の文面は同梱の契約 file が正本。本節は構造の決�
 
 ## 11. 配布と外部依存
 
-- CLI は Go の単一 binary。`go install` と GitHub Releases (macOS / Linux) で配る (ADR 0003)
+- CLI は Go の単一 binary。`go install`・GitHub Releases・Homebrew tap `swat9013/tap` の cask の 3 経路で、macOS / Linux に配る (ADR 0003 / 0007)
+  - tag の push で、GoReleaser が Releases の binary と tap の cask を同時に更新する。cask は `homebrew_casks` で生成する (`brews` の formula は使わない)
+  - tap は Homebrew の tap trust の対象なので、install の手順は完全修飾名 (`swat9013/tap/claude-dispatcher`) で書く
+  - macOS の quarantine の扱いと、gh / claude を cask の依存に載せるかは ADR 0007 で未決。どの案でも、依存の充足は README の「前提」と `doctor` が見る
 - **orchestrator の契約 file は binary に埋め込む**。契約と `tick` の版が必ず一致する
 - **playbook・原則索引・two-axis-review は plugin `swat-skills` (marketplace `swat9013`) に実行時に依存する**。CLI は Claude Code の `~/.claude/plugins/installed_plugins.json` から plugin 名 `swat-skills` の `installPath` を引き、次の絶対 path を解決して LLM に渡す (plugin 内の配置に依存する interface)
   - playbook: `<installPath>/skills/procedure/playbook-*/SKILL.md`
