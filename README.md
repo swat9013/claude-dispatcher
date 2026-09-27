@@ -30,7 +30,7 @@ claude-dispatcher loop ─周期ごと─▶ tick ─指示─▶ orchestrator (
 
 ## install
 
-どちらかで `claude-dispatcher` を PATH の通った場所に置く。
+今は `go install` か GitHub Releases のどちらかで `claude-dispatcher` を PATH の通った場所に置く。
 
 **`go install`** (Go は [go.mod](go.mod) の `go` 行の版以上):
 
@@ -48,6 +48,8 @@ mkdir -p ~/.local/bin && install -m 755 claude-dispatcher ~/.local/bin/
 ```
 
 binary は署名していない。macOS でブラウザから取った archive は Gatekeeper に起動を止められるので、`gh release download` か `curl -LO` で取る (ブラウザで取ったなら `xattr -d com.apple.quarantine ~/.local/bin/claude-dispatcher`)。
+
+**Homebrew** (準備中): tap `swat9013/tap` の cask から macOS / Linux に入れられるようにする。手順は公開したらここに書く ([#10](https://github.com/swat9013/claude-dispatcher/issues/10))。
 
 ## 導入
 
