@@ -45,7 +45,7 @@ Cockburn『ユースケース実践ガイド』(Writing Effective Use Cases) の
 - **Level**: user-goal (sea)
 - **Trigger**: CLI が `start` 指示を出した
 - **事前条件**: 候補が 1 件以上あり、wip 枚数が上限 N 未満
-- **成功保証**: 着手した issue に wip が付き worker が走っている。worker 終了後は closing reference 付きの CL が open で、残タスクと範囲外の欠陥が着手可 label の無い issue として tracker に残り、wip が剥がれ、worktree が残っていない
+- **成功保証**: 着手した issue に wip が付き worker が走っている。worker 終了後は closing reference 付きの CL が open で、system.md §10 が issue にすると定める残りが着手可 label の無い issue として tracker に残り、wip が剥がれ、worktree が残っていない
 
 **Main Success Scenario**
 
@@ -54,7 +54,7 @@ Cockburn『ユースケース実践ガイド』(Writing Effective Use Cases) の
 3. orchestrator が issue に wip を付け、spawn prompt を決定ファイルに書いて終了する。CLI が決定ファイルを検査し、headless worker を detach 起動して tick を終える
 4. worker が worktree を作り、playbook と原則索引を読んで実装する
 5. worker が two-axis-review を通し、自律判断を説明文に載せた closing reference 付き CL を作成して、レビュー出力を CL へコメントする
-6. worker が system.md §10 の対象を triage 待ちの issue にし、CL 本文の「user に残る作業」節から番号で指す (着手可 label は付けない)
+6. worker が system.md §10 が issue にすると定める残りを triage 待ちの issue にし、CL 本文の「user に残る作業」節から番号で指す (着手可 label は付けない)
 7. worker が終了処理として wip を剥がし、worktree を消して終了する
 
 **Extensions**
@@ -112,7 +112,7 @@ Cockburn『ユースケース実践ガイド』(Writing Effective Use Cases) の
 
 1. worker が続行不能の根拠と、解決に要ることを整理する
 2. worker が途中までの成果 (あれば) を commit して push する (成果の所在をコメントに書けるようにする)
-3. worker が system.md §10 の対象を triage 待ちの issue にする (着手可 label は付けない)
+3. worker が system.md §10 が issue にすると定める残りを triage 待ちの issue にする (着手可 label は付けない)
 4. worker が issue へ引き渡しコメントを書く (step 3 で作った issue を番号で指す)
 5. worker が issue に `ready-for-human` を付け、wip を剥がす (コメントの後 — label を先に動かすと成果の所在を書く前に人が動く)
 6. worker が worktree を消して終了する (branch が永続)
