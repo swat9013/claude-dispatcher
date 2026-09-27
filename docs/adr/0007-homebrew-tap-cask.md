@@ -1,6 +1,6 @@
 # ADR 0007: Homebrew tap `swat9013/tap` の cask を配布経路に加える
 
-- Status: Proposed (quarantine と依存の 2 論点を人が確定したら Accepted にする)
+- Status: Proposed (quarantine と依存の 2 論点が未決。人が CL で確定したら、merge より前に本文の「未決」を決定へ書き換えて Accepted にする。Proposed のまま merge しない)
 - Date: 2026-09-27
 - ADR 0003 のうち、配布を `go install` と GitHub Releases に限っていた部分に経路を 1 つ足す (binary に契約を埋め込む決定と plugin の解決は変えない)
 
@@ -88,7 +88,7 @@ tap (Homebrew の第三者 repository) として `swat9013/homebrew-tap` を用�
 
 ### formula (`brews`) で配る
 
-- 却下理由: GoReleaser が deprecated とし、v3 で消す予定の仕組みである [G2]。Homebrew が quarantine を付けると明記しているのは cask の download だけ [H2] なので、formula なら論点 3 が起きないかもしれない (**未検証**)。それでも、なくなる予定の仕組みに新しい経路を載せる理由にはならない
+- 却下理由: GoReleaser が deprecated とした仕組みで、deprecated な option は次の major 版で消えうる [G2]。Homebrew が quarantine を付けると明記しているのは cask の download だけ [H2] なので、formula なら論点 3 が起きないかもしれない (**未検証**)。それでも、なくなる予定の仕組みに新しい経路を載せる理由にはならない
 
 ### macOS だけを対象にする
 
@@ -99,7 +99,7 @@ tap (Homebrew の第三者 repository) として `swat9013/homebrew-tap` を用�
 一次情報は GitHub 上のソースで読んだ。公開 URL と、読んだ ref を並べる。
 
 - [G1] GoReleaser「Homebrew Casks」 <https://goreleaser.com/customization/publish/homebrew_casks/> — `goreleaser/goreleaser@v2.18.2:www/content/customization/publish/homebrew_casks.md` (Signing and Notarizing / GitHub Actions / dependencies / hooks の節)
-- [G2] GoReleaser「Deprecation notices」の `brews` <https://goreleaser.com/resources/deprecations/#brews> — `goreleaser/goreleaser@v2.18.2:www/content/resources/deprecations.md`
+- [G2] GoReleaser「Deprecation notices」の `brews` <https://goreleaser.com/resources/deprecations/#brews> — `goreleaser/goreleaser@v2.18.2:www/content/resources/deprecations.md` (`brews` の項と、冒頭の「Deprecated options are only removed on major versions of GoReleaser.」)
 - [G3] GoReleaser の cask 生成の golden file — `goreleaser/goreleaser@v2.18.2:internal/pipe/cask/testdata/TestFullCask.rb.golden` と `TestFullPipe/hooks_templated.rb.golden` (`on_linux` の節・`depends_on` の出力・hook の `postflight do` への変換)
 - [H1] Homebrew「Cask Cookbook」 <https://docs.brew.sh/Cask-Cookbook> — `Homebrew/brew@ce46735f:docs/Cask-Cookbook.md` (OS ごとの artifact・`depends_on`・`*flight_steps` の節)
 - [H2] Homebrew「Homebrew Security and Supply Chain」 <https://docs.brew.sh/Homebrew-Security-and-Supply-Chain> — `Homebrew/brew@ce46735f:docs/Homebrew-Security-and-Supply-Chain.md` (cask の信頼モデルと quarantine、第三者 tap が unsupported であること)
