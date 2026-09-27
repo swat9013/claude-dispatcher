@@ -43,6 +43,21 @@ const (
 // git / ps / crontab の stub は status / setup / doctor の観測点。tick の契約は gh と claude の呼び出しだけで決まる
 var stubNames = []string{"gh", "claude", "git", "ps", "crontab"}
 
+// selfResolutionDirs は PATH の自己解決 (internal/deps の candidates) が探す置き場のうち、sandbox の HOME の外にあるもの。
+// sandbox の PATH は stub だけで閉じているが、自己解決はここまで探しに行くので、ここにある実物には stub で蓋ができない
+var selfResolutionDirs = []string{"/opt/homebrew/bin", "/usr/local/bin", "/home/linuxbrew/.linuxbrew/bin"}
+
+// skipIfSelfResolutionReachesARealOne は、自己解決が届く置き場に name の実物があれば t を skip する。
+// 「解決できない」を確かめるテストは、実物に解決されてしまうと検査が成り立たない
+func skipIfSelfResolutionReachesARealOne(t *testing.T, name string) {
+	t.Helper()
+	for _, dir := range selfResolutionDirs {
+		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+			t.Skipf("PATH の自己解決が届く %s に %s の実物がある", dir, name)
+		}
+	}
+}
+
 var registerSourcesOnce = sync.OnceValue(registerBinarySources)
 
 var (
@@ -165,8 +180,9 @@ func newBareSandbox(t *testing.T) *sandbox {
 	s.installStubs(s.binDir)
 	s.env = map[string]string{
 		"HOME": s.home,
-		// stub を先頭に置く。PATH の自己解決が HOME 配下や Homebrew の実物へ届かないよう、依存 CLI はすべて stub で埋める
-		"PATH": s.binDir + ":/usr/bin:/bin",
+		// PATH は stub だけで閉じる。CLI が撃つ外部 CLI はすべて stub にあるので、/usr/bin 等を足すと
+		// stub を消したテストで runner の実物 (/usr/bin/gh 等) に届いてしまう
+		"PATH": s.binDir,
 	}
 	return s
 }
