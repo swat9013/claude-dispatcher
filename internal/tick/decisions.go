@@ -114,8 +114,8 @@ func validate(d Decisions, instructions []Instruction) error {
 	return validateSpawnList(d.Spawn, instructions)
 }
 
-// validateSpawnList は spawn の列全体に掛かる検査。1 件ずつの検査を通った列を受ける
-// (start の spawn は start 指示に許されたものだけになっている)。
+// validateSpawnList は spawn の列全体に掛かる検査。start の件数は kind だけで数える
+// (start 指示の無い tick の start spawn は、1 件ずつの検査が採否の語彙で弾く)。
 func validateSpawnList(spawns []Spawn, instructions []Instruction) error {
 	seen := map[int]bool{}
 	for _, s := range spawns {
