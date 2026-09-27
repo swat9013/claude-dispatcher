@@ -21,7 +21,7 @@
 
 - commit 時: `pre-commit install` 済みなら、gitleaks が staged の内容を自動で検査し、秘匿情報を検出すると commit を止める (検査対象は staged だけなので、手で走らせるなら stage した後に `pre-commit run`)
 - push 前: `go vet ./...` と `go test ./...` が通ること。`pre-commit install` 済みなら push 時に hook が走り、落ちると push を止める
-  - `test/blackbox` は binary を build して外から撃つ black-box テスト (外から観測できる契約の検査。正本は [docs/design/formats.md](docs/design/formats.md))。外部 CLI は stub に差し替えるので、network も認証も要らず、マシンに在る実物にも届かない。例外は 2 つ: Homebrew の prefix 等に gh / claude の実物があるマシン (macOS の runner の gh 等) では、「解決できない」を確かめるテストが skip される。`--cron-env` の試運転は cron と同じ `/usr/bin:/bin` から始まるので、そこに在る実物 (ubuntu の runner の gh 等) より前に、自己解決で stub の置き場を足して引かせている
+  - `test/blackbox` は binary を build して外から撃つ black-box テスト (外から観測できる契約の検査。正本は [docs/design/formats.md](docs/design/formats.md))。外部 CLI は stub に差し替えるので、network も認証も要らず、マシンに在る実物にも届かない。例外は 2 つ: Homebrew の prefix 等に gh / claude の実物があるマシン (macOS の runner の gh 等) では、「解決できない」を確かめるテストが skip される。`--cron-env` の試運転は cron と同じ `/usr/bin:/bin` から始まり、そこに在る実物 (ubuntu の runner の gh 等) に届きうる。テストが stub を引けるのは、claude が `/usr/bin:/bin` に無いので自己解決が働き、stub の置き場 (`~/.local/bin`) を前に足すから
 - PR と main への push: [.github/workflows/ci.yml](.github/workflows/ci.yml) が、`go vet ./...` と `go test ./...` を ubuntu と macOS の runner (配布対象の OS) で撃ち、`goreleaser check` で [.goreleaser.yaml](.goreleaser.yaml) を検査する。skip したテストは理由とともに job の log の最後に並ぶ
 - release: tag (`v*`) は main の commit に打つ。push すると [.github/workflows/release.yml](.github/workflows/release.yml) が、上の CI と同じ gate を tag の commit で通し、tag の commit が main に在ることを確かめてから GoReleaser で GitHub Releases に binary を出し、tap `swat9013/homebrew-tap` の cask を更新する ([.goreleaser.yaml](.goreleaser.yaml))
   - prerelease の tag (`v1.2.0-rc.1` 等) は、Release を prerelease として出し、tap を更新しない

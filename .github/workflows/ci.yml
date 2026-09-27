@@ -25,14 +25,21 @@ jobs:
         with:
           go-version-file: go.mod
       - run: go vet ./...
-      # -v で skip の理由 (runner に在る実物に届くので検査が成り立たないケース) を log に残す
-      # shell: bash は pipefail で撃つので、go test が落ちれば tee を挟んでも step は落ちる
-      - run: go test -count=1 -v ./... 2>&1 | tee test.log
+      # -json の event を残し、log には -v と同じ出力を流す。shell: bash は pipefail で撃つので、go test が落ちれば step も落ちる
+      - run: go test -count=1 -json ./... | tee test.json | jq -rj 'select(.Action == "output") | .Output'
         shell: bash
-      # skip の理由 (t.Skipf の文) は --- SKIP の行の直前に出るので、1 行前も並べる
+      # skip したテストと理由 (t.Skipf の文) を並べる。subtest の --- SKIP は親の結果の下にまとめて出て、
+      # 理由の行と離れるので、-v の行の位置でなく -json の event をテスト名で引く
       - name: skip したテスト
         if: always()
-        run: grep -B1 -- '--- SKIP' test.log || echo "skip なし"
+        run: |
+          jq -rs '
+            [.[] | select(.Action == "skip" and .Test) | {Package, Test}] as $skipped
+            | if ($skipped | length) == 0 then "skip なし"
+              else .[] | select(.Action == "output" and .Test and ({Package, Test} | IN($skipped[]))
+                                and (.Output | test("^\\s+\\S+\\.go:\\d+: ")))
+                   | "\(.Test):\(.Output | rtrimstr("\n"))"
+              end' test.json
         shell: bash
 
   goreleaser-check:
