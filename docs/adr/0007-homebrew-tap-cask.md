@@ -1,6 +1,6 @@
 # ADR 0007: Homebrew tap `swat9013/tap` の cask を配布経路に加える
 
-- Status: Proposed (quarantine と依存の 2 論点が未決。人が CL で確定したら、merge より前に本文の「未決」を決定へ書き換えて Accepted にする。Proposed のまま merge しない)
+- Status: Accepted
 - Date: 2026-09-27
 - ADR 0003 のうち、配布を `go install` と GitHub Releases に限っていた部分に経路を 1 つ足す (binary に契約を埋め込む決定と plugin の解決は変えない)
 
@@ -21,7 +21,7 @@ tap (Homebrew の第三者 repository) として `swat9013/homebrew-tap` を用�
 
 ## Decision
 
-**tap `swat9013/tap` に cask `claude-dispatcher` を置き、GoReleaser の `homebrew_casks` で tag ごとに更新する。macOS と Linux の両方を対象にする。** quarantine の扱いと依存の宣言は一次情報だけでは一方に決まらないので、下の「未決」に選択肢を並べ、人が確定する。
+**tap `swat9013/tap` に cask `claude-dispatcher` を置き、GoReleaser の `homebrew_casks` で tag ごとに更新する。macOS と Linux の両方を対象にする。macOS の quarantine は cask の宣言的な steps で外し、gh / claude は依存に載せない。** 論点 3 と 4 は一次情報だけでは一方に決まらなかったので、比べた案とトレードオフを残し、人が確定した。
 
 ### 1. formula ではなく cask で配る
 
@@ -36,7 +36,7 @@ tap (Homebrew の第三者 repository) として `swat9013/homebrew-tap` を用�
 - 既存の配布は macOS と Linux の両方に binary を出している (ADR 0003)。Homebrew の経路だけ Linux を外す理由は無い
 - quarantine は macOS の機構なので、論点 3 の決め方は Linux に効かない
 
-### 3. quarantine の扱い: 未決
+### 3. quarantine は cask の `postflight_steps` で外す
 
 事実:
 
@@ -44,7 +44,7 @@ tap (Homebrew の第三者 repository) として `swat9013/homebrew-tap` を用�
 - 本 repo の binary は署名していない (README)。GoReleaser の docs は、署名していない binary の cask は `xattr` で quarantine を外さないと「damaged and cannot be opened」で起動できないことがあるとしている [G1]
 - Homebrew は Gatekeeper の迂回を容易に提供しない方針で、`--no-quarantine` を 5.0.0 で deprecated にした [H4]。Gatekeeper の検査に落ちる cask の disable (2026 年 9 月) は `Homebrew/homebrew-cask` が対象で [H4][H5]、第三者 tap は対象外
 
-選択肢:
+比べた案:
 
 | 案 | 中身 | 利点 | 欠点 |
 |---|---|---|---|
@@ -53,7 +53,13 @@ tap (Homebrew の第三者 repository) として `swat9013/homebrew-tap` を用�
 | C. 署名と公証 | GoReleaser の sign / notarize で Developer ID 署名と公証を行う [G1] | 迂回が要らず、Homebrew の方針とも Apple の推奨とも合う。Releases の binary も同時に直る | Apple Developer Program の年額が掛かり、証明書と credential を Actions の secret として人が管理する |
 | D. caveats で案内する | cask の `caveats` に、利用者が撃つ `xattr` のコマンドを書く [G1] | cask 側は迂回をしない | 初回の起動が失敗し、利用者が手で直す。`brew upgrade` のたびに付き直すかは**未検証** |
 
-### 4. 依存の宣言: 未決
+決定: **B を採る。** 費用を掛けずに、非推奨でない形で利用者の手間を無くせるのは B だけである。
+
+- B が出力できるかは、tap へ publish する実装で GoReleaser の snapshot build を撃って確かめる
+- 出力できなければ A で出す。その場合は、Homebrew が第三者 tap の legacy flight block を受け付ける 2027-12-11 [H3] までに B か C へ移す
+- C は Apple Developer Program の費用を掛けると決めたときに採り直す
+
+### 4. gh / claude を依存に載せない
 
 事実:
 
@@ -62,13 +68,15 @@ tap (Homebrew の第三者 repository) として `swat9013/homebrew-tap` を用�
 - claude は `Homebrew/homebrew-cask` の cask `claude-code` として在る [H7]。この cask は `conflicts_with cask: "claude-code@latest"` を宣言している [H7]
 - plugin `swat-skills` は Homebrew で配られていないので、どの案でも依存に載らない。README の「前提」と `doctor` の検査は、どの案でも残る
 
-選択肢:
+比べた案:
 
 | 案 | 利点 | 欠点 |
 |---|---|---|
 | a. どちらも載せない | 3 つの配布経路で前提が揃う。Homebrew 以外で入れた gh / claude と二重にならない | 利用者が gh と claude を自分で入れる。欠けていれば `doctor` で気づく |
 | b. gh だけ載せる | Homebrew の利用者は gh を別に入れなくてよい | 前提が経路ごとに食い違う。apt や mise で入れた gh と二重になり、どちらが PATH で先に引かれるかが環境次第になる |
 | c. gh と claude を載せる | 前提のうち CLI が揃う | b の欠点に加え、`claude-code@latest` を入れている利用者は conflict で install できない可能性がある (**未検証**: conflict 時の実際の挙動)。Homebrew 以外で入れた claude と二重になる |
+
+決定: **a を採る。** 3 つの配布経路で前提が揃い、Homebrew 以外で入れた gh / claude と二重にならない。依存の充足は、どの経路でも README の「前提」と `doctor` が見る。
 
 ## Consequences
 
