@@ -277,7 +277,7 @@ ISSUE  KIND   STATE    ELAPSED  SESSION  BRANCH  WIP  CL        TICK
 | SESSION | `claude agents --json` に同じ session が居れば `<id> <status>/<state>`、居なければ `-` |
 | BRANCH | cwd の clone に `worktree-issue-<issue>` の作業ツリーがあれば `origin/HEAD` からの ahead 数 (`+3`)、無ければ `-` |
 | WIP | issue に `dispatcher:wip` が付いているか (`yes` / `no`) |
-| CL | CL 置き場の repo 自身の head branch (fork でない) `worktree-issue-<issue>` の最新 CL (`#<番号> <state>`。state は `OPEN` / `CLOSED` / `MERGED`)、無ければ `-` |
+| CL | CL 置き場の repo 自身の head branch (fork でない) `worktree-issue-<issue>` の最新 CL (`#<番号> <state>`。state は `OPEN` / `CLOSED` / `MERGED`)、無ければ `-`。同じ名前の branch の CL を新しい順に 10 本まで読み、fork の CL を読み飛ばす。10 本とも fork の CL でまだ続きがあれば、その issue だけ `?` にして注記を残す |
 
 exit: 0。指定した project が無い / project が 1 つも無いときは 2。
 

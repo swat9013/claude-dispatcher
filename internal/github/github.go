@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -191,13 +192,13 @@ query($owner: String!, $name: String!) {
 
 // PR は open PR 1 本の観測。
 type PR struct {
-	Number    int
-	URL       string
-	Head      string
-	Fork      bool // head branch が fork の repo にある (isCrossRepository)
-	Base      string
-	Draft     bool
-	Mergeable string
+	Number     int
+	URL        string
+	Head       string
+	HeadInFork bool // isCrossRepository
+	Base       string
+	Draft      bool
+	Mergeable  string
 	// Closes は closing reference が指す issue (issueRepo の issue だけ)
 	Closes            []int
 	Checks            *string // head commit の checks の集約。checks が無ければ nil
@@ -262,7 +263,7 @@ func OpenPRs(gh Runner, repo, issueRepo config.Repo) ([]PR, error) {
 		if n.ReviewThreads.TotalCount > reviewThreadsSize {
 			return nil, fmt.Errorf("%w: PR #%d の review thread が %d 件を超えた", ErrTruncated, n.Number, reviewThreadsSize)
 		}
-		pr := PR{Number: n.Number, URL: n.URL, Head: n.HeadRefName, Fork: n.IsCrossRepository, Base: n.BaseRefName, Draft: n.IsDraft, Mergeable: n.Mergeable, Closes: []int{}}
+		pr := PR{Number: n.Number, URL: n.URL, Head: n.HeadRefName, HeadInFork: n.IsCrossRepository, Base: n.BaseRefName, Draft: n.IsDraft, Mergeable: n.Mergeable, Closes: []int{}}
 		for _, ref := range n.ClosingIssuesReferences.Nodes {
 			if ref.Repository.NameWithOwner == issueRepo.String() {
 				pr.Closes = append(pr.Closes, ref.Number)
@@ -313,8 +314,9 @@ type CLState struct {
 const latestCLsWindow = 10
 
 // LatestCLs は issue ごとに、repo 自身の head branch (fork でない) が branches[issue] の最新の CL を返す。無い issue は nil。
-// headRefName の絞り込みは fork の CL も拾うので、新しい順に読んで fork の CL を読み飛ばす。
-func LatestCLs(gh Runner, repo config.Repo, branches map[int]string) (map[int]*CLState, error) {
+// headRefName の絞り込みは fork の CL も拾うので、新しい順に latestCLsWindow 本まで読んで fork の CL を読み飛ばす。
+// 窓の中が fork だけで続きがある issue は、CL が無いと言い切れないので undetermined に返す (cls には載せない)。
+func LatestCLs(gh Runner, repo config.Repo, branches map[int]string) (cls map[int]*CLState, undetermined []int, err error) {
 	var fields strings.Builder
 	for issue, branch := range branches {
 		fmt.Fprintf(&fields, ` i%d: pullRequests(headRefName: %q, first: %d, orderBy: {field: CREATED_AT, direction: DESC}) { totalCount nodes { number state isCrossRepository } }`, issue, branch, latestCLsWindow)
@@ -322,7 +324,7 @@ func LatestCLs(gh Runner, repo config.Repo, branches map[int]string) (map[int]*C
 	query := "query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) {" + fields.String() + " } }"
 	out, err := gh.Run("api", "graphql", "-f", "query="+query, "-f", "owner="+repo.Owner, "-f", "name="+repo.Name)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var payload struct {
 		Data struct {
@@ -336,13 +338,13 @@ func LatestCLs(gh Runner, repo config.Repo, branches map[int]string) (map[int]*C
 		}
 	}
 	if err := json.Unmarshal(out, &payload); err != nil {
-		return nil, fmt.Errorf("gh api graphql の出力を読めない: %w", err)
+		return nil, nil, fmt.Errorf("gh api graphql の出力を読めない: %w", err)
 	}
-	cls := map[int]*CLState{}
+	cls = map[int]*CLState{}
 	for issue := range branches {
 		found, ok := payload.Data.Repository[fmt.Sprintf("i%d", issue)]
 		if !ok {
-			return nil, fmt.Errorf("gh api graphql の出力に issue %d の CL が無い", issue)
+			return nil, nil, fmt.Errorf("gh api graphql の出力に issue %d の CL が無い", issue)
 		}
 		cls[issue] = nil
 		for _, n := range found.Nodes {
@@ -353,10 +355,12 @@ func LatestCLs(gh Runner, repo config.Repo, branches map[int]string) (map[int]*C
 		}
 		if cls[issue] == nil && found.TotalCount > len(found.Nodes) {
 			// 窓の外に repo 自身の CL が残っているかもしれない。無いと言い切らない
-			return nil, fmt.Errorf("%w: issue %d の branch %s の CL が fork だけで %d 本を超えた", ErrTruncated, issue, branches[issue], latestCLsWindow)
+			delete(cls, issue)
+			undetermined = append(undetermined, issue)
 		}
 	}
-	return cls, nil
+	slices.Sort(undetermined)
+	return cls, undetermined, nil
 }
 
 // CreateLabel は repo に label を作る。tracker に書く唯一の経路で、導入者が承認した setup だけが使う (system.md §1)。
