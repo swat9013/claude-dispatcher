@@ -21,6 +21,7 @@ import (
 	"github.com/swat9013/claude-dispatcher/internal/termtext"
 	"github.com/swat9013/claude-dispatcher/internal/tick"
 	"github.com/swat9013/claude-dispatcher/internal/ticklog"
+	"github.com/swat9013/claude-dispatcher/internal/version"
 )
 
 // Options は doctor の入力。Gh / Crontab / DryRun は外部 CLI の起動口。
@@ -64,6 +65,8 @@ func (r *report) line(mark, item, format string, args ...any) {
 // Run は検査を回し、NG が 1 つでもあれば 1 を返す。
 func Run(o Options) int {
 	r := &report{out: o.Stdout}
+	// 導入検査の結果と一緒に版を貼れるように先頭に置く (情報。判定しない)
+	r.line(markInfo, "版", "%s", version.Read())
 	cfg, cfgErr := config.Load(o.Project.ConfigFile(), o.Home)
 	if cfgErr != nil {
 		r.line(markNG, "config", "%v", cfgErr)
