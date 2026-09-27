@@ -42,25 +42,23 @@ type Probes struct {
 	Git func(args ...string) (string, error)
 }
 
-// Observer は機械の観測を読む口。本番は ps と claude を撃つ Commands、テストは fake。
+// Observer は機械の観測を読む口。本番は ps と claude を撃つ CommandObserver、テストは fake。
 type Observer interface {
-	// Processes は生きている process の pid → command 行
-	Processes() (map[int]string, error)
-	// Agents は `claude agents --json` の出力
-	Agents() (string, error)
+	Observe() launch.Machine
 }
 
-// Commands は ps と claude を撃って機械を観測する Observer。Output は name を解決して撃ち、stdout を返す口。
-type Commands struct {
+// CommandObserver は ps と claude を撃って機械を観測する。Output は name を解決して撃ち、stdout を返す口。
+type CommandObserver struct {
 	Output func(name string, args ...string) (string, error)
 }
 
-func (c Commands) Processes() (map[int]string, error) {
-	out, err := c.Output("ps", "-A", "-o", "pid=,command=")
-	return parseProcesses(out), err
+func (o CommandObserver) Observe() launch.Machine {
+	var m launch.Machine
+	ps, err := o.Output("ps", "-A", "-o", "pid=,command=")
+	m.Processes, m.ProcessesErr = parseProcesses(ps), err
+	m.Agents, m.AgentsErr = o.Output("claude", "agents", "--json")
+	return m
 }
-
-func (c Commands) Agents() (string, error) { return c.Output("claude", "agents", "--json") }
 
 // parseProcesses は `ps -A -o pid=,command=` の出力を pid → command 行にする。
 func parseProcesses(out string) map[int]string {
@@ -110,18 +108,17 @@ type Branch struct {
 }
 
 // Collect は project ごとの今を組む。機械の観測はマシンで 1 つなので、1 度だけ読んで全 project で共有する。
-func Collect(projects []paths.Project, home string, probes Probes, now time.Time) []Report {
-	var machine launch.Machine
-	machine.Processes, machine.ProcessesErr = probes.Machine.Processes()
-	machine.Agents, machine.AgentsErr = probes.Machine.Agents()
-	live, liveErr := probes.Workers(machine)
+// 経過の基準の時刻は観測を読んだ後に clock から取る。
+func Collect(projects []paths.Project, home string, probes Probes, clock func() time.Time) []Report {
+	machine := probes.Machine.Observe()
+	alive, aliveErr := probes.Workers(machine)
 	reports := make([]Report, 0, len(projects))
 	for _, project := range projects {
 		c := &collector{
 			report:  Report{Project: project.Name, Workers: []Worker{}, Notes: []string{}},
-			machine: machine, live: live, liveErr: liveErr, probes: probes,
+			machine: machine, workers: alive, workersErr: aliveErr, probes: probes,
 		}
-		reports = append(reports, c.collect(project, home, now))
+		reports = append(reports, c.collect(project, home, clock()))
 	}
 	return reports
 }
@@ -130,8 +127,8 @@ func Collect(projects []paths.Project, home string, probes Probes, now time.Time
 func (c *collector) collect(project paths.Project, home string, now time.Time) Report {
 	if c.machine.ProcessesErr != nil {
 		c.note("process の一覧を読めない — tick の実行中と worker の生死は ? (%v)", c.machine.ProcessesErr)
-	} else if c.liveErr != nil {
-		c.note("worker の生死を読めない — STATE は ? (%v)", c.liveErr)
+	} else if c.workersErr != nil {
+		c.note("worker の生死を読めない — STATE は ? (%v)", c.workersErr)
 	}
 	c.report.Tick.Running = c.tickRunning(project.Name)
 	lines, broken, err := ticklog.Read(project.LogFile())
@@ -214,9 +211,10 @@ func listed(spawns []spawnRecord, alive func(ticklog.Spawned) Probed[bool], wip 
 type collector struct {
 	report  Report
 	machine launch.Machine
-	live    launch.LiveWorkers
-	liveErr error
-	probes  Probes
+	// workers は起動部が組んだ今生きている worker の一覧。組めなければ workersErr
+	workers    launch.Alive
+	workersErr error
+	probes     Probes
 }
 
 func (c *collector) note(format string, args ...any) {
@@ -225,10 +223,10 @@ func (c *collector) note(format string, args ...any) {
 
 // alive は起動記録の worker が今生きているかを起動部の一覧に尋ねる。一覧を組めなければ ?。
 func (c *collector) alive(s ticklog.Spawned) Probed[bool] {
-	if c.liveErr != nil {
+	if c.workersErr != nil {
 		return Probed[bool]{}
 	}
-	return known(c.live(launch.WorkerLaunch{PID: s.PID, SessionID: s.SessionID}))
+	return known(c.workers(launch.WorkerLaunch{PID: s.PID, SessionID: s.SessionID}))
 }
 
 // wip は issue に wip が付いているかを返す関数。wip を読めなければどの issue も ?。

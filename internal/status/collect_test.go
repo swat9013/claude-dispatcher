@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -14,36 +15,31 @@ import (
 	"github.com/swat9013/claude-dispatcher/internal/paths"
 )
 
-// fakeMachine は ps / claude の代わりに決めた観測を返し、読まれた回数を数える。
+// fakeMachine は ps / claude の代わりに決めた観測を返し、観測された回数を数える。
 type fakeMachine struct {
-	processes    map[int]string
-	processesErr error
-	agents       string
-	reads        int
+	machine  launch.Machine
+	observed int
 }
 
-func (f *fakeMachine) Processes() (map[int]string, error) {
-	f.reads++
-	return f.processes, f.processesErr
+func (f *fakeMachine) Observe() launch.Machine {
+	f.observed++
+	return f.machine
 }
 
-func (f *fakeMachine) Agents() (string, error) { return f.agents, nil }
+func quietMachine() *fakeMachine {
+	return &fakeMachine{machine: launch.Machine{Processes: map[int]string{}, Agents: "[]"}}
+}
 
-// liveWorkers は起動部の代わりに、pids の worker だけが生きていると答える。
-func liveWorkers(pids ...int) launch.Census {
-	return func(m launch.Machine) (launch.LiveWorkers, error) {
-		if m.ProcessesErr != nil {
-			return nil, m.ProcessesErr
-		}
-		return func(w launch.WorkerLaunch) bool {
-			for _, pid := range pids {
-				if w.PID == pid {
-					return true
-				}
-			}
-			return false
-		}, nil
+// answers は起動部の代わりに、pids の worker だけが生きていると答える。
+func answers(pids ...int) launch.Census {
+	return func(launch.Machine) (launch.Alive, error) {
+		return func(w launch.WorkerLaunch) bool { return slices.Contains(pids, w.PID) }, nil
 	}
+}
+
+// cannotAnswer は起動部の代わりに、一覧を組めなかったと答える。
+func cannotAnswer(err error) launch.Census {
+	return func(launch.Machine) (launch.Alive, error) { return nil, err }
 }
 
 // projectWithSpawn は issue 42 の worker (pid 4242) を起動した tick 行だけを持つ project を置く (config は置かない)。
@@ -70,71 +66,102 @@ func probesWith(machine Observer, workers launch.Census) Probes {
 	}
 }
 
+func collectOne(t *testing.T, probes Probes) Report {
+	t.Helper()
+	return Collect([]paths.Project{projectWithSpawn(t, "acme")}, t.TempDir(), probes, time.Now)[0]
+}
+
 func TestCollectListsAWorkerTheLauncherTellsAlive(t *testing.T) {
-	project := projectWithSpawn(t, "acme")
-	probes := probesWith(&fakeMachine{processes: map[int]string{}, agents: "[]"}, liveWorkers(4242))
+	r := collectOne(t, probesWith(quietMachine(), answers(4242)))
 
-	reports := Collect([]paths.Project{project}, t.TempDir(), probes, time.Now())
-
-	if w := reports[0].Workers; len(w) != 1 || !w[0].Alive.Known || !w[0].Alive.Value {
+	if w := r.Workers; len(w) != 1 || !w[0].Alive.Known || !w[0].Alive.Value {
 		t.Fatalf("workers = %+v, want 起動部が生きていると答えた issue 42 の worker が running で載る", w)
 	}
 }
 
 func TestCollectDoesNotListAWorkerTheLauncherTellsGone(t *testing.T) {
-	project := projectWithSpawn(t, "acme")
-	probes := probesWith(&fakeMachine{processes: map[int]string{}, agents: "[]"}, liveWorkers())
+	r := collectOne(t, probesWith(quietMachine(), answers()))
 
-	reports := Collect([]paths.Project{project}, t.TempDir(), probes, time.Now())
-
-	if w := reports[0].Workers; len(w) != 0 {
-		t.Fatalf("workers = %+v, want 生きていない worker は (wip を確かめられなければ) 載らない", w)
+	if len(r.Workers) != 0 {
+		t.Fatalf("workers = %+v, want 生きていない worker は (wip を確かめられなければ) 載らない", r.Workers)
 	}
 }
 
-func TestCollectReadsTheMachineOnceForEveryProject(t *testing.T) {
-	machine := &fakeMachine{processes: map[int]string{}, agents: "[]"}
+func TestCollectObservesTheMachineOnceForEveryProject(t *testing.T) {
+	machine := quietMachine()
 	projects := []paths.Project{projectWithSpawn(t, "acme"), projectWithSpawn(t, "beta")}
 
-	Collect(projects, t.TempDir(), probesWith(machine, liveWorkers(4242)), time.Now())
+	Collect(projects, t.TempDir(), probesWith(machine, answers(4242)), time.Now)
 
-	if machine.reads != 1 {
-		t.Fatalf("process の一覧を %d 回読んだ, want 1 回の描画で 1 度だけ", machine.reads)
+	if machine.observed != 1 {
+		t.Fatalf("機械を %d 回観測した, want 1 回の描画で 1 度だけ", machine.observed)
 	}
 }
 
-func TestCollectMarksLivenessUnknownWhenTheProcessListCannotBeRead(t *testing.T) {
-	project := projectWithSpawn(t, "acme")
-	machine := &fakeMachine{processesErr: errors.New("ps failed"), agents: "[]"}
+func TestCollectNotesFirstThatTheProcessListCannotBeRead(t *testing.T) {
+	machine := &fakeMachine{machine: launch.Machine{ProcessesErr: errors.New("ps failed"), Agents: "[]"}}
 
-	reports := Collect([]paths.Project{project}, t.TempDir(), probesWith(machine, liveWorkers(4242)), time.Now())
+	r := collectOne(t, probesWith(machine, launch.ClaudePrintCensus))
 
-	r := reports[0]
-	if r.Tick.Running.Known || len(r.Workers) != 0 {
-		t.Fatalf("report = %+v, want tick の実行中が ? で、生死を確かめられない worker は載らない", r)
-	}
 	if len(r.Notes) == 0 || !strings.HasPrefix(r.Notes[0], "process の一覧を読めない — tick の実行中と worker の生死は ?") {
 		t.Fatalf("notes = %q, want 先頭に process の一覧を読めない注記", r.Notes)
 	}
 }
 
-func TestReportSplitsIntoHeadingNotesAndTable(t *testing.T) {
-	project := projectWithSpawn(t, "acme")
-	probes := probesWith(&fakeMachine{processes: map[int]string{}, agents: "[]"}, liveWorkers(4242))
-	r := Collect([]paths.Project{project}, t.TempDir(), probes, time.Now())[0]
+func TestCollectLeavesTickRunningUnknownWhenTheProcessListCannotBeRead(t *testing.T) {
+	machine := &fakeMachine{machine: launch.Machine{ProcessesErr: errors.New("ps failed"), Agents: "[]"}}
 
-	heading, notes, table := r.Heading(), r.NoteLines(), r.TableLines()
+	r := collectOne(t, probesWith(machine, launch.ClaudePrintCensus))
 
-	if !strings.HasPrefix(heading, "acme  待機  最終 tick ") {
-		t.Fatalf("heading = %q, want project 名・tick の状態・最終 tick", heading)
+	if r.Tick.Running.Known {
+		t.Fatalf("tick running = %+v, want ?", r.Tick.Running)
 	}
-	if len(notes) == 0 || !strings.HasPrefix(notes[0], "  ! config を読めない") {
-		t.Fatalf("notes = %q, want config を読めない注記", notes)
+}
+
+func TestCollectNotesThatLivenessIsUnknownWhenTheLauncherCannotAnswer(t *testing.T) {
+	r := collectOne(t, probesWith(quietMachine(), cannotAnswer(errors.New("claude agents failed"))))
+
+	if len(r.Notes) == 0 || !strings.HasPrefix(r.Notes[0], "worker の生死を読めない — STATE は ?") {
+		t.Fatalf("notes = %q, want 先頭に worker の生死を読めない注記", r.Notes)
 	}
+}
+
+func TestCollectDoesNotListAWorkerWhoseLivenessIsUnknown(t *testing.T) {
+	r := collectOne(t, probesWith(quietMachine(), cannotAnswer(errors.New("claude agents failed"))))
+
+	if len(r.Workers) != 0 {
+		t.Fatalf("workers = %+v, want 生死を確かめられない worker は (wip も ? なら) 載らない", r.Workers)
+	}
+}
+
+func TestReportHeadingShowsTheProjectTheTickStateAndTheLastTick(t *testing.T) {
+	r := collectOne(t, probesWith(quietMachine(), answers(4242)))
+
+	if got, want := r.Heading(), "acme  待機  最終 tick 2026-09-26T02:48:00Z ok"; got != want {
+		t.Fatalf("heading = %q, want %q", got, want)
+	}
+}
+
+func TestReportNoteLinesMarkEachNote(t *testing.T) {
+	r := Report{Notes: []string{"config を読めない"}}
+
+	if got := r.NoteLines(); len(got) != 1 || got[0] != "  ! config を読めない" {
+		t.Fatalf("note lines = %q, want 注記ごとに `  ! ` を前置した行", got)
+	}
+}
+
+func TestReportTableLinesAreEmptyWithoutWorkers(t *testing.T) {
+	if got := (Report{}).TableLines(); len(got) != 0 {
+		t.Fatalf("table lines = %q, want 載せる worker が居なければ表を出さない", got)
+	}
+}
+
+func TestReportTableLinesStartWithTheColumnHeaderThenOneRowPerWorker(t *testing.T) {
+	r := collectOne(t, probesWith(quietMachine(), answers(4242)))
+
+	table := r.TableLines()
+
 	if len(table) != 2 || !strings.HasPrefix(table[0], "ISSUE") || !strings.HasPrefix(table[1], "#42") {
-		t.Fatalf("table = %q, want 見出し行と issue 42 の行", table)
-	}
-	if got, want := RenderTable([]Report{r}), strings.Join(append(append([]string{heading}, notes...), table...), "\n"); got != want {
-		t.Fatalf("RenderTable = %q, want 見出し・注記・表をこの順に並べたもの %q", got, want)
+		t.Fatalf("table = %q, want 列の見出し行と issue 42 の行", table)
 	}
 }

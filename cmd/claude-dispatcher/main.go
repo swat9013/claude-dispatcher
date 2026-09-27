@@ -300,9 +300,9 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 	probes := status.Probes{
-		Machine: status.Commands{Output: e.output},
+		Machine: status.CommandObserver{Output: e.output},
 		// worker は newLauncher の ClaudePrint で起動するので、生死もその形で見分ける
-		Workers: launch.ClaudePrintWorkers,
+		Workers: launch.ClaudePrintCensus,
 		Gh:      e.ghFor,
 		Git:     e.git,
 	}
@@ -310,7 +310,7 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 	for _, name := range projects {
 		places = append(places, e.roots.Project(name))
 	}
-	collect := func() []status.Report { return status.Collect(places, e.home, probes, time.Now()) }
+	collect := func() []status.Report { return status.Collect(places, e.home, probes, time.Now) }
 
 	if !watch {
 		fmt.Fprintln(stdout, status.RenderTable(collect()))
