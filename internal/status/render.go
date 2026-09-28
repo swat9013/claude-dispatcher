@@ -15,11 +15,12 @@ const unknownCell = "?"
 
 var columns = []string{"ISSUE", "KIND", "STATE", "ELAPSED", "SESSION", "BRANCH", "WIP", "CL", "TICK"}
 
-// RenderTable は project ごとの表を空行で区切って並べる (formats.md §10)。
+// RenderTable は project ごとに見出し・注記・表を並べ、project の間を空行で区切る (formats.md §10)。
 func RenderTable(reports []Report) string {
 	blocks := make([]string, 0, len(reports))
 	for _, r := range reports {
-		blocks = append(blocks, strings.Join(renderProject(r), "\n"))
+		lines := append([]string{r.Heading()}, r.NoteLines()...)
+		blocks = append(blocks, strings.Join(append(lines, r.TableLines()...), "\n"))
 	}
 	return strings.Join(blocks, "\n\n")
 }
@@ -32,7 +33,8 @@ func cell[T any](p Probed[T], format func(T) string) string {
 	return format(p.Value)
 }
 
-func renderProject(r Report) []string {
+// Heading は project の見出し行 (project 名・tick の状態・最終 tick)。
+func (r Report) Heading() string {
 	running := "tick " + unknownCell
 	if r.Tick.Running.Known {
 		running = map[bool]string{true: "tick 実行中", false: "待機"}[r.Tick.Running.Value]
@@ -43,13 +45,24 @@ func renderProject(r Report) []string {
 		}
 		return ticklog.ShortTS(l.TS) + " " + l.Result
 	})
-	lines := []string{fmt.Sprintf("%s  %s  最終 tick %s", r.Project, running, last)}
+	return fmt.Sprintf("%s  %s  最終 tick %s", r.Project, running, last)
+}
+
+// NoteLines は注記の行。
+func (r Report) NoteLines() []string {
+	lines := make([]string, 0, len(r.Notes))
 	for _, note := range r.Notes {
 		lines = append(lines, "  ! "+note)
 	}
+	return lines
+}
+
+// TableLines は worker の表の行 (列の見出し行を含む)。載せる worker が居なければ空。
+func (r Report) TableLines() []string {
 	if len(r.Workers) == 0 {
-		return lines
+		return nil
 	}
+	var lines []string
 	rows := [][]string{columns}
 	for _, w := range r.Workers {
 		rows = append(rows, []string{

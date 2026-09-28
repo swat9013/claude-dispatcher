@@ -152,7 +152,7 @@ claude_token_file = "~/.config/claude-dispatcher/<project>/claude-token"
 
 - 指示の並びは `reenter` → `start` → `anomaly`
 - 候補だけが issue 本文 `body` を持つ (orchestrator の playbook 選定の信号)
-- `linked_cls` と `cls[].issues` の紐づきは、closing reference が指す issue と、head branch `worktree-issue-<issue>` が示す issue の和 (system.md §4)
+- `linked_cls` と `cls[].issues` の紐づきは、closing reference が指す issue と、CL 置き場の repo 自身の head branch (fork でない) `worktree-issue-<issue>` が示す issue の和 (system.md §4)
 - `mergeable` は CL を base へ merge できるか (`MERGEABLE` / `CONFLICTING` / `UNKNOWN`)
 - `checks` は head commit の checks の集約 (`SUCCESS` / `PENDING` / `EXPECTED` / `FAILURE` / `ERROR` / `null`。`EXPECTED` は必須の checks がまだ報告されていない状態)
 - `mergeable` / `checks` の語彙は本 file が正本で、CL host の綴りではない。CL 置き場の部品が host の応答をこの語彙へ写す (gh の応答は同じ綴り。system.md §13)
@@ -182,6 +182,8 @@ CLI は orchestrator の正常終了後に次を検査する (timeout / 異常�
 |---|---|
 | file があり JSON として読める (spawn 0 件でも file は要る) | 1 件も起動せず `error` |
 | `action` と `spawn[].kind` が上の語彙に入り、`spawn[].kind` が同じ issue の `action` と一致する | 1 件も起動せず `error` |
+| `spawn[].issue` が重複しない (同じ issue の worker は worker log の path と作業ツリーの branch を取り合う) | 1 件も起動せず `error` |
+| `kind: start` の spawn が start 指示の `free_slots` 件以下 (並列上限 N を起動前に守る) | 1 件も起動せず `error` |
 | `spawn[].prompt` に未展開の変数 (`${`) が残っていない | 1 件も起動せず `error` |
 | `spawn[].playbooks` (prompt に載せた playbook の絶対 path の列) の各 path が prompt 本文に含まれ、file として実在する。`start` は指示の選定母集合の 1 本、`reenter` は指示の条件の playbook を条件順に並べた列の部分列 (読み直しで外れた条件は落としてよい) | 1 件も起動せず `error` |
 | 網羅: 上の表の issue 1 件ごとに採否がある | 書かれた `spawn` を起動してから `error` |
@@ -277,7 +279,7 @@ ISSUE  KIND   STATE    ELAPSED  SESSION  BRANCH  WIP  CL        TICK
 | SESSION | `claude agents --json` に同じ session が居れば `<id> <status>/<state>`、居なければ `-` |
 | BRANCH | cwd の clone に `worktree-issue-<issue>` の作業ツリーがあれば `origin/HEAD` からの ahead 数 (`+3`)、無ければ `-` |
 | WIP | issue に `dispatcher:wip` が付いているか (`yes` / `no`) |
-| CL | head branch `worktree-issue-<issue>` の最新 CL (`#<番号> <state>`。state は `OPEN` / `CLOSED` / `MERGED`)、無ければ `-` |
+| CL | CL 置き場の repo 自身の head branch (fork でない) `worktree-issue-<issue>` の最新 CL (`#<番号> <state>`。state は `OPEN` / `CLOSED` / `MERGED`)、無ければ `-`。同じ名前の branch の CL を新しい順に 10 本まで読み、fork の CL を読み飛ばす。10 本とも fork の CL でまだ続きがあれば、その issue だけ `?` にして注記を残す |
 
 exit: 0。指定した project が無い / project が 1 つも無いときは 2。
 
@@ -309,6 +311,7 @@ claude-dispatcher doctor <project>
 導入の充足を検査して 1 項目 1 行で示す。**何も書かない** (state dir・config・settings・外部 store のどれにも)。
 
 ```
+--  版            v0.3.0 (<commit>)
 ok  config        <config.toml の path>
 NG  label         置き場 acme/widgets に dispatcher:wip が無い — `claude-dispatcher setup myproj` で作る
 --  最終 tick     2026-09-26T03:00:00Z ok
@@ -316,6 +319,7 @@ NG  label         置き場 acme/widgets に dispatcher:wip が無い — `claud
 
 | 項目 | 見るもの |
 |---|---|
+| `版` | この binary の版と commit (情報。判定しない)。綴りは §14 |
 | `config` | config.toml が在り、`tick` と同じ検査に通る |
 | `state dir` | state dir が在る |
 | `依存 CLI` | gh / claude / git が (PATH の自己解決の後で) 見つかる |
@@ -406,3 +410,21 @@ SIGINT / SIGTERM / SIGHUP を同じに扱う。
 - stdout への書き込みの失敗 (読み手の消えた pipe 等) では止まらない。描画を捨てて続け、停止要求で止まる
 
 exit: 0 = 停止要求で止まった / 1・2・3 = 起動時の検査 (上表)。想定外の失敗で loop 自身が止まったときは 1。
+
+## 14. `--version`
+
+```
+claude-dispatcher --version
+```
+
+binary の版と commit を stdout に 1 行で出す。config も state dir も読まないので、導入が壊れていても撃てる (不具合の報告に貼る)。
+
+```
+claude-dispatcher v0.3.0 (<commit の hash>)
+```
+
+- 版: Releases の binary は GoReleaser が埋めた tag (`v0.3.0`)。`go install <module>@<版>` の binary は module の版 (同じ `v0.3.0`)。git の作業ツリーでの `go build` は Go が VCS から刻む pseudo-version (直近の tag の次の patch の `-0.<日時>-<hash>`。例: `v0.1.1-0.20260927163012-aac3e1c06160`、未 commit の変更があれば `+dirty`)。VCS の情報が無い build (`go run`・`-buildvcs=false` 等) は `(devel)`
+- commit: Releases の binary は tag の commit。git の作業ツリーでの `go build` は build 情報の `vcs.revision`。`go install <module>@<版>` の binary は module cache から build するので commit を持たず `unknown`。VCS の情報が無い build も `unknown`
+- doctor の `版` の行 (§12) も同じ綴りを出す
+
+exit: 0。

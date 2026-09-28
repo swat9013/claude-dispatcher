@@ -54,6 +54,7 @@ type CL struct {
 	Number            int     `json:"number"`
 	URL               string  `json:"url"`
 	Branch            string  `json:"branch"`
+	HeadInFork        bool    `json:"-"` // worker の CL の判定 (isWorkerCLOf) だけに使い、指示ファイルには載せない
 	Base              string  `json:"base"`
 	Draft             bool    `json:"draft"`
 	Issues            []int   `json:"issues"`
@@ -65,10 +66,15 @@ type CL struct {
 // WorkerBranch は worker が作る branch 名の規約 (system.md §10)。CLI はこの綴りで worker 由来の CL を見分ける
 func WorkerBranch(issue int) string { return fmt.Sprintf("worktree-issue-%d", issue) }
 
+// isWorkerCLOf は CL が issue の worker の CL か: CL 置き場の repo 自身の branch (fork でない) で、
+// 名前が worker の規約のもの (system.md §4 の (b))。worker は fork を作らない
+func (cl CL) isWorkerCLOf(issue int) bool {
+	return !cl.HeadInFork && cl.Branch == WorkerBranch(issue)
+}
+
 // Classify は open issue と open PR から snapshot を組む。
 //
-// issue に紐づく CL は、closing reference がその issue を指すものと、head branch が worker の規約
-// `worktree-issue-<issue>` のものの和 (system.md §4)。
+// issue に紐づく CL は、closing reference がその issue を指すものと、worker の CL (isWorkerCLOf) の和 (system.md §4)。
 func Classify(cfg config.Config, issues []github.Issue, prs []github.PR, now time.Time) Snapshot {
 	open := map[int]bool{}
 	for _, i := range issues {
@@ -77,9 +83,13 @@ func Classify(cfg config.Config, issues []github.Issue, prs []github.PR, now tim
 	cls := make([]CL, 0, len(prs))
 	linked := map[int][]int{}
 	for _, pr := range prs {
+		cl := CL{
+			Number: pr.Number, URL: pr.URL, Branch: pr.Head, HeadInFork: pr.HeadInFork, Base: pr.Base, Draft: pr.Draft,
+			Mergeable: pr.Mergeable, Checks: pr.Checks, UnresolvedThreads: pr.UnresolvedThreads,
+		}
 		related := slices.Clone(pr.Closes)
 		for n := range open {
-			if pr.Head == WorkerBranch(n) && !slices.Contains(related, n) {
+			if cl.isWorkerCLOf(n) && !slices.Contains(related, n) {
 				related = append(related, n)
 			}
 		}
@@ -89,10 +99,8 @@ func Classify(cfg config.Config, issues []github.Issue, prs []github.PR, now tim
 				linked[n] = append(linked[n], pr.Number)
 			}
 		}
-		cls = append(cls, CL{
-			Number: pr.Number, URL: pr.URL, Branch: pr.Head, Base: pr.Base, Draft: pr.Draft, Issues: related,
-			Mergeable: pr.Mergeable, Checks: pr.Checks, UnresolvedThreads: pr.UnresolvedThreads,
-		})
+		cl.Issues = related
+		cls = append(cls, cl)
 	}
 
 	buckets := IssueBuckets{Candidates: []Candidate{}, WIP: []IssueBrief{}, ReadyForHuman: []int{}}

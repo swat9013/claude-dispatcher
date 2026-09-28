@@ -9,7 +9,22 @@ permissions:
   contents: write
 
 jobs:
+  # push 前の gate を通った main の commit にだけ release を出す (tag を main の外の commit に打ったら、gate を走らせる前に止める)
+  on-main:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+
+  # ci.yml の gate を tag の commit で通してから publish する
+  gate:
+    needs: on-main
+    uses: ./.github/workflows/ci.yml
+
   release:
+    needs: gate
     runs-on: ubuntu-latest
     steps:
       # release の書き込み権限を持つ job なので、action は commit SHA で固定する
@@ -19,9 +34,6 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      # push 前の gate を通った main の commit にだけ release を出す (tag を main の外の commit に打ったら止める)
-      - run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
-      - run: go vet ./...
       # Releases に binary を出した後の tap への push で落ちて release が半端に止まるのを、publish の前に止める (未登録と失効)
       - name: tap の token が使えるか確かめる
         run: |

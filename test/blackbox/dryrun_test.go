@@ -106,12 +106,7 @@ func TestDryRunFailsNamingADependencyItCannotResolve(t *testing.T) {
 	for _, name := range []string{"claude", "gh"} {
 		t.Run(name, func(t *testing.T) {
 			s := newSandbox(t)
-			// PATH の自己解決は HOME 配下と Homebrew 等の置き場を探す。実物があると解決できてしまうので検査できない
-			for _, dir := range []string{"/opt/homebrew/bin", "/usr/local/bin"} {
-				if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
-					t.Skipf("PATH の自己解決が届く %s に %s の実物がある", dir, name)
-				}
-			}
+			skipIfSelfResolutionReachesARealOne(t, name)
 			if err := os.Remove(filepath.Join(s.binDir, name)); err != nil {
 				t.Fatal(err)
 			}

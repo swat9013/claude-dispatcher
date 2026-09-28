@@ -201,12 +201,7 @@ func TestDoctorReportsARepoGhCannotSeeAsNG(t *testing.T) {
 func TestDoctorReportsADependencyItCannotResolveAsNG(t *testing.T) {
 	s := newInstallSandbox(t)
 	s.satisfied()
-	// PATH の自己解決は HOME 配下と Homebrew 等の置き場を探す。実物があると解決できてしまうので検査できない
-	for _, dir := range []string{"/opt/homebrew/bin", "/usr/local/bin"} {
-		if _, err := os.Stat(filepath.Join(dir, "claude")); err == nil {
-			t.Skipf("PATH の自己解決が届く %s に claude の実物がある", dir)
-		}
-	}
+	skipIfSelfResolutionReachesARealOne(t, "claude")
 	for _, dir := range []string{s.binDir, filepath.Join(s.home, ".local", "bin")} {
 		if err := os.Remove(filepath.Join(dir, "claude")); err != nil {
 			t.Fatal(err)

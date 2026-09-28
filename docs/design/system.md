@@ -75,7 +75,7 @@ issue から CL までを無人で回す機構は、次の 4 つの失敗に陥�
 
 - **候補 = 着手可 ∧ ¬wip ∧ ¬`ready-for-human` ∧ 紐づく open CL なし**。CL が merge されず close されると自動的に候補へ戻る (望ましい挙動)。`ready-for-human` は人が外すまで候補から外し続ける
 - **途中成果の永続は remote branch** (worker が push したものだけが残る)。worktree は残らないので、再入は branch から worktree を作り直す
-- **issue に紐づく CL** は、CL 置き場の open CL のうち、(a) CL 記述の closing reference がその issue を指すもの、または (b) head branch が worker の規約 `worktree-issue-<issue>` のもの。(b) は CLI が branch 名から機械的に判定するので、worker が closing reference を書き忘れても「実装済み」を見落として二重着手にならない
+- **issue に紐づく CL** は、CL 置き場の open CL のうち、(a) CL 記述の closing reference がその issue を指すもの、または (b) CL 置き場の repo 自身の branch (fork でない) で、名前が worker の規約 `worktree-issue-<issue>` のもの。(b) は CLI が branch 名から機械的に判定するので、worker が closing reference を書き忘れても「実装済み」を見落として二重着手にならない。fork の branch を (b) から外すのは、worker は fork を作らず、第三者が fork から同じ名前の branch で開いた CL に issue を塞がせず、再入もさせないため (fork の CL も closing reference があれば (a) で紐づく)
 - 並列上限 N のカウンタは wip label の枚数
 - stale wip の自動解消は持たない — triage の人間判断。人が手で付けた wip も N を 1 消費し、snapshot からは stale wip と区別できない (人が見つける手掛かりは `status`、§1)
 - **どの状態も tick を跨いで機械が記憶しない**。毎 tick 外部 store を読み直して再構成する
@@ -99,7 +99,7 @@ CLI が導出する指示は 3 種。**カタログに無い事象は指示に�
 | 指示 | 発火条件 (機械的に確定) | orchestrator の実行 |
 |---|---|---|
 | `start` | 候補があり、wip 枚数 < 上限 N で、選定母集合が空でない (空き分だけ。候補と選定母集合の playbook を添える。母集合は §10) | 着手する issue を選び、wip を付けて worker の起動を決定ファイルに書く (選定・見送りは LLM) |
-| `reenter` | 紐づく open CL がちょうど 1 本あり、その head が worker の branch 規約 (`worktree-issue-<issue>`) に従い、issue に wip も `ready-for-human` も無く、その CL に条件が立つ (立った条件を `conditions` に併記。語彙は下記の条件カタログ) | wip を付けて既存 branch への再入 worker の起動を決定ファイルに書く (条件ごとの対応手順は条件別 playbook が持ち、spawn prompt にはその path を `conditions` 順に載せる)。`start` より先に扱う (新規着手より既存 CL の完了が近い) |
+| `reenter` | 紐づく open CL がちょうど 1 本あり、その head が CL 置き場の repo 自身の branch で worker の branch 規約 (`worktree-issue-<issue>`) に従い、issue に wip も `ready-for-human` も無く、その CL に条件が立つ (立った条件を `conditions` に併記。語彙は下記の条件カタログ) | wip を付けて既存 branch への再入 worker の起動を決定ファイルに書く (条件ごとの対応手順は条件別 playbook が持ち、spawn prompt にはその path を `conditions` 順に載せる)。`start` より先に扱う (新規着手より既存 CL の完了が近い) |
 | `anomaly` | 上記に分類できない観測 (wip 枚数が上限 N を超えている / wip と `ready-for-human` が同居している / 1 つの open issue に open CL が複数紐づく — 対象は label に依らず open issue 全件) | 見送りか人へ返す。どちらでも判断を決定ファイルに残す |
 
 **条件カタログ** (条件名 → snapshot 上の述語 → 対応 playbook)。定義元は CLI の 1 箇所で、orchestrator の契約 file が持つ「条件ごとの読み直し方法」と条件名の並びが一致することをテストが検査する。
@@ -200,6 +200,7 @@ spawn prompt の文面は同梱の契約 file が正本。本節は構造の決�
 
 - **merge 後の deploy** — merge 自体が人間ゲートのため範囲外
 - **triage** — 着手可の付与・`ready-for-human` の解消・stale wip の回収は人間の領分
+- **着手可 issue の本文の規範整合性レビュー** (plugin `swat-skills` の `ready-for-agent-review`) — 着手可 label を付ける経路 (triage) の責務で、orchestrator の `start` の採否では掛けない (§10 の信頼の根拠からの帰結。理由: #29)。採否で orchestrator が見る「本文が自己完結しているか」(契約 file) はこれに含まない
 - **stale wip の自動解消 / orchestrator の常駐運用** — 拡張候補として認知だけしておく
 - **loop の監督** (boot 時の起動・落ちた loop の起こし直し) — 人が同じコマンドで撃ち直す (ADR 0006)
 - **gh 以外の tracker / CL host** (GitLab / Jira) — 拡張候補。置き場の宣言は tracker 種別と識別子の組で持つので、CLI の観測は置き場の部品に adapter を足し (§13、ADR 0008)、LLM の gh 操作は契約 file と playbook に種別ごとに足す形で広げられる。issue の同一性 (今は番号) を key に広げるときは、公開形式 (formats.md) を合わせて直す

@@ -25,6 +25,7 @@ import (
 	"github.com/swat9013/claude-dispatcher/internal/setup"
 	"github.com/swat9013/claude-dispatcher/internal/status"
 	"github.com/swat9013/claude-dispatcher/internal/tick"
+	"github.com/swat9013/claude-dispatcher/internal/version"
 )
 
 // exit code は formats.md §3。引数の誤りは 2
@@ -37,6 +38,7 @@ const usage = `usage:
   claude-dispatcher setup <project>
   claude-dispatcher doctor <project>
   claude-dispatcher paths --json [<project>]
+  claude-dispatcher --version
 `
 
 func main() {
@@ -61,6 +63,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return runPaths(args[1:], stdout, stderr)
 	case "-h", "--help", "help":
 		fmt.Fprint(stdout, usage)
+		return 0
+	case "--version":
+		// config も state dir も読まない。不具合の報告に版を貼れるよう、導入が壊れていても撃てる
+		fmt.Fprintf(stdout, "claude-dispatcher %s\n", version.Line())
 		return 0
 	}
 	return usageError(stderr, "未知の subcommand: %s", args[0])
@@ -299,19 +305,18 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "project が 1 つも無い: %s\n", e.roots.Config)
 		return exitUsage
 	}
-	probes := status.Probes{Gh: e.ghFor, Git: e.git}
-	collect := func() []status.Report {
-		// process の一覧と claude のセッション一覧はマシンで 1 つなので、描画ごとに 1 度だけ読んで全 project で共有する
-		var machine status.Machine
-		ps, err := e.output("ps", "-A", "-o", "pid=,command=")
-		machine.Processes, machine.ProcessesErr = status.ParseProcesses(ps), err
-		machine.Agents, machine.AgentsErr = e.output("claude", "agents", "--json")
-		reports := make([]status.Report, 0, len(projects))
-		for _, name := range projects {
-			reports = append(reports, status.Collect(e.roots.Project(name), e.home, machine, probes, time.Now()))
-		}
-		return reports
+	probes := status.Probes{
+		Machine: status.CommandObserver{Output: e.output},
+		// worker は newLauncher の ClaudePrint で起動するので、生死もその形で見分ける
+		Workers: launch.ClaudePrintCensus,
+		Gh:      e.ghFor,
+		Git:     e.git,
 	}
+	places := make([]paths.Project, 0, len(projects))
+	for _, name := range projects {
+		places = append(places, e.roots.Project(name))
+	}
+	collect := func() []status.Report { return status.Collect(places, e.home, probes, time.Now) }
 
 	if !watch {
 		fmt.Fprintln(stdout, status.RenderTable(collect()))

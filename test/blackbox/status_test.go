@@ -58,8 +58,39 @@ func (s *sandbox) statusScenario() {
 	s.respond("git", stubwire.Rule{ArgsPrefix: []string{"worktree", "list"}, Stdout: "worktree " + s.clone + "\nbranch refs/heads/main\n\nworktree " + s.clone + "/.claude/worktrees/issue-42\nbranch refs/heads/" + workerBranch(42) + "\n"})
 	s.respond("git", stubwire.Rule{ArgsPrefix: []string{"rev-parse"}, Stdout: "origin/main\n"})
 	s.respond("git", stubwire.Rule{ArgsPrefix: []string{"rev-list"}, Stdout: "3\n"})
+	s.respondLatestCLs(map[int]latestCLPage{42: {cls: []latestCL{{number: 57, state: "OPEN"}}}})
+}
+
+// latestCL は status の CL 列の問い合わせ (branch ごとに新しい順の CL) が返す CL 1 本。
+type latestCL struct {
+	number int
+	state  string
+	fork   bool
+}
+
+// latestCLPage は 1 issue 分の応答。hasMore は cls の後にまだ古い CL が続く (totalCount が cls の本数を超える)
+type latestCLPage struct {
+	cls     []latestCL
+	hasMore bool
+}
+
+// respondLatestCLs は `gh api graphql` の headRefName の問い合わせに、issue ごとの CL の列を返す (GitHub GraphQL の形)。
+func (s *sandbox) respondLatestCLs(pages map[int]latestCLPage) {
+	s.t.Helper()
+	repository := map[string]any{}
+	for issue, page := range pages {
+		nodes := make([]map[string]any, 0, len(page.cls))
+		for _, cl := range page.cls {
+			nodes = append(nodes, map[string]any{"number": cl.number, "state": cl.state, "isCrossRepository": cl.fork})
+		}
+		total := len(page.cls)
+		if page.hasMore {
+			total++
+		}
+		repository[fmt.Sprintf("i%d", issue)] = map[string]any{"totalCount": total, "nodes": nodes}
+	}
 	s.respond("gh", stubwire.Rule{ArgsPrefix: []string{"api", "graphql"}, ArgContains: "headRefName",
-		Stdout: `{"data":{"repository":{"i42":{"nodes":[{"number":57,"state":"OPEN"}]}}}}`})
+		Stdout: mustJSON(s.t, map[string]any{"data": map[string]any{"repository": repository}})})
 }
 
 func (s *sandbox) statusPS(args ...string) runResult {
@@ -127,6 +158,55 @@ func TestStatusListsARunningWorkerWithItsWipBranchAndCL(t *testing.T) {
 		if !strings.Contains(strings.Join(row, " "), want) {
 			t.Fatalf("#42 の行に %q が無い: %v\n%s", want, row, r.stdout)
 		}
+	}
+}
+
+func TestStatusCLColumnSkipsAForkCLOnTheWorkerBranchName(t *testing.T) {
+	s := newSandbox(t)
+	s.statusScenario()
+	s.workerAlive()
+	s.setWip(42)
+	// 最新は fork から同じ branch 名で開かれた #60。worker の CL は #57
+	s.respondLatestCLs(map[int]latestCLPage{42: {cls: []latestCL{{number: 60, state: "OPEN", fork: true}, {number: 57, state: "MERGED"}}}})
+
+	r := s.statusPS()
+
+	row := strings.Join(workerRow(r.stdout, 42), " ")
+	if !strings.Contains(row, "#57 MERGED") || strings.Contains(row, "#60") {
+		t.Fatalf("#42 の CL 列が fork でない最新の CL (#57 MERGED) でない: %s\n%s", row, r.stdout)
+	}
+}
+
+func TestStatusCLColumnIsUnknownOnlyForAnIssueWhoseWindowHoldsOnlyForkCLs(t *testing.T) {
+	s := newSandbox(t)
+	s.statusScenario()
+	line := map[string]any{
+		"ts": spawnedTS, "project": s.project, "cwd": s.clone, "result": "ok",
+		"spawned": []map[string]any{
+			{"issue": 42, "kind": "start", "pid": workerPID, "log": "/x.log", "session_id": workerSession},
+			{"issue": 43, "kind": "start", "pid": workerPID + 1, "log": "/y.log", "session_id": "43-session"},
+		},
+	}
+	mustWrite(t, s.logFile(), mustJSON(t, line)+"\n")
+	s.workerAlive()
+	s.setWip(42, 43)
+	forks := make([]latestCL, 0, 10)
+	for n := range 10 {
+		forks = append(forks, latestCL{number: 200 + n, state: "CLOSED", fork: true})
+	}
+	// 42 は新しい 10 本が fork の CL だけで、まだ続きがある。43 は worker の CL #58 がある
+	s.respondLatestCLs(map[int]latestCLPage{
+		42: {cls: forks, hasMore: true},
+		43: {cls: []latestCL{{number: 58, state: "OPEN"}}},
+	})
+
+	r := s.statusPS()
+
+	if row := workerRow(r.stdout, 42); len(row) < 2 || row[len(row)-2] != "?" {
+		t.Fatalf("#42 の CL 列が ? でない: %v\n%s", row, r.stdout)
+	}
+	if row := strings.Join(workerRow(r.stdout, 43), " "); !strings.Contains(row, "#58 OPEN") {
+		t.Fatalf("#43 の CL 列が #58 OPEN でない: %s\n%s", row, r.stdout)
 	}
 }
 
