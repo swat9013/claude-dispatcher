@@ -5,7 +5,7 @@
 ## セットアップ
 
 - 前提ツールは [README の「前提」](README.md#前提) のとおり (Claude Code / plugin `swat-skills@swat9013` / `gh`)
-- 加えて `golangci-lint` を CI と同じ版 (.github/workflows/checks.yml の `lint` job の `version:`) で入れる。公式の手段 (<https://golangci-lint.run/docs/welcome/install/>) で binary を入れる。版を固定して入れられるのは install script (`curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b "$(go env GOPATH)/bin" <版>`)。`brew install golangci-lint` はその時点の最新版が入るので、`golangci-lint version` で CI と同じ版かを確かめる。`go install` と go.mod の `tool` directive は golangci-lint の公式が動作を保証していない
+- 加えて `golangci-lint` を CI と同じ版 (.github/workflows/checks.yml の `lint` job の `version:`) で入れる。公式の install script に版を渡して binary を入れる (手順は <https://golangci-lint.run/docs/welcome/install/>)。brew などの package manager は版を選べず、CI と版がずれるので使わない。`go install` と go.mod の `tool` directive は golangci-lint の公式が動作を保証していない
 - 加えて `pre-commit` (4.4.0 以上) を入れ、clone ごとに 1 回 `pre-commit install` を撃つ (commit 時と push 前の hook が両方入る)。gitleaks・actionlint・shellcheck は pre-commit が hook 環境として build するので別途の導入は要らない (初回の build に network が要る)
   - Go は手元の版が [go.mod](go.mod) の `toolchain` 行より古くても、`go` コマンドがその版を取ってきて使う (`GOTOOLCHAIN` の既定の `auto`)。hook も `go` コマンド経由で撃つので、手元と CI で同じ版の Go が動く
 
@@ -34,7 +34,7 @@
   - go mod tidy (`go mod tidy -diff`): go.mod / go.sum に差分が出れば落ちる
   - actionlint: workflow の静的検査。`run:` の script は、hook 環境に版を固定して入れた shellcheck で検査する
 - push 前: `go vet ./...`・`golangci-lint run ./...` (設定は [.golangci.yml](.golangci.yml)。binary の入れ方は上の「セットアップ」) ・`go test -race ./...` (データ競合の検出付き) が通ること。加えて gitleaks が、push する commit のうち remote に無いもの (merge commit を除く) を 1 つずつ検査する。CI の `pre-commit` job は同じ hook を PR の commit 範囲に撃つ。`pre-commit install` 済みなら push 時に hook が走り、落ちると push を止める
-  - golangci-lint の既定セットも govet を含むが、`go vet ./...` は外さない。`go vet` は go.mod の toolchain の Go に入っている analyzer で動き、golangci-lint の govet はその golangci-lint を build したときの analyzer で動くので、Go の新しい版で足された analyzer は `go vet` にしか無いことがある
+  - golangci-lint の既定セットも govet を含むが、`go vet ./...` も撃つ (理由は .pre-commit-config.yaml の go-vet の hook のコメント)
   - `test/blackbox` は binary を build して外から撃つ black-box テスト (外から観測できる契約の検査。正本は [docs/design/formats.md](docs/design/formats.md))。外部 CLI は stub に差し替えるので、network も認証も要らず、マシンに在る実物にも届かない。例外は 2 つ: Homebrew の prefix 等に gh / claude の実物があるマシン (macOS の runner の gh 等) では、「解決できない」を確かめるテストが skip される。`--cron-env` の試運転は cron と同じ `/usr/bin:/bin` から始まり、そこに在る実物 (ubuntu の runner の gh 等) に届きうる。テストが stub を引けるのは、claude が `/usr/bin:/bin` に無いので自己解決が働き、stub の置き場 (`~/.local/bin`) を前に足すから
 - PR と main への push: [.github/workflows/ci.yml](.github/workflows/ci.yml) が検査の本体 [.github/workflows/checks.yml](.github/workflows/checks.yml) を呼ぶ。Go は setup-go が go.mod の `toolchain` 行の版を入れる
   - `test`: `go vet ./...` と `go test -race ./...` を ubuntu と macOS の runner (配布対象の OS) で撃つ。skip したテストは理由とともに job の log の最後に並ぶ
