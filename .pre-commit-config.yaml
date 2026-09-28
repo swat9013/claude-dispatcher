@@ -11,10 +11,12 @@ repos:
     rev: v8.30.1
     hooks:
       - id: gitleaks
-      # CI の pre-commit job が PR の commit 範囲に撃つ検査を、push 前に手元でも撃つ。版は上の rev で揃う
+      # push する commit を 1 つずつ検査する。範囲は pre-commit が PRE_COMMIT_FROM_REF / PRE_COMMIT_TO_REF で渡す
+      # (push 前は remote に無い commit、CI は PR の base / head を --from-ref / --to-ref で渡す)。
+      # merge commit は git log -p が差分を出さないので --no-merges で外す
       - id: gitleaks
-        name: gitleaks (main に無い commit)
-        entry: gitleaks git --redact --log-opts="--no-merges origin/main..HEAD"
+        name: gitleaks (push する commit)
+        entry: sh -c 'gitleaks git --redact --log-opts="--no-merges $PRE_COMMIT_FROM_REF..$PRE_COMMIT_TO_REF"'
         always_run: true
         stages: [pre-push]
   - repo: https://github.com/rhysd/actionlint

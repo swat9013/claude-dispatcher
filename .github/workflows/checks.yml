@@ -65,19 +65,13 @@ jobs:
       - run: pipx install pre-commit==4.6.2
       - run: pre-commit run --all-files --show-diff-on-failure
       # merge commit を許しているので、PR の途中の commit で入れて後の commit で消した秘匿情報も main の履歴に残る。
-      # tree だけを見る commit 時の hook では見逃すので、PR の commit を 1 つずつ検査する。
+      # tree だけを見る commit 時の hook では見逃すので、push 前の gitleaks の hook を PR の commit 範囲に撃つ (版も規則も手元と同じ)。
       # base..head は main (stack した CL なら前段の branch) から届く commit を除くので、--first-parent で絞らない
       # (絞ると、前段の branch や同じ branch への他人の push から merge で入った、まだ main に無い commit を見逃す)。
-      # merge commit は git log -p が差分を出さないので --no-merges で外す。merge で解いた conflict の中身は検査されない
       # gitleaks-action は使わない (v2 以降 EULA で、PR の commit 一覧を 1 page しか引かず、commit の多い PR で範囲が欠けうる)
       - name: gitleaks (PR の commit 範囲)
         if: github.event_name == 'pull_request'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          # 規則を手元と揃えるため、版は .pre-commit-config.yaml の gitleaks の rev から読む
-          version=$(yq '.repos[] | select(.repo == "https://github.com/gitleaks/gitleaks") | .rev' .pre-commit-config.yaml)
-          test -n "$version" || { echo "::error::.pre-commit-config.yaml から gitleaks の rev を読めない"; exit 1; }
-          go install "github.com/zricethezav/gitleaks/v8@${version}"
-          gitleaks git --redact --log-opts="--no-merges ${BASE_SHA}..${HEAD_SHA}"
+        run: pre-commit run --hook-stage pre-push --from-ref "$BASE_SHA" --to-ref "$HEAD_SHA" gitleaks

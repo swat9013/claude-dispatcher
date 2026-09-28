@@ -62,11 +62,12 @@ jobs:
               echo
               echo '```'
               # issue 本文の上限 (65536 文字) に収める
-              head -c 60000 report.txt
+              limit=60000
+              head -c "$limit" report.txt
               echo '```'
-              if [ "$(wc -c < report.txt)" -gt 60000 ]; then
+              if [ "$(wc -c < report.txt)" -gt "$limit" ]; then
                 echo
-                echo "出力が長いので先頭の 60000 byte で切った。全文は run の log にある"
+                echo "出力が長いので先頭の $limit byte で切った。全文は run の log にある"
               fi
             } > body.md
             gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --label needs-triage --body-file body.md
