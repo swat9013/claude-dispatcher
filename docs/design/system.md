@@ -98,7 +98,7 @@ CLI が導出する指示は 3 種。**カタログに無い事象は指示に�
 
 | 指示 | 発火条件 (機械的に確定) | orchestrator の実行 |
 |---|---|---|
-| `start` | 候補があり、wip 枚数 < 上限 N (空き分だけ。候補と選定母集合の playbook を添える。母集合は §10) | 着手する issue を選び、wip を付けて worker の起動を決定ファイルに書く (選定・見送りは LLM) |
+| `start` | 候補があり、wip 枚数 < 上限 N で、選定母集合が空でない (空き分だけ。候補と選定母集合の playbook を添える。母集合は §10) | 着手する issue を選び、wip を付けて worker の起動を決定ファイルに書く (選定・見送りは LLM) |
 | `reenter` | 紐づく open CL がちょうど 1 本あり、その head が CL 置き場の repo 自身の branch で worker の branch 規約 (`worktree-issue-<issue>`) に従い、issue に wip も `ready-for-human` も無く、その CL に条件が立つ (立った条件を `conditions` に併記。語彙は下記の条件カタログ) | wip を付けて既存 branch への再入 worker の起動を決定ファイルに書く (条件ごとの対応手順は条件別 playbook が持ち、spawn prompt にはその path を `conditions` 順に載せる)。`start` より先に扱う (新規着手より既存 CL の完了が近い) |
 | `anomaly` | 上記に分類できない観測 (wip 枚数が上限 N を超えている / wip と `ready-for-human` が同居している / 1 つの open issue に open CL が複数紐づく — 対象は label に依らず open issue 全件) | 見送りか人へ返す。どちらでも判断を決定ファイルに残す |
 
@@ -163,7 +163,7 @@ CLI が導出する指示は 3 種。**カタログに無い事象は指示に�
 spawn prompt の文面は同梱の契約 file が正本。本節は構造の決定だけを持つ。
 
 - issue 番号・置き場・着手形態 (`start` / `reenter`)。新規着手の branch 名は `worktree-issue-<issue>` (issue 番号から機械的に決まる規約。CLI はこの綴りで worker 由来の CL を見分ける)。playbook と原則索引の**絶対 path を Read させる** — worker に原則を届ける経路は spawn prompt だけ
-- **playbook は orchestrator が選ぶ**。`start` は issue 本文だけを信号に、新しい CL を作る playbook 群から 1 本選ぶ。**選定母集合と選定条件は playbook 側が宣言する** — playbook の frontmatter の `metadata` に `deliverable: cl` (母集合の印) と `dispatch-when` (どの issue に選ぶかの条件文) を書く。CLI は tick ごとに `playbook-*` を走査して母集合を集め、`start` 指示に path と `dispatch-when` を組にして添える。path の列挙をどこにも持たないので、印を付けた playbook は CLI を触らずに選定対象へ入る。印があるのに `dispatch-when` が無い / frontmatter が読めない playbook は tick を error にする (黙って母集合から外さない)。orchestrator は既定の `playbook-implementation` 以外を `dispatch-when` に明示的に当たるときだけ選び、迷ったら既定に倒す (狭い playbook を誤って渡すと無関係な step が worker の作業を占める)。`reenter` は条件カタログ (§6) の playbook を条件順に全部渡す
+- **playbook は orchestrator が選ぶ**。`start` は issue 本文だけを信号に、新しい CL を作る playbook 群から 1 本選ぶ。**選定母集合と選定条件は playbook 側が宣言する** — playbook の frontmatter の `metadata` に `deliverable: cl` (母集合の印) と `dispatch-when` (どの issue に選ぶかの条件文) を書く。CLI は tick ごとに `playbook-*` を走査して母集合を集め、`start` 指示に path と `dispatch-when` を組にして添える。path の列挙をどこにも持たないので、印を付けた playbook は CLI を触らずに選定対象へ入る。印があるのに `dispatch-when` が無い / frontmatter が読めない playbook は tick を error にする (黙って母集合から外さない)。**母集合が空なら `start` 指示を出さない** (orchestrator は選べる playbook が無く全候補を見送るしかないので、起動しても判断が無い)。`reenter` / `anomaly` は今までどおり出し、指示が `start` だけなら orchestrator を起動しない。`doctor` は空の母集合を情報として示す (formats.md §12)。orchestrator は既定の `playbook-implementation` 以外を `dispatch-when` に明示的に当たるときだけ選び、迷ったら既定に倒す (狭い playbook を誤って渡すと無関係な step が worker の作業を占める)。`reenter` は条件カタログ (§6) の playbook を条件順に全部渡す
 - CL 到達前に two-axis-review を invoke し、走らせたレビューの出力を CL へのコメントで載せる (worker = 作業した本人が自分の指摘を落とす構造の唯一の歯止め)
 - CL 記述に issue への closing reference を必ず書く (merge で issue を閉じるため。cross-repo の CL 置き場でも紐づきを読めるように逐語で書く)
 - **自律判断で進んだ点を CL 説明文の独立した節に書く** (往復を持たない代償を成果物側で払う)
@@ -189,7 +189,7 @@ spawn prompt の文面は同梱の契約 file が正本。本節は構造の決�
 - **orchestrator の契約 file は binary に埋め込む**。契約と `tick` の版が必ず一致する
 - **playbook・原則索引・two-axis-review は plugin `swat-skills` (marketplace `swat9013`) に実行時に依存する**。CLI は Claude Code の `~/.claude/plugins/installed_plugins.json` から plugin 名 `swat-skills` の `installPath` を引き、次の絶対 path を解決して LLM に渡す (plugin 内の配置に依存する interface)
   - playbook: `<installPath>/skills/procedure/playbook-*/SKILL.md`
-  - 原則索引: `<installPath>/skills/knowledge/principle-index/SKILL.md`
+  - 原則索引: `<installPath>/skills/knowledge/principle-index/SKILL.md`。**orchestrator を起動する tick (指示が 1 件以上残った tick) で file が無ければ、tick を error にする** (`result: error`、「指示を導出できなかった」。formats.md §3)。無いまま起動すると、worker は原則を 1 つも受け取らずに黙って走る。orchestrator を起動しない tick (静止した tick と、空の母集合で `start` を落として指示が残らなかった tick) は索引を prompt に載せないので確かめない
   - scope の選択順: `projectPath` が cwd と一致する project scope の entry → user scope の entry → どちらも無ければ `~/.claude/skills/swat-skills` (Claude Code が in-place で読む skills ディレクトリ)
   - 別 marketplace 由来の `swat-skills` entry が複数あれば、どれを使うか決められないので loud に止める
   - 版の照合・互換検査はしない。常に install 済みの版を使う

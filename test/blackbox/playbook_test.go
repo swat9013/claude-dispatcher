@@ -144,6 +144,106 @@ func TestUnreadableFrontmatterStopsTheTickNamingThePlaybook(t *testing.T) {
 	s.assertErrorNames(s.assertOutcome(r, outcomeError), filepath.Join(broken, "SKILL.md"))
 }
 
+func TestUnusablePrincipleIndexStopsTheTickWithoutLaunchingTheOrchestrator(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		breakIndex func(t *testing.T, index string)
+	}{
+		{"file が無い", func(t *testing.T, index string) {
+			if err := os.Remove(index); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"file でなくディレクトリ", func(t *testing.T, index string) {
+			if err := os.Remove(index); err != nil {
+				t.Fatal(err)
+			}
+			mustMkdir(t, index)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newSandbox(t)
+			index := principleIndexPath(s.defaultInstallPath())
+			tc.breakIndex(t, index)
+			s.setIssues(readyIssue(42))
+
+			r := s.tick()
+
+			s.assertErrorNames(s.assertOutcome(r, outcomeError), index)
+			s.assertNoClaude("原則索引が " + tc.name + "のに")
+		})
+	}
+}
+
+// unmarkStartPlaybooks は選定母集合の印 (metadata.deliverable: cl) を持つ playbook を、印の無い SKILL.md に書き換えて母集合を空にする。
+func (s *sandbox) unmarkStartPlaybooks() {
+	s.t.Helper()
+	files, err := filepath.Glob(filepath.Join(s.defaultInstallPath(), "skills", "procedure", "playbook-*", "SKILL.md"))
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	unmarked := 0
+	for _, file := range files {
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			s.t.Fatal(err)
+		}
+		if strings.Contains(string(raw), "deliverable: cl") {
+			dir := filepath.Dir(file)
+			writeSkill(s.t, dir, "name: "+filepath.Base(dir)+"\n")
+			unmarked++
+		}
+	}
+	if unmarked == 0 {
+		s.t.Fatal("印の付いた playbook が無い")
+	}
+}
+
+func TestEmptyStartSetYieldsNoStartButStillYieldsReenter(t *testing.T) {
+	s := newSandbox(t)
+	s.unmarkStartPlaybooks()
+	reenterScenario(s)
+	s.setIssues(issue{number: 39}, readyIssue(42))
+	s.orchestratorSkips(39)
+
+	assertExit(t, s.tick(), 0)
+
+	file := s.onlyInstructionFile()
+	if starts := instructionsOfKind(t, file, "start"); len(starts) != 0 {
+		t.Fatalf("選定母集合が空なのに start を出した: %v", starts)
+	}
+	if reenters := instructionsOfKind(t, file, "reenter"); len(reenters) != 1 {
+		t.Fatalf("reenter = %v, want 1 件", reenters)
+	}
+}
+
+func TestEmptyStartSetWithOnlyCandidatesLaunchesNoOrchestrator(t *testing.T) {
+	s := newSandbox(t)
+	s.unmarkStartPlaybooks()
+	s.setIssues(readyIssue(42))
+
+	r := s.tick()
+
+	s.assertOutcome(r, outcomeOK)
+	s.assertNoInstructionFile("選定母集合が空で start しか無いのに")
+	s.assertNoClaude("選定母集合が空で start しか無いのに")
+}
+
+func TestTickThatLaunchesNoOrchestratorDoesNotRequireThePrincipleIndex(t *testing.T) {
+	s := newSandbox(t)
+	if err := os.Remove(principleIndexPath(s.defaultInstallPath())); err != nil {
+		t.Fatal(err)
+	}
+	// 母集合が空なので start が落ち、指示が残らない
+	s.unmarkStartPlaybooks()
+	s.setIssues(readyIssue(42))
+
+	r := s.tick()
+
+	s.assertOutcome(r, outcomeOK)
+	s.assertNoClaude("orchestrator を起動しない tick なのに")
+}
+
 func TestOrchestratorPromptCarriesTheResolvedPrincipleIndexPath(t *testing.T) {
 	s := newSandbox(t)
 
