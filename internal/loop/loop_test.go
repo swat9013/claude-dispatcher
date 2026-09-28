@@ -124,7 +124,8 @@ func startLoop(t *testing.T, settings ...setting) *harness {
 	return h
 }
 
-var ok = tick.Outcome{Result: tick.ResultOK, Logged: true}
+// loggedOK は log.jsonl に書けた ok の tick
+var loggedOK = tick.Outcome{Result: tick.ResultOK, Logged: true}
 
 // tickCalled は tick が呼ばれるのを待つ。
 func (h *harness) tickCalled() tickCall {
@@ -166,6 +167,21 @@ func (h *harness) waitFor(done func() bool) {
 	}
 }
 
+// tickReturnsAndStops は呼ばれている tick を out で終わらせ、loop が止まるのを待つ。
+func (h *harness) tickReturnsAndStops(out tick.Outcome) {
+	h.t.Helper()
+	h.outcomes <- out
+	h.stops()
+}
+
+// secondStopRequest は tick の実行中に停止要求を 2 回送り、tick へ「orchestrator を止めよ」が届くのを待つ。
+func (h *harness) secondStopRequest(call tickCall) {
+	h.t.Helper()
+	h.signals <- syscall.SIGINT
+	h.signals <- syscall.SIGINT
+	<-call.control.StopOrchestrator
+}
+
 func (h *harness) stops() int {
 	h.t.Helper()
 	select {
@@ -190,19 +206,24 @@ func (h *harness) lastScreen() string {
 
 // --- 周期 ---
 
-func TestLoopTicksRightAwayThenIntervalAfterTheTickEnded(t *testing.T) {
+func TestLoopTicksRightAfterStarting(t *testing.T) {
 	h := startLoop(t)
 
-	first := h.ticks(ok)
-	h.clock.advance(5*time.Minute - time.Second)
-	h.clock.advance(time.Second)
-	second := h.tickCalled().at
+	first := h.tickCalled().at
 
 	if !first.Equal(start) {
 		t.Fatalf("1 回目の tick = %s, want 起動直後 (%s)", first, start)
 	}
-	// 1 回目の tick は 10s 掛かって終わった。2 回目がそれより早く撃たれていれば、ここで受けるのは早い方の時刻
-	if want := start.Add(10*time.Second + 5*time.Minute); !second.Equal(want) {
+}
+
+func TestLoopTicksAgainIntervalAfterTheTickEnded(t *testing.T) {
+	h := startLoop(t)
+	h.ticks(loggedOK) // 10s 掛かって終わる
+
+	h.clock.advance(5 * time.Minute)
+
+	// 2 回目がこれより早く撃たれていれば、ここで受けるのは早い方の時刻
+	if second, want := h.tickCalled().at, start.Add(10*time.Second+5*time.Minute); !second.Equal(want) {
 		t.Fatalf("2 回目の tick = %s, want tick の終了から interval 後 (%s)", second, want)
 	}
 }
@@ -222,10 +243,10 @@ func TestLoopGoesOnToTheNextPeriodWhenATickFails(t *testing.T) {
 
 func TestLoopDoesNotChaseMissedPeriods(t *testing.T) {
 	h := startLoop(t)
-	h.ticks(ok)
+	h.ticks(loggedOK)
 	// スリープ明け: 周期を 3 つ分取りこぼした
 	h.clock.advance(16 * time.Minute)
-	resumed := h.ticks(ok)
+	resumed := h.ticks(loggedOK)
 
 	h.clock.advance(5 * time.Minute)
 	next := h.tickCalled().at
@@ -238,30 +259,33 @@ func TestLoopDoesNotChaseMissedPeriods(t *testing.T) {
 
 // --- 停止 ---
 
-func TestLoopStopsRightAwayOnAStopRequestBetweenTicks(t *testing.T) {
-	h := startLoop(t)
-	h.ticks(ok)
+func TestLoopStopsRightAwayOnAStopRequestBetweenTicksNamingTheSignal(t *testing.T) {
+	for _, tc := range []struct {
+		sig  syscall.Signal
+		name string
+	}{{syscall.SIGINT, "SIGINT"}, {syscall.SIGTERM, "SIGTERM"}, {syscall.SIGHUP, "SIGHUP"}} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := startLoop(t)
+			h.ticks(loggedOK)
 
-	h.signals <- syscall.SIGTERM
+			h.signals <- tc.sig
 
-	if exit := h.stops(); exit != 0 {
-		t.Fatalf("exit %d, want 0", exit)
-	}
-	if !strings.HasSuffix(h.stdout.String(), " [widgets] loop を止めた (停止要求 SIGTERM)。止めずに走っている worker: 0 本\n") {
-		t.Fatalf("終了行が無い:\n%s", h.stdout.String())
+			if exit := h.stops(); exit != 0 {
+				t.Fatalf("exit %d, want 0", exit)
+			}
+			if !strings.HasSuffix(h.stdout.String(), " [widgets] loop を止めた (停止要求 "+tc.name+")。止めずに走っている worker: 0 本\n") {
+				t.Fatalf("終了行が無い:\n%s", h.stdout.String())
+			}
+		})
 	}
 }
 
 func TestLoopStoppedBeforeLaunchingTheOrchestratorSaysSoOnTheEndLine(t *testing.T) {
 	h := startLoop(t)
-	call := h.tickCalled()
-	h.signals <- syscall.SIGINT
-	h.signals <- syscall.SIGINT
+	h.secondStopRequest(h.tickCalled())
 
-	<-call.control.StopOrchestrator
-	h.outcomes <- tick.Outcome{Result: tick.ResultError, Logged: true, Halt: tick.HaltedBeforeLaunch}
+	h.tickReturnsAndStops(tick.Outcome{Result: tick.ResultError, Logged: true, Halt: tick.HaltedBeforeLaunch})
 
-	h.stops()
 	if !strings.Contains(h.stdout.String(), "loop を止めた (2 回目の停止要求で orchestrator を起動せずに止めた)。") {
 		t.Fatalf("終了行の理由が違う:\n%s", h.stdout.String())
 	}
@@ -269,14 +293,10 @@ func TestLoopStoppedBeforeLaunchingTheOrchestratorSaysSoOnTheEndLine(t *testing.
 
 func TestLoopStoppedDuringTheOrchestratorPointsToItsLogOnTheEndLine(t *testing.T) {
 	h := startLoop(t)
-	call := h.tickCalled()
-	h.signals <- syscall.SIGINT
-	h.signals <- syscall.SIGINT
+	h.secondStopRequest(h.tickCalled())
 
-	<-call.control.StopOrchestrator
-	h.outcomes <- tick.Outcome{Result: tick.ResultError, Logged: true, Halt: tick.HaltedDuringRun, OrchestratorLog: "/s/o.log"}
+	h.tickReturnsAndStops(tick.Outcome{Result: tick.ResultError, Logged: true, Halt: tick.HaltedDuringRun, OrchestratorLog: "/s/o.log"})
 
-	h.stops()
 	if !strings.Contains(h.stdout.String(), "loop を止めた (2 回目の停止要求で orchestrator を止めた — 経過は /s/o.log。wip を付けたまま残った issue が無いか確かめる)。") {
 		t.Fatalf("終了行の理由が違う:\n%s", h.stdout.String())
 	}
@@ -287,9 +307,8 @@ func TestLoopFirstStopRequestDoesNotStopTheOrchestrator(t *testing.T) {
 	call := h.tickCalled()
 	h.signals <- syscall.SIGINT
 
-	h.outcomes <- ok
+	h.tickReturnsAndStops(loggedOK)
 
-	h.stops()
 	select {
 	case <-call.control.StopOrchestrator:
 		t.Fatal("1 回目の停止要求で orchestrator を止めた")
@@ -342,9 +361,22 @@ func TestLoopOnATerminalShowsTheRunningTickBeforeTheFirstTickEnds(t *testing.T) 
 	}
 }
 
+func TestLoopOnATerminalRedrawsTheScreenEvery15Seconds(t *testing.T) {
+	h := startLoop(t, onTerminal)
+	h.ticks(loggedOK)
+	drawn := strings.Count(h.stdout.String(), clearScreen)
+
+	h.clock.advance(15 * time.Second)
+
+	h.waitFor(func() bool { return strings.Count(h.stdout.String(), clearScreen) > drawn })
+	if !strings.Contains(h.lastScreen(), "(あと 4m45s)") && !strings.Contains(h.lastScreen(), "(あと 4m)") {
+		t.Fatalf("15 秒後の画面の残りが進んでいない:\n%s", h.lastScreen())
+	}
+}
+
 func TestLoopLeavesAStoppedScreenWithoutTheGuide(t *testing.T) {
 	h := startLoop(t, onTerminal)
-	h.ticks(ok)
+	h.ticks(loggedOK)
 
 	h.signals <- syscall.SIGINT
 	h.stops()

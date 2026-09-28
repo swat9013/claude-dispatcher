@@ -4,6 +4,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -29,8 +30,12 @@ import (
 	"golang.org/x/term"
 )
 
-// exit code は formats.md §3。引数の誤りは 2
-const exitUsage = 2
+// exit code は formats.md §3 / §13。失敗は 1、引数の誤りは 2、同じ project の loop が走っていれば 3
+const (
+	exitFailed      = 1
+	exitUsage       = 2
+	exitLoopRunning = 3
+)
 
 const usage = `usage:
   claude-dispatcher loop <project> <interval>
@@ -381,18 +386,25 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 	}
 	e, err := newEnvironment()
 	if err != nil {
-		return refuse(loop.ExitFailed, "%v", err)
+		return refuse(exitFailed, "%v", err)
 	}
 	project := e.roots.Project(name)
 	// config の中身は検査しない (tick ごとに読み直し、落ちた tick は見出しに出る)
 	if err := config.RequireFile(project.ConfigFile()); err != nil {
 		return refuse(exitUsage, "%v", err)
 	}
-	lock, lockErr := loop.AcquireLock(project)
-	if lockErr != nil {
-		return refuse(lockErr.Exit, "%s", lockErr.Msg)
+	if info, err := os.Stat(project.StateDir); err != nil || !info.IsDir() {
+		return refuse(exitFailed, "state dir が無い: %s (`claude-dispatcher setup %s` が作る)", project.StateDir, name)
+	}
+	lock, err := loop.AcquireLock(project)
+	if errors.Is(err, loop.ErrAlreadyRunning) {
+		return refuse(exitLoopRunning, "%v", err)
+	}
+	if err != nil {
+		return refuse(exitFailed, "%v", err)
 	}
 	defer lock.Close()
+	surviveClosedStdout()
 	return loop.Run(e.loopOptions(project, interval, stdout, stderr))
 }
 
@@ -422,9 +434,12 @@ func (e environment) loopOptions(project paths.Project, interval loop.Interval, 
 func stopRequests() <-chan os.Signal {
 	signals := make(chan os.Signal, 4) // 素早い 2 回目の Ctrl+C を落とさないよう余裕を持たせる
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
-	// 読み手の消えた stdout へ書いても SIGPIPE で倒れず、書き込みの失敗として返させる (system.md §9)
-	signal.Notify(make(chan os.Signal, 1), syscall.SIGPIPE)
 	return signals
+}
+
+// surviveClosedStdout は、読み手の消えた stdout へ書いても SIGPIPE で倒れず、書き込みの失敗として返させる (system.md §9)。
+func surviveClosedStdout() {
+	signal.Notify(make(chan os.Signal, 1), syscall.SIGPIPE)
 }
 
 // isTerminal は w が端末か。端末でない character device (/dev/null 等) は端末に数えない。

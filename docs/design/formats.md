@@ -381,6 +381,7 @@ Ctrl+C で停止
 | 待機 | `待機 · 次の tick <時刻> (あと <残り>)` | `Ctrl+C で停止` |
 | tick 実行中 | `tick 実行中 · <経過>`。orchestrator を待つ間は `tick 実行中 · orchestrator <経過> (上限 15m)` | `Ctrl+C: この tick を終えてから停止` |
 | 停止待ち | `停止待ち · ` に tick 実行中と同じ経過 | `停止待ち: この tick を終えたら止まる。もう一度 Ctrl+C で orchestrator を止めて止まる (付いた wip は残りうる)` |
+| 停止 (止まった後に残す画面) | `停止` | (出さない) |
 
 `<残り>` と `<経過>` は §10 の ELAPSED と同じ綴り。
 
@@ -407,7 +408,8 @@ SIGINT / SIGTERM / SIGHUP を同じに扱う。
   - `<理由>` は `停止要求 <signal 名>` (例 `停止要求 SIGINT`)。2 回目の停止要求で止めたときは `2 回目の停止要求で orchestrator を止めた — 経過は <orchestrator log の path>。wip を付けたまま残った issue が無いか確かめる` (orchestrator を起動する前なら `2 回目の停止要求で orchestrator を起動せずに止めた`)
   - `<n>` は `status` の STATE が `running` の行の数。process の一覧か log.jsonl を読めなければ `?`。止まる前の最後の現況を組んでいる間に次の停止要求が来たら、組むのを待たずに直前の現況から数える
 - 2 回目の停止要求で止めた tick 行の `error` は `停止要求で orchestrator を止めた` か `停止要求で orchestrator を起動しなかった`
-- stdout への書き込みの失敗 (読み手の消えた pipe 等) では止まらない。描画を捨てて続け、停止要求で止まる
+- stdout への書き込みの失敗 (読み手の消えた pipe 等) では止まらない。描画を捨てて続け、停止要求で止まる。終了行を stdout に書けなければ stderr に出す
+- 走っている間の想定外の失敗 (panic) は stack trace を stderr に出し、tick なら `result: error` の最終 tick として見出しに、status の現況なら注記に載せて続ける (端末では次の描き直しで stack trace が画面から消えうるので、見出しと注記が残る観測点)
 
 exit: 0 = 停止要求で止まった / 1・2・3 = 起動時の検査 (上表)。想定外の失敗で loop 自身が止まったときは 1。
 

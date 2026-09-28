@@ -34,37 +34,23 @@ func ParseInterval(text string) (Interval, error) {
 	return Interval{Duration: d, Text: text}, nil
 }
 
-// 起動時の検査のうち、lock を取るときの exit code (formats.md §13)
-const (
-	ExitFailed = 1
-	ExitLocked = 3
-)
+// ErrAlreadyRunning は同じ project の loop が走っていて lock を取れなかったことを表す。
+var ErrAlreadyRunning = errors.New("同じ project の loop がもう走っている")
 
-// LockError は loop の lock を取れなかった理由。Exit は formats.md §13 の exit code。
-type LockError struct {
-	Exit int
-	Msg  string
-}
-
-func (e *LockError) Error() string { return e.Msg }
-
-// AcquireLock は state dir に loop の生存期間の lock を取る。返した file を閉じると lock が外れる — loop が終わるまで開いておく。
-// state dir が無ければ lock の置き場も無いので、それも lock を取れない理由として返す。
-func AcquireLock(project paths.Project) (*os.File, *LockError) {
-	if info, err := os.Stat(project.StateDir); err != nil || !info.IsDir() {
-		return nil, &LockError{ExitFailed, fmt.Sprintf("state dir が無い: %s (`claude-dispatcher setup %s` が作る)", project.StateDir, project.Name)}
-	}
+// AcquireLock は state dir に loop の生存期間の lock を取る (state dir の実在は呼び出し側が先に確かめる)。返した file を
+// 閉じると lock が外れる — loop が終わるまで開いておく。走っている loop が持っていれば ErrAlreadyRunning を包んで返す。
+func AcquireLock(project paths.Project) (*os.File, error) {
 	lock, err := os.OpenFile(project.LoopLockFile(), os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
-		return nil, &LockError{ExitFailed, fmt.Sprintf("loop の lock file を開けない (%s): %v", project.LoopLockFile(), err)}
+		return nil, fmt.Errorf("loop の lock file を開けない (%s): %w", project.LoopLockFile(), err)
 	}
 	// flock は process が消えれば外れるので、落ちた loop の lock が残って次の起動を塞ぐことはない
 	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		lock.Close()
 		if errors.Is(err, syscall.EWOULDBLOCK) {
-			return nil, &LockError{ExitLocked, fmt.Sprintf("%s の loop がもう走っている (%s)", project.Name, project.LoopLockFile())}
+			return nil, fmt.Errorf("%s: %w (%s)", project.Name, ErrAlreadyRunning, project.LoopLockFile())
 		}
-		return nil, &LockError{ExitFailed, fmt.Sprintf("loop の lock を取れない (%s): %v", project.LoopLockFile(), err)}
+		return nil, fmt.Errorf("loop の lock を取れない (%s): %w", project.LoopLockFile(), err)
 	}
 	return lock, nil
 }

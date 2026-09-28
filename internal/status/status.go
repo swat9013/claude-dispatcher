@@ -119,7 +119,9 @@ func Collect(projects []paths.Project, home string, probes Probes, clock func() 
 			report:  Report{Project: project.Name, Workers: []Worker{}, Notes: []string{}},
 			machine: machine, isAlive: alive, isAliveErr: aliveErr, probes: probes,
 		}
-		reports = append(reports, c.collect(project, home, clock()))
+		report := c.collect(project, home, clock())
+		report.RunningWorkers = runningWorkers(report, aliveErr)
+		reports = append(reports, report)
 	}
 	return reports
 }
@@ -149,7 +151,6 @@ func (c *collector) collect(project paths.Project, home string, now time.Time) R
 
 	spawns := spawnRecords(lines)
 	if len(spawns) == 0 {
-		c.countRunning()
 		return c.report
 	}
 	cfg, cfgErr := config.Load(project.ConfigFile(), home)
@@ -163,7 +164,6 @@ func (c *collector) collect(project paths.Project, home string, now time.Time) R
 		}
 	}
 	c.report.Workers = listed(spawns, c.alive, c.wip(cfg, cfgErr, gh), now)
-	c.countRunning()
 	if len(c.report.Workers) > 0 {
 		c.fillDetails(cfg, cfgErr, gh)
 	}
@@ -211,18 +211,22 @@ func listed(spawns []spawnRecord, alive func(ticklog.Spawned) Probed[bool], wip 
 	return workers
 }
 
-// countRunning は載せた worker のうち生きている数を数える。生きている worker はすべて載るので、載せた分で足りる。
-func (c *collector) countRunning() {
-	if c.isAliveErr != nil {
-		return
+// runningWorkers は載せた worker のうち生きている数を数える (生きている worker はすべて載るので、載せた分で足りる)。
+// 起動部が生死を答えられないか、起動記録 (log.jsonl) を読めないか、生死の分からない worker が居れば ?。
+func runningWorkers(r Report, aliveErr error) Probed[int] {
+	if aliveErr != nil || !r.LastTick.Known {
+		return Probed[int]{}
 	}
 	n := 0
-	for _, w := range c.report.Workers {
-		if w.Alive.Known && w.Alive.Value {
+	for _, w := range r.Workers {
+		if !w.Alive.Known {
+			return Probed[int]{}
+		}
+		if w.Alive.Value {
 			n++
 		}
 	}
-	c.report.RunningWorkers = known(n)
+	return known(n)
 }
 
 type collector struct {

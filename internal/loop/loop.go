@@ -50,7 +50,7 @@ type Options struct {
 func Run(o Options) (exit int) {
 	defer func() {
 		if v := recover(); v != nil {
-			fmt.Fprintf(o.Stderr, "panic: %v\n%s", v, debug.Stack())
+			reportPanic(o.Stderr, v)
 			exit = 1
 		}
 	}()
@@ -93,8 +93,9 @@ func (l *loop) run() int {
 			// 周期の境目に届いていた停止要求を先に受ける (tick の合間の停止要求は tick を始めない)
 			select {
 			case sig := <-l.o.Signals:
-				l.stopRequests = append(l.stopRequests, sig)
-				return l.finish(l.stopReason(nil))
+				if l.onStopRequest(sig) {
+					return l.finish(l.stopReason(nil))
+				}
 			default:
 				l.startTick()
 			}
@@ -117,13 +118,12 @@ func (l *loop) run() int {
 			l.refresh()
 		case <-poll.C:
 			// 周期の描き直しは組んでいる間は積まない (gh が遅いと組み直しが途切れなく続く)
-			if l.o.Terminal && !l.feed.busy && l.o.Now().Sub(l.lastRefresh) >= redrawInterval {
+			if l.o.Terminal && l.feed.idle() && l.o.Now().Sub(l.lastRefresh) >= redrawInterval {
 				l.refresh()
 			}
 		case report := <-l.feed.collected:
-			l.report = report
+			l.report = l.feed.receive(report)
 			l.draw(true)
-			l.feed.done()
 		}
 	}
 }
@@ -144,7 +144,7 @@ func (l *loop) startTick() {
 		defer func() {
 			// tick の 1 回分は自分で panic を行に写すので、ここへ来るのは組み立ての失敗だけ。loop は次の周期へ進む
 			if v := recover(); v != nil {
-				fmt.Fprintf(l.o.Stderr, "panic: %v\n%s", v, debug.Stack())
+				reportPanic(l.o.Stderr, v)
 				l.tickDone <- tick.Outcome{Result: tick.ResultError, Error: fmt.Sprintf("想定外の失敗で止まった: %v", v)}
 			}
 		}()
@@ -155,8 +155,11 @@ func (l *loop) startTick() {
 	}
 }
 
-// onStopRequest は停止要求を受ける。すぐ止まってよければ true。
+// onStopRequest は停止要求を受ける。すぐ止まってよければ true。3 回目以降は段階を進めないので数えない。
 func (l *loop) onStopRequest(sig os.Signal) bool {
+	if len(l.stopRequests) == 2 {
+		return false
+	}
 	l.stopRequests = append(l.stopRequests, sig)
 	switch {
 	case l.phase == waiting:
@@ -165,11 +168,9 @@ func (l *loop) onStopRequest(sig os.Signal) bool {
 	case len(l.stopRequests) == 1:
 		// 実行中の tick を最後まで進めてから止まる
 		l.phase = stopping
-	case len(l.stopRequests) == 2:
-		// 段階の解釈 (起動前・起動中・正常終了の後) は tick の 1 回分が持つ
-		close(l.stopOrchestrator)
 	default:
-		return false
+		// 2 回目。段階の解釈 (起動前・起動中・正常終了の後) は tick の 1 回分が持つ
+		close(l.stopOrchestrator)
 	}
 	if l.o.Terminal {
 		l.refresh()
@@ -211,7 +212,7 @@ func (l *loop) refresh() {
 func (l *loop) collectStatus() (report status.Report) {
 	defer func() {
 		if v := recover(); v != nil {
-			fmt.Fprintf(l.o.Stderr, "panic: %v\n%s", v, debug.Stack())
+			reportPanic(l.o.Stderr, v)
 			report = status.Report{Project: l.o.Project, Notes: []string{fmt.Sprintf("status の現況を組めない: %v", v)}}
 		}
 	}()
@@ -244,7 +245,8 @@ func (l *loop) draw(withGuide bool) {
 }
 
 // finish は画面を残したまま止まる: 今の現況で操作案内を除いた画面を描き、終了行を 1 行足す。
-// 現況を組む間 (gh が遅いと分単位) に次の停止要求が来たら、組むのを待たずに直前の現況で描いて止まる。
+// 現況を組む間 (gh が遅いと分単位) に次の停止要求が来たら、組むのを待たずに直前の現況で描いて止まる。statusFeed を
+// 通さないのは、feed が組み終えるまで待つ前提で、停止要求で待ちを打ち切れないため。
 func (l *loop) finish(reason string) int {
 	collected := make(chan status.Report, 1)
 	go func() { collected <- l.collectStatus() }()
@@ -284,11 +286,20 @@ func (f *statusFeed) request() {
 	go func() { f.collected <- f.collect() }()
 }
 
-// done は collected から受け取った後に呼ぶ。
-func (f *statusFeed) done() {
+// idle は組んでいないか。
+func (f *statusFeed) idle() bool { return !f.busy }
+
+// receive は collected から受け取った現況を返し、組んでいる間に求められていたら組み直しを始める。
+func (f *statusFeed) receive(report status.Report) status.Report {
 	f.busy = false
 	if f.again {
 		f.again = false
 		f.request()
 	}
+	return report
+}
+
+// reportPanic は想定外の失敗を stack trace ごと stderr に出す (formats.md §13)。
+func reportPanic(stderr io.Writer, v any) {
+	fmt.Fprintf(stderr, "panic: %v\n%s", v, debug.Stack())
 }

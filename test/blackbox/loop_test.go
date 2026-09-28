@@ -470,14 +470,11 @@ func TestLoopFirstSignalDuringATickFinishesTheTickThenStops(t *testing.T) {
 			r := p.wait()
 
 			assertExit(t, r, 0)
-			// 1 回目で止まっていれば ok の行も起動記録も無い
+			// signal ごとに回すのは、binary が 3 つの signal を停止要求として受けているかを確かめるため。
+			// 1 回目で止まっていれば ok の行も起動記録も無い (終了行の綴りは internal/loop の単体テストが見る)
 			line := s.lastTickLine()
 			if line["result"] != "ok" || len(spawnedPIDs(t, line)) != 1 {
 				t.Fatalf("tick を最後まで進めていない (決定どおり worker を起動して ok の行を書く): %v", line)
-			}
-			// 走っている worker の数は status の現況から数える (sandbox の ps は stub なので、ここでは数の形だけを見る)
-			if m := endLine(t, r.stdout); m[2] != "停止要求 "+signalName(sig) || !regexp.MustCompile(`^\d+$`).MatchString(m[3]) {
-				t.Fatalf("終了行 = %q, want 停止要求 %s と走っている worker の数", m[0], signalName(sig))
 			}
 		})
 	}
