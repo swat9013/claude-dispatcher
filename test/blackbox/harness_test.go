@@ -181,7 +181,7 @@ func newBareSandbox(t *testing.T) *sandbox {
 	}
 	// TempDir の削除より先に走る (Cleanup は後に登録したものから走る)
 	t.Cleanup(s.waitForSpawnedWorkers)
-	s.installStubs(s.binDir)
+	s.installStubs()
 	s.env = map[string]string{
 		"HOME": s.home,
 		// PATH は stub だけで閉じる。CLI が撃つ外部 CLI はすべて stub にあるので、/usr/bin 等を足すと
@@ -206,8 +206,9 @@ func (s *sandbox) setUp() {
 	s.installPlugin("swat-skills@swat9013", "user", "")
 }
 
-// installStubs は stub binary を名前ごとに dir へ hard link し、stub が root を引く file を置く。
-func (s *sandbox) installStubs(dir string) {
+// installStubs は stub binary を名前ごとに PATH の置き場 (binDir) へ hard link し、stub が root を引く file を置く。
+func (s *sandbox) installStubs() {
+	dir := s.binDir
 	s.t.Helper()
 	mustMkdir(s.t, dir)
 	for _, name := range stubNames {

@@ -4,7 +4,6 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -27,6 +26,7 @@ import (
 	"github.com/swat9013/claude-dispatcher/internal/status"
 	"github.com/swat9013/claude-dispatcher/internal/tick"
 	"github.com/swat9013/claude-dispatcher/internal/version"
+	"golang.org/x/term"
 )
 
 // exit code は formats.md §3。引数の誤りは 2
@@ -86,8 +86,13 @@ func checkProject(stderr io.Writer, name string) bool {
 	if paths.ValidProjectName(name) {
 		return true
 	}
-	usageError(stderr, "project 名は [A-Za-z0-9._-]+: %q", name)
+	usageError(stderr, "%s", invalidProjectName(name))
 	return false
+}
+
+// invalidProjectName は置き場の綴りに使えない project 名を拒む文言。
+func invalidProjectName(name string) string {
+	return fmt.Sprintf("project 名は [A-Za-z0-9._-]+: %q", name)
 }
 
 // environment は subcommand が共有する実行環境。env は依存 CLI の PATH を解決した後の env。
@@ -356,75 +361,76 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 
 // --- loop ---
 
-// runLoop は起動時の検査 (formats.md §13) を通して loop を回す。検査に落ちたら画面を出さず、stderr に理由を 1 行出す。
+// runLoop は起動時の検査 (formats.md §13) を通して loop を回す。検査に落ちたら画面を出さず、stderr に理由を 1 行出す
+// (usage の一覧は出さない)。
 func runLoop(args []string, stdout, stderr io.Writer) int {
 	refuse := func(exit int, format string, a ...any) int {
 		fmt.Fprintf(stderr, format+"\n", a...)
 		return exit
 	}
 	if len(args) != 2 {
-		return refuse(loop.ExitUsage, "loop は <project> <interval> を取る (例: claude-dispatcher loop myproj 5m)")
+		return refuse(exitUsage, "loop は <project> <interval> を取る (例: claude-dispatcher loop myproj 5m)")
 	}
-	name, intervalText := args[0], args[1]
+	name := args[0]
 	if !paths.ValidProjectName(name) {
-		return refuse(loop.ExitUsage, "project 名は [A-Za-z0-9._-]+: %q", name)
+		return refuse(exitUsage, "%s", invalidProjectName(name))
 	}
-	interval, err := loop.ParseInterval(intervalText)
+	interval, err := loop.ParseInterval(args[1])
 	if err != nil {
-		return refuse(loop.ExitUsage, "%v", err)
+		return refuse(exitUsage, "%v", err)
 	}
 	e, err := newEnvironment()
 	if err != nil {
 		return refuse(loop.ExitFailed, "%v", err)
 	}
 	project := e.roots.Project(name)
-	lock, err := loop.Acquire(project)
-	if err != nil {
-		var start *loop.StartError
-		if errors.As(err, &start) {
-			return refuse(start.Exit, "%s", start.Msg)
-		}
-		return refuse(loop.ExitFailed, "%v", err)
+	// config の中身は検査しない (tick ごとに読み直し、落ちた tick は見出しに出る)
+	if err := config.RequireFile(project.ConfigFile()); err != nil {
+		return refuse(exitUsage, "%v", err)
+	}
+	lock, lockErr := loop.AcquireLock(project)
+	if lockErr != nil {
+		return refuse(lockErr.Exit, "%s", lockErr.Msg)
 	}
 	defer lock.Close()
+	return loop.Run(e.loopOptions(project, interval, stdout, stderr))
+}
 
-	signals := make(chan os.Signal, 4) // 素早い 2 回目の Ctrl+C を落とさないよう余裕を持たせる
-	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
-	// 読み手の消えた stdout へ書いても SIGPIPE で倒れず、書き込みの失敗として返させる (段階停止の途中で orchestrator を
-	// 孤児にしない)。signal.Ignore は子 process に継がれるので使わない
-	signal.Notify(make(chan os.Signal, 1), syscall.SIGPIPE)
-
+// loopOptions は project の loop の入力を組む。
+func (e environment) loopOptions(project paths.Project, interval loop.Interval, stdout, stderr io.Writer) loop.Options {
 	probes := e.statusProbes()
-	return loop.Run(loop.Options{
-		Project:      name,
-		Interval:     interval,
-		IntervalText: intervalText,
-		Stdout:       stdout,
-		Stderr:       stderr,
-		Terminal:     isTerminal(stdout),
-		Signals:      signals,
-		Tick: func(req loop.Request) tick.Outcome {
+	return loop.Options{
+		Project:  project.Name,
+		Interval: interval,
+		Stdout:   stdout,
+		Stderr:   stderr,
+		Terminal: isTerminal(stdout),
+		Signals:  stopRequests(),
+		Tick: func(control tick.Control) tick.Outcome {
 			// loop の中の tick は失敗行を出さない (見出しに出す)。stdout は試運転しか使わないので捨てる
-			o := e.tickOptions(name, io.Discard, stderr)
-			o.StopOrchestrator = req.StopOrchestrator
-			o.OrchestratorStarted = req.OrchestratorStarted
+			o := e.tickOptions(project.Name, io.Discard, stderr)
+			o.Control = control
 			return tick.Once(o)
 		},
 		Status: func() status.Report { return status.Collect([]paths.Project{project}, e.home, probes, time.Now)[0] },
 		Now:    time.Now,
 		Poll:   loop.DefaultPoll,
-		Redraw: loop.DefaultRedraw,
-	})
+	}
 }
 
-// isTerminal は w が端末 (character device) か。
+// stopRequests は loop の停止要求 (SIGINT / SIGTERM / SIGHUP) を受ける channel を返す。
+func stopRequests() <-chan os.Signal {
+	signals := make(chan os.Signal, 4) // 素早い 2 回目の Ctrl+C を落とさないよう余裕を持たせる
+	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	// 読み手の消えた stdout へ書いても SIGPIPE で倒れず、書き込みの失敗として返させる (system.md §9)
+	signal.Notify(make(chan os.Signal, 1), syscall.SIGPIPE)
+	return signals
+}
+
+// isTerminal は w が端末か。端末でない character device (/dev/null 等) は端末に数えない。
 func isTerminal(w io.Writer) bool {
 	f, ok := w.(*os.File)
-	if !ok {
-		return false
-	}
-	info, err := f.Stat()
-	return err == nil && info.Mode()&os.ModeCharDevice != 0
+	return ok && term.IsTerminal(int(f.Fd()))
 }
 
 // --- paths ---

@@ -17,43 +17,33 @@ import (
 
 	"github.com/swat9013/claude-dispatcher/internal/status"
 	"github.com/swat9013/claude-dispatcher/internal/tick"
+	"github.com/swat9013/claude-dispatcher/internal/ticklog"
 )
 
-// 本番の周期の見直し間隔と画面の描き直し間隔
-const (
-	DefaultPoll   = time.Second
-	DefaultRedraw = 15 * time.Second
-)
+// DefaultPoll は本番で壁時計を見直す間隔
+const DefaultPoll = time.Second
+
+// redrawInterval は端末の画面を描き直す間隔 (formats.md §13.1)
+const redrawInterval = 15 * time.Second
 
 // Options は loop の入力。Tick / Status / Now / Signals は差し替えの口 (テストは fake を渡す)。
 type Options struct {
 	Project  string
-	Interval time.Duration
-	// IntervalText は撃たれた interval の綴り (見出しに出す)
-	IntervalText string
-	Stdout       io.Writer
-	Stderr       io.Writer
+	Interval Interval
+	Stdout   io.Writer
+	Stderr   io.Writer
 	// Terminal は stdout が端末か。端末なら画面を消して描き直し、端末でなければ追記する
 	Terminal bool
 	// Signals は停止要求 (SIGINT / SIGTERM / SIGHUP)
 	Signals <-chan os.Signal
-	// Tick は tick の 1 回分を回す
-	Tick func(Request) tick.Outcome
+	// Tick は tick の 1 回分を回す。control は「orchestrator を止めよ」の口と orchestrator の起動の通知先
+	Tick func(control tick.Control) tick.Outcome
 	// Status は project の今 (status の現況) を組む
 	Status func() status.Report
 	// Now は壁時計。次の tick の時刻はこれで判定する (スリープ中に monotonic clock が進まない OS がある — system.md §9)
 	Now func() time.Time
-	// Poll は壁時計を見直す間隔、Redraw は端末の画面を描き直す間隔
-	Poll   time.Duration
-	Redraw time.Duration
-}
-
-// Request は loop が tick の 1 回分へ渡すもの。
-type Request struct {
-	// StopOrchestrator は 2 回目の停止要求で閉じる
-	StopOrchestrator <-chan struct{}
-	// OrchestratorStarted は tick が orchestrator を起動する直前に呼ぶ (画面の経過の起点)
-	OrchestratorStarted func(at time.Time)
+	// Poll は壁時計を見直す間隔
+	Poll time.Duration
 }
 
 // Run は停止要求で止まるまで tick を回し、exit code を返す (停止要求で止まったら 0、想定外の失敗なら 1)。
@@ -65,11 +55,11 @@ func Run(o Options) (exit int) {
 		}
 	}()
 	l := &loop{
-		o:         o,
-		tickDone:  make(chan tick.Outcome, 1),
-		collected: make(chan status.Report, 1),
-		report:    status.Report{Project: o.Project},
+		o:        o,
+		tickDone: make(chan tick.Outcome, 1),
+		report:   status.Report{Project: o.Project},
 	}
+	l.feed = &statusFeed{collect: l.collectStatus, collected: make(chan status.Report, 1)}
 	return l.run()
 }
 
@@ -83,19 +73,15 @@ type loop struct {
 	tickDone            chan tick.Outcome
 	last                *tick.Outcome
 
-	// stops は受けた停止要求の数、firstStop は 1 回目の signal
-	stops     int
-	firstStop os.Signal
+	// stopRequests は受けた停止要求 (1 回目の signal が終了行の理由になる)
+	stopRequests []os.Signal
 	// stopOrchestrator は実行中の tick へ渡した「orchestrator を止めよ」の口
 	stopOrchestrator chan struct{}
 
-	report status.Report
-	// collected は裏で組んだ status の現況の受け口。組んでいる間は collecting、その間に描き直しを求められたら collectAgain
-	collected    chan status.Report
-	collecting   bool
-	collectAgain bool
-	lastRefresh  time.Time
-	drawn        bool
+	feed        *statusFeed
+	report      status.Report
+	lastRefresh time.Time
+	drawn       bool
 }
 
 func (l *loop) run() int {
@@ -104,7 +90,14 @@ func (l *loop) run() int {
 	l.next = wall(l.o.Now())
 	for {
 		if l.phase == waiting && !wall(l.o.Now()).Before(l.next) {
-			l.startTick()
+			// 周期の境目に届いていた停止要求を先に受ける (tick の合間の停止要求は tick を始めない)
+			select {
+			case sig := <-l.o.Signals:
+				l.stopRequests = append(l.stopRequests, sig)
+				return l.finish(l.stopReason(nil))
+			default:
+				l.startTick()
+			}
 		}
 		select {
 		case sig := <-l.o.Signals:
@@ -115,26 +108,22 @@ func (l *loop) run() int {
 			l.last = &out
 			l.tickStarted = time.Time{}
 			l.orchestratorStarted.Store(nil)
-			if l.stops > 0 {
+			if len(l.stopRequests) > 0 {
 				return l.finish(l.stopReason(&out))
 			}
 			// 周期は tick の終了から数える。取りこぼした周期は追い掛けない
 			l.phase = waiting
-			l.next = wall(l.o.Now()).Add(l.o.Interval)
+			l.next = wall(l.o.Now()).Add(l.o.Interval.Duration)
 			l.refresh()
 		case <-poll.C:
 			// 周期の描き直しは組んでいる間は積まない (gh が遅いと組み直しが途切れなく続く)
-			if l.o.Terminal && !l.collecting && l.o.Now().Sub(l.lastRefresh) >= l.o.Redraw {
+			if l.o.Terminal && !l.feed.busy && l.o.Now().Sub(l.lastRefresh) >= redrawInterval {
 				l.refresh()
 			}
-		case report := <-l.collected:
-			l.collecting = false
+		case report := <-l.feed.collected:
 			l.report = report
 			l.draw(true)
-			if l.collectAgain {
-				l.collectAgain = false
-				l.refresh()
-			}
+			l.feed.done()
 		}
 	}
 }
@@ -147,7 +136,7 @@ func (l *loop) startTick() {
 	l.tickStarted = l.o.Now()
 	l.orchestratorStarted.Store(nil)
 	l.stopOrchestrator = make(chan struct{})
-	req := Request{
+	control := tick.Control{
 		StopOrchestrator:    l.stopOrchestrator,
 		OrchestratorStarted: func(at time.Time) { l.orchestratorStarted.Store(&at) },
 	}
@@ -155,10 +144,11 @@ func (l *loop) startTick() {
 		defer func() {
 			// tick の 1 回分は自分で panic を行に写すので、ここへ来るのは組み立ての失敗だけ。loop は次の周期へ進む
 			if v := recover(); v != nil {
+				fmt.Fprintf(l.o.Stderr, "panic: %v\n%s", v, debug.Stack())
 				l.tickDone <- tick.Outcome{Result: tick.ResultError, Error: fmt.Sprintf("想定外の失敗で止まった: %v", v)}
 			}
 		}()
-		l.tickDone <- l.o.Tick(req)
+		l.tickDone <- l.o.Tick(control)
 	}()
 	if l.o.Terminal {
 		l.refresh()
@@ -167,25 +157,22 @@ func (l *loop) startTick() {
 
 // onStopRequest は停止要求を受ける。すぐ止まってよければ true。
 func (l *loop) onStopRequest(sig os.Signal) bool {
-	l.stops++
+	l.stopRequests = append(l.stopRequests, sig)
 	switch {
 	case l.phase == waiting:
 		// tick の合間: 次の tick を始めずに止まる
-		l.firstStop = sig
 		return true
-	case l.stops == 1:
+	case len(l.stopRequests) == 1:
 		// 実行中の tick を最後まで進めてから止まる
-		l.firstStop = sig
 		l.phase = stopping
-		if l.o.Terminal {
-			l.refresh()
-		}
-	case l.stops == 2:
+	case len(l.stopRequests) == 2:
 		// 段階の解釈 (起動前・起動中・正常終了の後) は tick の 1 回分が持つ
 		close(l.stopOrchestrator)
-		if l.o.Terminal {
-			l.refresh()
-		}
+	default:
+		return false
+	}
+	if l.o.Terminal {
+		l.refresh()
 	}
 	return false
 }
@@ -199,7 +186,7 @@ func (l *loop) stopReason(out *tick.Outcome) string {
 			return "2 回目の停止要求で orchestrator を起動せずに止めた"
 		}
 	}
-	return "停止要求 " + signalName(l.firstStop)
+	return "停止要求 " + signalName(l.stopRequests[0])
 }
 
 func signalName(sig os.Signal) string {
@@ -214,21 +201,17 @@ func signalName(sig os.Signal) string {
 	return sig.String()
 }
 
-// refresh は status の現況を裏で組ませ、組めたら描く。組んでいる間に求められたら、組み終えてからもう一度組む。
+// refresh は status の現況を組み直させる。組めたら run が描く。
 func (l *loop) refresh() {
 	l.lastRefresh = l.o.Now()
-	if l.collecting {
-		l.collectAgain = true
-		return
-	}
-	l.collecting = true
-	go func() { l.collected <- l.collectStatus() }()
+	l.feed.request()
 }
 
 // collectStatus は status の現況を組む。組めなければ理由を注記にした空の現況にする (画面を止めない)。
 func (l *loop) collectStatus() (report status.Report) {
 	defer func() {
 		if v := recover(); v != nil {
+			fmt.Fprintf(l.o.Stderr, "panic: %v\n%s", v, debug.Stack())
 			report = status.Report{Project: l.o.Project, Notes: []string{fmt.Sprintf("status の現況を組めない: %v", v)}}
 		}
 	}()
@@ -237,7 +220,7 @@ func (l *loop) collectStatus() (report status.Report) {
 
 func (l *loop) view() view {
 	v := view{
-		project: l.o.Project, interval: l.o.IntervalText, phase: l.phase, now: l.o.Now(),
+		project: l.o.Project, interval: l.o.Interval.Text, phase: l.phase, now: l.o.Now(),
 		next: l.next, tickStarted: l.tickStarted, last: l.last, report: l.report,
 	}
 	if at := l.orchestratorStarted.Load(); at != nil {
@@ -249,8 +232,7 @@ func (l *loop) view() view {
 // draw は画面を描く。端末なら消して描き直し、端末でなければ操作案内を除いて空行で区切って追記する。
 // 書き込みの失敗 (読み手の消えた pipe 等) は捨てる — 描けなくても停止要求で止まれるように。
 func (l *loop) draw(withGuide bool) {
-	lines := l.view().lines(withGuide && l.o.Terminal)
-	text := strings.Join(lines, "\n") + "\n"
+	text := strings.Join(l.view().lines(withGuide && l.o.Terminal), "\n") + "\n"
 	switch {
 	case l.o.Terminal:
 		text = clearScreen + text
@@ -266,17 +248,47 @@ func (l *loop) draw(withGuide bool) {
 func (l *loop) finish(reason string) int {
 	collected := make(chan status.Report, 1)
 	go func() { collected <- l.collectStatus() }()
-	running := "?"
 	select {
 	case l.report = <-collected:
-		if n := l.report.RunningWorkers(); n.Known {
-			running = fmt.Sprint(n.Value)
-		}
 	case <-l.o.Signals:
 	}
-	l.phase = stopping
+	l.phase = stopped
 	l.draw(false)
-	_, _ = fmt.Fprintf(l.o.Stdout, "%s [%s] loop を止めた (%s)。止めずに走っている worker: %s 本\n",
-		l.o.Now().UTC().Format(timeLayout), l.o.Project, reason, running)
+	running := "?"
+	if n := l.report.RunningWorkers; n.Known {
+		running = fmt.Sprint(n.Value)
+	}
+	end := fmt.Sprintf("%s [%s] loop を止めた (%s)。止めずに走っている worker: %s 本\n",
+		l.o.Now().UTC().Format(ticklog.TimeLayout), l.o.Project, reason, running)
+	if _, err := io.WriteString(l.o.Stdout, end); err != nil {
+		// 止めた理由と走っている worker の数は、画面が消えても残す
+		fmt.Fprint(l.o.Stderr, end)
+	}
 	return 0
+}
+
+// statusFeed は status の現況を裏で組み、組めたら collected へ流す。組んでいる間に求められた分は、組み終えてから 1 回にまとめて組み直す。
+type statusFeed struct {
+	collect   func() status.Report
+	collected chan status.Report
+	// busy は組んでいる間、again はその間に組み直しを求められたか
+	busy, again bool
+}
+
+func (f *statusFeed) request() {
+	if f.busy {
+		f.again = true
+		return
+	}
+	f.busy = true
+	go func() { f.collected <- f.collect() }()
+}
+
+// done は collected から受け取った後に呼ぶ。
+func (f *statusFeed) done() {
+	f.busy = false
+	if f.again {
+		f.again = false
+		f.request()
+	}
 }

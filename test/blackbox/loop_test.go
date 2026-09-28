@@ -349,7 +349,7 @@ func TestLoopRefusesASecondLoopOfTheSameProject(t *testing.T) {
 
 // --- 周期と画面 ---
 
-func TestLoopTicksRightAfterStartingAndStopsOnTheFirstSignalBetweenTicks(t *testing.T) {
+func TestLoopStopsOnTheFirstSignalBetweenTicksWithoutStartingAnother(t *testing.T) {
 	for _, sig := range []syscall.Signal{syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP} {
 		t.Run(sig.String(), func(t *testing.T) {
 			s := newSandbox(t)
@@ -456,67 +456,91 @@ func TestLoopKeepsStoppingInStepsWhenStdoutIsGone(t *testing.T) {
 // --- 段階的な停止 ---
 
 func TestLoopFirstSignalDuringATickFinishesTheTickThenStops(t *testing.T) {
+	for _, sig := range []syscall.Signal{syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP} {
+		t.Run(sig.String(), func(t *testing.T) {
+			s := newSandbox(t)
+			s.setIssues(readyIssue(42))
+			s.workersRunUntilReleased()
+			s.orchestratorWaitsAfterWriting(startDecisions(playbookPath(s.defaultInstallPath(), "playbook-implementation"), 42))
+			p := s.startLoop()
+			s.waitOrchestratorCalls(1)
+			p.signal(sig)
+			s.release("orchestrator")
+
+			r := p.wait()
+
+			assertExit(t, r, 0)
+			// 1 回目で止まっていれば ok の行も起動記録も無い
+			line := s.lastTickLine()
+			if line["result"] != "ok" || len(spawnedPIDs(t, line)) != 1 {
+				t.Fatalf("tick を最後まで進めていない (決定どおり worker を起動して ok の行を書く): %v", line)
+			}
+			// 走っている worker の数は status の現況から数える (sandbox の ps は stub なので、ここでは数の形だけを見る)
+			if m := endLine(t, r.stdout); m[2] != "停止要求 "+signalName(sig) || !regexp.MustCompile(`^\d+$`).MatchString(m[3]) {
+				t.Fatalf("終了行 = %q, want 停止要求 %s と走っている worker の数", m[0], signalName(sig))
+			}
+		})
+	}
+}
+
+func TestLoopFirstSignalLeavesTheWorkerOfTheTickRunning(t *testing.T) {
 	s := newSandbox(t)
 	s.setIssues(readyIssue(42))
 	s.workersRunUntilReleased()
 	s.orchestratorWaitsAfterWriting(startDecisions(playbookPath(s.defaultInstallPath(), "playbook-implementation"), 42))
 	p := s.startLoop()
 	s.waitOrchestratorCalls(1)
-
 	p.signal(syscall.SIGINT)
-	time.Sleep(300 * time.Millisecond)
-	if !p.running() {
-		t.Fatalf("1 回目の停止要求で tick を終える前に止まった:\n%s", p.stdout)
-	}
 	s.release("orchestrator")
-	r := p.wait()
 
-	assertExit(t, r, 0)
-	line := s.lastTickLine()
-	if line["result"] != "ok" || len(spawnedPIDs(t, line)) != 1 {
-		t.Fatalf("tick を最後まで進めていない (決定どおり worker を起動して ok の行を書く): %v", line)
-	}
-	if pid := spawnedPIDs(t, line)[0]; !alive(t, pid) {
+	assertExit(t, p.wait(), 0)
+
+	if pid := spawnedPIDs(t, s.lastTickLine())[0]; !alive(t, pid) {
 		t.Fatalf("loop の停止で起動済みの worker (pid %d) が止まった", pid)
-	}
-	// 走っている worker の数は status の現況から数える (sandbox の ps は stub なので、ここでは数の形だけを見る)
-	if m := endLine(t, r.stdout); m[2] != "停止要求 SIGINT" || !regexp.MustCompile(`^\d+$`).MatchString(m[3]) {
-		t.Fatalf("終了行 = %q, want 停止要求 SIGINT と走っている worker の数", m[0])
 	}
 }
 
-func TestLoopSecondSignalStopsTheOrchestratorWithoutReadingItsDecisions(t *testing.T) {
-	s := newSandbox(t)
+// secondSignalDuringTheOrchestrator は orchestrator が決定ファイルを書いて待っている間に、2 回目の停止要求で loop を止める。
+func (s *sandbox) secondSignalDuringTheOrchestrator() runResult {
+	s.t.Helper()
 	s.setIssues(readyIssue(42))
 	s.orchestratorWaitsAfterWriting(startDecisions(playbookPath(s.defaultInstallPath(), "playbook-implementation"), 42))
 	p := s.startLoop()
 	s.waitOrchestratorCalls(1)
+	p.signal(syscall.SIGINT)
+	p.signal(syscall.SIGINT)
+	return p.wait()
+}
 
-	p.signal(syscall.SIGINT)
-	p.signal(syscall.SIGINT)
-	r := p.wait()
+func TestLoopSecondSignalLeavesAnErrorLineWithoutReadingTheDecisions(t *testing.T) {
+	s := newSandbox(t)
+
+	r := s.secondSignalDuringTheOrchestrator()
 
 	assertExit(t, r, 0)
 	line := s.lastTickLine()
 	if line["result"] != "error" || line["error"] != "停止要求で orchestrator を止めた" {
 		t.Fatalf("tick 行 = %v, want result error と停止要求で止めた error", line)
 	}
+	// 決定ファイルには start 42 が書かれている。読んでいれば worker を起動して spawned に載る
 	if _, ok := line["orchestrator"]; !ok || len(asList(t, line["spawned"])) != 0 {
 		t.Fatalf("起動して止めた orchestrator を載せ、worker は起動しない: %v", line)
 	}
-	settleDetachedWorkers()
-	if calls := s.callsMatching("claude", isWorkerCall); len(calls) != 0 {
-		t.Fatalf("止めた orchestrator の決定ファイルを読んで worker を起動した: %v", calls)
-	}
+}
+
+func TestLoopSecondSignalStopsTheOrchestratorAndPointsToItsLog(t *testing.T) {
+	s := newSandbox(t)
+
+	r := s.secondSignalDuringTheOrchestrator()
+
 	for _, pid := range s.orchestratorPIDs() {
 		if alive(t, pid) {
 			t.Fatalf("orchestrator (pid %d) が止まっていない", pid)
 		}
 	}
-	m := endLine(t, r.stdout)
-	orchestratorLog := s.orchestratorLogFile(stemOf(t, s, line))
-	if want := "2 回目の停止要求で orchestrator を止めた — 経過は " + orchestratorLog + "。wip を付けたまま残った issue が無いか確かめる"; m[2] != want {
-		t.Fatalf("終了行の理由 = %q, want %q", m[2], want)
+	orchestratorLog := s.orchestratorLogFile(stemOf(t, s, s.lastTickLine()))
+	if want := "2 回目の停止要求で orchestrator を止めた — 経過は " + orchestratorLog + "。wip を付けたまま残った issue が無いか確かめる"; endLine(t, r.stdout)[2] != want {
+		t.Fatalf("終了行の理由 = %q, want %q", endLine(t, r.stdout)[2], want)
 	}
 }
 

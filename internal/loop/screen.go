@@ -17,8 +17,10 @@ type phase int
 const (
 	waiting phase = iota
 	ticking
-	// stopping は停止を求められた後。tick の実行中なら終わるのを待ち、終わっていれば止まる
+	// stopping は tick の実行中に停止を求められた後。tick が終わるのを待つ
 	stopping
+	// stopped は止まった後 (残す画面にだけ出る)
+	stopped
 )
 
 // clearScreen は端末の画面を消して左上へ戻す
@@ -32,9 +34,8 @@ type view struct {
 	now      time.Time
 	// next は次の tick の時刻 (待機のとき)
 	next time.Time
-	// tickStarted は実行中の tick を始めた時刻。tick を実行していなければ零値
-	tickStarted time.Time
-	// orchestratorStarted は実行中の tick が orchestrator を起動した時刻。起動していなければ零値
+	// tickStarted は実行中の tick を始めた時刻。orchestratorStarted はその tick が orchestrator を起動した時刻 (起動していなければ零値)
+	tickStarted         time.Time
 	orchestratorStarted time.Time
 	// last は loop が回した直近の tick。まだ 1 回も終えていなければ nil
 	last   *tick.Outcome
@@ -43,10 +44,8 @@ type view struct {
 
 // lines は画面の行。withGuide が false なら操作案内を除く (stdout が端末でないときと、止まった後の画面)。
 func (v view) lines(withGuide bool) []string {
-	lines := []string{
-		fmt.Sprintf("%s  loop %s  %s", v.project, v.interval, v.state()),
-		v.lastTick(),
-	}
+	state, guide := v.stateAndGuide()
+	lines := []string{fmt.Sprintf("%s  loop %s  %s", v.project, v.interval, state), v.lastTick()}
 	// log.jsonl に書けなかった tick も出す (result が ok でも status と doctor は古い log を読むことになる)
 	if v.last != nil && (v.last.Result != tick.ResultOK || !v.last.Logged) {
 		lines = append(lines, "  ! "+v.last.Error)
@@ -54,22 +53,24 @@ func (v view) lines(withGuide bool) []string {
 	lines = append(lines, v.report.NoteLines()...)
 	lines = append(lines, v.report.TableLines()...)
 	if withGuide {
-		lines = append(lines, "", v.guide())
+		lines = append(lines, "", guide)
 	}
 	return lines
 }
 
-func (v view) state() string {
+// stateAndGuide は phase ごとの状態欄と操作案内 (formats.md §13.1 / §13.2)。
+func (v view) stateAndGuide() (state, guide string) {
 	switch v.phase {
 	case waiting:
-		return fmt.Sprintf("待機 · 次の tick %s (あと %s)", v.next.UTC().Format(timeLayout), status.FormatElapsed(max(v.next.Sub(v.now), 0)))
+		return fmt.Sprintf("待機 · 次の tick %s (あと %s)", v.next.UTC().Format(ticklog.TimeLayout), status.FormatElapsed(max(v.next.Sub(v.now), 0))),
+			"Ctrl+C で停止"
 	case ticking:
-		return "tick 実行中 · " + v.progress()
+		return "tick 実行中 · " + v.progress(), "Ctrl+C: この tick を終えてから停止"
+	case stopping:
+		return "停止待ち · " + v.progress(),
+			"停止待ち: この tick を終えたら止まる。もう一度 Ctrl+C で orchestrator を止めて止まる (付いた wip は残りうる)"
 	}
-	if v.tickStarted.IsZero() {
-		return "停止待ち"
-	}
-	return "停止待ち · " + v.progress()
+	return "停止", ""
 }
 
 // progress は実行中の tick の経過。orchestrator を待つ間はその経過と上限を出す。
@@ -84,7 +85,7 @@ func (v view) lastTick() string {
 	if v.last == nil {
 		return "最終 tick なし"
 	}
-	parts := []string{fmt.Sprintf("最終 tick %s %s", ticklog.ShortTS(v.last.TS), v.last.Result.Name), instructionsPart(v.last.Instructions)}
+	parts := []string{"最終 tick " + ticklog.Summary(v.last.TS, v.last.Result.Name), instructionsPart(v.last.Instructions)}
 	if len(v.last.Spawned) > 0 {
 		issues := make([]string, 0, len(v.last.Spawned))
 		for _, issue := range v.last.Spawned {
@@ -113,16 +114,3 @@ func instructionsPart(counts map[string]int) string {
 	}
 	return "指示 " + strings.Join(pairs, ", ")
 }
-
-func (v view) guide() string {
-	switch v.phase {
-	case waiting:
-		return "Ctrl+C で停止"
-	case ticking:
-		return "Ctrl+C: この tick を終えてから停止"
-	}
-	return "停止待ち: この tick を終えたら止まる。もう一度 Ctrl+C で orchestrator を止めて止まる (付いた wip は残りうる)"
-}
-
-// timeLayout は画面と終了行の時刻 (UTC、秒まで)
-const timeLayout = "2006-01-02T15:04:05Z"

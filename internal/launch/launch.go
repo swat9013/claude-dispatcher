@@ -29,9 +29,8 @@ type Launcher interface {
 type OrchestratorRun struct {
 	ExitCode int
 	Seconds  float64
-	TimedOut bool
-	// Stopped は停止要求で止めた (上限時間で止めたときは TimedOut)
-	Stopped   bool
+	// End は自分で終わったか、上限時間か停止要求で止めたか
+	End       proc.End
 	SessionID string
 }
 
@@ -87,8 +86,7 @@ func (c ClaudePrint) RunOrchestrator(prompt, logFile string, timeout time.Durati
 	// 異常終了は exit code で log に残すので、Wait の error は見ない
 	end, _ := proc.Wait(cmd, timeout, stop)
 	return OrchestratorRun{
-		ExitCode: cmd.ProcessState.ExitCode(), Seconds: time.Since(started).Seconds(),
-		TimedOut: end == proc.TimedOut, Stopped: end == proc.Stopped, SessionID: sessionID,
+		ExitCode: cmd.ProcessState.ExitCode(), Seconds: time.Since(started).Seconds(), End: end, SessionID: sessionID,
 	}, nil
 }
 

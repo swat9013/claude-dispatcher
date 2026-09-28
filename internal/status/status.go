@@ -80,25 +80,10 @@ type Report struct {
 	// LastTick は log.jsonl の最後の tick 行。Value が nil なら tick 行がまだ無い
 	LastTick Probed[*ticklog.Line]
 	Workers  []Worker
-	Notes    []string
-}
-
-// RunningWorkers は載せた worker のうち process が生きている数 (loop の終了行 — formats.md §13.2)。
-// process の一覧か log を読めず、生きている worker を数え切れなければ ?。
-func (r Report) RunningWorkers() Probed[int] {
-	if !r.Loop.Known || !r.LastTick.Known {
-		return Probed[int]{}
-	}
-	n := 0
-	for _, w := range r.Workers {
-		if !w.Alive.Known {
-			return Probed[int]{}
-		}
-		if w.Alive.Value {
-			n++
-		}
-	}
-	return known(n)
+	// RunningWorkers は起動記録の worker のうち process が生きている数 (loop の終了行 — formats.md §13.2)。
+	// 起動部が生死を答えられないか、起動記録 (log.jsonl) を読めなければ ?
+	RunningWorkers Probed[int]
+	Notes          []string
 }
 
 // Worker は表の 1 行。
@@ -164,6 +149,7 @@ func (c *collector) collect(project paths.Project, home string, now time.Time) R
 
 	spawns := spawnRecords(lines)
 	if len(spawns) == 0 {
+		c.countRunning()
 		return c.report
 	}
 	cfg, cfgErr := config.Load(project.ConfigFile(), home)
@@ -177,6 +163,7 @@ func (c *collector) collect(project paths.Project, home string, now time.Time) R
 		}
 	}
 	c.report.Workers = listed(spawns, c.alive, c.wip(cfg, cfgErr, gh), now)
+	c.countRunning()
 	if len(c.report.Workers) > 0 {
 		c.fillDetails(cfg, cfgErr, gh)
 	}
@@ -222,6 +209,20 @@ func listed(spawns []spawnRecord, alive func(ticklog.Spawned) Probed[bool], wip 
 		workers = append(workers, Worker{Spawn: s.Spawned, TickTS: s.tick.TS, Elapsed: now.Sub(s.tick.At), Alive: a, WIP: w})
 	}
 	return workers
+}
+
+// countRunning は載せた worker のうち生きている数を数える。生きている worker はすべて載るので、載せた分で足りる。
+func (c *collector) countRunning() {
+	if c.isAliveErr != nil {
+		return
+	}
+	n := 0
+	for _, w := range c.report.Workers {
+		if w.Alive.Known && w.Alive.Value {
+			n++
+		}
+	}
+	c.report.RunningWorkers = known(n)
 }
 
 type collector struct {

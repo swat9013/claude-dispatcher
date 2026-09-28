@@ -16,7 +16,7 @@ import (
 )
 
 // RootFile は stub binary の隣に置き、stub root の path を 1 行で持つ file の名前。
-// root を env ではなく file で渡すのは、stub を自己解決の置き場 (~/.local/bin) に置いたときも、PATH を経ずに引けるようにするため。
+// root を env ではなく file で渡すので、テスト対象の binary が子へ渡す env (観測対象) に配線の値を混ぜずに済む。
 const RootFile = ".stub-root"
 
 // UnmatchedExit は、どの rule にも当たらない呼び出しに stub が返す exit code。

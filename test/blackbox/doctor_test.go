@@ -176,10 +176,8 @@ func TestDoctorReportsARepoGhCannotSeeAsNG(t *testing.T) {
 func TestDoctorReportsADependencyItCannotResolveAsNG(t *testing.T) {
 	s := newInstallSandbox(t)
 	skipIfSelfResolutionReachesARealOne(t, "claude")
-	for _, dir := range []string{s.binDir} {
-		if err := os.Remove(filepath.Join(dir, "claude")); err != nil {
-			t.Fatal(err)
-		}
+	if err := os.Remove(filepath.Join(s.binDir, "claude")); err != nil {
+		t.Fatal(err)
 	}
 
 	r := s.doctor()

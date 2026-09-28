@@ -43,7 +43,7 @@ func (r Report) Heading() string {
 		if l == nil {
 			return "なし"
 		}
-		return ticklog.ShortTS(l.TS) + " " + l.Result
+		return ticklog.Summary(l.TS, l.Result)
 	})
 	return fmt.Sprintf("%s  %s  最終 tick %s", r.Project, loop, last)
 }

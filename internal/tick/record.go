@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/swat9013/claude-dispatcher/internal/launch"
+	"github.com/swat9013/claude-dispatcher/internal/proc"
+	"github.com/swat9013/claude-dispatcher/internal/ticklog"
 )
 
 const (
@@ -17,8 +19,6 @@ const (
 	logTimeLayout = "2006-01-02T15:04:05.000000Z"
 	// stemLayout は tick の開始時刻から作る file 名の幹。同じ秒に 2 tick 走っても前の file を上書きしない
 	stemLayout = "20060102T150405.000000Z"
-	// failureTimeLayout は失敗行の前置 (秒まで)
-	failureTimeLayout = "2006-01-02T15:04:05Z"
 )
 
 // Result は tick の結果の種別と exit code (formats.md §3)。
@@ -82,7 +82,7 @@ type orchestratorRecord struct {
 
 func newOrchestratorRecord(run launch.OrchestratorRun) orchestratorRecord {
 	// 秒は log を読む人の目安なので 0.1 秒まで
-	return orchestratorRecord{ExitCode: run.ExitCode, Seconds: math.Round(run.Seconds*10) / 10, TimedOut: run.TimedOut, SessionID: run.SessionID}
+	return orchestratorRecord{ExitCode: run.ExitCode, Seconds: math.Round(run.Seconds*10) / 10, TimedOut: run.End == proc.TimedOut, SessionID: run.SessionID}
 }
 
 type spawned struct {
@@ -163,5 +163,5 @@ func failureLine(at time.Time, project, loggedTS string, result Result, err stri
 	if loggedTS == "" {
 		loggedTS = "-"
 	}
-	return fmt.Sprintf("%s [%s] tick=%s result=%s %s", at.UTC().Format(failureTimeLayout), project, loggedTS, result.Name, foldLines(err))
+	return fmt.Sprintf("%s [%s] tick=%s result=%s %s", at.UTC().Format(ticklog.TimeLayout), project, loggedTS, result.Name, foldLines(err))
 }

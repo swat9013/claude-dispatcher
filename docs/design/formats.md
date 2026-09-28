@@ -356,7 +356,7 @@ config の中身は起動時に検査しない。tick ごとに読み直し、�
 
 ### 13.1 画面
 
-stdout が端末のとき、`status ps <project>` の表 (§10) の見出し行を loop の見出しに差し替え、末尾に操作案内を足した画面を描く。15 秒ごと・tick の直後・停止を求められたときに、画面を消して (`\033[H\033[2J`) 描き直す。
+stdout が端末のとき、`status ps <project>` の表 (§10) の見出し行を loop の見出しに差し替え、末尾に操作案内を足した画面を描く。15 秒ごと・tick の始まりと直後・停止を求められたときに、画面を消して (`\033[H\033[2J`) 描き直す。
 
 ```
 myproj  loop 5m  待機 · 次の tick 2026-09-26T03:05:00Z (あと 3m)
@@ -372,7 +372,7 @@ Ctrl+C で停止
 |---|---|
 | 1 行目 | project・`loop <interval>`・状態 (下表) |
 | `最終 tick` | loop が回した直近の tick の `ts`・`result`・指示の種別と件数 (0 件なら `指示 0`)・起動した worker の issue (無ければ省く)。まだ 1 回も終えていなければ `最終 tick なし` |
-| `!` 行 | 直近の tick の `error` (`result` が `ok` 以外のとき) と、`status` の注記 (§10) |
+| `!` 行 | 直近の tick の `error` (`result` が `ok` 以外のとき。tick 行を log.jsonl に書けなかったときは `result` に関わらず、書けなかった理由を含めて出す) と、`status` の注記 (§10) |
 | 表 | `status` と同じ (§10)。載せる worker が居なければ出さない |
 | 最終行 | 操作案内 (下表) |
 
@@ -398,14 +398,14 @@ SIGINT / SIGTERM / SIGHUP を同じに扱う。
 | 2 回目・orchestrator の正常終了後 | 1 回目と同じ。決定ファイルの検査と決定どおりの worker の起動を終え、tick 行を書いてから止まる (起動を途中で打ち切ると、付いた wip が worker の無いまま残る) |
 
 - 起動済みの worker はどちらの停止でも止めない
-- 止まったら画面を消さずに残し、終了行を 1 行足す
+- 止まったら操作案内を除いた画面を描いて残し (1 行目の状態欄は `停止`)、終了行を 1 行足す
 
   ```
   <時刻 (UTC, 秒まで)> [<project>] loop を止めた (<理由>)。止めずに走っている worker: <n> 本
   ```
 
   - `<理由>` は `停止要求 <signal 名>` (例 `停止要求 SIGINT`)。2 回目の停止要求で止めたときは `2 回目の停止要求で orchestrator を止めた — 経過は <orchestrator log の path>。wip を付けたまま残った issue が無いか確かめる` (orchestrator を起動する前なら `2 回目の停止要求で orchestrator を起動せずに止めた`)
-  - `<n>` は `status` の STATE が `running` の行の数。process の一覧を読めなければ `?`
+  - `<n>` は `status` の STATE が `running` の行の数。process の一覧か log.jsonl を読めなければ `?`。止まる前の最後の現況を組んでいる間に次の停止要求が来たら、組むのを待たずに直前の現況から数える
 - 2 回目の停止要求で止めた tick 行の `error` は `停止要求で orchestrator を止めた` か `停止要求で orchestrator を起動しなかった`
 - stdout への書き込みの失敗 (読み手の消えた pipe 等) では止まらない。描画を捨てて続け、停止要求で止まる
 

@@ -14,6 +14,7 @@ import (
 	"github.com/swat9013/claude-dispatcher/internal/github"
 	"github.com/swat9013/claude-dispatcher/internal/launch"
 	"github.com/swat9013/claude-dispatcher/internal/paths"
+	"github.com/swat9013/claude-dispatcher/internal/proc"
 	"github.com/swat9013/claude-dispatcher/internal/tick"
 )
 
@@ -44,8 +45,8 @@ func (g fakeGh) Run(args ...string) ([]byte, error) {
 // fakeLauncher は claude の代わりに呼び出しを記録する。orchestrate は orchestrator の振る舞いを決める。
 type fakeLauncher struct {
 	orchestrate func(prompt string) launch.OrchestratorRun
-	// stopped は RunOrchestrator が受け取った停止要求
-	stopped <-chan struct{}
+	// stop は RunOrchestrator が受け取った停止要求 (orchestrate の中から見る)
+	stop    <-chan struct{}
 	spawn   func(n int) (launch.WorkerLaunch, error)
 	prompts []string
 	workers []string
@@ -53,7 +54,7 @@ type fakeLauncher struct {
 
 func (f *fakeLauncher) RunOrchestrator(prompt, logFile string, timeout time.Duration, stop <-chan struct{}) (launch.OrchestratorRun, error) {
 	f.prompts = append(f.prompts, prompt)
-	f.stopped = stop
+	f.stop = stop
 	return f.orchestrate(prompt), nil
 }
 
@@ -107,7 +108,7 @@ func (e *env) run(gh fakeGh, launcher *fakeLauncher) int {
 // once は停止要求の口 stop を渡して 1 tick を回す (loop と同じ呼び方)。
 func (e *env) once(gh fakeGh, launcher *fakeLauncher, stop <-chan struct{}) tick.Outcome {
 	o := e.options(gh, launcher)
-	o.StopOrchestrator = stop
+	o.Control.StopOrchestrator = stop
 	return tick.Once(o)
 }
 
@@ -253,7 +254,7 @@ func TestTimedOutOrchestratorHasItsDecisionsIgnored(t *testing.T) {
 	launcher := &fakeLauncher{
 		orchestrate: func(prompt string) launch.OrchestratorRun {
 			run := e.writesDecisions(prompt)
-			run.TimedOut, run.ExitCode = true, -1
+			run.End, run.ExitCode = proc.TimedOut, -1
 			return run
 		},
 		spawn: func(int) (launch.WorkerLaunch, error) {
@@ -309,22 +310,26 @@ func TestStopRequestBeforeTheOrchestratorKeepsItFromLaunching(t *testing.T) {
 
 func TestStopRequestDuringTheOrchestratorLeavesItsDecisionsUnread(t *testing.T) {
 	e := newEnv(t)
-	launcher := &fakeLauncher{
+	stop := make(chan struct{})
+	var launcher *fakeLauncher
+	launcher = &fakeLauncher{
+		// 起動部の代わり: 決定ファイルを書いた後に届いた停止要求で止まる (届かなければ止まらずに正常終了する)
 		orchestrate: func(prompt string) launch.OrchestratorRun {
 			run := e.writesDecisions(prompt)
-			run.Stopped, run.ExitCode = true, -1
+			close(stop)
+			select {
+			case <-launcher.stop:
+				run.End, run.ExitCode = proc.Stopped, -1
+			default:
+			}
 			return run
 		},
 		spawn: refusesWorkers(t),
 	}
-	stop := make(chan struct{})
 
 	out := e.once(fakeGh{issues: twoCandidates}, launcher, stop)
 
 	line := e.tickLine()
-	if launcher.stopped != (<-chan struct{})(stop) {
-		t.Fatal("停止要求を起動部へ渡していない")
-	}
 	if out.Result != tick.ResultError || out.Halt != tick.HaltedDuringRun || line["error"] != "停止要求で orchestrator を止めた" {
 		t.Fatalf("outcome = %+v / line = %v", out, line)
 	}

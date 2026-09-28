@@ -90,7 +90,7 @@ func TestCollectDoesNotListAWorkerTheLauncherTellsGone(t *testing.T) {
 func TestRunningWorkersCountsTheListedWorkersWhoseProcessLives(t *testing.T) {
 	r := collectOne(t, probesWith(quietMachine(), answers(4242)))
 
-	if got := r.RunningWorkers(); !got.Known || got.Value != 1 {
+	if got := r.RunningWorkers; !got.Known || got.Value != 1 {
 		t.Fatalf("running workers = %+v, want 1", got)
 	}
 }
@@ -100,7 +100,7 @@ func TestRunningWorkersIsUnknownWhenTheProcessListCannotBeRead(t *testing.T) {
 
 	r := collectOne(t, probesWith(machine, launch.ClaudePrintCensus))
 
-	if got := r.RunningWorkers(); got.Known {
+	if got := r.RunningWorkers; got.Known {
 		t.Fatalf("running workers = %+v, want ?", got)
 	}
 }

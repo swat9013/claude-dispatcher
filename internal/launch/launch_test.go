@@ -6,8 +6,11 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
+
+	"github.com/swat9013/claude-dispatcher/internal/proc"
 )
 
 // fakeClaude は claude の代わりに script を置いた ClaudePrint を返す。
@@ -21,19 +24,25 @@ func fakeClaude(t *testing.T, script string) ClaudePrint {
 	return ClaudePrint{Claude: claude, Env: []string{"PATH=/usr/bin:/bin"}, Cwd: dir}
 }
 
-func TestRunOrchestratorStopsTheProcessGroupOnAStopRequestAndSaysSo(t *testing.T) {
+func closed() chan struct{} {
+	c := make(chan struct{})
+	close(c)
+	return c
+}
+
+// processState は pid の process の状態 (ps の STAT)。process が無ければ ""。
+func processState(pid int) string {
+	out, _ := exec.Command("/bin/ps", "-o", "stat=", "-p", strconv.Itoa(pid)).Output()
+	return strings.TrimSpace(string(out))
+}
+
+func TestRunOrchestratorStopsItOnAStopRequestAndSaysSo(t *testing.T) {
 	c := fakeClaude(t, "sleep 30")
-	stop := make(chan struct{})
-	time.AfterFunc(100*time.Millisecond, func() { close(stop) })
-	started := time.Now()
 
-	run, err := c.RunOrchestrator("prompt", filepath.Join(t.TempDir(), "o.log"), time.Minute, stop)
+	run, err := c.RunOrchestrator("prompt", filepath.Join(t.TempDir(), "o.log"), time.Minute, closed())
 
-	if err != nil || !run.Stopped || run.TimedOut {
-		t.Fatalf("run = %+v, err = %v, want 停止要求で止めた (timed_out ではない)", run, err)
-	}
-	if elapsed := time.Since(started); elapsed > 10*time.Second {
-		t.Fatalf("停止要求から止まるまで %s 掛かった", elapsed)
+	if err != nil || run.End != proc.Stopped {
+		t.Fatalf("run = %+v, err = %v, want 停止要求で止めた", run, err)
 	}
 }
 
@@ -42,8 +51,23 @@ func TestRunOrchestratorTellsATimeoutApartFromAStopRequest(t *testing.T) {
 
 	run, err := c.RunOrchestrator("prompt", filepath.Join(t.TempDir(), "o.log"), 100*time.Millisecond, nil)
 
-	if err != nil || !run.TimedOut || run.Stopped {
-		t.Fatalf("run = %+v, err = %v, want 上限時間で止めた (stopped ではない)", run, err)
+	if err != nil || run.End != proc.TimedOut {
+		t.Fatalf("run = %+v, err = %v, want 上限時間で止めた", run, err)
+	}
+}
+
+func TestStoppingTheOrchestratorLeavesAWorkerRunning(t *testing.T) {
+	c := fakeClaude(t, "sleep 30")
+	w, err := c.SpawnWorker("prompt", filepath.Join(t.TempDir(), "w.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { syscall.Kill(-w.PID, syscall.SIGKILL) })
+
+	c.RunOrchestrator("prompt", filepath.Join(t.TempDir(), "o.log"), time.Minute, closed())
+
+	if state := processState(w.PID); state == "" || strings.HasPrefix(state, "Z") {
+		t.Fatalf("orchestrator を止めたら worker (pid %d) も止まった (state %q)", w.PID, state)
 	}
 }
 
@@ -56,12 +80,7 @@ func TestSpawnWorkerReapsTheWorkerWhenItEnds(t *testing.T) {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(5 * time.Second)
-	for {
-		out, _ := exec.Command("/bin/ps", "-o", "stat=", "-p", strconv.Itoa(w.PID)).Output()
-		state := strings.TrimSpace(string(out))
-		if state == "" {
-			return
-		}
+	for state := processState(w.PID); state != ""; state = processState(w.PID) {
 		if time.Now().After(deadline) {
 			t.Fatalf("終わった worker (pid %d) が回収されずに残っている (state %q)", w.PID, state)
 		}

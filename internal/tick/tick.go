@@ -24,6 +24,7 @@ import (
 	"github.com/swat9013/claude-dispatcher/internal/launch"
 	"github.com/swat9013/claude-dispatcher/internal/paths"
 	"github.com/swat9013/claude-dispatcher/internal/plugin"
+	"github.com/swat9013/claude-dispatcher/internal/proc"
 )
 
 // OrchestratorTimeout は orchestrator の上限。超えたら kill して log に残す (system.md §9)
@@ -44,7 +45,13 @@ type Options struct {
 	Gh       func(env []string) (github.Runner, error)
 	Launcher func(env []string) (launch.Launcher, error)
 
-	// StopOrchestrator は「orchestrator を止めよ」の要求で、閉じると届く。nil なら届かない (単発の tick)。
+	// Control は loop が渡す口。単発の tick は零値のまま (停止要求は届かず、起動の通知もしない)
+	Control Control
+}
+
+// Control は loop が tick の 1 回分へ渡す口。
+type Control struct {
+	// StopOrchestrator は「orchestrator を止めよ」の要求で、閉じると届く。nil なら届かない。
 	// 段階の解釈は tick が持つ: 起動前なら起動せず、起動中なら止めて決定ファイルを読まず、正常終了の後なら無視する (system.md §13)
 	StopOrchestrator <-chan struct{}
 	// OrchestratorStarted は orchestrator を起動する直前に呼ぶ (loop の画面の経過の起点)。nil なら呼ばない
@@ -63,8 +70,9 @@ const (
 	HaltedDuringRun
 )
 
-// Outcome は確定した tick 行。中身は log.jsonl に書いたものと同じで、書けなかったときは Error にその理由を足し、Logged が false。
-// exit code と失敗行を出すかは呼び出し側が決める (system.md §13)。
+// Outcome は確定した tick 行のうち、呼び出し側 (単発の tick の exit code と失敗行、loop の画面と終了行) が使う分。値は log.jsonl に
+// 書いたものと同じで、書けなかったときは Error にその理由を足し、Logged が false。exit code と失敗行を出すかは呼び出し側が決める
+// (system.md §13)。
 type Outcome struct {
 	TS     string
 	Result Result
@@ -223,7 +231,7 @@ func (r *run) finish(err error) Outcome {
 // stopRequested は「orchestrator を止めよ」の要求が届いているか。
 func (r *run) stopRequested() bool {
 	select {
-	case <-r.o.StopOrchestrator:
+	case <-r.o.Control.StopOrchestrator:
 		return true
 	default:
 		return false
@@ -391,26 +399,26 @@ func (r *run) driveOrchestrator(obs observation, instructionFile string) error {
 		return stopf(ResultError, "停止要求で orchestrator を起動しなかった")
 	}
 	orchestratorLog := r.project.OrchestratorLog(r.stem)
-	if r.o.OrchestratorStarted != nil {
-		r.o.OrchestratorStarted(time.Now())
+	if r.o.Control.OrchestratorStarted != nil {
+		r.o.Control.OrchestratorStarted(time.Now())
 	}
-	run, err := launcher.RunOrchestrator(prompt, orchestratorLog, OrchestratorTimeout, r.o.StopOrchestrator)
+	run, err := launcher.RunOrchestrator(prompt, orchestratorLog, OrchestratorTimeout, r.o.Control.StopOrchestrator)
 	if err != nil {
 		return err
 	}
 	r.orchestratorLog = orchestratorLog
 	r.line.launchedKeys = &launchedKeys{Orchestrator: newOrchestratorRecord(run), Spawned: []spawned{}}
-	if run.Stopped {
+	if run.End == proc.Stopped {
 		// timeout と同じく決定ファイルは読まない。付いた wip は機械では剥がさない (system.md §9)
 		r.halt = HaltedDuringRun
 		return stopf(ResultError, "停止要求で orchestrator を止めた")
 	}
 	// ここから後に届いた停止要求は無視する: 決定どおりの worker の起動を途中で打ち切ると、付いた wip が worker の無いまま残る
-	if run.TimedOut || run.ExitCode != 0 {
+	if run.End == proc.TimedOut || run.ExitCode != 0 {
 		// 途中で死んだ orchestrator の決定ファイルは信用しない (wip を付けた後に書き切れていない可能性)。
 		// 付いた wip は機械では剥がさない — stale wip として人が回収する
 		return fmt.Errorf("orchestrator が正常終了しなかった (exit %d, timed_out=%t)。決定ファイルは読まない。"+
-			"経過は %s。この tick で wip を付けたまま残った issue があれば、人が確かめて剥がす", run.ExitCode, run.TimedOut, orchestratorLog)
+			"経過は %s。この tick で wip を付けたまま残った issue があれば、人が確かめて剥がす", run.ExitCode, run.End == proc.TimedOut, orchestratorLog)
 	}
 	decisions, err := ReadDecisions(decisionsFile, obs.instructions)
 	if err != nil {
