@@ -30,7 +30,6 @@ func TestVersionPrintsTheVersionAndCommitWithoutAConfig(t *testing.T) {
 
 func TestDoctorShowsTheSameVersionAsTheVersionFlagAsInformation(t *testing.T) {
 	s := newInstallSandbox(t)
-	s.satisfied()
 	want := versionLine.FindStringSubmatch(s.run("--version").stdout)
 	if want == nil {
 		t.Fatal("--version の出力が読めない")

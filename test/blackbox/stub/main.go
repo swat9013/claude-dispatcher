@@ -1,13 +1,12 @@
-// stub は black-box テストで PATH に置く外部 CLI (gh / claude / git / ps / crontab) の代役。
+// stub は black-box テストで PATH に置く外部 CLI (gh / claude / git / ps) の代役。
 //
 // 1 つの binary を名前ごとに hard link して使い、起動された名前で振る舞いを引く。harness との取り決め
-// (置き場と JSON の形) は stubwire が持つ。crontab だけは rule でなく、表を stub root に持つ fake として振る舞う。
+// (置き場と JSON の形) は stubwire が持つ。
 package main
 
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -24,19 +23,8 @@ func main() {
 	if err != nil {
 		fail(name, err)
 	}
-	var stdin string
-	if name == "crontab" && slices.Equal(os.Args[1:], []string{"-"}) {
-		raw, err := io.ReadAll(os.Stdin)
-		if err != nil {
-			fail(name, err)
-		}
-		stdin = string(raw)
-	}
-	if err := record(root, name, stdin); err != nil {
+	if err := record(root, name); err != nil {
 		fail(name, err)
-	}
-	if name == "crontab" {
-		os.Exit(crontab(root, os.Args[1:], stdin))
 	}
 	r, err := matchRule(root, name, os.Args[1:])
 	if err != nil {
@@ -50,6 +38,10 @@ func main() {
 		if err := writeDecisions(*r.Decisions); err != nil {
 			fail(name, err)
 		}
+	}
+	if r.ReleaseFile != "" && !waitForRelease(r.ReleaseFile) {
+		fmt.Fprintf(os.Stderr, "stub %s: %s が %s 経っても現れない\n", name, r.ReleaseFile, stubwire.ReleaseDeadline)
+		os.Exit(stubwire.ReleaseTimeoutExit)
 	}
 	fmt.Fprint(os.Stdout, r.Stdout)
 	fmt.Fprint(os.Stderr, r.Stderr)
@@ -73,36 +65,19 @@ func stubRoot() (string, error) {
 	return strings.TrimSpace(string(raw)), nil
 }
 
-// crontab は `crontab -l` (表を出す。無ければ exit 1) と `crontab -` (stdin の表で置き換える) だけを受ける fake。
-func crontab(root string, args []string, stdin string) int {
-	file := stubwire.CrontabFile(root)
-	switch {
-	case slices.Equal(args, []string{"-l"}):
-		raw, err := os.ReadFile(file)
-		if os.IsNotExist(err) {
-			fmt.Fprintln(os.Stderr, "crontab: no crontab for stub")
-			return 1
+// waitForRelease は file が現れるまで待つ。上限を過ぎたら false。
+func waitForRelease(file string) bool {
+	deadline := time.Now().Add(stubwire.ReleaseDeadline)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(file); err == nil {
+			return true
 		}
-		if err != nil {
-			fail("crontab", err)
-		}
-		fmt.Print(string(raw))
-		return 0
-	case slices.Equal(args, []string{"-"}):
-		if _, err := os.Stat(stubwire.CrontabRefuseFile(root)); err == nil {
-			fmt.Fprintln(os.Stderr, "crontab: stub refuses to install the table")
-			return 1
-		}
-		if err := os.WriteFile(file, []byte(stdin), 0o644); err != nil {
-			fail("crontab", err)
-		}
-		return 0
+		time.Sleep(20 * time.Millisecond)
 	}
-	fmt.Fprintf(os.Stderr, "stub crontab: 受けない呼び出し: %q\n", args)
-	return stubwire.UnmatchedExit
+	return false
 }
 
-func record(root, name, stdin string) error {
+func record(root, name string) error {
 	exe, err := os.Executable()
 	if err != nil {
 		return err
@@ -117,7 +92,7 @@ func record(root, name, stdin string) error {
 			env[key] = value
 		}
 	}
-	raw, err := json.Marshal(stubwire.Call{Exe: exe, Argv: os.Args, Cwd: cwd, Env: env, Stdin: stdin})
+	raw, err := json.Marshal(stubwire.Call{Exe: exe, Argv: os.Args, Cwd: cwd, Env: env})
 	if err != nil {
 		return err
 	}

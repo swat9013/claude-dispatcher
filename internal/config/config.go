@@ -165,7 +165,7 @@ func Load(path, home string) (Config, error) {
 		}
 		abs, ok := expandHome(file.raw, home)
 		if !ok {
-			// 相対 path は cwd (cron の cd 先) で指す先が変わる
+			// 相対 path は cwd (loop を撃った clone) で指す先が変わる
 			return Config{}, errorf("%s: [auth].%s は絶対 path か ~ 始まり: %s", path, key, file.raw)
 		}
 		*file.dst = abs

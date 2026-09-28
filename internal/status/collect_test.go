@@ -87,6 +87,24 @@ func TestCollectDoesNotListAWorkerTheLauncherTellsGone(t *testing.T) {
 	}
 }
 
+func TestRunningWorkersCountsTheListedWorkersWhoseProcessLives(t *testing.T) {
+	r := collectOne(t, probesWith(quietMachine(), answers(4242)))
+
+	if got := r.RunningWorkers(); !got.Known || got.Value != 1 {
+		t.Fatalf("running workers = %+v, want 1", got)
+	}
+}
+
+func TestRunningWorkersIsUnknownWhenTheProcessListCannotBeRead(t *testing.T) {
+	machine := &fakeMachine{machine: launch.Machine{ProcessesErr: errors.New("ps failed"), Agents: "[]"}}
+
+	r := collectOne(t, probesWith(machine, launch.ClaudePrintCensus))
+
+	if got := r.RunningWorkers(); got.Known {
+		t.Fatalf("running workers = %+v, want ?", got)
+	}
+}
+
 func TestCollectObservesTheMachineOnceForEveryProject(t *testing.T) {
 	machine := quietMachine()
 	projects := []paths.Project{projectWithSpawn(t, "acme"), projectWithSpawn(t, "beta")}
@@ -120,18 +138,18 @@ func TestCollectNotesFirstThatTheProcessListCannotBeRead(t *testing.T) {
 
 	r := collectOne(t, probesWith(machine, launch.ClaudePrintCensus))
 
-	if len(r.Notes) == 0 || !strings.HasPrefix(r.Notes[0], "process の一覧を読めない — tick の実行中と worker の生死は ?") {
+	if len(r.Notes) == 0 || !strings.HasPrefix(r.Notes[0], "process の一覧を読めない — loop と worker の生死は ?") {
 		t.Fatalf("notes = %q, want 先頭に process の一覧を読めない注記", r.Notes)
 	}
 }
 
-func TestCollectLeavesTickRunningUnknownWhenTheProcessListCannotBeRead(t *testing.T) {
+func TestCollectLeavesTheLoopUnknownWhenTheProcessListCannotBeRead(t *testing.T) {
 	machine := &fakeMachine{machine: launch.Machine{ProcessesErr: errors.New("ps failed"), Agents: "[]"}}
 
 	r := collectOne(t, probesWith(machine, launch.ClaudePrintCensus))
 
-	if r.Tick.Running.Known {
-		t.Fatalf("tick running = %+v, want ?", r.Tick.Running)
+	if r.Loop.Known {
+		t.Fatalf("loop = %+v, want ?", r.Loop)
 	}
 }
 
@@ -151,10 +169,10 @@ func TestCollectDoesNotListAWorkerWhoseLivenessIsUnknown(t *testing.T) {
 	}
 }
 
-func TestReportHeadingShowsTheProjectTheTickStateAndTheLastTick(t *testing.T) {
+func TestReportHeadingShowsTheProjectTheLoopAndTheLastTick(t *testing.T) {
 	r := collectOne(t, probesWith(quietMachine(), answers(4242)))
 
-	if got, want := r.Heading(), "acme  待機  最終 tick 2026-09-26T02:48:00Z ok"; got != want {
+	if got, want := r.Heading(), "acme  loop なし  最終 tick 2026-09-26T02:48:00Z ok"; got != want {
 		t.Fatalf("heading = %q, want %q", got, want)
 	}
 }
@@ -179,7 +197,7 @@ func TestRenderTablePutsHeadingNotesTableInOrderAndABlankLineBetweenProjects(t *
 
 	got := RenderTable([]Report{noted, quiet})
 
-	want := "acme  tick ?  最終 tick ?\n  ! wip を読めない\n\nbeta  tick ?  最終 tick ?"
+	want := "acme  loop ?  最終 tick ?\n  ! wip を読めない\n\nbeta  loop ?  最終 tick ?"
 	if got != want {
 		t.Fatalf("RenderTable = %q, want %q", got, want)
 	}

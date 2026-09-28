@@ -1,8 +1,8 @@
 // Package setup は `claude-dispatcher setup <project>` (formats.md §11) を進める。
 //
-// 段 (config の雛形 → config の検査 → label → 試運転 → crontab) を順に進め、済んでいる段は何もせずに通る
-// (再実行で同じ終状態に収束する)。外 (tracker の label・ユーザーの crontab) へ書くのは、書く中身を示して導入者の承認を
-// 得た後だけ。Claude Code の settings は書かない。
+// 段 (config の雛形 → config の検査 → label → 試運転 → loop の起動コマンド) を順に進め、済んでいる段は何もせずに通る
+// (再実行で同じ終状態に収束する)。外 (tracker の label) へ書くのは、書く中身を示して導入者の承認を得た後だけ。
+// Claude Code の settings は書かない。loop は起動しない。
 package setup
 
 import (
@@ -11,11 +11,10 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"slices"
+	"regexp"
 	"strings"
 
 	"github.com/swat9013/claude-dispatcher/internal/config"
-	"github.com/swat9013/claude-dispatcher/internal/crontab"
 	"github.com/swat9013/claude-dispatcher/internal/github"
 	"github.com/swat9013/claude-dispatcher/internal/paths"
 )
@@ -23,28 +22,26 @@ import (
 // exit code (formats.md §11)。試運転が落ちたときは試運転の exit code をそのまま返す。段は exitDone を「次の段へ進む」の
 // 意味で返す
 const (
-	exitDone    = 0 // crontab に tick 行がある状態で終わった / 段が済んだ
-	exitStopped = 1 // 途中で止まった (雛形を書いた / 承認されなかった / 外部 CLI の失敗 / 既存の tick 行と食い違う)
+	exitDone    = 0 // 試運転が通り loop の起動コマンドを示して終わった / 段が済んだ
+	exitStopped = 1 // 途中で止まった (雛形を書いた / 承認されなかった / 外部 CLI の失敗)
 	exitConfig  = 2
 )
 
-// Options は setup の入力。Gh / Git / Crontab / DryRun は外部 CLI の起動口。
+// Options は setup の入力。Gh / Git は外部 CLI の起動口、DryRun は tick の 1 回分の試運転。
 type Options struct {
 	Project paths.Project
 	Home    string
-	// Clone は実装 repo の clone (cwd)。crontab の行の cd 先
-	Clone string
-	// Self は claude-dispatcher の絶対 path。crontab の行に埋める
-	Self   string
+	// Clone は実装 repo の clone (cwd)。loop の起動コマンドの cd 先
+	Clone  string
 	Stdin  io.Reader
 	Stdout io.Writer
 	Stderr io.Writer
 
-	Gh      func(config.Config) (github.Runner, error)
-	Git     func(args ...string) (string, error)
-	Crontab func() (crontab.Client, error)
-	// DryRun は `claude-dispatcher <args>` を撃ち、出力を Stdout / Stderr へ流して exit code を返す
-	DryRun func(args ...string) int
+	Gh  func(config.Config) (github.Runner, error)
+	Git func(args ...string) (string, error)
+	// DryRun は tick の 1 回分の試運転 (`tick <project> --dry-run` と同じ) を process の中で回し、出力を Stdout / Stderr へ
+	// 流して exit code を返す
+	DryRun func() int
 }
 
 type run struct {
@@ -66,17 +63,25 @@ func Run(o Options) int {
 	if exit := r.ensureLabels(cfg); exit != exitDone {
 		return exit
 	}
-	for _, args := range [][]string{
-		{"tick", o.Project.Name, "--dry-run"},
-		{"tick", o.Project.Name, "--dry-run", "--cron-env"},
-	} {
-		r.say("試運転: claude-dispatcher %s", strings.Join(args, " "))
-		if exit := o.DryRun(args...); exit != 0 {
-			fmt.Fprintf(o.Stderr, "試運転が落ちた (exit %d)。上の行が名指しするものを直して setup を撃ち直す\n", exit)
-			return exit
-		}
+	r.say("試運転: claude-dispatcher tick %s --dry-run", o.Project.Name)
+	if exit := o.DryRun(); exit != 0 {
+		fmt.Fprintf(o.Stderr, "試運転が落ちた (exit %d)。上の行が名指しするものを直して setup を撃ち直す\n", exit)
+		return exit
 	}
-	return r.ensureCrontab()
+	r.say("導入できた。clone を cwd にした端末で loop を起動する (Ctrl+C で止まる。間隔は 1m〜24h で変えてよい):")
+	r.say("  cd %s && claude-dispatcher loop %s 5m", shellQuote(o.Clone), o.Project.Name)
+	return exitDone
+}
+
+var plainWord = regexp.MustCompile(`^[A-Za-z0-9_./~:@+=,-]+$`)
+
+// shellQuote は shell が 1 語として読む形にする。特殊な文字が無ければそのまま (人がそのまま貼って撃てるように)。
+func shellQuote(s string) string {
+	if plainWord.MatchString(s) {
+		return s
+	}
+	const quote = "'"
+	return quote + strings.ReplaceAll(s, quote, quote+`\`+quote+quote) + quote
 }
 
 func (r *run) say(format string, args ...any) { fmt.Fprintf(r.o.Stdout, format+"\n", args...) }
@@ -212,47 +217,5 @@ func (r *run) ensureLabels(cfg config.Config) int {
 		}
 		r.say("label を作った: %s", l.Name)
 	}
-	return exitDone
-}
-
-// --- 5. crontab ---
-
-func (r *run) ensureCrontab() int {
-	client, err := r.o.Crontab()
-	if err != nil {
-		return r.fail("crontab を撃てない: %v", err)
-	}
-	table, err := client.Read()
-	if err != nil {
-		return r.fail("crontab を読めない: %v", err)
-	}
-	line := crontab.Line(r.o.Clone, r.o.Self, r.o.Project.Name, r.o.Project.CronLog())
-	existing := crontab.TickLines(table, r.o.Project.Name)
-	switch {
-	case slices.ContainsFunc(existing, func(e string) bool { return crontab.SameCommand(e, line) }):
-		r.say("crontab: 登録済み\n  %s", strings.Join(existing, "\n  "))
-		return exitDone
-	case len(existing) > 0:
-		// cd 先や binary を人が変えた行かもしれない。黙って置き換えない
-		r.say("crontab に %s の tick 行が別の形である。置き換えない — 変えるなら `crontab -e` で自分で直す", r.o.Project.Name)
-		for _, e := range existing {
-			r.say("  現行:   %s", e)
-		}
-		r.say("  組んだ行: %s", line)
-		return exitStopped
-	}
-	r.say("crontab に足す行:\n  %s", line)
-	if !r.approve("crontab に登録してよいか") {
-		r.say("登録していない。自分で足すなら `crontab -e` で上の行を足す")
-		return exitStopped
-	}
-	if err := client.Write(crontab.Append(table, line)); err != nil {
-		return r.fail("crontab に書けない: %v。`crontab -e` で上の行を自分で足す", err)
-	}
-	after, err := client.Read()
-	if err != nil || !slices.Contains(crontab.TickLines(after, r.o.Project.Name), line) {
-		return r.fail("crontab に登録した行が見当たらない (%v)。`crontab -l` で確かめる", err)
-	}
-	r.say("crontab に登録した。周期の 2 倍待って、log.jsonl の最終行の ts が進むかで最初の tick を確かめる (`claude-dispatcher doctor %s`)", r.o.Project.Name)
 	return exitDone
 }

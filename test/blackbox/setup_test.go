@@ -1,22 +1,18 @@
 package blackbox_test
 
 import (
-	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/swat9013/claude-dispatcher/test/blackbox/stubwire"
 )
 
-// `setup <project>` (formats.md §11)。書くもの (config の雛形・label・crontab) は導入者の承認の後だけ。
+// `setup <project>` (formats.md §11)。書くもの (config の雛形・label) は導入者の承認の後だけ。
 
-// newInstallSandbox は setup / doctor が cron 相当の試運転 (`tick --dry-run --cron-env`) まで通せる sandbox を作る。
-// 撃ち直しは XDG_* と親の PATH を剥がすので、置き場は $HOME の既定、依存 CLI は自己解決の置き場 (~/.local/bin) にも置く。
+// newInstallSandbox は setup / doctor が雛形の origin を clone から読める sandbox を作る。
 func newInstallSandbox(t *testing.T) *sandbox {
-	s := newSandboxWithHomeDefaults(t)
-	s.installStubs(filepath.Join(s.home, ".local", "bin"))
+	s := newSandbox(t)
 	s.respond("git", stubwire.Rule{ArgsPrefix: []string{"remote", "get-url", "origin"}, Stdout: "git@github.com:" + defaultIssueRepo + ".git\n"})
 	return s
 }
@@ -26,28 +22,9 @@ func (s *sandbox) setup(input string) runResult {
 	return s.runWithInput(input, "setup", s.project)
 }
 
-// tickCronLine は setup が組む crontab の行 (formats.md §11)。
-func (s *sandbox) tickCronLine() string {
-	return fmt.Sprintf("*/5 * * * * cd %s && %s tick %s >> %s 2>&1", s.clone, dispatcherBin, s.project, filepath.Join(s.stateDir(), "cron.log"))
-}
-
-func (s *sandbox) setCrontab(content string) {
-	mustWrite(s.t, stubwire.CrontabFile(s.stubRoot), content)
-}
-
-func (s *sandbox) crontab() string {
-	raw, err := os.ReadFile(stubwire.CrontabFile(s.stubRoot))
-	if os.IsNotExist(err) {
-		return ""
-	}
-	if err != nil {
-		s.t.Fatal(err)
-	}
-	return string(raw)
-}
-
-func (s *sandbox) crontabWrites() []stubCall {
-	return s.callsMatching("crontab", func(c stubCall) bool { return c.hasArg("-") })
+// loopCommandLine は setup が最後に示す loop の起動コマンド (formats.md §11)。
+func (s *sandbox) loopCommandLine() string {
+	return "cd " + s.clone + " && claude-dispatcher loop " + s.project + " 5m"
 }
 
 func (s *sandbox) labelCreates() []stubCall {
@@ -72,8 +49,8 @@ func TestSetupWritesAConfigTemplateAndTheStateDirThenStopsForTheHumanToFillIt(t 
 		t.Fatal("state dir を作っていない")
 	}
 	s.assertNames(r.stdout+r.stderr, s.configFile())
-	if len(s.crontabWrites()) != 0 || len(s.labelCreates()) != 0 {
-		t.Fatal("雛形を書いただけの段で label か crontab に書いた")
+	if len(s.labelCreates()) != 0 {
+		t.Fatal("雛形を書いただけの段で label を作った")
 	}
 }
 
@@ -139,123 +116,64 @@ func TestSetupDoesNotCreateLabelsWithoutApprovalAndShowsTheCommands(t *testing.T
 	}
 }
 
-func TestSetupRunsBothDryRunsWithoutStartingClaude(t *testing.T) {
+func TestSetupRunsTheDryRunInProcessWithoutStartingClaude(t *testing.T) {
 	s := newInstallSandbox(t)
 	s.setIssues(readyIssue(42))
 
 	r := s.setup("")
 
-	if strings.Count(r.stdout, `"dry_run":true`) != 2 {
-		t.Fatalf("試運転 2 本の出力が無い:\n%s", r.stdout)
+	assertExit(t, r, 0)
+	if strings.Count(r.stdout, `"dry_run":true`) != 1 {
+		t.Fatalf("試運転 1 本の出力が無い:\n%s", r.stdout)
 	}
 	s.assertNoClaude("setup の試運転で")
+	s.assertNoLog()
 }
 
-func TestSetupStopsWhenADryRunFails(t *testing.T) {
+func TestSetupStopsWithTheDryRunExitCodeWhenTheDryRunFails(t *testing.T) {
 	s := newInstallSandbox(t)
 	s.ghFails([]string{"issue", "list"}, 1, "HTTP 502: Bad Gateway\n")
 
 	r := s.setup("y\n")
 
 	assertExit(t, r, 1)
-	if calls := s.calls("crontab"); len(calls) != 0 {
-		t.Fatalf("試運転が落ちたのに crontab を触った: %v", calls)
+	if strings.Contains(r.stdout, s.loopCommandLine()) {
+		t.Fatalf("試運転が落ちたのに loop の起動コマンドを示した:\n%s", r.stdout)
+	}
+	if !strings.Contains(r.stderr, "502") {
+		t.Fatalf("試運転の出力をそのまま示していない:\n%s", r.stderr)
 	}
 }
 
-func TestSetupRegistersTheCrontabLineWhenApproved(t *testing.T) {
+func TestSetupEndsByShowingTheLoopCommandWithoutStartingIt(t *testing.T) {
 	s := newInstallSandbox(t)
-	s.setCrontab("0 3 * * * /usr/bin/backup\n")
-
-	r := s.setup("yes\n")
-
-	assertExit(t, r, 0)
-	if got := s.crontab(); got != "0 3 * * * /usr/bin/backup\n"+s.tickCronLine()+"\n" {
-		t.Fatalf("crontab = %q", got)
-	}
-}
-
-func TestSetupDoesNotRegisterTheCrontabLineWithoutApprovalAndShowsIt(t *testing.T) {
-	for _, tc := range []struct{ name, input string }{{"no-answer", ""}, {"n", "n\n"}} {
-		t.Run(tc.name, func(t *testing.T) {
-			s := newInstallSandbox(t)
-			s.setCrontab("0 3 * * * /usr/bin/backup\n")
-
-			r := s.setup(tc.input)
-
-			assertExit(t, r, 1)
-			if len(s.crontabWrites()) != 0 {
-				t.Fatal("承認なしに crontab を書いた")
-			}
-			if !strings.Contains(r.stdout, s.tickCronLine()) {
-				t.Fatalf("足す行を示していない:\n%s", r.stdout)
-			}
-		})
-	}
-}
-
-func TestSetupStopsWhenTheCrontabRefusesTheWrite(t *testing.T) {
-	s := newInstallSandbox(t)
-	mustWrite(t, stubwire.CrontabRefuseFile(s.stubRoot), "")
-
-	r := s.setup("y\n")
-
-	assertExit(t, r, 1)
-	if !strings.Contains(r.stderr, "crontab に書けない") || !strings.Contains(r.stdout, s.tickCronLine()) {
-		t.Fatalf("書けなかったことと自分で足す行を示していない:\n%s%s", r.stdout, r.stderr)
-	}
-}
-
-func TestSetupWithTheLineAlreadyRegisteredEndsWithoutAsking(t *testing.T) {
-	s := newInstallSandbox(t)
-	s.setCrontab(s.tickCronLine() + "\n")
 
 	r := s.setup("")
 
 	assertExit(t, r, 0)
-	if len(s.crontabWrites()) != 0 {
-		t.Fatal("登録済みの crontab を書き直した")
+	if !strings.Contains(r.stdout, s.loopCommandLine()) {
+		t.Fatalf("loop の起動コマンド %q を示していない:\n%s", s.loopCommandLine(), r.stdout)
 	}
-}
-
-func TestSetupTreatsATickLineWhoseScheduleWasChangedAsRegistered(t *testing.T) {
-	s := newInstallSandbox(t)
-	changed := strings.Replace(s.tickCronLine(), "*/5 ", "*/10 ", 1) + "\n"
-	s.setCrontab(changed)
-
-	r := s.setup("")
-
-	assertExit(t, r, 0)
-	if len(s.crontabWrites()) != 0 || s.crontab() != changed {
-		t.Fatal("周期だけを変えた tick 行を書き直した")
-	}
-}
-
-func TestSetupShowsButDoesNotReplaceADifferentTickLineOfTheProject(t *testing.T) {
-	s := newInstallSandbox(t)
-	existing := "*/10 * * * * cd /elsewhere && /old/claude-dispatcher tick " + s.project + " >> /tmp/cron.log 2>&1\n"
-	s.setCrontab(existing)
-
-	r := s.setup("y\n")
-
-	assertExit(t, r, 1)
-	if len(s.crontabWrites()) != 0 || s.crontab() != existing {
-		t.Fatal("既存の tick 行を置き換えた")
-	}
-	if !strings.Contains(r.stdout, strings.TrimSpace(existing)) || !strings.Contains(r.stdout, s.tickCronLine()) {
-		t.Fatalf("現行の行と組んだ行を並べていない:\n%s", r.stdout)
-	}
+	s.assertNoLog()
 }
 
 func TestSetupRunTwiceConvergesWithoutWritingAgain(t *testing.T) {
 	s := newInstallSandbox(t)
 	assertExit(t, s.setup("y\n"), 0)
-	writes := len(s.crontabWrites())
+	config := string(mustRead(t, s.configFile()))
 
-	r := s.setup("")
+	r := s.setup("y\n")
 
 	assertExit(t, r, 0)
-	if len(s.crontabWrites()) != writes || strings.Count(s.crontab(), " tick "+s.project) != 1 {
-		t.Fatalf("2 回目の setup が crontab を書いた: %q", s.crontab())
+	if len(s.labelCreates()) != 0 || string(mustRead(t, s.configFile())) != config {
+		t.Fatal("揃った導入に 2 回目の setup が書いた")
+	}
+}
+
+// assertNoLog は log.jsonl が書かれていないことを確かめる (試運転は state dir に何も書かない)。
+func (s *sandbox) assertNoLog() {
+	s.t.Helper()
+	if _, err := os.Stat(s.logFile()); !os.IsNotExist(err) {
+		s.t.Fatal("log.jsonl を書いた")
 	}
 }

@@ -1,7 +1,7 @@
 // Package doctor は `claude-dispatcher doctor <project>` (formats.md §12) の検査を回す。
 //
 // 導入の充足を 1 項目 1 行で示し、最後に Claude Code の settings に要る entry を示す。何も書かない
-// (state dir・config・settings・crontab・外部 store のどれにも)。
+// (state dir・config・settings・外部 store のどれにも)。
 package doctor
 
 import (
@@ -9,11 +9,9 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"slices"
 	"strings"
 
 	"github.com/swat9013/claude-dispatcher/internal/config"
-	"github.com/swat9013/claude-dispatcher/internal/crontab"
 	"github.com/swat9013/claude-dispatcher/internal/deps"
 	"github.com/swat9013/claude-dispatcher/internal/github"
 	"github.com/swat9013/claude-dispatcher/internal/paths"
@@ -24,23 +22,20 @@ import (
 	"github.com/swat9013/claude-dispatcher/internal/version"
 )
 
-// Options は doctor の入力。Gh / Crontab / DryRun は外部 CLI の起動口。
+// Options は doctor の入力。Gh は外部 CLI の起動口、DryRun は tick の 1 回分の試運転。
 type Options struct {
 	Project paths.Project
 	Home    string
-	// Clone は実装 repo の clone (cwd)。plugin の project scope の照合と、crontab の行の cd 先
+	// Clone は実装 repo の clone (cwd)。plugin の project scope の照合に使う
 	Clone string
-	// Self は claude-dispatcher の絶対 path を返す。crontab の行を setup と同じ形に組んで突き合わせる。組めなければ
-	// crontab の項目だけを NG にし、ほかの検査は続ける
-	Self func() (string, error)
 	// Env は依存 CLI の PATH を解決した後の env
 	Env    []string
 	Stdout io.Writer
 
-	Gh      func(config.Config) (github.Runner, error)
-	Crontab func() (crontab.Client, error)
-	// DryRun は `claude-dispatcher <args>` を撃ち、stdout と stderr を合わせた出力と exit code を返す
-	DryRun func(args ...string) (output string, exit int)
+	Gh func(config.Config) (github.Runner, error)
+	// DryRun は tick の 1 回分の試運転 (`tick <project> --dry-run` と同じ) を process の中で回し、stdout と stderr を
+	// 合わせた出力と exit code を返す
+	DryRun func() (output string, exit int)
 }
 
 // 行の先頭の印 (formats.md §12)
@@ -78,7 +73,6 @@ func Run(o Options) int {
 	checkTracker(r, o, cfg, cfgErr)
 	checkPlugin(r, o)
 	checkDryRun(r, o, cfgErr)
-	checkCrontab(r, o)
 	checkLastTick(r, o.Project)
 	showSettings(o.Stdout, o.Project)
 	if r.ng {
@@ -203,50 +197,20 @@ func isFile(path string) bool {
 	return err == nil && !info.IsDir()
 }
 
-// checkDryRun は cron 相当の最小環境の試運転 (`tick --dry-run --cron-env`) を撃つ。試運転は state dir に何も書かない
-// (system.md §9)。config が読めなければ試運転も同じところで落ちるので撃たない。
+// checkDryRun は tick の 1 回分の試運転を回す。試運転は state dir に何も書かない (system.md §9)。
+// config が読めなければ試運転も同じところで落ちるので回さない。
 func checkDryRun(r *report, o Options, cfgErr error) {
 	if cfgErr != nil {
 		r.line(markInfo, "試運転", "config を直してから確かめる")
 		return
 	}
-	args := []string{"tick", o.Project.Name, "--dry-run", "--cron-env"}
-	out, exit := o.DryRun(args...)
+	out, exit := o.DryRun()
 	out = strings.TrimSpace(out)
 	if exit != 0 {
-		r.line(markNG, "試運転", "`claude-dispatcher %s` が exit %d で落ちた:\n  %s", strings.Join(args, " "), exit, strings.ReplaceAll(out, "\n", "\n  "))
+		r.line(markNG, "試運転", "`claude-dispatcher tick %s --dry-run` と同じ試運転が exit %d で落ちた:\n  %s", o.Project.Name, exit, strings.ReplaceAll(out, "\n", "\n  "))
 		return
 	}
 	r.line(markOK, "試運転", "%s", out)
-}
-
-func checkCrontab(r *report, o Options) {
-	client, err := o.Crontab()
-	var table string
-	if err == nil {
-		table, err = client.Read()
-	}
-	if err != nil {
-		r.line(markNG, "crontab", "読めない: %v", err)
-		return
-	}
-	self, err := o.Self()
-	if err != nil {
-		r.line(markNG, "crontab", "setup の組む行と突き合わせられない: %v", err)
-		return
-	}
-	want := crontab.Line(o.Clone, self, o.Project.Name, o.Project.CronLog())
-	lines := crontab.TickLines(table, o.Project.Name)
-	switch {
-	case slices.ContainsFunc(lines, func(l string) bool { return crontab.SameCommand(l, want) }):
-		r.line(markOK, "crontab", "%s", strings.Join(lines, " / "))
-	case len(lines) == 0:
-		r.line(markNG, "crontab", "%s の tick 行が無い — `claude-dispatcher setup %s` で登録する", o.Project.Name, o.Project.Name)
-	default:
-		// cd 先・binary・cron.log のどれかが setup の組む行と違う (周期の違いは見ない)
-		r.line(markNG, "crontab", "%s の tick 行が setup の組む行と違う — 意図した変更でなければ `crontab -e` で直す\n  現行:   %s\n  組む行: %s",
-			o.Project.Name, strings.Join(lines, "\n  現行:   "), want)
-	}
 }
 
 func checkLastTick(r *report, project paths.Project) {

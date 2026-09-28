@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// cron.log に出す行 (formats.md §6)。失敗 tick は stderr の末尾に、log.jsonl の行を指す前置付きの 1 行を置く。
+// 単発の tick の失敗行 (formats.md §6)。失敗 tick は stderr の末尾に、log.jsonl の行を指す前置付きの 1 行を置く。
 
 func TestFailedTickEndsStderrWithALinePointingToItsLogLine(t *testing.T) {
 	s := newSandbox(t)
@@ -15,9 +15,9 @@ func TestFailedTickEndsStderrWithALinePointingToItsLogLine(t *testing.T) {
 	r := s.tick()
 
 	line := s.assertOutcome(r, outcomeConfigError)
-	msg := assertCronLogLine(t, r.stderr, s.project, asString(t, line["ts"]), "config_error")
+	msg := assertFailureLine(t, r.stderr, s.project, asString(t, line["ts"]), "config_error")
 	if msg != line["error"] {
-		t.Fatalf("cron.log の error %q と log.jsonl の error %q が違う", msg, line["error"])
+		t.Fatalf("失敗行の error %q と log.jsonl の error %q が違う", msg, line["error"])
 	}
 }
 
@@ -44,19 +44,19 @@ func TestTickWithoutAStateDirPointsToNoLogLine(t *testing.T) {
 	if r.exit == 0 {
 		t.Fatal("state dir の無い tick が成功した")
 	}
-	if tick := lastCronLogLine(t, r.stderr)[3]; tick != "-" {
+	if tick := lastFailureLine(t, r.stderr)[3]; tick != "-" {
 		t.Fatalf("log.jsonl を書けない tick の最終行が tick=%s (want -)", tick)
 	}
 }
 
-func TestCronLogLineFoldsAMultilineErrorIntoOneLine(t *testing.T) {
+func TestFailureLineFoldsAMultilineErrorIntoOneLine(t *testing.T) {
 	s := newSandbox(t)
 	s.ghFails([]string{"api", "graphql"}, 1, "first problem\nsecond problem\n")
 
 	r := s.tick()
 
 	line := s.assertOutcome(r, outcomeError)
-	msg := assertCronLogLine(t, r.stderr, s.project, asString(t, line["ts"]), "error")
+	msg := assertFailureLine(t, r.stderr, s.project, asString(t, line["ts"]), "error")
 	if !strings.Contains(msg, "first problem / second problem") {
 		t.Fatalf("error が 1 行に畳まれていない: %q", msg)
 	}
@@ -70,5 +70,5 @@ func TestTickStoppedMidwayPointsToTheLogLineItLeft(t *testing.T) {
 	r := s.tick()
 
 	line := s.assertOutcome(r, outcomeError)
-	assertCronLogLine(t, r.stderr, s.project, asString(t, line["ts"]), "error")
+	assertFailureLine(t, r.stderr, s.project, asString(t, line["ts"]), "error")
 }

@@ -18,17 +18,20 @@ import (
 
 // Launcher は orchestrator と worker を起動する seam。
 type Launcher interface {
-	// RunOrchestrator は orchestrator を起動して終了を待つ。timeout を超えたら process group ごと止める。
-	// 出力は logFile へ落とす。起動できなかったときだけ error を返す。
-	RunOrchestrator(prompt, logFile string, timeout time.Duration) (OrchestratorRun, error)
+	// RunOrchestrator は orchestrator を起動して終了を待つ。timeout を超えるか stop が閉じたら process group ごと止め、
+	// どちらで止めたかを返す。stop が nil なら停止要求は届かない。出力は logFile へ落とす。起動できなかったときだけ error を返す。
+	RunOrchestrator(prompt, logFile string, timeout time.Duration, stop <-chan struct{}) (OrchestratorRun, error)
 	// SpawnWorker は worker を新しい process session として起動し、待たずに返す。出力は logFile へ落とす。
+	// worker の終了は起動した process の中で回収する (長く生きる loop に zombie を溜めない)。
 	SpawnWorker(prompt, logFile string) (WorkerLaunch, error)
 }
 
 type OrchestratorRun struct {
-	ExitCode  int
-	Seconds   float64
-	TimedOut  bool
+	ExitCode int
+	Seconds  float64
+	TimedOut bool
+	// Stopped は停止要求で止めた (上限時間で止めたときは TimedOut)
+	Stopped   bool
 	SessionID string
 }
 
@@ -52,8 +55,8 @@ func (c ClaudePrint) command(prompt, sessionID string, log *os.File) *exec.Cmd {
 	cmd.Env = c.Env
 	cmd.Dir = c.Cwd
 	cmd.Stdout, cmd.Stderr = log, log
-	// 新しい process session にする: orchestrator は timeout 時に process group ごと止めるため、
-	// worker は tick の終了と cron の process group に巻き込まれないため
+	// 新しい process session にする: orchestrator は timeout と停止要求のときに process group ごと止めるため、
+	// worker は loop の端末の signal と process group に巻き込まれないため
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	return cmd
 }
@@ -75,16 +78,17 @@ func (c ClaudePrint) start(prompt, logFile string) (*exec.Cmd, string, error) {
 	return cmd, sessionID, nil
 }
 
-func (c ClaudePrint) RunOrchestrator(prompt, logFile string, timeout time.Duration) (OrchestratorRun, error) {
+func (c ClaudePrint) RunOrchestrator(prompt, logFile string, timeout time.Duration, stop <-chan struct{}) (OrchestratorRun, error) {
 	started := time.Now()
 	cmd, sessionID, err := c.start(prompt, logFile)
 	if err != nil {
 		return OrchestratorRun{}, err
 	}
 	// 異常終了は exit code で log に残すので、Wait の error は見ない
-	timedOut, _ := proc.Wait(cmd, timeout)
+	end, _ := proc.Wait(cmd, timeout, stop)
 	return OrchestratorRun{
-		ExitCode: cmd.ProcessState.ExitCode(), Seconds: time.Since(started).Seconds(), TimedOut: timedOut, SessionID: sessionID,
+		ExitCode: cmd.ProcessState.ExitCode(), Seconds: time.Since(started).Seconds(),
+		TimedOut: end == proc.TimedOut, Stopped: end == proc.Stopped, SessionID: sessionID,
 	}, nil
 }
 
@@ -93,7 +97,8 @@ func (c ClaudePrint) SpawnWorker(prompt, logFile string) (WorkerLaunch, error) {
 	if err != nil {
 		return WorkerLaunch{}, err
 	}
-	// 待たない。回収は tick の終了後に init が行う
+	// 待たずに返し、終了は裏で回収する。loop は長く生きるので、回収しないと終わった worker が zombie として残る
+	go cmd.Wait()
 	return WorkerLaunch{PID: cmd.Process.Pid, SessionID: sessionID}, nil
 }
 

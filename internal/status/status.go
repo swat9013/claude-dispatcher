@@ -75,15 +75,30 @@ func parseProcesses(out string) map[int]string {
 // Report は 1 project の像。
 type Report struct {
 	Project string
-	Tick    Tick
-	Workers []Worker
-	Notes   []string
+	// Loop は project の loop の process が居るか
+	Loop Probed[bool]
+	// LastTick は log.jsonl の最後の tick 行。Value が nil なら tick 行がまだ無い
+	LastTick Probed[*ticklog.Line]
+	Workers  []Worker
+	Notes    []string
 }
 
-// Tick は tick の状態。Last.Value が nil なら tick 行がまだ無い。
-type Tick struct {
-	Running Probed[bool]
-	Last    Probed[*ticklog.Line]
+// RunningWorkers は載せた worker のうち process が生きている数 (loop の終了行 — formats.md §13.2)。
+// process の一覧か log を読めず、生きている worker を数え切れなければ ?。
+func (r Report) RunningWorkers() Probed[int] {
+	if !r.Loop.Known || !r.LastTick.Known {
+		return Probed[int]{}
+	}
+	n := 0
+	for _, w := range r.Workers {
+		if !w.Alive.Known {
+			return Probed[int]{}
+		}
+		if w.Alive.Value {
+			n++
+		}
+	}
+	return known(n)
 }
 
 // Worker は表の 1 行。
@@ -127,11 +142,11 @@ func Collect(projects []paths.Project, home string, probes Probes, clock func() 
 // collect は 1 project の今を組む。
 func (c *collector) collect(project paths.Project, home string, now time.Time) Report {
 	if c.machine.ProcessesErr != nil {
-		c.note("process の一覧を読めない — tick の実行中と worker の生死は ? (%v)", c.machine.ProcessesErr)
+		c.note("process の一覧を読めない — loop と worker の生死は ? (%v)", c.machine.ProcessesErr)
 	} else if c.isAliveErr != nil {
 		c.note("worker の生死を読めない — STATE は ? (%v)", c.isAliveErr)
 	}
-	c.report.Tick.Running = c.tickRunning(project.Name)
+	c.report.Loop = c.loopRunning(project.Name)
 	lines, broken, err := ticklog.Read(project.LogFile())
 	if err != nil {
 		// 途中までの行から最終 tick や起動記録を出すと古い像を今として見せるので、log からは何も出さない
@@ -145,7 +160,7 @@ func (c *collector) collect(project paths.Project, home string, now time.Time) R
 	if l, ok := ticklog.Last(lines); ok {
 		last = &l
 	}
-	c.report.Tick.Last = known(last)
+	c.report.LastTick = known(last)
 
 	spawns := spawnRecords(lines)
 	if len(spawns) == 0 {
@@ -364,18 +379,16 @@ func (c *collector) cls(cfg config.Config, gh github.Runner, branchOf map[int]st
 	return known(cls)
 }
 
-// tickRunning は `claude-dispatcher … tick <project>` の process (試運転を除く) が居るか。
-func (c *collector) tickRunning(project string) Probed[bool] {
+// loopRunning は project の loop の process (`claude-dispatcher loop <project> …`) が居るか。argv の先頭で照合する —
+// worker の command 行には spawn prompt の本文が載るので、途中の綴りで照合すると prompt の中の文字列に当たる。
+func (c *collector) loopRunning(project string) Probed[bool] {
 	if c.machine.ProcessesErr != nil {
 		return Probed[bool]{}
 	}
 	for _, command := range c.machine.Processes {
 		fields := strings.Fields(command)
-		for i := 0; i+2 < len(fields); i++ {
-			if filepath.Base(fields[i]) == "claude-dispatcher" && fields[i+1] == "tick" && fields[i+2] == project &&
-				!slices.Contains(fields, "--dry-run") {
-				return known(true)
-			}
+		if len(fields) >= 3 && filepath.Base(fields[0]) == "claude-dispatcher" && fields[1] == "loop" && fields[2] == project {
+			return known(true)
 		}
 	}
 	return known(false)

@@ -13,8 +13,8 @@ var (
 	tickStemPattern = regexp.MustCompile(`^\d{8}T\d{6}\.\d{6}Z$`)
 	logTSPattern    = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$`)
 	uuidPattern     = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
-	// cron.log の行 (formats.md §6): <時刻 (UTC, 秒まで)> [<project>] tick=<ts か -> result=<result> <error>
-	cronLogLinePattern = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z) \[([^\]]+)\] tick=(\S+) result=(\S+) (.+)$`)
+	// tick の失敗行 (formats.md §6): <時刻 (UTC, 秒まで)> [<project>] tick=<ts か -> result=<result> <error>
+	failureLinePattern = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z) \[([^\]]+)\] tick=(\S+) result=(\S+) (.+)$`)
 )
 
 // outcome は exit code と log.jsonl の result の組 (formats.md §3)。
@@ -77,22 +77,22 @@ func (s *sandbox) assertNames(msg string, names ...string) {
 	}
 }
 
-// assertCronLogLine は stderr の最終行が前置付きの 1 行で、project / tick / result が一致することを確かめ、error 部分を返す。
-func assertCronLogLine(t *testing.T, stderr, project, tick, result string) string {
+// assertFailureLine は stderr の最終行が前置付きの 1 行で、project / tick / result が一致することを確かめ、error 部分を返す。
+func assertFailureLine(t *testing.T, stderr, project, tick, result string) string {
 	t.Helper()
-	m := lastCronLogLine(t, stderr)
+	m := lastFailureLine(t, stderr)
 	if m[2] != project || m[3] != tick || m[4] != result {
 		t.Fatalf("前置 = [%s] tick=%s result=%s, want [%s] tick=%s result=%s", m[2], m[3], m[4], project, tick, result)
 	}
 	return m[5]
 }
 
-// lastCronLogLine は stderr の最終行を cron.log の行として分解する ([全体, 時刻, project, tick, result, error])。
-func lastCronLogLine(t *testing.T, stderr string) []string {
+// lastFailureLine は stderr の最終行を tick の失敗行として分解する ([全体, 時刻, project, tick, result, error])。
+func lastFailureLine(t *testing.T, stderr string) []string {
 	t.Helper()
 	lines := strings.Split(strings.TrimRight(stderr, "\n"), "\n")
 	last := lines[len(lines)-1]
-	m := cronLogLinePattern.FindStringSubmatch(last)
+	m := failureLinePattern.FindStringSubmatch(last)
 	if m == nil {
 		t.Fatalf("stderr の最終行が `<時刻> [<project>] tick=<ts> result=<result> <error>` でない: %q", last)
 	}
