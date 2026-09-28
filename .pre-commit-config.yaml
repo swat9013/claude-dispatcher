@@ -1,6 +1,8 @@
-# `pre-commit install` 1 回で commit 時 (gitleaks / gofmt / go mod tidy / actionlint) と push 前 (go vet / go test) の両方の hook が入る。
+# `pre-commit install` 1 回で commit 時 (gitleaks / gofmt / go mod tidy / actionlint) と push 前 (gitleaks の commit 範囲 / go vet / go test) の両方の hook が入る。
 # CI (.github/workflows/checks.yml) は commit 時の hook を `pre-commit run --all-files` で撃つので、手元と同じ検査が CI でも落ちる
 default_install_hook_types: [pre-commit, pre-push]
+# stages を書かない hook は commit 時だけに撃つ (書かないと install した全 stage で撃たれ、push 前にも走る)
+default_stages: [pre-commit]
 # 手元の Go を使う hook の `language: unsupported` は 4.4.0 で入った名前 (それより古い pre-commit は解釈できずに落ちる)
 minimum_pre_commit_version: '4.4.0'
 
@@ -9,10 +11,19 @@ repos:
     rev: v8.30.1
     hooks:
       - id: gitleaks
+      # CI の pre-commit job が PR の commit 範囲に撃つ検査を、push 前に手元でも撃つ。版は上の rev で揃う
+      - id: gitleaks
+        name: gitleaks (main に無い commit)
+        entry: gitleaks git --redact --log-opts="--no-merges origin/main..HEAD"
+        always_run: true
+        stages: [pre-push]
   - repo: https://github.com/rhysd/actionlint
     rev: v1.7.12
     hooks:
       - id: actionlint
+        # actionlint は PATH の shellcheck で run: の script も検査する。hook 環境に版を固定した shellcheck を入れ、
+        # 手元の有無と CI の runner に入っている版に結果を左右させない
+        additional_dependencies: [github.com/wasilibs/go-shellcheck/cmd/shellcheck@v0.11.1]
   # Go の hook は go コマンド経由で撃つ。go.mod の toolchain directive の版の Go が動き、手元と CI で版が揃う
   # (`language: golang` は pre-commit が専用の GOROOT と GOTOOLCHAIN=local を立てるので toolchain directive が効かない)
   - repo: local

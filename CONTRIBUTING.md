@@ -5,7 +5,7 @@
 ## セットアップ
 
 - 前提ツールは [README の「前提」](README.md#前提) のとおり (Claude Code / plugin `swat-skills@swat9013` / `gh`)
-- 加えて `pre-commit` (4.4.0 以上) と `shellcheck` を入れ、clone ごとに 1 回 `pre-commit install` を撃つ (commit 時と push 前の hook が両方入る)。gitleaks と actionlint は pre-commit が hook 環境として build するので別途の導入は要らない (初回の build に network が要る)
+- 加えて `pre-commit` (4.4.0 以上) を入れ、clone ごとに 1 回 `pre-commit install` を撃つ (commit 時と push 前の hook が両方入る)。gitleaks・actionlint・shellcheck は pre-commit が hook 環境として build するので別途の導入は要らない (初回の build に network が要る)
   - Go は手元の版が [go.mod](go.mod) の `toolchain` 行より古くても、`go` コマンドがその版を取ってきて使う (`GOTOOLCHAIN` の既定の `auto`)。hook も `go` コマンド経由で撃つので、手元と CI で同じ版の Go が動く
 
 ## branch・worktree 運用
@@ -31,18 +31,19 @@
   - gitleaks: staged の内容に秘匿情報があれば落ちる
   - gofmt (`go fmt ./...`): 整形し直した file があれば落ちる。file は書き換わった後なので、見直して stage し直す
   - go mod tidy (`go mod tidy -diff`): go.mod / go.sum に差分が出れば落ちる
-  - actionlint: workflow の静的検査。PATH に `shellcheck` があれば `run:` の script も検査する。CI の ubuntu の runner には `shellcheck` があるので、手元に無いと CI でだけ落ちる
-- push 前: `go vet ./...` と `go test -race ./...` (データ競合の検出付き) が通ること。`pre-commit install` 済みなら push 時に hook が走り、落ちると push を止める。`-race` を付けても全体で 30 秒ほど (付けないと 27 秒ほど) なので、push 前にも付けている
+  - actionlint: workflow の静的検査。`run:` の script は、hook 環境に版を固定して入れた shellcheck で検査する
+- push 前: `go vet ./...` と `go test -race ./...` (データ競合の検出付き) が通ること。加えて gitleaks が、main に無い commit (`origin/main..HEAD`、merge commit を除く) を 1 つずつ検査する (CI の `pre-commit` job が PR の commit 範囲に撃つのと同じ検査)。`pre-commit install` 済みなら push 時に hook が走り、落ちると push を止める
   - `test/blackbox` は binary を build して外から撃つ black-box テスト (外から観測できる契約の検査。正本は [docs/design/formats.md](docs/design/formats.md))。外部 CLI は stub に差し替えるので、network も認証も要らず、マシンに在る実物にも届かない。例外は 2 つ: Homebrew の prefix 等に gh / claude の実物があるマシン (macOS の runner の gh 等) では、「解決できない」を確かめるテストが skip される。`--cron-env` の試運転は cron と同じ `/usr/bin:/bin` から始まり、そこに在る実物 (ubuntu の runner の gh 等) に届きうる。テストが stub を引けるのは、claude が `/usr/bin:/bin` に無いので自己解決が働き、stub の置き場 (`~/.local/bin`) を前に足すから
 - PR と main への push: [.github/workflows/ci.yml](.github/workflows/ci.yml) が検査の本体 [.github/workflows/checks.yml](.github/workflows/checks.yml) を呼ぶ。Go は setup-go が go.mod の `toolchain` 行の版を入れる
   - `test`: `go vet ./...` と `go test -race ./...` を ubuntu と macOS の runner (配布対象の OS) で撃つ。skip したテストは理由とともに job の log の最後に並ぶ
   - `goreleaser-check`: `goreleaser check` で [.goreleaser.yaml](.goreleaser.yaml) を検査する
-  - `pre-commit`: commit 時の hook を `pre-commit run --all-files` で撃つ。PR では加えて、PR の commit (base..head。merge commit と、merge で入った main 側の commit を除く) を gitleaks で 1 つずつ検査する。merge commit を許しているので、途中の commit で入れて後の commit で消した秘匿情報も main の履歴に残るため。手元での再現は `gitleaks git --redact --log-opts="--no-merges --first-parent origin/main..HEAD"`
+  - `pre-commit`: commit 時の hook を `pre-commit run --all-files` で撃つ。PR では加えて、PR の commit (base..head。merge commit を除く) を gitleaks で 1 つずつ検査する。merge commit を許しているので、途中の commit で入れて後の commit で消した秘匿情報も main の履歴に残るため。merge commit で解いた conflict の中身は検査されない。手元では push 前の hook が同じ検査を撃つ (手で撃つなら `pre-commit run --hook-stage pre-push gitleaks`)
   - 同じ PR に push が重なると、古い run を中止する。main への push の run は中止しない
-  - PR に付く check 名: `checks / test (ubuntu-latest)`・`checks / test (macos-latest)`・`checks / goreleaser-check`・`checks / pre-commit`
-- 定期: [.github/workflows/govulncheck.yml](.github/workflows/govulncheck.yml) が、週 1 回 (月曜 0:00 UTC)・main への push・手動 (`workflow_dispatch`) で、依存と標準ライブラリの脆弱性を `go tool govulncheck ./...` で検査する。検出したら `needs-triage` の issue を 1 件起こし (同じ題名の open な issue があれば起こさない)、run を落とす。手元での再現は同じコマンド (版は go.mod の `tool` 行で固定している)
-- 版の更新: [.github/dependabot.yml](.github/dependabot.yml) が週 1 回、GitHub Actions・Go の依存 (govulncheck を含む)・pre-commit の hook の `rev` を、それぞれ 1 本の PR で上げる。auto-merge はしない。CI の gitleaks の版は .pre-commit-config.yaml の `rev` から読むので、hook と一緒に上がる。Dependabot の対象外で、手で上げるもの:
-  - go.mod の `go` 行 (サポート中の最も古い Go の版) と `toolchain` 行 (build に使う版。Dependabot が上げるかは確かめていない)
+  - PR に付く check 名: `checks / test (ubuntu-latest)`・`checks / test (macos-latest)`・`checks / goreleaser-check`・`checks / pre-commit`。名前は checks.yml の job 名と matrix から決まる。変えたら、この列挙と、branch の保護で required にした check を一緒に直す
+- 定期: [.github/workflows/govulncheck.yml](.github/workflows/govulncheck.yml) が、週 1 回 (月曜 0:00 UTC)・main への push・手動 (`workflow_dispatch`) で、依存と標準ライブラリの脆弱性を `go tool govulncheck ./...` で検査する。検出したら `needs-triage` の issue を 1 件起こし (同じ題名の open な issue があれば起こさない)、run を落とす。run を落とすのは、issue を起こせなかったとき (権限・API の失敗) にも検出を見落とさないため。この run は PR の CL には付かないので、worker の `ci` 再入は起こさない。手元での再現は同じコマンド (版は go.mod の `tool` 行で固定している)
+- 版の更新: [.github/dependabot.yml](.github/dependabot.yml) が週 1 回、GitHub Actions・Go の依存 (indirect と、govulncheck を含む)・pre-commit の hook の `rev` を、それぞれ 1 本の PR で上げる。auto-merge はしない。CI の gitleaks の版は .pre-commit-config.yaml の `rev` から読むので、hook と一緒に上がる。Dependabot の対象外で、手で上げるもの (Dependabot の週次の PR を merge するときに、あわせて新しい版が出ていないかを見る):
+  - go.mod の `toolchain` 行 (build に使う版)。Dependabot の `gomod` が上げる対象として資料に書かれていないので、手で上げる
+  - go.mod の `go` 行 (利用者に求める最低の版。サポート中の最も古い Go の版に合わせる)。依存の go.mod の `go` 行より下げられないので、Dependabot が上げた依存 (govulncheck の `golang.org/x/vuln` とその依存を含む) に引き上げられることがある。Dependabot の PR で `go` 行が動いたら、利用者に求める版が上がってよいかを見てから merge する
   - goreleaser-action に渡す `version:` (checks.yml と release.yml の 2 箇所)
   - checks.yml の `pre-commit` job で入れる pre-commit の版
 - release: tag (`v*`) は main の commit に打つ。push すると [.github/workflows/release.yml](.github/workflows/release.yml) が、上の CI と同じ検査の本体 (checks.yml) を tag の commit で通し、tag の commit が main に在ることを確かめてから GoReleaser で GitHub Releases に binary を出し、tap `swat9013/homebrew-tap` の cask を更新する ([.goreleaser.yaml](.goreleaser.yaml))

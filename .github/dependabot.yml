@@ -13,6 +13,10 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # tool directive の依存 (govulncheck の golang.org/x/vuln) は go.mod で // indirect になる。
+    # 既定の対象は direct の依存だけなので、indirect も上げる対象に入れる
+    allow:
+      - dependency-type: all
     groups:
       gomod:
         patterns: ["*"]
