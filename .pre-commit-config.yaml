@@ -1,24 +1,46 @@
-# `pre-commit install` 1 回で commit 時 (gitleaks) と push 前 (go vet / go test) の両方の hook が入る
+# `pre-commit install` 1 回で commit 時 (gitleaks / gofmt / go mod tidy / actionlint) と push 前 (go vet / go test) の両方の hook が入る。
+# CI (.github/workflows/checks.yml) は commit 時の hook を `pre-commit run --all-files` で撃つので、手元と同じ検査が CI でも落ちる
 default_install_hook_types: [pre-commit, pre-push]
+# 手元の Go を使う hook の `language: unsupported` は 4.4.0 で入った名前 (それより古い pre-commit は解釈できずに落ちる)
+minimum_pre_commit_version: '4.4.0'
 
 repos:
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.30.1
     hooks:
       - id: gitleaks
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.12
+    hooks:
+      - id: actionlint
+  # Go の hook は go コマンド経由で撃つ。go.mod の toolchain directive の版の Go が動き、手元と CI で版が揃う
+  # (`language: golang` は pre-commit が専用の GOROOT と GOTOOLCHAIN=local を立てるので toolchain directive が効かない)
   - repo: local
     hooks:
+      # go fmt は整形し直した file を書き換える。書き換えがあると pre-commit が hook を落とす
+      - id: gofmt
+        name: gofmt
+        entry: go fmt ./...
+        language: unsupported
+        pass_filenames: false
+        types: [go]
+      - id: go-mod-tidy
+        name: go mod tidy
+        entry: go mod tidy -diff
+        language: unsupported
+        pass_filenames: false
+        files: (\.go|^go\.mod|^go\.sum)$
       - id: go-vet
         name: go vet
         entry: go vet ./...
-        language: system
+        language: unsupported
         pass_filenames: false
         always_run: true
         stages: [pre-push]
       - id: go-test
         name: go test
-        entry: go test ./...
-        language: system
+        entry: go test -race ./...
+        language: unsupported
         pass_filenames: false
         always_run: true
         stages: [pre-push]
