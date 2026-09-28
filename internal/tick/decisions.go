@@ -111,6 +111,32 @@ func validate(d Decisions, instructions []Instruction) error {
 			return fmt.Errorf("spawn (issue %d): %w", s.Issue, err)
 		}
 	}
+	return validateSpawnList(d.Spawn, instructions)
+}
+
+// validateSpawnList は spawn の列全体に掛かる検査。start の件数は kind だけで数える
+// (start 指示の無い tick の start spawn は、1 件ずつの検査が採否の語彙で弾く)。
+func validateSpawnList(spawns []Spawn, instructions []Instruction) error {
+	seen := map[int]bool{}
+	for _, s := range spawns {
+		if seen[s.Issue] {
+			// worker log (workers/<issue>-<stem>.log) と worktree-issue-<N> を 2 つの worker が取り合う
+			return fmt.Errorf("spawn に issue %d が 2 件ある", s.Issue)
+		}
+		seen[s.Issue] = true
+	}
+	starts := 0
+	for _, s := range spawns {
+		if s.Kind == ActionStart {
+			starts++
+		}
+	}
+	for _, i := range instructions {
+		if start, ok := i.(StartInstruction); ok && starts > start.FreeSlots {
+			// 並列上限 N を orchestrator の判断だけに任せない (起動した後の wip_over_limit では遅い)
+			return fmt.Errorf("start の spawn が %d 件あり、指示の free_slots (%d) を超える", starts, start.FreeSlots)
+		}
+	}
 	return nil
 }
 
