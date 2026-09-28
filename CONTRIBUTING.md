@@ -10,7 +10,7 @@
 ## branch・worktree 運用
 
 - 作業は issue 単位で行い、main から `worktree-issue-<n>` (`<n>` は issue 番号) の branch を切る
-  - dispatcher はこの綴りの head branch で worker 由来の CL を見分け、issue と紐づける ([docs/design/system.md](docs/design/system.md) §4)。綴りを崩すと二重着手の防止が効かない
+  - dispatcher はこの綴りの head branch (fork でない、この repo 自身の branch) で worker 由来の CL を見分け、issue と紐づける ([docs/design/system.md](docs/design/system.md) §4)。綴りを崩すと二重着手の防止が効かない
 - ファイルの変更 (コード・docs を問わない) は、main の checkout で直接行わず、worktree を作ってその中で行う。main の checkout に未 commit の変更を残すと、別の作業の差分と混ざって PR に切り出せなくなる
   - 対話で動かす Claude Code では `EnterWorktree` に name `issue-<n>` を渡す。branch 名は `worktree-` が前置されて `worktree-issue-<n>` になる
   - dispatcher が spawn した worker は、spawn prompt の「作業ツリー」の手順に従う (正本は [internal/contract/orchestrator.md](internal/contract/orchestrator.md))。cwd を clone root に置いたまま `git worktree add` で作る点が上と違う

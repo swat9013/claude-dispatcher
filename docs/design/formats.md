@@ -152,7 +152,7 @@ claude_token_file = "~/.config/claude-dispatcher/<project>/claude-token"
 
 - 指示の並びは `reenter` → `start` → `anomaly`
 - 候補だけが issue 本文 `body` を持つ (orchestrator の playbook 選定の信号)
-- `linked_cls` と `cls[].issues` の紐づきは、closing reference が指す issue と、head branch `worktree-issue-<issue>` が示す issue の和 (system.md §4)
+- `linked_cls` と `cls[].issues` の紐づきは、closing reference が指す issue と、CL 置き場の repo 自身の head branch (fork でない) `worktree-issue-<issue>` が示す issue の和 (system.md §4)
 - `mergeable` は CL を base へ merge できるか (`MERGEABLE` / `CONFLICTING` / `UNKNOWN`)
 - `checks` は head commit の checks の集約 (`SUCCESS` / `PENDING` / `EXPECTED` / `FAILURE` / `ERROR` / `null`。`EXPECTED` は必須の checks がまだ報告されていない状態)
 - `mergeable` / `checks` の語彙は本 file が正本で、CL host の綴りではない。CL 置き場の部品が host の応答をこの語彙へ写す (gh の応答は同じ綴り。system.md §13)
@@ -279,7 +279,7 @@ ISSUE  KIND   STATE    ELAPSED  SESSION  BRANCH  WIP  CL        TICK
 | SESSION | `claude agents --json` に同じ session が居れば `<id> <status>/<state>`、居なければ `-` |
 | BRANCH | cwd の clone に `worktree-issue-<issue>` の作業ツリーがあれば `origin/HEAD` からの ahead 数 (`+3`)、無ければ `-` |
 | WIP | issue に `dispatcher:wip` が付いているか (`yes` / `no`) |
-| CL | head branch `worktree-issue-<issue>` の最新 CL (`#<番号> <state>`。state は `OPEN` / `CLOSED` / `MERGED`)、無ければ `-` |
+| CL | CL 置き場の repo 自身の head branch (fork でない) `worktree-issue-<issue>` の最新 CL (`#<番号> <state>`。state は `OPEN` / `CLOSED` / `MERGED`)、無ければ `-`。同じ名前の branch の CL を新しい順に 10 本まで読み、fork の CL を読み飛ばす。10 本とも fork の CL でまだ続きがあれば、その issue だけ `?` にして注記を残す |
 
 exit: 0。指定した project が無い / project が 1 つも無いときは 2。
 

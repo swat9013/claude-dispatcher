@@ -235,8 +235,8 @@ func Derive(s Snapshot) []Instruction {
 			continue
 		}
 		cl := clByNumber[numbers[0]]
-		// 人が開いた CL には再入しない。wip / ready-for-human の付いた issue にも出さない (system.md §6)
-		if wip[issue] || human[issue] || cl.Branch != WorkerBranch(issue) {
+		// 人が開いた CL (fork の CL を含む) には再入しない。wip / ready-for-human の付いた issue にも出さない (system.md §6)
+		if wip[issue] || human[issue] || !cl.isWorkerCLOf(issue) {
 			continue
 		}
 		var conditions []ConditionPointer

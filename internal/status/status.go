@@ -231,6 +231,10 @@ func (c *collector) fillDetails(cfg config.Config, cfgErr error, gh github.Runne
 		w.Session = lookupIn(sessions, w.Spawn.SessionID)
 		w.Branch = lookupIn(branches, w.Spawn.Issue)
 		w.CL = lookupIn(cls, w.Spawn.Issue)
+		if _, ok := cls.Value[w.Spawn.Issue]; cls.Known && !ok {
+			// LatestCLs が決められなかった issue (fork の CL だけで窓を超えた)。無いと言い切らず ? にする
+			w.CL = Probed[*github.CLState]{}
+		}
 	}
 }
 
@@ -317,10 +321,13 @@ func (c *collector) ahead(base, name string) Probed[int] {
 }
 
 func (c *collector) cls(cfg config.Config, gh github.Runner, branchOf map[int]string) Probed[map[int]*github.CLState] {
-	cls, err := github.LatestCLs(gh, cfg.CLRepo, branchOf)
+	cls, undetermined, err := github.LatestCLs(gh, cfg.CLRepo, branchOf)
 	if err != nil {
 		c.note("CL を読めない — CL は ? (%v)", err)
 		return Probed[map[int]*github.CLState]{}
+	}
+	for _, issue := range undetermined {
+		c.note("#%d の CL を決められない — CL は ? (branch %s の新しい順の %d 本がすべて fork の CL で、まだ続きがある)", issue, branchOf[issue], github.LatestCLsWindow)
 	}
 	return known(cls)
 }
