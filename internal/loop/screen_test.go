@@ -12,7 +12,7 @@ import (
 func TestScreenWhileWaitingShowsTheNextTickTheLastTickAndTheGuide(t *testing.T) {
 	v := view{
 		project: "myproj", interval: "5m", phase: waiting, now: start, next: start.Add(3 * time.Minute),
-		last:   &tick.Outcome{TS: "2026-09-26T02:58:00.123456Z", Result: tick.ResultOK, Instructions: map[string]int{"start": 1}, Spawned: []int{42}},
+		last:   &tick.Outcome{TS: "2026-09-26T02:58:00.123456Z", Result: tick.ResultOK, Logged: true, Instructions: map[string]int{"start": 1}, Spawned: []int{42}},
 		report: status.Report{Notes: []string{"wip を読めない"}},
 	}
 
@@ -31,7 +31,7 @@ func TestScreenWhileWaitingShowsTheNextTickTheLastTickAndTheGuide(t *testing.T) 
 func TestScreenPutsTheErrorOfTheLastTickFirstAmongTheNotes(t *testing.T) {
 	v := view{
 		project: "myproj", interval: "5m", phase: waiting, now: start, next: start,
-		last:   &tick.Outcome{TS: "2026-09-26T02:58:00Z", Result: tick.ResultConfigError, Error: "未知の key"},
+		last:   &tick.Outcome{TS: "2026-09-26T02:58:00Z", Result: tick.ResultConfigError, Logged: true, Error: "未知の key"},
 		report: status.Report{Notes: []string{"wip を読めない"}},
 	}
 
@@ -62,5 +62,18 @@ func TestScreenWhileTheOrchestratorRunsShowsItsElapsedAndLimit(t *testing.T) {
 	}
 	if !strings.HasPrefix(lines[len(lines)-1], "停止待ち: この tick を終えたら止まる。もう一度 Ctrl+C で orchestrator を止めて止まる") {
 		t.Fatalf("操作案内 = %q", lines[len(lines)-1])
+	}
+}
+
+func TestScreenShowsATickThatCouldNotWriteItsLogLineEvenWhenItWasOK(t *testing.T) {
+	v := view{
+		project: "myproj", interval: "5m", phase: waiting, now: start, next: start,
+		last: &tick.Outcome{TS: "2026-09-26T02:58:00Z", Result: tick.ResultOK, Logged: false, Error: "log.jsonl に書けない: disk full"},
+	}
+
+	lines := v.lines(false)
+
+	if len(lines) < 3 || lines[2] != "  ! log.jsonl に書けない: disk full" {
+		t.Fatalf("lines = %q, want log.jsonl に書けなかったことを ! の行に出す", lines)
 	}
 }

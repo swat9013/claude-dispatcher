@@ -391,7 +391,6 @@ func (r *run) driveOrchestrator(obs observation, instructionFile string) error {
 		return stopf(ResultError, "停止要求で orchestrator を起動しなかった")
 	}
 	orchestratorLog := r.project.OrchestratorLog(r.stem)
-	r.orchestratorLog = orchestratorLog
 	if r.o.OrchestratorStarted != nil {
 		r.o.OrchestratorStarted(time.Now())
 	}
@@ -399,6 +398,7 @@ func (r *run) driveOrchestrator(obs observation, instructionFile string) error {
 	if err != nil {
 		return err
 	}
+	r.orchestratorLog = orchestratorLog
 	r.line.launchedKeys = &launchedKeys{Orchestrator: newOrchestratorRecord(run), Spawned: []spawned{}}
 	if run.Stopped {
 		// timeout と同じく決定ファイルは読まない。付いた wip は機械では剥がさない (system.md §9)

@@ -47,7 +47,8 @@ func (v view) lines(withGuide bool) []string {
 		fmt.Sprintf("%s  loop %s  %s", v.project, v.interval, v.state()),
 		v.lastTick(),
 	}
-	if v.last != nil && v.last.Result != tick.ResultOK {
+	// log.jsonl に書けなかった tick も出す (result が ok でも status と doctor は古い log を読むことになる)
+	if v.last != nil && (v.last.Result != tick.ResultOK || !v.last.Logged) {
 		lines = append(lines, "  ! "+v.last.Error)
 	}
 	lines = append(lines, v.report.NoteLines()...)

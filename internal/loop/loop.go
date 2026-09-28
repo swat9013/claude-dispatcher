@@ -123,7 +123,8 @@ func (l *loop) run() int {
 			l.next = wall(l.o.Now()).Add(l.o.Interval)
 			l.refresh()
 		case <-poll.C:
-			if l.o.Terminal && l.o.Now().Sub(l.lastRefresh) >= l.o.Redraw {
+			// 周期の描き直しは組んでいる間は積まない (gh が遅いと組み直しが途切れなく続く)
+			if l.o.Terminal && !l.collecting && l.o.Now().Sub(l.lastRefresh) >= l.o.Redraw {
 				l.refresh()
 			}
 		case report := <-l.collected:
@@ -182,6 +183,9 @@ func (l *loop) onStopRequest(sig os.Signal) bool {
 	case l.stops == 2:
 		// 段階の解釈 (起動前・起動中・正常終了の後) は tick の 1 回分が持つ
 		close(l.stopOrchestrator)
+		if l.o.Terminal {
+			l.refresh()
+		}
 	}
 	return false
 }
@@ -258,14 +262,20 @@ func (l *loop) draw(withGuide bool) {
 }
 
 // finish は画面を残したまま止まる: 今の現況で操作案内を除いた画面を描き、終了行を 1 行足す。
+// 現況を組む間 (gh が遅いと分単位) に次の停止要求が来たら、組むのを待たずに直前の現況で描いて止まる。
 func (l *loop) finish(reason string) int {
-	l.report = l.collectStatus()
+	collected := make(chan status.Report, 1)
+	go func() { collected <- l.collectStatus() }()
+	running := "?"
+	select {
+	case l.report = <-collected:
+		if n := l.report.RunningWorkers(); n.Known {
+			running = fmt.Sprint(n.Value)
+		}
+	case <-l.o.Signals:
+	}
 	l.phase = stopping
 	l.draw(false)
-	running := "?"
-	if n := l.report.RunningWorkers(); n.Known {
-		running = fmt.Sprint(n.Value)
-	}
 	_, _ = fmt.Fprintf(l.o.Stdout, "%s [%s] loop を止めた (%s)。止めずに走っている worker: %s 本\n",
 		l.o.Now().UTC().Format(timeLayout), l.o.Project, reason, running)
 	return 0

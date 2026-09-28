@@ -36,6 +36,13 @@ func Wait(cmd *exec.Cmd, timeout time.Duration, stop <-chan struct{}) (End, erro
 	case <-stop:
 		end = Stopped
 	}
+	// 子の終了と同時に届いたら終了を優先する (select はどちらも選びうる)。正常終了した orchestrator を止めたことにすると、
+	// 決定ファイルが読まれず、付いた wip が worker の無いまま残る
+	select {
+	case err := <-done:
+		return Exited, err
+	default:
+	}
 	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 	return end, <-done
 }
