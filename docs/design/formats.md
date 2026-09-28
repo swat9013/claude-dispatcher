@@ -311,6 +311,7 @@ claude-dispatcher doctor <project>
 導入の充足を検査して 1 項目 1 行で示す。**何も書かない** (state dir・config・settings・外部 store のどれにも)。
 
 ```
+--  版            v0.3.0 (<commit>)
 ok  config        <config.toml の path>
 NG  label         置き場 acme/widgets に dispatcher:wip が無い — `claude-dispatcher setup myproj` で作る
 --  最終 tick     2026-09-26T03:00:00Z ok
@@ -318,6 +319,7 @@ NG  label         置き場 acme/widgets に dispatcher:wip が無い — `claud
 
 | 項目 | 見るもの |
 |---|---|
+| `版` | この binary の版と commit (情報。判定しない)。綴りは §14 |
 | `config` | config.toml が在り、`tick` と同じ検査に通る |
 | `state dir` | state dir が在る |
 | `依存 CLI` | gh / claude / git が (PATH の自己解決の後で) 見つかる |
@@ -408,3 +410,21 @@ SIGINT / SIGTERM / SIGHUP を同じに扱う。
 - stdout への書き込みの失敗 (読み手の消えた pipe 等) では止まらない。描画を捨てて続け、停止要求で止まる
 
 exit: 0 = 停止要求で止まった / 1・2・3 = 起動時の検査 (上表)。想定外の失敗で loop 自身が止まったときは 1。
+
+## 14. `--version`
+
+```
+claude-dispatcher --version
+```
+
+binary の版と commit を stdout に 1 行で出す。config も state dir も読まないので、導入が壊れていても撃てる (不具合の報告に貼る)。
+
+```
+claude-dispatcher v0.3.0 (<commit の hash>)
+```
+
+- 版: Releases の binary は GoReleaser が埋めた tag (`v0.3.0`)。`go install <module>@<版>` の binary は module の版 (同じ `v0.3.0`)。git の作業ツリーでの `go build` は Go が VCS から刻む pseudo-version (直近の tag の次の patch の `-0.<日時>-<hash>`。例: `v0.1.1-0.20260927163012-aac3e1c06160`、未 commit の変更があれば `+dirty`)。VCS の情報が無い build (`go run`・`-buildvcs=false` 等) は `(devel)`
+- commit: Releases の binary は tag の commit。git の作業ツリーでの `go build` は build 情報の `vcs.revision`。`go install <module>@<版>` の binary は module cache から build するので commit を持たず `unknown`。VCS の情報が無い build も `unknown`
+- doctor の `版` の行 (§12) も同じ綴りを出す
+
+exit: 0。

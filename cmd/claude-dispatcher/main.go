@@ -25,6 +25,7 @@ import (
 	"github.com/swat9013/claude-dispatcher/internal/setup"
 	"github.com/swat9013/claude-dispatcher/internal/status"
 	"github.com/swat9013/claude-dispatcher/internal/tick"
+	"github.com/swat9013/claude-dispatcher/internal/version"
 )
 
 // exit code は formats.md §3。引数の誤りは 2
@@ -37,6 +38,7 @@ const usage = `usage:
   claude-dispatcher setup <project>
   claude-dispatcher doctor <project>
   claude-dispatcher paths --json [<project>]
+  claude-dispatcher --version
 `
 
 func main() {
@@ -61,6 +63,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return runPaths(args[1:], stdout, stderr)
 	case "-h", "--help", "help":
 		fmt.Fprint(stdout, usage)
+		return 0
+	case "--version":
+		// config も state dir も読まない。不具合の報告に版を貼れるよう、導入が壊れていても撃てる
+		fmt.Fprintf(stdout, "claude-dispatcher %s\n", version.Line())
 		return 0
 	}
 	return usageError(stderr, "未知の subcommand: %s", args[0])

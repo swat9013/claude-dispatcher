@@ -11,7 +11,12 @@ builds:
     goos: [darwin, linux]
     goarch: [amd64, arm64]
     flags: [-trimpath]
-    ldflags: [-s -w]
+    # 版と commit を binary に埋める (claude-dispatcher --version / doctor の版の行。formats.md §14)。
+    # 版は tag (`v` 付き) のまま埋め、go install の binary が出す module の版と綴りを揃える
+    ldflags:
+      - -s -w
+      - -X github.com/swat9013/claude-dispatcher/internal/version.version={{ .Tag }}
+      - -X github.com/swat9013/claude-dispatcher/internal/version.commit={{ .Commit }}
 
 archives:
   - formats: [tar.gz]
