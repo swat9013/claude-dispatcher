@@ -14,7 +14,8 @@ var Names = []string{"gh", "claude", "git"}
 // Invoked は tick 自身が起動する依存 CLI。試運転は起動の手前で止まるので、これらが解決できるかを代わりに検査する
 var Invoked = []string{"gh", "claude"}
 
-// candidates は PATH に無いときに足す置き場。前に居るものから探す (Homebrew は macOS の 2 つと Linux の prefix)
+// candidates は PATH に無いときに足す置き場。前に居るものから探す (Homebrew は macOS の 2 つと Linux の prefix)。
+// HOME の外の置き場を変えたら、black-box テストの selfResolutionDirs も揃える
 var candidates = []string{
 	"~/.local/bin", "~/.local/share/mise/shims",
 	"/opt/homebrew/bin", "/usr/local/bin", "/home/linuxbrew/.linuxbrew/bin",
