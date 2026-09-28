@@ -1,4 +1,4 @@
-# `pre-commit install` 1 回で commit 時 (gitleaks / gofmt / go mod tidy / actionlint) と push 前 (gitleaks の commit 範囲 / go vet / go test) の両方の hook が入る。
+# `pre-commit install` 1 回で commit 時 (gitleaks / gofmt / go mod tidy / actionlint) と push 前 (gitleaks の commit 範囲 / go vet / golangci-lint / go test) の両方の hook が入る。
 # CI (.github/workflows/checks.yml) は commit 時の hook を `pre-commit run --all-files` で撃つので、手元と同じ検査が CI でも落ちる
 default_install_hook_types: [pre-commit, pre-push]
 # stages を書かない hook は commit 時だけに撃つ (書かないと install した全 stage で撃たれ、push 前にも走る)
@@ -46,6 +46,15 @@ repos:
       - id: go-vet
         name: go vet
         entry: go vet ./...
+        language: unsupported
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
+      # binary は CI と同じ版を人が公式の手段で入れる (CONTRIBUTING.md の「セットアップ」)。公式の hook は
+      # language: golang で source から build し (公式が保証しない導入経路)、--fix も付くので使わない
+      - id: golangci-lint
+        name: golangci-lint
+        entry: golangci-lint run ./...
         language: unsupported
         pass_filenames: false
         always_run: true
