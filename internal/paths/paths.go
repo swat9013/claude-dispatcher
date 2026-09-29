@@ -74,9 +74,11 @@ func (r Roots) Project(name string) Project {
 
 func (p Project) ConfigFile() string { return filepath.Join(p.ConfigDir, "config.toml") }
 func (p Project) LogFile() string    { return filepath.Join(p.StateDir, "log.jsonl") }
-func (p Project) CronLog() string    { return filepath.Join(p.StateDir, "cron.log") }
 func (p Project) LockFile() string   { return filepath.Join(p.StateDir, "tick.lock") }
-func (p Project) MarkerFile() string { return filepath.Join(p.StateDir, "config-verified") }
+
+// LoopLockFile は loop が生きている間持つ lock の対象 (同じ project の 2 本目の loop を拒む)
+func (p Project) LoopLockFile() string { return filepath.Join(p.StateDir, "loop.lock") }
+func (p Project) MarkerFile() string   { return filepath.Join(p.StateDir, "config-verified") }
 
 func (p Project) InstructionFile(stem string) string {
 	return filepath.Join(p.StateDir, "instructions", stem+".json")

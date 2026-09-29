@@ -37,33 +37,25 @@ func assertDoctorMark(t *testing.T, stdout, item, mark string) string {
 	return line
 }
 
-// satisfied は doctor の全項目が充足する sandbox にする (crontab に tick 行を置く)。
-func (s *sandbox) satisfied() {
-	s.setCrontab(s.tickCronLine() + "\n")
-}
-
 func TestDoctorOnASatisfiedProjectReportsNoNG(t *testing.T) {
 	s := newInstallSandbox(t)
-	s.satisfied()
 
 	r := s.doctor()
 
 	assertExit(t, r, 0)
-	for _, item := range []string{"config", "state dir", "依存 CLI", "置き場", "label", "plugin", "playbook", "原則索引", "crontab"} {
+	for _, item := range []string{"config", "state dir", "依存 CLI", "置き場", "label", "plugin", "playbook", "原則索引", "試運転"} {
 		assertDoctorMark(t, r.stdout, item, "ok")
 	}
 }
 
 func TestDoctorWritesNothing(t *testing.T) {
 	s := newInstallSandbox(t)
-	s.satisfied()
 	mustMkdir(t, filepath.Join(s.clone, ".claude"))
 	mustWrite(t, filepath.Join(s.clone, ".claude", "settings.json"), `{"sandbox": {}}`)
 	before := map[string]map[string]string{}
 	for _, dir := range []string{s.stateDir(), s.configRoot, s.home, s.clone} {
 		before[dir] = fileFingerprints(t, dir)
 	}
-	crontab := s.crontab()
 
 	s.doctor()
 
@@ -72,14 +64,13 @@ func TestDoctorWritesNothing(t *testing.T) {
 			t.Fatalf("doctor が %s の下に書いた", dir)
 		}
 	}
-	if s.crontab() != crontab || len(s.crontabWrites()) != 0 || len(s.labelCreates()) != 0 {
-		t.Fatal("doctor が crontab か label を書いた")
+	if len(s.labelCreates()) != 0 {
+		t.Fatal("doctor が label を作った")
 	}
 }
 
 func TestDoctorShowsTheSettingsEntriesItNeedsWithoutWritingThem(t *testing.T) {
 	s := newInstallSandbox(t)
-	s.satisfied()
 
 	r := s.doctor()
 
@@ -95,7 +86,6 @@ func TestDoctorShowsTheSettingsEntriesItNeedsWithoutWritingThem(t *testing.T) {
 
 func TestDoctorReportsPluginFromTwoMarketplacesAsNG(t *testing.T) {
 	s := newInstallSandbox(t)
-	s.satisfied()
 	s.installPlugin("swat-skills@other", "user", "")
 
 	r := s.doctor()
@@ -107,7 +97,6 @@ func TestDoctorReportsPluginFromTwoMarketplacesAsNG(t *testing.T) {
 
 func TestDoctorFollowsThePluginScopeOrder(t *testing.T) {
 	s := newInstallSandbox(t)
-	s.satisfied()
 	projectInstall := s.installPlugin("swat-skills@swat9013", "project", s.clone)
 
 	r := s.doctor()
@@ -127,7 +116,6 @@ func TestDoctorReportsAMissingPlaybookOrPrincipleIndexAsNG(t *testing.T) {
 	} {
 		t.Run(tc.item, func(t *testing.T) {
 			s := newInstallSandbox(t)
-			s.satisfied()
 			missing := tc.missing(s.defaultInstallPath())
 			if err := os.Remove(missing); err != nil {
 				t.Fatal(err)
@@ -145,7 +133,6 @@ func TestDoctorReportsAMissingPlaybookOrPrincipleIndexAsNG(t *testing.T) {
 
 func TestDoctorReportsAMissingLabelAsNG(t *testing.T) {
 	s := newInstallSandbox(t)
-	s.satisfied()
 	s.setLabels(humanLabel, defaultReadyLabel)
 
 	r := s.doctor()
@@ -154,18 +141,8 @@ func TestDoctorReportsAMissingLabelAsNG(t *testing.T) {
 	s.assertNames(assertDoctorMark(t, r.stdout, "label", "NG"), wipLabel)
 }
 
-func TestDoctorReportsAMissingTickLineAsNG(t *testing.T) {
-	s := newInstallSandbox(t)
-
-	r := s.doctor()
-
-	assertExit(t, r, 1)
-	assertDoctorMark(t, r.stdout, "crontab", "NG")
-}
-
 func TestDoctorShowsTheLastTickAsInformation(t *testing.T) {
 	s := newInstallSandbox(t)
-	s.satisfied()
 	s.writeSpawnedTickLine()
 
 	r := s.doctor()
@@ -177,7 +154,6 @@ func TestDoctorShowsTheLastTickAsInformation(t *testing.T) {
 
 func TestDoctorWithABrokenConfigStillChecksTheRest(t *testing.T) {
 	s := newInstallSandbox(t)
-	s.satisfied()
 	s.writeConfig(s.configWith(`readylabel = "x"`, "max_wip = 2"))
 
 	r := s.doctor()
@@ -189,7 +165,6 @@ func TestDoctorWithABrokenConfigStillChecksTheRest(t *testing.T) {
 
 func TestDoctorReportsARepoGhCannotSeeAsNG(t *testing.T) {
 	s := newInstallSandbox(t)
-	s.satisfied()
 	s.repoMissing()
 
 	r := s.doctor()
@@ -200,12 +175,9 @@ func TestDoctorReportsARepoGhCannotSeeAsNG(t *testing.T) {
 
 func TestDoctorReportsADependencyItCannotResolveAsNG(t *testing.T) {
 	s := newInstallSandbox(t)
-	s.satisfied()
 	skipIfSelfResolutionReachesARealOne(t, "claude")
-	for _, dir := range []string{s.binDir, filepath.Join(s.home, ".local", "bin")} {
-		if err := os.Remove(filepath.Join(dir, "claude")); err != nil {
-			t.Fatal(err)
-		}
+	if err := os.Remove(filepath.Join(s.binDir, "claude")); err != nil {
+		t.Fatal(err)
 	}
 
 	r := s.doctor()
@@ -214,23 +186,21 @@ func TestDoctorReportsADependencyItCannotResolveAsNG(t *testing.T) {
 	s.assertNames(assertDoctorMark(t, r.stdout, "依存 CLI", "NG"), "claude")
 }
 
-func TestDoctorReportsAFailingCronEnvDryRunAsNGWithItsOutput(t *testing.T) {
+func TestDoctorReportsAFailingDryRunAsNGWithItsOutput(t *testing.T) {
 	s := newInstallSandbox(t)
-	s.satisfied()
 	s.ghFails([]string{"issue", "list"}, 1, "HTTP 502: Bad Gateway\n")
 
 	r := s.doctor()
 
 	assertExit(t, r, 1)
 	assertDoctorMark(t, r.stdout, "試運転", "NG")
-	if !strings.Contains(r.stdout, "--cron-env") || !strings.Contains(r.stdout, "502") {
+	if !strings.Contains(r.stdout, "--dry-run") || !strings.Contains(r.stdout, "502") {
 		t.Fatalf("撃った試運転と落ちた理由を示していない:\n%s", r.stdout)
 	}
 }
 
-func TestDoctorRunsTheCronEnvDryRunWithoutWritingTheStateDir(t *testing.T) {
+func TestDoctorRunsTheDryRunWithoutWritingTheStateDir(t *testing.T) {
 	s := newInstallSandbox(t)
-	s.satisfied()
 
 	r := s.doctor()
 
@@ -240,33 +210,8 @@ func TestDoctorRunsTheCronEnvDryRunWithoutWritingTheStateDir(t *testing.T) {
 	s.assertNoClaude("doctor の試運転で")
 }
 
-func TestDoctorReportsATickLineThatDiffersFromTheOneSetupBuildsAsNG(t *testing.T) {
-	s := newInstallSandbox(t)
-	existing := "*/5 * * * * cd /elsewhere && /old/claude-dispatcher tick " + s.project + " >> /tmp/cron.log 2>&1"
-	s.setCrontab(existing + "\n")
-
-	r := s.doctor()
-
-	assertExit(t, r, 1)
-	assertDoctorMark(t, r.stdout, "crontab", "NG")
-	if !strings.Contains(r.stdout, existing) || !strings.Contains(r.stdout, s.tickCronLine()) {
-		t.Fatalf("現行の行と組む行を並べていない:\n%s", r.stdout)
-	}
-}
-
-func TestDoctorAcceptsATickLineWhoseScheduleWasChanged(t *testing.T) {
-	s := newInstallSandbox(t)
-	s.setCrontab(strings.Replace(s.tickCronLine(), "*/5 ", "*/10 ", 1) + "\n")
-
-	r := s.doctor()
-
-	assertExit(t, r, 0)
-	assertDoctorMark(t, r.stdout, "crontab", "ok")
-}
-
 func TestDoctorCountsTheLogLinesItCouldNotRead(t *testing.T) {
 	s := newInstallSandbox(t)
-	s.satisfied()
 	s.writeSpawnedTickLine()
 	appendFile(t, s.logFile(), "{\"ts\": \"2026-09-26T03:00\n")
 	// 後片付け (起動した worker を待つ) は log を JSON として読むので、読めない行を消してから渡す

@@ -87,11 +87,17 @@ func Last(lines []Line) (Line, bool) {
 	return lines[len(lines)-1], true
 }
 
+// TimeLayout は人が読む時刻の綴り (UTC、秒まで)。画面・失敗行・終了行が使う (formats.md §1)
+const TimeLayout = "2006-01-02T15:04:05Z"
+
 // ShortTS は tick 行の ts を人が読む秒までの形にする (読めなければそのまま)。
 func ShortTS(ts string) string {
 	at, err := time.Parse(time.RFC3339Nano, ts)
 	if err != nil {
 		return ts
 	}
-	return at.UTC().Format("2006-01-02T15:04:05Z")
+	return at.UTC().Format(TimeLayout)
 }
+
+// Summary は最終 tick の欄の中身 (`<秒までの ts> <result>`)。status の見出しと loop の画面が使う。
+func Summary(ts, result string) string { return ShortTS(ts) + " " + result }

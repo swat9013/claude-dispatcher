@@ -33,19 +33,19 @@ func cell[T any](p Probed[T], format func(T) string) string {
 	return format(p.Value)
 }
 
-// Heading は project の見出し行 (project 名・tick の状態・最終 tick)。
+// Heading は project の見出し行 (project 名・loop の生死・最終 tick)。
 func (r Report) Heading() string {
-	running := "tick " + unknownCell
-	if r.Tick.Running.Known {
-		running = map[bool]string{true: "tick 実行中", false: "待機"}[r.Tick.Running.Value]
+	loop := "loop " + unknownCell
+	if r.Loop.Known {
+		loop = map[bool]string{true: "loop 稼働中", false: "loop なし"}[r.Loop.Value]
 	}
-	last := cell(r.Tick.Last, func(l *ticklog.Line) string {
+	last := cell(r.LastTick, func(l *ticklog.Line) string {
 		if l == nil {
 			return "なし"
 		}
-		return ticklog.ShortTS(l.TS) + " " + l.Result
+		return ticklog.Summary(l.TS, l.Result)
 	})
-	return fmt.Sprintf("%s  %s  最終 tick %s", r.Project, running, last)
+	return fmt.Sprintf("%s  %s  最終 tick %s", r.Project, loop, last)
 }
 
 // NoteLines は注記の行。
@@ -66,7 +66,7 @@ func (r Report) TableLines() []string {
 	rows := [][]string{columns}
 	for _, w := range r.Workers {
 		rows = append(rows, []string{
-			fmt.Sprintf("#%d", w.Spawn.Issue), w.Spawn.Kind, cell(w.Alive, stateCell), formatElapsed(w.Elapsed),
+			fmt.Sprintf("#%d", w.Spawn.Issue), w.Spawn.Kind, cell(w.Alive, stateCell), FormatElapsed(w.Elapsed),
 			cell(w.Session, sessionCell), cell(w.Branch, branchCell), cell(w.WIP, wipCell), cell(w.CL, clCell), ticklog.ShortTS(w.TickTS),
 		})
 	}
@@ -86,8 +86,8 @@ func (r Report) TableLines() []string {
 	return lines
 }
 
-// formatElapsed は経過を `45s` / `12m` / `3h05m` / `2d04h` にする。
-func formatElapsed(d time.Duration) string {
+// FormatElapsed は経過を `45s` / `12m` / `3h05m` / `2d04h` にする (formats.md §10。loop の画面の残りと経過も同じ綴り)。
+func FormatElapsed(d time.Duration) string {
 	seconds := int(d.Seconds())
 	switch {
 	case seconds < 60:

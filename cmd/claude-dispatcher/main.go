@@ -4,35 +4,42 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
-	"path/filepath"
+	"os/signal"
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/swat9013/claude-dispatcher/internal/config"
-	"github.com/swat9013/claude-dispatcher/internal/crontab"
 	"github.com/swat9013/claude-dispatcher/internal/deps"
 	"github.com/swat9013/claude-dispatcher/internal/doctor"
 	"github.com/swat9013/claude-dispatcher/internal/github"
 	"github.com/swat9013/claude-dispatcher/internal/launch"
+	"github.com/swat9013/claude-dispatcher/internal/loop"
 	"github.com/swat9013/claude-dispatcher/internal/paths"
 	"github.com/swat9013/claude-dispatcher/internal/proc"
 	"github.com/swat9013/claude-dispatcher/internal/setup"
 	"github.com/swat9013/claude-dispatcher/internal/status"
 	"github.com/swat9013/claude-dispatcher/internal/tick"
 	"github.com/swat9013/claude-dispatcher/internal/version"
+	"golang.org/x/term"
 )
 
-// exit code は formats.md §3。引数の誤りは 2
-const exitUsage = 2
+// exit code は formats.md §3 / §13。失敗は 1、引数の誤りは 2、同じ project の loop が走っていれば 3
+const (
+	exitFailed      = 1
+	exitUsage       = 2
+	exitLoopRunning = 3
+)
 
 const usage = `usage:
-  claude-dispatcher tick <project> [--dry-run [--cron-env]]
+  claude-dispatcher loop <project> <interval>
+  claude-dispatcher tick <project> [--dry-run]
   claude-dispatcher status ps [<project>]
   claude-dispatcher status watch [<project>] [--interval <秒>]
   claude-dispatcher setup <project>
@@ -51,6 +58,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 	switch args[0] {
+	case "loop":
+		return runLoop(args[1:], stdout, stderr)
 	case "tick":
 		return runTick(args[1:], stdout, stderr)
 	case "status":
@@ -82,8 +91,13 @@ func checkProject(stderr io.Writer, name string) bool {
 	if paths.ValidProjectName(name) {
 		return true
 	}
-	usageError(stderr, "project 名は [A-Za-z0-9._-]+: %q", name)
+	usageError(stderr, "%s", invalidProjectName(name))
 	return false
+}
+
+// invalidProjectName は置き場の綴りに使えない project 名を拒む文言。
+func invalidProjectName(name string) string {
+	return fmt.Sprintf("project 名は [A-Za-z0-9._-]+: %q", name)
 }
 
 // environment は subcommand が共有する実行環境。env は依存 CLI の PATH を解決した後の env。
@@ -108,7 +122,7 @@ func newEnvironment() (environment, error) {
 	}, nil
 }
 
-// probeTimeout は status / setup / doctor が撃つ外部 CLI (git / ps / claude / crontab) の上限
+// probeTimeout は status / setup / doctor / loop の画面が撃つ外部 CLI (git / ps / claude) の上限
 const probeTimeout = 30 * time.Second
 
 // output は env の PATH で name を解決して撃ち、stdout を返す。
@@ -130,11 +144,6 @@ func (e environment) command(name string) (proc.Command, error) {
 
 func (e environment) git(args ...string) (string, error) { return e.output("git", args...) }
 
-func (e environment) crontab() (crontab.Client, error) {
-	c, err := e.command("crontab")
-	return crontab.Client{Command: c}, err
-}
-
 // ghFor は config の token file の token を載せた env で gh を撃つ Runner を返す (tick と同じ認証の経路)。
 func (e environment) ghFor(cfg config.Config) (github.Runner, error) {
 	tokens, err := cfg.Tokens(func(key string) string { return deps.Getenv(e.env, key) })
@@ -144,41 +153,9 @@ func (e environment) ghFor(cfg config.Config) (github.Runner, error) {
 	return newGh(deps.WithEnv(e.env, tokens.GH))
 }
 
-// --- tick ---
-
-func runTick(args []string, stdout, stderr io.Writer) int {
-	var project string
-	var dryRun, cronEnv bool
-	for _, arg := range args {
-		switch {
-		case arg == "--dry-run":
-			dryRun = true
-		case arg == "--cron-env":
-			cronEnv = true
-		case strings.HasPrefix(arg, "-"):
-			return usageError(stderr, "未知の flag: %s", arg)
-		case project == "":
-			project = arg
-		default:
-			return usageError(stderr, "引数が多い: %s", arg)
-		}
-	}
-	if !checkProject(stderr, project) {
-		return exitUsage
-	}
-	if cronEnv {
-		if !dryRun {
-			return usageError(stderr, "--cron-env は --dry-run と組で使う (cron 相当の環境で撃つのは試運転だけ)")
-		}
-		return reexecInCronEnv(project, stdout, stderr)
-	}
-
-	e, err := newEnvironment()
-	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
-	}
-	opts := tick.Options{
+// tickOptions は project の tick の 1 回分の入力。出力は stdout / stderr へ流す。
+func (e environment) tickOptions(project string, stdout, stderr io.Writer) tick.Options {
+	return tick.Options{
 		Project:  project,
 		Roots:    e.roots,
 		Home:     e.home,
@@ -190,40 +167,49 @@ func runTick(args []string, stdout, stderr io.Writer) int {
 		Gh:       newGh,
 		Launcher: newLauncher(e.cwd),
 	}
+}
+
+// statusProbes は status の現況が読む外部の口。
+func (e environment) statusProbes() status.Probes {
+	return status.Probes{
+		Machine: status.CommandObserver{Output: e.output},
+		// worker は newLauncher の ClaudePrint で起動するので、生死もその形で見分ける
+		Workers: launch.ClaudePrintCensus,
+		Gh:      e.ghFor,
+		Git:     e.git,
+	}
+}
+
+// --- tick ---
+
+func runTick(args []string, stdout, stderr io.Writer) int {
+	var project string
+	var dryRun bool
+	for _, arg := range args {
+		switch {
+		case arg == "--dry-run":
+			dryRun = true
+		case strings.HasPrefix(arg, "-"):
+			return usageError(stderr, "未知の flag: %s", arg)
+		case project == "":
+			project = arg
+		default:
+			return usageError(stderr, "引数が多い: %s", arg)
+		}
+	}
+	if !checkProject(stderr, project) {
+		return exitUsage
+	}
+	e, err := newEnvironment()
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	opts := e.tickOptions(project, stdout, stderr)
 	if dryRun {
 		return tick.DryRun(opts)
 	}
 	return tick.Run(opts)
-}
-
-// cronBasePATH は cron の既定 PATH
-const cronBasePATH = "/usr/bin:/bin"
-
-// reexecInCronEnv は HOME と最小の PATH だけを残した環境で自分を撃ち直す (system.md §9)。
-// 撃ち直しを CLI が持つのは、Claude Code の sandbox の除外指定が Bash 呼び出しの先頭 token だけで照合されるため —
-// 呼び出し側が `env -i …` を前置すると CLI が sandbox 内に落ち、gh が credential を読めない偽の失敗になる。
-func reexecInCronEnv(project string, stdout, stderr io.Writer) int {
-	return runSelf([]string{"HOME=" + os.Getenv("HOME"), "PATH=" + cronBasePATH}, stdout, stderr, "tick", project, "--dry-run")
-}
-
-// runSelf は自分を env で撃ち、出力を流して exit code を返す。
-func runSelf(env []string, stdout, stderr io.Writer, args ...string) int {
-	self, err := os.Executable()
-	if err != nil {
-		fmt.Fprintf(stderr, "自分の path を解決できない: %v\n", err)
-		return 1
-	}
-	cmd := exec.Command(self, args...)
-	cmd.Env = env
-	cmd.Stdout, cmd.Stderr = stdout, stderr
-	if err := cmd.Run(); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return exitErr.ExitCode()
-		}
-		fmt.Fprintf(stderr, "撃ち直せない: %v\n", err)
-		return 1
-	}
-	return 0
 }
 
 const ghTimeout = 120 * time.Second
@@ -305,13 +291,7 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "project が 1 つも無い: %s\n", e.roots.Config)
 		return exitUsage
 	}
-	probes := status.Probes{
-		Machine: status.CommandObserver{Output: e.output},
-		// worker は newLauncher の ClaudePrint で起動するので、生死もその形で見分ける
-		Workers: launch.ClaudePrintCensus,
-		Gh:      e.ghFor,
-		Git:     e.git,
-	}
+	probes := e.statusProbes()
 	places := make([]paths.Project, 0, len(projects))
 	for _, name := range projects {
 		places = append(places, e.roots.Project(name))
@@ -343,24 +323,17 @@ func runSetup(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	self, err := selfForCrontab(os.Args[0], e.env)
-	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
-	}
 	return setup.Run(setup.Options{
 		Project: e.roots.Project(args[0]),
 		Home:    e.home,
 		Clone:   e.cwd,
-		Self:    self,
 		Stdin:   stdin,
 		Stdout:  stdout,
 		Stderr:  stderr,
 		Gh:      e.ghFor,
 		Git:     e.git,
-		Crontab: e.crontab,
-		// 試運転は親の env のまま撃つ (PATH の自己解決と cron 相当の撃ち直しは tick 自身が行う)
-		DryRun: func(args ...string) int { return runSelf(os.Environ(), stdout, stderr, args...) },
+		// 試運転は tick の 1 回分の試運転を process の中で回す (自分の binary を撃ち直さない — system.md §13)
+		DryRun: func() int { return tick.DryRun(e.tickOptions(args[0], stdout, stderr)) },
 	})
 }
 
@@ -380,39 +353,99 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 		Project: e.roots.Project(args[0]),
 		Home:    e.home,
 		Clone:   e.cwd,
-		Self:    func() (string, error) { return selfForCrontab(os.Args[0], e.env) },
 		Env:     e.env,
 		Stdout:  stdout,
 		Gh:      e.ghFor,
-		Crontab: e.crontab,
-		DryRun: func(args ...string) (string, int) {
+		DryRun: func() (string, int) {
 			var out bytes.Buffer
-			exit := runSelf(os.Environ(), &out, &out, args...)
+			exit := tick.DryRun(e.tickOptions(args[0], &out, &out))
 			return out.String(), exit
 		},
 	})
 }
 
-// selfForCrontab は crontab の行に埋める自分の絶対 path。撃たれたときの綴り (PATH で引いた path) を使う —
-// os.Executable は symlink を解決した実体 (Homebrew の版つき Cellar の path 等) を返すことがあり、更新で消える。
-// go run の一時 build は crontab から撃てないので拒む。argv0 は撃たれたときの os.Args[0]。
-func selfForCrontab(argv0 string, env []string) (string, error) {
-	self := argv0
-	if !strings.Contains(self, string(os.PathSeparator)) {
-		found, err := deps.Lookup(self, env)
-		if err != nil {
-			return "", fmt.Errorf("自分の path を解決できない: %w", err)
-		}
-		self = found
+// --- loop ---
+
+// runLoop は起動時の検査 (formats.md §13) を通して loop を回す。検査に落ちたら画面を出さず、stderr に理由を 1 行出す
+// (usage の一覧は出さない)。
+func runLoop(args []string, stdout, stderr io.Writer) int {
+	refuse := func(exit int, format string, a ...any) int {
+		fmt.Fprintf(stderr, format+"\n", a...)
+		return exit
 	}
-	abs, err := filepath.Abs(self)
+	if len(args) != 2 {
+		return refuse(exitUsage, "loop は <project> <interval> を取る (例: claude-dispatcher loop myproj 5m)")
+	}
+	name := args[0]
+	if !paths.ValidProjectName(name) {
+		return refuse(exitUsage, "%s", invalidProjectName(name))
+	}
+	interval, err := loop.ParseInterval(args[1])
 	if err != nil {
-		return "", fmt.Errorf("自分の path を解決できない: %w", err)
+		return refuse(exitUsage, "%v", err)
 	}
-	if strings.Contains(abs, string(os.PathSeparator)+"go-build") {
-		return "", fmt.Errorf("go run の一時 build (%s) は crontab に書けない。go install 等で置いた binary から撃つ", abs)
+	e, err := newEnvironment()
+	if err != nil {
+		return refuse(exitFailed, "%v", err)
 	}
-	return abs, nil
+	project := e.roots.Project(name)
+	// config の中身は検査しない (tick ごとに読み直し、落ちた tick は見出しに出る)
+	if err := config.RequireFile(project.ConfigFile()); err != nil {
+		return refuse(exitUsage, "%v", err)
+	}
+	if info, err := os.Stat(project.StateDir); err != nil || !info.IsDir() {
+		return refuse(exitFailed, "state dir が無い: %s (`claude-dispatcher setup %s` が作る)", project.StateDir, name)
+	}
+	lock, err := loop.AcquireLock(project)
+	if errors.Is(err, loop.ErrAlreadyRunning) {
+		return refuse(exitLoopRunning, "%v", err)
+	}
+	if err != nil {
+		return refuse(exitFailed, "%v", err)
+	}
+	defer lock.Close()
+	surviveClosedStdout()
+	return loop.Run(e.loopOptions(project, interval, stdout, stderr))
+}
+
+// loopOptions は project の loop の入力を組む。
+func (e environment) loopOptions(project paths.Project, interval loop.Interval, stdout, stderr io.Writer) loop.Options {
+	probes := e.statusProbes()
+	return loop.Options{
+		Project:  project.Name,
+		Interval: interval,
+		Stdout:   stdout,
+		Stderr:   stderr,
+		Terminal: isTerminal(stdout),
+		Signals:  stopRequests(),
+		Tick: func(control tick.Control) tick.Outcome {
+			// loop の中の tick は失敗行を出さない (見出しに出す)。stdout は試運転しか使わないので捨てる
+			o := e.tickOptions(project.Name, io.Discard, stderr)
+			o.Control = control
+			return tick.Once(o)
+		},
+		Status: func() status.Report { return status.Collect([]paths.Project{project}, e.home, probes, time.Now)[0] },
+		Now:    time.Now,
+		Poll:   loop.DefaultPoll,
+	}
+}
+
+// stopRequests は loop の停止要求 (SIGINT / SIGTERM / SIGHUP) を受ける channel を返す。
+func stopRequests() <-chan os.Signal {
+	signals := make(chan os.Signal, 4) // loop が読む前に届いた停止要求を落とさないよう余裕を持たせる (同じ signal の連続は runtime が先にまとめるので、ここでは救えない)
+	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	return signals
+}
+
+// surviveClosedStdout は、読み手の消えた stdout へ書いても SIGPIPE で倒れず、書き込みの失敗として返させる (system.md §9)。
+func surviveClosedStdout() {
+	signal.Notify(make(chan os.Signal, 1), syscall.SIGPIPE)
+}
+
+// isTerminal は w が端末か。端末でない character device (/dev/null 等) は端末に数えない。
+func isTerminal(w io.Writer) bool {
+	f, ok := w.(*os.File)
+	return ok && term.IsTerminal(int(f.Fd()))
 }
 
 // --- paths ---

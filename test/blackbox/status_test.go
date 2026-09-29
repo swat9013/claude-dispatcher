@@ -312,16 +312,41 @@ func TestStatusWithNoProjectsIsAUsageError(t *testing.T) {
 	assertExit(t, r, 2)
 }
 
-func TestStatusReadsARunningTickFromTheProcessList(t *testing.T) {
+func TestStatusReadsTheLoopOfTheProjectFromTheProcessList(t *testing.T) {
+	for _, tc := range []struct {
+		name, process, want string
+	}{
+		{"running", "777 /home/me/go/bin/claude-dispatcher loop " + defaultProject + " 5m", "loop 稼働中"},
+		{"other-project", "777 /home/me/go/bin/claude-dispatcher loop other 5m", "loop なし"},
+		{"single-tick", "777 /home/me/go/bin/claude-dispatcher tick " + defaultProject, "loop なし"},
+		// worker の command 行には spawn prompt が載る。prompt の中の綴りを loop と取り違えない
+		{"in-a-prompt", "778 /usr/local/bin/claude -p run claude-dispatcher loop " + defaultProject + " 5m --session-id x", "loop なし"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newSandbox(t)
+			s.statusScenario()
+			s.setWip()
+			s.setProcesses(tc.process)
+
+			r := s.statusPS()
+
+			if first := strings.SplitN(r.stdout, "\n", 2)[0]; first != s.project+"  "+tc.want+"  最終 tick 2026-09-26T02:48:00Z ok" {
+				t.Fatalf("1 行目 = %q, want 2 欄目が %s", first, tc.want)
+			}
+		})
+	}
+}
+
+func TestStatusMarksTheLoopUnknownWhenTheProcessListCannotBeRead(t *testing.T) {
 	s := newSandbox(t)
 	s.statusScenario()
 	s.setWip()
-	s.setProcesses("777 /home/me/go/bin/claude-dispatcher tick " + s.project)
+	s.respond("ps", stubwire.Rule{Exit: 1, Stderr: "ps: not permitted\n"})
 
 	r := s.statusPS()
 
-	if first := strings.SplitN(r.stdout, "\n", 2)[0]; !strings.Contains(first, "tick 実行中") {
-		t.Fatalf("1 行目 = %q", first)
+	if first := strings.SplitN(r.stdout, "\n", 2)[0]; !strings.Contains(first, "  loop ?  ") {
+		t.Fatalf("1 行目 = %q, want loop ?", first)
 	}
 }
 

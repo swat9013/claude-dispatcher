@@ -96,7 +96,7 @@ func TestFailedDryRunReportsOnlyADashTickLineOnStderr(t *testing.T) {
 	if r.stdout != "" {
 		t.Fatalf("失敗した試運転が stdout に書いた: %q", r.stdout)
 	}
-	assertCronLogLine(t, r.stderr, s.project, "-", "config_error")
+	assertFailureLine(t, r.stderr, s.project, "-", "config_error")
 	if after := fileFingerprints(t, s.stateRoot); !reflect.DeepEqual(before, after) {
 		t.Fatal("失敗した試運転が state dir に書いた")
 	}
@@ -121,38 +121,11 @@ func TestDryRunFailsNamingADependencyItCannotResolve(t *testing.T) {
 	}
 }
 
-func TestCronEnvDryRunRunsWithOnlyHomeAndAMinimalPath(t *testing.T) {
-	s := newSandboxWithHomeDefaults(t)
-	// cron の最小 PATH からは見えない。自己解決の置き場 (~/.local/bin) にだけ stub を置く
-	selfResolved := filepath.Join(s.home, ".local", "bin")
-	s.installStubs(selfResolved)
-	s.setIssues(readyIssue(42))
+func TestTickRejectsTheRemovedCronEnvFlag(t *testing.T) {
+	s := newSandbox(t)
 
-	r := s.runWithEnv(map[string]string{"GH_TOKEN": "parent-shell-token", "XDG_STATE_HOME": filepath.Join(s.root, "elsewhere")},
-		"tick", s.project, "--dry-run", "--cron-env")
+	r := s.tick("--dry-run", "--cron-env")
 
-	assertExit(t, r, 0)
-	calls := s.calls("gh")
-	if len(calls) == 0 {
-		t.Fatal("gh が呼ばれていない")
-	}
-	for _, c := range calls {
-		for _, stripped := range []string{"GH_TOKEN", "XDG_STATE_HOME"} {
-			if _, ok := c.Env[stripped]; ok {
-				t.Fatalf("親 shell の %s が撃ち直し後に残った: %v", stripped, c.Env)
-			}
-		}
-		if c.Env["HOME"] != s.home {
-			t.Fatalf("HOME = %q, want %s", c.Env["HOME"], s.home)
-		}
-		if slices.Contains(filepath.SplitList(c.Env["PATH"]), s.binDir) {
-			t.Fatalf("親 shell の PATH が撃ち直し後に残った: %q", c.Env["PATH"])
-		}
-		if filepath.Dir(c.Exe) != selfResolved {
-			t.Fatalf("gh を自己解決の置き場から引いていない: %s", c.Exe)
-		}
-	}
-	if got := asMap(t, dryRunLine(t, r)["instructions"]); number(t, got["start"]) != 1 {
-		t.Fatalf("instructions = %v", got)
-	}
+	assertExit(t, r, 2)
+	s.assertNames(r.stderr, "--cron-env")
 }

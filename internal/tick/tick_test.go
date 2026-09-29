@@ -14,6 +14,7 @@ import (
 	"github.com/swat9013/claude-dispatcher/internal/github"
 	"github.com/swat9013/claude-dispatcher/internal/launch"
 	"github.com/swat9013/claude-dispatcher/internal/paths"
+	"github.com/swat9013/claude-dispatcher/internal/proc"
 	"github.com/swat9013/claude-dispatcher/internal/tick"
 )
 
@@ -44,13 +45,16 @@ func (g fakeGh) Run(args ...string) ([]byte, error) {
 // fakeLauncher は claude の代わりに呼び出しを記録する。orchestrate は orchestrator の振る舞いを決める。
 type fakeLauncher struct {
 	orchestrate func(prompt string) launch.OrchestratorRun
-	spawn       func(n int) (launch.WorkerLaunch, error)
-	prompts     []string
-	workers     []string
+	// stop は RunOrchestrator が受け取った停止要求 (orchestrate の中から見る)
+	stop    <-chan struct{}
+	spawn   func(n int) (launch.WorkerLaunch, error)
+	prompts []string
+	workers []string
 }
 
-func (f *fakeLauncher) RunOrchestrator(prompt, logFile string, timeout time.Duration) (launch.OrchestratorRun, error) {
+func (f *fakeLauncher) RunOrchestrator(prompt, logFile string, timeout time.Duration, stop <-chan struct{}) (launch.OrchestratorRun, error) {
 	f.prompts = append(f.prompts, prompt)
+	f.stop = stop
 	return f.orchestrate(prompt), nil
 }
 
@@ -88,13 +92,24 @@ func (e *env) playbook() string {
 	return filepath.Join(e.home, ".claude", "skills", "swat-skills", "skills", "procedure", "playbook-implementation", "SKILL.md")
 }
 
-func (e *env) run(gh fakeGh, launcher *fakeLauncher) int {
-	return tick.Run(tick.Options{
+func (e *env) options(gh fakeGh, launcher *fakeLauncher) tick.Options {
+	return tick.Options{
 		Project: "widgets", Roots: e.roots, Home: e.home, Cwd: e.cwd, Env: []string{"HOME=" + e.home},
 		Now: now, Stdout: &bytes.Buffer{}, Stderr: &e.stderr,
 		Gh:       func([]string) (github.Runner, error) { return gh, nil },
 		Launcher: func([]string) (launch.Launcher, error) { return launcher, nil },
-	})
+	}
+}
+
+func (e *env) run(gh fakeGh, launcher *fakeLauncher) int {
+	return tick.Run(e.options(gh, launcher))
+}
+
+// once は停止要求の口 stop を渡して 1 tick を回す (loop と同じ呼び方)。
+func (e *env) once(gh fakeGh, launcher *fakeLauncher, stop <-chan struct{}) tick.Outcome {
+	o := e.options(gh, launcher)
+	o.Control.StopOrchestrator = stop
+	return tick.Once(o)
 }
 
 func (e *env) tickLine() map[string]any {
@@ -239,7 +254,7 @@ func TestTimedOutOrchestratorHasItsDecisionsIgnored(t *testing.T) {
 	launcher := &fakeLauncher{
 		orchestrate: func(prompt string) launch.OrchestratorRun {
 			run := e.writesDecisions(prompt)
-			run.TimedOut, run.ExitCode = true, -1
+			run.End, run.ExitCode = proc.TimedOut, -1
 			return run
 		},
 		spawn: func(int) (launch.WorkerLaunch, error) {
@@ -256,6 +271,102 @@ func TestTimedOutOrchestratorHasItsDecisionsIgnored(t *testing.T) {
 	orchestrator := e.tickLine()["orchestrator"].(map[string]any)
 	if orchestrator["timed_out"] != true {
 		t.Fatalf("orchestrator = %v", orchestrator)
+	}
+}
+
+func closed() chan struct{} {
+	c := make(chan struct{})
+	close(c)
+	return c
+}
+
+func refusesWorkers(t *testing.T) func(int) (launch.WorkerLaunch, error) {
+	return func(int) (launch.WorkerLaunch, error) {
+		t.Fatal("worker を起動した")
+		return launch.WorkerLaunch{}, nil
+	}
+}
+
+func TestStopRequestBeforeTheOrchestratorKeepsItFromLaunching(t *testing.T) {
+	e := newEnv(t)
+	launcher := &fakeLauncher{
+		orchestrate: func(string) launch.OrchestratorRun {
+			t.Fatal("orchestrator を起動した")
+			return launch.OrchestratorRun{}
+		},
+		spawn: refusesWorkers(t),
+	}
+
+	out := e.once(fakeGh{issues: twoCandidates}, launcher, closed())
+
+	line := e.tickLine()
+	if out.Result != tick.ResultError || out.Halt != tick.HaltedBeforeLaunch || line["error"] != "停止要求で orchestrator を起動しなかった" {
+		t.Fatalf("outcome = %+v / line = %v", out, line)
+	}
+	if _, ok := line["orchestrator"]; ok {
+		t.Fatalf("起動しなかった orchestrator の key を載せた: %v", line)
+	}
+}
+
+func TestStopRequestDuringTheOrchestratorLeavesItsDecisionsUnread(t *testing.T) {
+	e := newEnv(t)
+	stop := make(chan struct{})
+	var launcher *fakeLauncher
+	launcher = &fakeLauncher{
+		// 起動部の代わり: 決定ファイルを書いた後に届いた停止要求で止まる (届かなければ止まらずに正常終了する)
+		orchestrate: func(prompt string) launch.OrchestratorRun {
+			run := e.writesDecisions(prompt)
+			close(stop)
+			select {
+			case <-launcher.stop:
+				run.End, run.ExitCode = proc.Stopped, -1
+			default:
+			}
+			return run
+		},
+		spawn: refusesWorkers(t),
+	}
+
+	out := e.once(fakeGh{issues: twoCandidates}, launcher, stop)
+
+	line := e.tickLine()
+	if out.Result != tick.ResultError || out.Halt != tick.HaltedDuringRun || line["error"] != "停止要求で orchestrator を止めた" {
+		t.Fatalf("outcome = %+v / line = %v", out, line)
+	}
+	if line["orchestrator"] == nil || out.OrchestratorLog != e.project.OrchestratorLog(stem) {
+		t.Fatalf("止めた orchestrator の key と log の path が無い: %+v / %v", out, line)
+	}
+}
+
+func TestStopRequestAfterTheOrchestratorEndedNormallyIsIgnored(t *testing.T) {
+	e := newEnv(t)
+	stop := make(chan struct{})
+	launcher := &fakeLauncher{
+		orchestrate: func(prompt string) launch.OrchestratorRun {
+			run := e.writesDecisions(prompt)
+			close(stop) // 正常終了の直前に届いた
+			return run
+		},
+		spawn: launchesWorkers,
+	}
+
+	out := e.once(fakeGh{issues: twoCandidates}, launcher, stop)
+
+	if out.Result != tick.ResultOK || out.Halt != tick.NotHalted || len(out.Spawned) != 2 {
+		t.Fatalf("outcome = %+v, want 決定どおり worker を起動して ok", out)
+	}
+}
+
+func TestOnceLeavesTheFailureLineToTheCaller(t *testing.T) {
+	e := newEnv(t)
+
+	out := e.once(fakeGh{issues: "not json"}, &fakeLauncher{}, nil)
+
+	if out.Result != tick.ResultError || !out.Logged || out.Error == "" {
+		t.Fatalf("outcome = %+v", out)
+	}
+	if e.stderr.Len() != 0 {
+		t.Fatalf("Once が失敗行を出した: %q", e.stderr.String())
 	}
 }
 

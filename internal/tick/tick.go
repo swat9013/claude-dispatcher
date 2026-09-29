@@ -1,4 +1,4 @@
-// Package tick は `claude-dispatcher tick` の 1 回分を回す。
+// Package tick は tick の 1 回分を回す。単発の `claude-dispatcher tick` と loop が呼ぶ (system.md §13)。
 //
 // 観測の正規化と、機械的に確定する指示の導出までを CLI が持ち、選ぶ・見送る・人へ返すは orchestrator (LLM) に残す。
 // 外部 store (tracker / CL host) には書かない。書くのは state dir だけ (system.md §1 / §5)。
@@ -24,6 +24,7 @@ import (
 	"github.com/swat9013/claude-dispatcher/internal/launch"
 	"github.com/swat9013/claude-dispatcher/internal/paths"
 	"github.com/swat9013/claude-dispatcher/internal/plugin"
+	"github.com/swat9013/claude-dispatcher/internal/proc"
 )
 
 // OrchestratorTimeout は orchestrator の上限。超えたら kill して log に残す (system.md §9)
@@ -43,6 +44,48 @@ type Options struct {
 
 	Gh       func(env []string) (github.Runner, error)
 	Launcher func(env []string) (launch.Launcher, error)
+
+	// Control は loop が渡す口。単発の tick は零値のまま (停止要求は届かず、起動の通知もしない)
+	Control Control
+}
+
+// Control は loop が tick の 1 回分へ渡す口。
+type Control struct {
+	// StopOrchestrator は「orchestrator を止めよ」の要求で、閉じると届く。nil なら届かない。
+	// 段階の解釈は tick が持つ: 起動前なら起動せず、起動中なら止めて決定ファイルを読まず、正常終了の後なら無視する (system.md §13)
+	StopOrchestrator <-chan struct{}
+	// OrchestratorStarted は orchestrator を起動する直前に呼ぶ (loop の画面の経過の起点)。nil なら呼ばない
+	OrchestratorStarted func(at time.Time)
+}
+
+// Halt は停止要求が orchestrator に何をしたか。
+type Halt int
+
+const (
+	// NotHalted は停止要求が届かなかったか、orchestrator の正常終了の後に届いたので無視した
+	NotHalted Halt = iota
+	// HaltedBeforeLaunch は起動前に届いたので orchestrator を起動しなかった
+	HaltedBeforeLaunch
+	// HaltedDuringRun は起動中に届いたので orchestrator の process group を止めた
+	HaltedDuringRun
+)
+
+// Outcome は確定した tick 行のうち、呼び出し側 (単発の tick の exit code と失敗行、loop の画面と終了行) が使う分。値は log.jsonl に
+// 書いたものと同じで、書けなかったときは Error にその理由を足し、Logged が false。exit code と失敗行を出すかは呼び出し側が決める
+// (system.md §13)。
+type Outcome struct {
+	TS     string
+	Result Result
+	// Error は tick 行の error (1 行に畳んだもの)
+	Error  string
+	Logged bool
+	// Instructions は指示の種別 → 件数。観測に至らなかった tick は nil
+	Instructions map[string]int
+	// Spawned は起動した worker の issue
+	Spawned []int
+	Halt    Halt
+	// OrchestratorLog は orchestrator を起動した tick の orchestrator log の path
+	OrchestratorLog string
 }
 
 // stop は tick を止める失敗。result と error 文を持つ。
@@ -69,8 +112,8 @@ func resultOf(err error) (Result, string) {
 	return ResultError, err.Error()
 }
 
-// onPanic は panic を想定外の失敗として end へ渡す。stack trace を先に出し、前置付きの 1 行は end が最後に置く
-// (cron.log は末尾から読まれる)。defer で直に呼ぶ。
+// onPanic は panic を想定外の失敗として end へ渡す。stack trace を先に出す — 失敗行は呼び出し側が最後に置き、
+// 末尾の行だけで読めるようにする (formats.md §6)。defer で直に呼ぶ。
 func onPanic(stderr io.Writer, end func(error)) {
 	if v := recover(); v != nil {
 		fmt.Fprintf(stderr, "panic: %v\n%s", v, debug.Stack())
@@ -83,6 +126,9 @@ type run struct {
 	project paths.Project
 	stem    string
 	line    tickLine
+	halt    Halt
+	// orchestratorLog は orchestrator を起動したときだけ埋まる
+	orchestratorLog string
 }
 
 func newRun(o Options) *run {
@@ -97,10 +143,23 @@ func newRun(o Options) *run {
 
 func (r *run) getenv(key string) string { return deps.Getenv(r.o.Env, key) }
 
-// Run は 1 tick を回して exit code を返す。どこで止まっても log.jsonl に 1 行を残す (書ける限り)。
+// Run は単発の tick を 1 回回して exit code を返す。失敗したら失敗行 (formats.md §6) を stderr の末尾に出す。
+func Run(o Options) int {
+	out := Once(o)
+	if out.Result != ResultOK || !out.Logged {
+		loggedTS := ""
+		if out.Logged {
+			loggedTS = out.TS
+		}
+		fmt.Fprintln(o.Stderr, failureLine(time.Now(), o.Project, loggedTS, out.Result, out.Error))
+	}
+	return out.Result.Exit
+}
+
+// Once は 1 tick を回して確定した tick 行を返す。どこで止まっても log.jsonl に 1 行を残す (書ける限り)。
 //
 // lock は tick 行を書き終えてから外す (system.md §9)。先に外すと、次の tick の行が前の tick の行より先に書かれうる。
-func Run(o Options) (exit int) {
+func Once(o Options) (out Outcome) {
 	r := newRun(o)
 	var lock *os.File
 	// 後に積んだ defer から走るので、onPanic が行を書いた後に lock を外す
@@ -109,7 +168,7 @@ func Run(o Options) (exit int) {
 			lock.Close() // 閉じると flock も外れる
 		}
 	}()
-	defer onPanic(o.Stderr, func(err error) { exit = r.finish(err) })
+	defer onPanic(o.Stderr, func(err error) { out = r.finish(err) })
 
 	if err := r.requireStateDir(); err != nil {
 		return r.finish(err)
@@ -132,8 +191,8 @@ func (r *run) requireStateDir() error {
 	return nil
 }
 
-// acquireLock は単一実行の lock を取る。取れなければ locked (前 tick が長引いている間も log は進める —
-// 最終行の時刻で cron の死活を見るため)。
+// acquireLock は単一実行の lock を取る。取れなければ locked (loop の tick と単発の tick を直列化する。重なった側も
+// log に行を残す)。
 func (r *run) acquireLock() (*os.File, error) {
 	lock, err := os.OpenFile(r.project.LockFile(), os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
@@ -146,21 +205,37 @@ func (r *run) acquireLock() (*os.File, error) {
 	return lock, nil
 }
 
-// finish は tick 行を書き、失敗なら cron.log の行を stderr に出して exit code を返す。
-// 行を書けなかったときは、result に関わらず書けなかった理由を cron.log の行で残す (log.jsonl が死活の手掛かりなので)。
-func (r *run) finish(err error) int {
+// finish は tick 行を書き、確定した行を返す。行を書けなかったときは、書けなかった理由を Error に足す
+// (呼び出し側がそれを人に見せる)。
+func (r *run) finish(err error) Outcome {
 	result, msg := resultOf(err)
 	r.line.Result = result.Name
 	r.line.Error = foldLines(msg)
-	loggedTS := r.line.TS
+	out := Outcome{TS: r.line.TS, Result: result, Logged: true, Halt: r.halt, OrchestratorLog: r.orchestratorLog}
 	if werr := appendLine(r.project.LogFile(), r.line); werr != nil {
-		loggedTS = ""
+		out.Logged = false
 		msg = strings.TrimSpace(msg + "\nlog.jsonl に書けない: " + werr.Error())
 	}
-	if result != ResultOK || loggedTS == "" {
-		fmt.Fprintln(r.o.Stderr, cronLogLine(time.Now(), r.o.Project, loggedTS, result, msg))
+	out.Error = foldLines(msg)
+	if r.line.observedKeys != nil {
+		out.Instructions = r.line.Instructions
 	}
-	return result.Exit
+	if r.line.launchedKeys != nil {
+		for _, s := range r.line.Spawned {
+			out.Spawned = append(out.Spawned, s.Issue)
+		}
+	}
+	return out
+}
+
+// stopRequested は「orchestrator を止めよ」の要求が届いているか。
+func (r *run) stopRequested() bool {
+	select {
+	case <-r.o.Control.StopOrchestrator:
+		return true
+	default:
+		return false
+	}
 }
 
 func (r *run) tick() error {
@@ -319,17 +394,31 @@ func (r *run) driveOrchestrator(obs observation, instructionFile string) error {
 	if err != nil {
 		return err
 	}
+	if r.stopRequested() {
+		r.halt = HaltedBeforeLaunch
+		return stopf(ResultError, "停止要求で orchestrator を起動しなかった")
+	}
 	orchestratorLog := r.project.OrchestratorLog(r.stem)
-	run, err := launcher.RunOrchestrator(prompt, orchestratorLog, OrchestratorTimeout)
+	if r.o.Control.OrchestratorStarted != nil {
+		r.o.Control.OrchestratorStarted(time.Now())
+	}
+	run, err := launcher.RunOrchestrator(prompt, orchestratorLog, OrchestratorTimeout, r.o.Control.StopOrchestrator)
 	if err != nil {
 		return err
 	}
+	r.orchestratorLog = orchestratorLog
 	r.line.launchedKeys = &launchedKeys{Orchestrator: newOrchestratorRecord(run), Spawned: []spawned{}}
-	if run.TimedOut || run.ExitCode != 0 {
+	if run.End == proc.Stopped {
+		// timeout と同じく決定ファイルは読まない。付いた wip は機械では剥がさない (system.md §9)
+		r.halt = HaltedDuringRun
+		return stopf(ResultError, "停止要求で orchestrator を止めた")
+	}
+	// ここから後に届いた停止要求は無視する: 決定どおりの worker の起動を途中で打ち切ると、付いた wip が worker の無いまま残る
+	if run.End == proc.TimedOut || run.ExitCode != 0 {
 		// 途中で死んだ orchestrator の決定ファイルは信用しない (wip を付けた後に書き切れていない可能性)。
 		// 付いた wip は機械では剥がさない — stale wip として人が回収する
 		return fmt.Errorf("orchestrator が正常終了しなかった (exit %d, timed_out=%t)。決定ファイルは読まない。"+
-			"経過は %s。この tick で wip を付けたまま残った issue があれば、人が確かめて剥がす", run.ExitCode, run.TimedOut, orchestratorLog)
+			"経過は %s。この tick で wip を付けたまま残った issue があれば、人が確かめて剥がす", run.ExitCode, run.End == proc.TimedOut, orchestratorLog)
 	}
 	decisions, err := ReadDecisions(decisionsFile, obs.instructions)
 	if err != nil {
@@ -391,7 +480,7 @@ func DryRun(o Options) (exit int) {
 	r := newRun(o)
 	fail := func(err error) int {
 		result, msg := resultOf(err)
-		fmt.Fprintln(o.Stderr, cronLogLine(time.Now(), o.Project, "", result, msg))
+		fmt.Fprintln(o.Stderr, failureLine(time.Now(), o.Project, "", result, msg))
 		return result.Exit
 	}
 	defer onPanic(o.Stderr, func(err error) { exit = fail(err) })

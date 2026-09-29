@@ -40,8 +40,8 @@ const (
 	runTimeout = 60 * time.Second
 )
 
-// git / ps / crontab の stub は status / setup / doctor の観測点。tick の契約は gh と claude の呼び出しだけで決まる
-var stubNames = []string{"gh", "claude", "git", "ps", "crontab"}
+// git / ps の stub は status / setup / doctor / loop の観測点。tick の契約は gh と claude の呼び出しだけで決まる
+var stubNames = []string{"gh", "claude", "git", "ps"}
 
 // selfResolutionDirs は PATH の自己解決 (internal/deps の candidates) が探す置き場のうち、sandbox の HOME の外にあるもの。
 // sandbox の PATH は stub だけで閉じているが (newBareSandbox)、自己解決はここまで探しに行くので、ここにある実物には stub で蓋ができない。
@@ -126,7 +126,9 @@ type sandbox struct {
 	// rules は stub の名前ごとの応答 rule。claude は orchestratorRule と組み合わせて書き出す
 	rules            map[string][]stubwire.Rule
 	orchestratorRule *stubwire.Rule
-	plugins          map[string][]pluginEntry
+	// workerRule は worker (spawn prompt に印を持つ claude 呼び出し) への応答
+	workerRule stubwire.Rule
+	plugins    map[string][]pluginEntry
 }
 
 // newSandbox は XDG_CONFIG_HOME / XDG_STATE_HOME を tmp に向けた sandbox を作る。
@@ -163,22 +165,23 @@ func newBareSandbox(t *testing.T) *sandbox {
 		t.Fatal(err)
 	}
 	s := &sandbox{
-		t:        t,
-		root:     root,
-		home:     filepath.Join(root, "home"),
-		clone:    filepath.Join(root, "clone"),
-		stubRoot: filepath.Join(root, "stub"),
-		binDir:   filepath.Join(root, "stub-bin"),
-		project:  defaultProject,
-		rules:    map[string][]stubwire.Rule{},
-		plugins:  map[string][]pluginEntry{},
+		t:          t,
+		root:       root,
+		home:       filepath.Join(root, "home"),
+		clone:      filepath.Join(root, "clone"),
+		stubRoot:   filepath.Join(root, "stub"),
+		binDir:     filepath.Join(root, "stub-bin"),
+		project:    defaultProject,
+		rules:      map[string][]stubwire.Rule{},
+		workerRule: quickWorkerRule,
+		plugins:    map[string][]pluginEntry{},
 	}
 	for _, dir := range []string{s.home, s.clone, s.stubRoot} {
 		mustMkdir(t, dir)
 	}
 	// TempDir の削除より先に走る (Cleanup は後に登録したものから走る)
 	t.Cleanup(s.waitForSpawnedWorkers)
-	s.installStubs(s.binDir)
+	s.installStubs()
 	s.env = map[string]string{
 		"HOME": s.home,
 		// PATH は stub だけで閉じる。CLI が撃つ外部 CLI はすべて stub にあるので、/usr/bin 等を足すと
@@ -203,8 +206,9 @@ func (s *sandbox) setUp() {
 	s.installPlugin("swat-skills@swat9013", "user", "")
 }
 
-// installStubs は stub binary を名前ごとに dir へ hard link し、stub が root を引く file を置く。
-func (s *sandbox) installStubs(dir string) {
+// installStubs は stub binary を名前ごとに PATH の置き場 (binDir) へ hard link し、stub が root を引く file を置く。
+func (s *sandbox) installStubs() {
+	dir := s.binDir
 	s.t.Helper()
 	mustMkdir(s.t, dir)
 	for _, name := range stubNames {

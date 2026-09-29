@@ -7,17 +7,16 @@
 //
 //	calls/<name>/<unixnano>-<pid>.json  呼び出し 1 回の記録 (Call)
 //	responses/<name>.json               応答の rule 列 ([]Rule)。先頭から見て最初に当たった rule で応答する
-//	crontab                             crontab の fake が持つ表 (無ければ表が無い)
-//	crontab.refuse                      在れば crontab の fake が `crontab -` を拒む
 package stubwire
 
 import (
 	"path/filepath"
 	"strconv"
+	"time"
 )
 
 // RootFile は stub binary の隣に置き、stub root の path を 1 行で持つ file の名前。
-// root を env ではなく file で渡すのは、`tick --dry-run --cron-env` が env を剥がして撃ち直すため。
+// root を env ではなく file で渡すので、テスト対象の binary が子へ渡す env (観測対象) に配線の値を混ぜずに済む。
 const RootFile = ".stub-root"
 
 // UnmatchedExit は、どの rule にも当たらない呼び出しに stub が返す exit code。
@@ -25,13 +24,6 @@ const RootFile = ".stub-root"
 const UnmatchedExit = 98
 
 func CallsDir(root, name string) string { return filepath.Join(root, "calls", name) }
-
-// CrontabFile は crontab の fake が持つ表の置き場。crontab は rule で応答する stub ではなく、
-// `crontab -` で入った表を `crontab -l` が返す fake にする (登録した後に読み直す手順を実物どおりに通すため)。
-func CrontabFile(root string) string { return filepath.Join(root, "crontab") }
-
-// CrontabRefuseFile が在ると、crontab の fake は `crontab -` (表の置き換え) を exit 1 で拒む。
-func CrontabRefuseFile(root string) string { return filepath.Join(root, "crontab.refuse") }
 
 func ResponsesFile(root, name string) string {
 	return filepath.Join(root, "responses", name+".json")
@@ -44,8 +36,6 @@ type Call struct {
 	Argv []string          `json:"argv"`
 	Cwd  string            `json:"cwd"`
 	Env  map[string]string `json:"env"`
-	// Stdin は `crontab -` が受け取った表 (他の呼び出しでは読まない)
-	Stdin string `json:"stdin,omitempty"`
 }
 
 // RecordedEnv は Call に残す env。token の受け渡しと置き場の解決を assert するためのもの。
@@ -65,7 +55,16 @@ type Rule struct {
 	Exit        int    `json:"exit,omitempty"`
 	// Decisions は orchestrator の代役: state dir の最新の指示ファイルと同じ stem で決定ファイルを書く
 	Decisions *DecisionsWrite `json:"decisions,omitempty"`
+	// ReleaseFile が空でなければ、決定ファイルを書いた後、その file が現れるまで終わらない (長く走る orchestrator / worker の代役)。
+	// 現れないまま ReleaseDeadline を過ぎたら ReleaseTimeoutExit で終わる
+	ReleaseFile string `json:"release_file,omitempty"`
 }
+
+// ReleaseDeadline は ReleaseFile を待つ上限。テストが release し忘れても stub が居残らないようにする
+const ReleaseDeadline = 2 * time.Minute
+
+// ReleaseTimeoutExit は ReleaseFile が現れないまま上限を過ぎた stub の exit code
+const ReleaseTimeoutExit = 96
 
 // DecisionsWrite は orchestrator の代役が書くもの。
 type DecisionsWrite struct {

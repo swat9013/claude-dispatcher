@@ -174,14 +174,14 @@ func workerBranch(issue int) string { return fmt.Sprintf("worktree-issue-%d", is
 
 // --- claude ---
 
-// workerRule は worker (spawn prompt に印を持つ claude 呼び出し) への応答。すぐ終わる
-var workerRule = stubwire.Rule{ArgContains: workerPromptMarker, Stdout: workerStubOutput}
+// quickWorkerRule は既定の worker への応答。すぐ終わる
+var quickWorkerRule = stubwire.Rule{ArgContains: workerPromptMarker, Stdout: workerStubOutput}
 
 // writeClaudeRules は claude の応答を worker → orchestrator の順で書き出す。
 // orchestrator の rule は条件を持たず何にでも当たるので、worker の rule を必ず先に置く。
 func (s *sandbox) writeClaudeRules() {
 	s.t.Helper()
-	rules := []stubwire.Rule{workerRule}
+	rules := []stubwire.Rule{s.workerRule}
 	if s.orchestratorRule != nil {
 		rules = append(rules, *s.orchestratorRule)
 	}

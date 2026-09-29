@@ -1,4 +1,5 @@
-// Package deps は依存 CLI (gh / claude / git) の path を解決する。cron の最小環境では PATH が通らない (system.md §9)。
+// Package deps は依存 CLI (gh / claude / git) の path を解決する。loop は起動した shell の PATH を継ぐが、最小の PATH の
+// shell (ssh 越し等) から撃たれても動くように、よく使われる置き場も探す (system.md §9)。
 package deps
 
 import (
