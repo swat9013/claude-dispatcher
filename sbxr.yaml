@@ -1,0 +1,18 @@
+# sbxr の repo 宣言。sandbox VM に CONTRIBUTING.md の「セットアップ」と同じ道具を入れ、VM の中でも gate (pre-commit の hook) を撃てるようにする
+version: 1
+init:
+  # go.mod の toolchain 行の版の Go と、依存の module を取ってくる (GOTOOLCHAIN の既定の auto)
+  - go mod download
+  # golangci-lint は CI と同じ版を公式の install script で入れる。版は checks.yml の lint job から読み、ここに重ねて書かない
+  - v=$(awk '/golangci-lint-action@/{f=1} f && /version:/{print $2; exit}' .github/workflows/checks.yml) && test -n "$v" && curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b "$HOME/.local/bin" "$v"
+  # pre-commit は 4.4.0 以上 (.pre-commit-config.yaml の minimum_pre_commit_version)。uv が無ければ入れる
+  - command -v uv >/dev/null || curl -LsSf https://astral.sh/uv/install.sh | sh
+  - PATH="$HOME/.local/bin:$PATH" uv tool install 'pre-commit>=4.4.0'
+  # commit 時と push 前の hook を入れ、hook 環境 (gitleaks・actionlint・shellcheck) を作成時に build しておく
+  - PATH="$HOME/.local/bin:$PATH" pre-commit install --install-hooks
+egress:
+  go-modules:
+    rationale: Go の toolchain (go.mod の toolchain 行) と依存 module の取得、pre-commit の hook 環境の build。GOPROXY と GOSUMDB の既定の宛先
+    allow:
+      - proxy.golang.org:443
+      - sum.golang.org:443
