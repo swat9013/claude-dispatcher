@@ -1,0 +1,9 @@
+# golangci-lint v2 の設定。撃つ場所と版は CONTRIBUTING.md の「gate」
+version: "2"
+
+linters:
+  # errcheck / govet / ineffassign / staticcheck / unused (staticcheck は gosimple と stylecheck を含む)
+  default: standard
+  exclusions:
+    # fmt.Fprint* / Close などの戻り値を慣習的に無視するものは errcheck で拾わない (v1 の既定の除外と同じ)
+    presets: [std-error-handling]
