@@ -504,8 +504,9 @@ func (s *sandbox) secondSignalDuringTheOrchestrator() runResult {
 	s.orchestratorWaitsAfterWriting(startDecisions(playbookPath(s.defaultInstallPath(), "playbook-implementation"), 42))
 	p := s.startLoop()
 	s.waitOrchestratorCalls(1)
+	// 同じ signal を続けて送ると、1 回目が受け取られる前なら kernel と Go の runtime が 1 回にまとめる。別の signal を送って 2 回分を確実に届ける
 	p.signal(syscall.SIGINT)
-	p.signal(syscall.SIGINT)
+	p.signal(syscall.SIGTERM)
 	return p.wait()
 }
 
@@ -551,8 +552,9 @@ func TestLoopSecondSignalLeavesWorkersOfEarlierTicksRunning(t *testing.T) {
 	p := s.startLoop()
 	s.waitOrchestratorCalls(2)
 
+	// 別の signal を送るのは secondSignalDuringTheOrchestrator と同じ理由 (同じ signal の連続はまとめられる)
 	p.signal(syscall.SIGTERM)
-	p.signal(syscall.SIGTERM)
+	p.signal(syscall.SIGHUP)
 	assertExit(t, p.wait(), 0)
 
 	if !alive(t, worker) {

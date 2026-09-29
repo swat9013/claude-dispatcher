@@ -432,7 +432,7 @@ func (e environment) loopOptions(project paths.Project, interval loop.Interval, 
 
 // stopRequests は loop の停止要求 (SIGINT / SIGTERM / SIGHUP) を受ける channel を返す。
 func stopRequests() <-chan os.Signal {
-	signals := make(chan os.Signal, 4) // 素早い 2 回目の Ctrl+C を落とさないよう余裕を持たせる
+	signals := make(chan os.Signal, 4) // loop が読む前に届いた停止要求を落とさないよう余裕を持たせる (同じ signal の連続は runtime が先にまとめるので、ここでは救えない)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	return signals
 }
