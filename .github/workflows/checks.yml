@@ -1,0 +1,90 @@
+# 検査の本体。ci.yml (PR と main への push) と release.yml (publish の前段) の両方から呼び、gate を 1 箇所に置く。
+# 呼ばれた側の github コンテキストは呼び出し元のものになるので、run の中止 (concurrency) はここでなく呼び出し元が決める。
+# gate の方針は CONTRIBUTING.md の「gate」
+name: checks
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  # push 前の hook (go vet / go test) を配布対象の OS (linux / darwin) の runner で撃つ
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # go.mod の toolchain directive の版を入れ、後続の step に GOTOOLCHAIN=local を export する
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      # -json の event を残し、log には -v と同じ出力を流す。shell: bash は pipefail で撃つので、go test が落ちれば step も落ちる
+      - run: go test -race -count=1 -json ./... | tee test.json | jq -rj 'select(.Action == "output") | .Output'
+        shell: bash
+      # skip したテストと理由 (t.Skipf の文) を並べる。subtest の --- SKIP は親の結果の下にまとめて出て、
+      # 理由の行と離れるので、-v の行の位置でなく -json の event をテスト名で引く
+      - name: skip したテスト
+        if: always()
+        run: |
+          jq -rs '
+            [.[] | select(.Action == "skip" and .Test) | {Package, Test}] as $skipped
+            | if ($skipped | length) == 0 then "skip なし"
+              else .[] | select(.Action == "output" and .Test and ({Package, Test} | IN($skipped[]))
+                                and (.Output | test("^\\s+\\S+\\.go:\\d+: ")))
+                   | "\(.Test):\(.Output | rtrimstr("\n"))"
+              end' test.json
+        shell: bash
+
+  # push 前の hook の golangci-lint を撃つ。build tag が無く OS で結果が変わらないので ubuntu だけで撃つ
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          # 手元に入れる版と揃える (CONTRIBUTING.md の「セットアップ」)
+          version: v2.14.0
+
+  goreleaser-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          version: v2.18.2
+          args: check
+
+  # commit 時の hook (.pre-commit-config.yaml) を全 file に撃ち、PR の commit 範囲を gitleaks で検査する。
+  # pre-commit install していない commit も、ここで同じ検査に掛かる
+  pre-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      # 版は Dependabot の対象外なので手で上げる (CONTRIBUTING.md の「gate」)
+      - run: pipx install pre-commit==4.6.2
+      - run: pre-commit run --all-files --show-diff-on-failure
+      # merge commit を許しているので、PR の途中の commit で入れて後の commit で消した秘匿情報も main の履歴に残る。
+      # tree だけを見る commit 時の hook では見逃すので、push 前の gitleaks の hook を PR の commit 範囲に撃つ (版も規則も手元と同じ)。
+      # base..head は main (stack した CL なら前段の branch) から届く commit を除くので、--first-parent で絞らない
+      # (絞ると、前段の branch や同じ branch への他人の push から merge で入った、まだ main に無い commit を見逃す)。
+      # gitleaks-action は使わない (v2 以降 EULA で、PR の commit 一覧を 1 page しか引かず、commit の多い PR で範囲が欠けうる)
+      - name: gitleaks (PR の commit 範囲)
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: pre-commit run --hook-stage pre-push --from-ref "$BASE_SHA" --to-ref "$HEAD_SHA" gitleaks

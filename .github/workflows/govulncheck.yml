@@ -1,0 +1,76 @@
+# 依存と標準ライブラリの脆弱性を govulncheck で定期的に検査し、検出したら triage 待ちの issue を 1 件起こす。
+# network 上の脆弱性 DB を引くので、CL の変更と無関係に赤くなりうる。PR では撃たない (新しい脆弱性の公開で、
+# 開いている worker の CL が一斉に ci 再入を起こすのを避ける)。方針は CONTRIBUTING.md の「gate」
+name: govulncheck
+
+on:
+  schedule:
+    - cron: "0 0 * * 1"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+# 同じ題名の issue を探してから起こすまでの間に別の run が割り込むと、issue が 2 件できる。run を 1 本ずつ流す
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  govulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # 出荷する Go (go.mod の toolchain directive) で標準ライブラリを判定する。golang/govulncheck-action は
+      # 既定で setup-go に go-version: stable を渡し、go-version-file に勝って最新 stable で検査してしまうので使わない。
+      # この job に setup-go を 2 回置かない (2 回目は 1 回目が export した GOTOOLCHAIN=local のために go 行の版を入れる)
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      # 判定は text 出力の exit code で行う (-json / sarif / openvex は検出があっても 0 を返す)。
+      # 3 は検出、それ以外の非 0 は検査そのものの失敗
+      - name: govulncheck
+        id: scan
+        run: |
+          code=0
+          go tool govulncheck ./... > report.txt 2>&1 || code=$?
+          cat report.txt
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          if [ "$code" -ne 0 ] && [ "$code" -ne 3 ]; then
+            echo "::error::govulncheck が検査に失敗した (exit $code)"
+            exit "$code"
+          fi
+      - name: 検出を issue にする
+        if: steps.scan.outputs.code == '3'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: govulncheck が脆弱性を検出した
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # --search は曖昧に一致するので、題名の完全一致で同じ issue が open かを見る
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"$TITLE\" in:title" --json number,title --jq 'map(select(.title == env.TITLE)) | .[0].number // empty')
+          if [ -n "$existing" ]; then
+            echo "open な #$existing があるので issue を起こさない"
+          else
+            {
+              echo "govulncheck が依存か標準ライブラリの脆弱性を検出した。run: $RUN_URL"
+              echo
+              echo "手元での再現: \`go tool govulncheck ./...\`"
+              echo
+              echo '```'
+              # issue 本文の上限 (65536 文字) に収める
+              limit=60000
+              head -c "$limit" report.txt
+              echo '```'
+              if [ "$(wc -c < report.txt)" -gt "$limit" ]; then
+                echo
+                echo "出力が長いので先頭の $limit byte で切った。全文は run の log にある"
+              fi
+            } > body.md
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --label needs-triage --body-file body.md
+          fi
+          echo "::error::govulncheck が脆弱性を検出した"
+          exit 1

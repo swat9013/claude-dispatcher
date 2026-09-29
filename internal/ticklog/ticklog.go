@@ -75,7 +75,7 @@ func parse(raw []byte) (line Line, ok, bad bool) {
 	if err != nil {
 		return Line{}, false, true
 	}
-	doc.Line.At = at
+	doc.At = at
 	return doc.Line, true, false
 }
 

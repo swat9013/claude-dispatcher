@@ -1,24 +1,71 @@
-# `pre-commit install` 1 回で commit 時 (gitleaks) と push 前 (go vet / go test) の両方の hook が入る
+# `pre-commit install` 1 回で commit 時 (gitleaks / gofmt / go mod tidy / actionlint) と push 前 (gitleaks の commit 範囲 / go vet / golangci-lint / go test) の両方の hook が入る。
+# CI (.github/workflows/checks.yml) は commit 時の hook を `pre-commit run --all-files` で撃つので、手元と同じ検査が CI でも落ちる
 default_install_hook_types: [pre-commit, pre-push]
+# stages を書かない hook は commit 時だけに撃つ (書かないと install した全 stage で撃たれ、push 前にも走る)
+default_stages: [pre-commit]
+# 手元の Go を使う hook の `language: unsupported` は 4.4.0 で入った名前 (それより古い pre-commit は解釈できずに落ちる)
+minimum_pre_commit_version: '4.4.0'
 
 repos:
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.30.1
     hooks:
       - id: gitleaks
+      # push する commit を 1 つずつ検査する。範囲は pre-commit が PRE_COMMIT_FROM_REF / PRE_COMMIT_TO_REF で渡す
+      # (push 前は remote に無い commit、CI は PR の base / head を --from-ref / --to-ref で渡す)。
+      # merge commit は git log -p が差分を出さないので --no-merges で外す
+      - id: gitleaks
+        name: gitleaks (push する commit)
+        entry: sh -c 'gitleaks git --redact --log-opts="--no-merges $PRE_COMMIT_FROM_REF..$PRE_COMMIT_TO_REF"'
+        always_run: true
+        stages: [pre-push]
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.12
+    hooks:
+      - id: actionlint
+        # actionlint は PATH の shellcheck で run: の script も検査する。hook 環境に版を固定した shellcheck を入れ、
+        # 手元の有無と CI の runner に入っている版に結果を左右させない
+        additional_dependencies: [github.com/wasilibs/go-shellcheck/cmd/shellcheck@v0.11.1]
+  # Go の hook は go コマンド経由で撃つ。go.mod の toolchain directive の版の Go が動き、手元と CI で版が揃う
+  # (`language: golang` は pre-commit が専用の GOROOT と GOTOOLCHAIN=local を立てるので toolchain directive が効かない)
   - repo: local
     hooks:
+      # go fmt は整形し直した file を書き換える。書き換えがあると pre-commit が hook を落とす
+      - id: gofmt
+        name: gofmt
+        entry: go fmt ./...
+        language: unsupported
+        pass_filenames: false
+        types: [go]
+      - id: go-mod-tidy
+        name: go mod tidy
+        entry: go mod tidy -diff
+        language: unsupported
+        pass_filenames: false
+        files: (\.go|^go\.mod|^go\.sum)$
+      # golangci-lint の既定セットも govet を含むが、go vet も撃つ。go vet は go.mod の toolchain の Go に入っている
+      # analyzer で動き、golangci-lint の govet は golangci-lint を build したときの analyzer で動くので、
+      # Go の新しい版で足された analyzer は go vet にしか無いことがある
       - id: go-vet
         name: go vet
         entry: go vet ./...
-        language: system
+        language: unsupported
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
+      # binary は CI と同じ版を人が公式の手段で入れる (CONTRIBUTING.md の「セットアップ」)。公式の hook は
+      # language: golang で source から build し (公式が保証しない導入経路)、--fix も付くので使わない
+      - id: golangci-lint
+        name: golangci-lint
+        entry: golangci-lint run ./...
+        language: unsupported
         pass_filenames: false
         always_run: true
         stages: [pre-push]
       - id: go-test
         name: go test
-        entry: go test ./...
-        language: system
+        entry: go test -race ./...
+        language: unsupported
         pass_filenames: false
         always_run: true
         stages: [pre-push]

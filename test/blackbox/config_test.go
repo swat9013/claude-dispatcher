@@ -54,7 +54,11 @@ func TestUnreadableConfigIsRejected(t *testing.T) {
 	if err := os.Chmod(s.configFile(), 0); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.Chmod(s.configFile(), 0o644) })
+	t.Cleanup(func() {
+		if err := os.Chmod(s.configFile(), 0o644); err != nil {
+			t.Error(err)
+		}
+	})
 
 	r := s.tick()
 

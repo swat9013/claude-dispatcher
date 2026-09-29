@@ -1,0 +1,29 @@
+# 依存の版を週 1 回、ecosystem ごとに 1 本の PR で上げる。auto-merge はしない (PR の CI を人が見て merge する)。
+# 対象外で手で上げるもの (goreleaser の version・CI の pre-commit の版・go.mod の toolchain) は CONTRIBUTING.md の「gate」
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns: ["*"]
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    # tool directive の依存 (govulncheck の golang.org/x/vuln) は go.mod で // indirect になる。
+    # 既定の対象は direct の依存だけなので、indirect も上げる対象に入れる
+    allow:
+      - dependency-type: all
+    groups:
+      gomod:
+        patterns: ["*"]
+  - package-ecosystem: pre-commit
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      pre-commit:
+        patterns: ["*"]
