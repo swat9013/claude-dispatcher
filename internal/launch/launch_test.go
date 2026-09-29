@@ -1,6 +1,7 @@
 package launch
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -62,9 +63,15 @@ func TestStoppingTheOrchestratorLeavesAWorkerRunning(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { syscall.Kill(-w.PID, syscall.SIGKILL) })
+	t.Cleanup(func() {
+		if err := syscall.Kill(-w.PID, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+			t.Errorf("worker (pid %d) を止められない: %v", w.PID, err)
+		}
+	})
 
-	c.RunOrchestrator("prompt", filepath.Join(t.TempDir(), "o.log"), time.Minute, closed())
+	if _, err := c.RunOrchestrator("prompt", filepath.Join(t.TempDir(), "o.log"), time.Minute, closed()); err != nil {
+		t.Fatal(err)
+	}
 
 	if state := processState(w.PID); state == "" || strings.HasPrefix(state, "Z") {
 		t.Fatalf("orchestrator を止めたら worker (pid %d) も止まった (state %q)", w.PID, state)

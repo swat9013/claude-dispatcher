@@ -63,10 +63,13 @@ func (s *sandbox) startLoop() *loopProcess {
 	if err := p.cmd.Start(); err != nil {
 		s.t.Fatalf("loop を起動できない: %v", err)
 	}
-	go func() { p.cmd.Wait(); close(p.done) }()
+	// 終わり方は wait が p.cmd.ProcessState から読むので、Wait の error は見ない
+	go func() { _ = p.cmd.Wait(); close(p.done) }()
 	s.t.Cleanup(func() {
 		if p.running() {
-			p.cmd.Process.Kill()
+			if err := p.cmd.Process.Kill(); err != nil {
+				s.t.Errorf("loop を止められない: %v", err)
+			}
 			<-p.done
 		}
 	})
@@ -293,7 +296,9 @@ func TestLoopAcceptsTheIntervalBounds(t *testing.T) {
 				t.Fatal(err)
 			}
 			s.waitTickLines(1)
-			cmd.Process.Signal(syscall.SIGINT)
+			if err := cmd.Process.Signal(syscall.SIGINT); err != nil {
+				t.Fatalf("loop に SIGINT を送れない: %v", err)
+			}
 			if err := cmd.Wait(); err != nil {
 				t.Fatalf("interval %s の loop が exit 0 で終わらない: %v\n%s", interval, err, stdout.String())
 			}
@@ -439,7 +444,9 @@ func TestLoopKeepsStoppingInStepsWhenStdoutIsGone(t *testing.T) {
 	stdout.Close()
 	s.waitTickLines(1)
 
-	cmd.Process.Signal(syscall.SIGINT)
+	if err := cmd.Process.Signal(syscall.SIGINT); err != nil {
+		t.Fatalf("loop に SIGINT を送れない: %v", err)
+	}
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	select {
@@ -448,7 +455,9 @@ func TestLoopKeepsStoppingInStepsWhenStdoutIsGone(t *testing.T) {
 			t.Fatalf("stdout の読み手が消えた loop が停止要求で exit 0 にならない: %v", err)
 		}
 	case <-time.After(runTimeout):
-		cmd.Process.Kill()
+		if err := cmd.Process.Kill(); err != nil {
+			t.Errorf("loop を止められない: %v", err)
+		}
 		t.Fatal("stdout の読み手が消えた loop が停止要求で止まらない")
 	}
 }

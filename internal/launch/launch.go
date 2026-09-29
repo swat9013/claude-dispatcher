@@ -95,8 +95,9 @@ func (c ClaudePrint) SpawnWorker(prompt, logFile string) (WorkerLaunch, error) {
 	if err != nil {
 		return WorkerLaunch{}, err
 	}
-	// 待たずに返し、終了は裏で回収する。loop は長く生きるので、回収しないと終わった worker が zombie として残る
-	go cmd.Wait()
+	// 待たずに返し、終了は裏で回収する。loop は長く生きるので、回収しないと終わった worker が zombie として残る。
+	// worker の成否は issue の label と引き渡しコメントが持つので、Wait の error は見ない
+	go func() { _ = cmd.Wait() }()
 	return WorkerLaunch{PID: cmd.Process.Pid, SessionID: sessionID}, nil
 }
 
