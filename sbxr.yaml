@@ -3,10 +3,11 @@ version: 1
 init:
   # go.mod の toolchain 行の版の Go と、依存の module を取ってくる (GOTOOLCHAIN の既定の auto)
   - go mod download
-  # golangci-lint は CI と同じ版を公式の install script で入れる。版は checks.yml の lint job から読み、ここに重ねて書かない
-  - v=$(awk '/golangci-lint-action@/{f=1} f && /version:/{print $2; exit}' .github/workflows/checks.yml) && test -n "$v" && curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b "$HOME/.local/bin" "$v"
+  # golangci-lint は CI と同じ版を公式の install script で入れる。版は checks.yml の lint job から読み、ここに重ねて書かない。
+  # install script は file に落としてから撃つ (pipe だと取得の失敗で sh が空の入力を受けて 0 で終わり、init の失敗が見えない)
+  - v=$(awk '/golangci-lint-action@/{f=1} f && /version:/{print $2; exit}' .github/workflows/checks.yml) && test -n "$v" && curl -sSfL -o /tmp/golangci-lint-install.sh https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh && sh /tmp/golangci-lint-install.sh -b "$HOME/.local/bin" "$v"
   # pre-commit は 4.4.0 以上 (.pre-commit-config.yaml の minimum_pre_commit_version)。uv が無ければ入れる
-  - command -v uv >/dev/null || curl -LsSf https://astral.sh/uv/install.sh | sh
+  - command -v uv >/dev/null || { curl -LsSf -o /tmp/uv-install.sh https://astral.sh/uv/install.sh && sh /tmp/uv-install.sh; }
   - PATH="$HOME/.local/bin:$PATH" uv tool install 'pre-commit>=4.4.0'
   # commit 時と push 前の hook を入れ、hook 環境 (gitleaks・actionlint・shellcheck) を作成時に build しておく
   - PATH="$HOME/.local/bin:$PATH" pre-commit install --install-hooks
