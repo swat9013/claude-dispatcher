@@ -175,6 +175,7 @@ spawn prompt の文面は同梱の契約 file が正本。本節は構造の決�
 - 作業ツリーの外にある実体 (settings の適用・label 作成・稼働 clone) を触る受け入れ条件は担当から外し、CL 本文に「user に残る作業」として書く (worker の sandbox が clone root の外への書き込みを拒む)
 - **残タスクと範囲外の欠陥は issue にする** — CL 本文は merge 後に読まれず残りが散逸する。**付ける label は宣言 config の triage label だけ** (無ければ label なし)。着手可 label が付くと次 tick の `start` が worker 自身の起票を拾い、dispatcher が自分の作業を自己増殖させる。同じ title の open issue があれば新しく作らず発端をコメントで足す
   - **この規約は spawn prompt の文面でしか守らせられない (残るリスク)**。worker は tick が渡す利用者本人の gh 認証で書くので、label を付けたのが worker か人かを tracker 上の actor で区別できず、tick の側で決定的に弾く述語が無い。CLI が塞ぐのは宣言の誤り (triage label = 着手可 label、§8) だけ。破られたときの歯止めは、並列上限 N と、候補を選ぶ orchestrator の判断と、人の triage になる
+  - **続行不能で終えるとき、担当 issue 自身の残りは issue にせず、引き渡しコメントの「人が次にやること」(formats.md §8) が持つ**。issue にするのは担当範囲の外で見つけた欠陥と直さなかったレビュー指摘だけ。担当 issue の残りを別の issue にすると、`ready-for-human` の付いた担当 issue とその残りが分かれて散る
 - **issue 本文は着手可 label を付けた人の triage を信頼の根拠にする** — orchestrator は本文を選定の信号に、worker は仕様として読む。本文の書き手の検査は持たないので、着手可 label を付けた後に作者が本文を書き換えると、書き換えた内容が push 権限を持つ worker に届く (残るリスク)。public repo では、collaborator 以外が作者の issue に着手可 label を付けるときにこのリスクを負う。作者が collaborator でない issue を候補から外す述語は拡張候補
 - **permission が止めた操作 (classifier の deny) を迂回しない** — 進めなくなったら続行不能として人へ返す
 - gh は 1 呼び出しにつき shell の top-level 断片の先頭に置いて単体で実行させる (sandbox の除外指定が先頭 token だけで照合されるため、`N=$(gh …)` のような埋め込みは除外されず credential を読めない)
