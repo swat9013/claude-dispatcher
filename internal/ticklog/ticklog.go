@@ -32,18 +32,30 @@ type OrchestratorLine struct {
 	Decisions []Decision `json:"decisions"`
 }
 
-// Decision は orchestrator 行の decisions の 1 件。Action は決定ファイルの語彙 (formats.md §5.2)。
+// Decision は決定ファイルの decisions の 1 件 (formats.md §5.2)。orchestrator 行は決定ファイルの decisions をそのまま
+// 写すので、書き手 (tick) と読み手 (status) が同じ型を使う。
 type Decision struct {
 	Issue  int    `json:"issue"`
-	Action string `json:"action"`
+	Action Action `json:"action"`
 	Reason string `json:"reason"`
 }
+
+// Action は決定ファイルの採否の語彙 (formats.md §5.2)。起動する採否 (start / reenter) は spawn の kind と同じ綴り。
+type Action string
+
+const (
+	ActionStart         Action = "start"
+	ActionReenter       Action = "reenter"
+	ActionSkip          Action = "skip"
+	ActionReadyForHuman Action = "ready-for-human"
+)
 
 // Log は log.jsonl を読んだもの。
 type Log struct {
 	// Ticks は tick 行を file の順に並べたもの
 	Ticks []Line
-	// LastOrchestrator は file の最後の orchestrator 行。無ければ nil
+	// LastOrchestrator は file の最後の orchestrator 行。無いか、最後の orchestrator 行を読めなければ nil
+	// (読めない行を飛ばして、それより古い判断を直近として見せない)
 	LastOrchestrator *OrchestratorLine
 }
 
@@ -65,14 +77,15 @@ func Read(file string) (log Log, broken int, err error) {
 		if readErr != nil && readErr != io.EOF {
 			return Log{}, 0, readErr
 		}
-		tickLine, orchestratorLine, bad := parse(raw)
-		switch {
-		case bad:
+		line, bad := parse(raw)
+		if bad {
 			broken++
-		case tickLine != nil:
-			log.Ticks = append(log.Ticks, *tickLine)
-		case orchestratorLine != nil:
-			log.LastOrchestrator = orchestratorLine
+		}
+		switch line := line.(type) {
+		case Line:
+			log.Ticks = append(log.Ticks, line)
+		case *OrchestratorLine:
+			log.LastOrchestrator = line
 		}
 		if readErr == io.EOF {
 			return log, broken, nil
@@ -80,30 +93,40 @@ func Read(file string) (log Log, broken int, err error) {
 	}
 }
 
-// parse は 1 行を読む。tick 行なら tickLine を、orchestrator 行なら orchestratorLine を返し、読めなければ bad
-// (空行はどれでもない)。
-func parse(raw []byte) (tickLine *Line, orchestratorLine *OrchestratorLine, bad bool) {
+// parse は 1 行を読む。line は tick 行なら Line、orchestrator 行なら *OrchestratorLine、空行か JSON として読めない行なら
+// nil。bad は読めなかった行。actor の在る行は key (ts / decisions) を読めなくても orchestrator 行として *OrchestratorLine
+// の nil を返す — 最も新しい orchestrator 行が読めないとき、それより古い判断を直近として出さないため。
+func parse(raw []byte) (line any, bad bool) {
 	raw = bytes.TrimSpace(raw)
 	if len(raw) == 0 {
-		return nil, nil, false
+		return nil, false
 	}
-	var doc struct {
-		Line
-		Actor     *string    `json:"actor"`
-		Decisions []Decision `json:"decisions"`
+	var head struct {
+		Actor *string `json:"actor"`
 	}
-	if err := json.Unmarshal(raw, &doc); err != nil {
-		return nil, nil, true
+	if err := json.Unmarshal(raw, &head); err != nil {
+		return nil, true
 	}
-	if doc.Actor != nil {
-		return nil, &OrchestratorLine{TS: doc.TS, Decisions: doc.Decisions}, false
+	if head.Actor != nil {
+		var orchestrator OrchestratorLine
+		if err := json.Unmarshal(raw, &orchestrator); err != nil {
+			return (*OrchestratorLine)(nil), true
+		}
+		if _, err := time.Parse(time.RFC3339Nano, orchestrator.TS); err != nil {
+			return (*OrchestratorLine)(nil), true
+		}
+		return &orchestrator, false
 	}
-	at, err := time.Parse(time.RFC3339Nano, doc.TS)
+	var tick Line
+	if err := json.Unmarshal(raw, &tick); err != nil {
+		return nil, true
+	}
+	at, err := time.Parse(time.RFC3339Nano, tick.TS)
 	if err != nil {
-		return nil, nil, true
+		return nil, true
 	}
-	doc.At = at
-	return &doc.Line, nil, false
+	tick.At = at
+	return tick, false
 }
 
 // Last は最後の tick 行を返す。無ければ false。

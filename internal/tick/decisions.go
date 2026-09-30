@@ -6,6 +6,8 @@ import (
 	"os"
 	"slices"
 	"strings"
+
+	"github.com/swat9013/claude-dispatcher/internal/ticklog"
 )
 
 // Decisions は orchestrator が書く決定ファイル (formats.md §5.2)。
@@ -16,11 +18,8 @@ type Decisions struct {
 	Spawn     []Spawn
 }
 
-type Decision struct {
-	Issue  int    `json:"issue"`
-	Action Action `json:"action"`
-	Reason string `json:"reason"`
-}
+// Decision は決定ファイルの decisions の 1 件。orchestrator 行を読む側と共有するので ticklog に置く。
+type Decision = ticklog.Decision
 
 // Spawn は起動する worker 1 つ。Kind は同じ issue の採否 (start / reenter) と同じ綴り。
 type Spawn struct {

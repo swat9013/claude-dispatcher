@@ -109,3 +109,25 @@ func TestStatusShowsNoDecisionLinesWhenNoneIsSkipOrReadyForHuman(t *testing.T) {
 		t.Fatalf("判断の行を出した:\n%s", r.stdout)
 	}
 }
+
+func TestStatusShowsNoDecisionsWhenTheNewestOrchestratorLineCannotBeRead(t *testing.T) {
+	s := newSandbox(t)
+	s.statusScenario()
+	broken := s.orchestratorLine("2026-09-26T03:05:00.000000Z")
+	broken["decisions"] = "壊れている"
+	s.writeLogLines(
+		s.tickLine("2026-09-26T03:00:00.000000Z"),
+		s.orchestratorLine("2026-09-26T03:00:00.000000Z", judged(51, "skip", "古い判断")),
+		s.tickLine("2026-09-26T03:05:00.000000Z"),
+		broken,
+	)
+
+	r := s.statusPS()
+
+	if strings.Contains(r.stdout, "判断") {
+		t.Fatalf("読めない最新の orchestrator 行より古い判断を出した:\n%s", r.stdout)
+	}
+	if !strings.Contains(r.stdout, "読めない 1 行を飛ばした") {
+		t.Fatalf("読めない行の注記が無い:\n%s", r.stdout)
+	}
+}

@@ -8,7 +8,6 @@ import (
 
 	"github.com/swat9013/claude-dispatcher/internal/github"
 	"github.com/swat9013/claude-dispatcher/internal/termtext"
-	"github.com/swat9013/claude-dispatcher/internal/tick"
 	"github.com/swat9013/claude-dispatcher/internal/ticklog"
 )
 
@@ -17,14 +16,20 @@ const unknownCell = "?"
 
 var columns = []string{"ISSUE", "KIND", "STATE", "ELAPSED", "SESSION", "BRANCH", "WIP", "CL", "TICK"}
 
-// Fit は行を端末の幅に収めるか (formats.md §10)。FitTerminal か FitPlain で作る。
+// Fit は判断の行の reason を端末の幅で切り詰めるか (formats.md §10)。FitTerminal か FitPlain で作る。
 type Fit struct {
-	// terminalWidth は行を収める端末の幅。0 なら端末でない
+	// terminalWidth は行を収める端末の幅。0 なら端末でない (FitPlain)
 	terminalWidth int
 }
 
-// FitTerminal は判断の行が端末の幅 width に収まるように reason を切り詰める。
-func FitTerminal(width int) Fit { return Fit{terminalWidth: width} }
+// FitTerminal は判断の行が端末の幅 width に収まるように reason を切り詰める。width は 1 以上 (幅を読めない端末は
+// FitPlain にする)。
+func FitTerminal(width int) Fit {
+	if width < 1 {
+		panic(fmt.Sprintf("status.FitTerminal: 端末の幅 %d は 1 以上でない", width))
+	}
+	return Fit{terminalWidth: width}
+}
 
 // FitPlain は stdout が端末でないときの出し方: 判断の行を切り詰めない。
 func FitPlain() Fit { return Fit{} }
@@ -71,10 +76,11 @@ func (r Report) JudgmentLines(fit Fit) []string {
 	}
 	var lines []string
 	for _, d := range r.LastOrchestrator.Decisions {
-		if action := tick.Action(d.Action); action != tick.ActionSkip && action != tick.ActionReadyForHuman {
+		if d.Action != ticklog.ActionSkip && d.Action != ticklog.ActionReadyForHuman {
 			continue
 		}
-		lines = append(lines, fit.cut(fmt.Sprintf("  #%d %s: %s", d.Issue, d.Action, oneLine(d.Reason))))
+		prefix := fmt.Sprintf("  #%d %s: ", d.Issue, d.Action)
+		lines = append(lines, prefix+fit.reason(oneLine(d.Reason), termtext.Width(prefix)))
 	}
 	if len(lines) == 0 {
 		return nil
@@ -82,24 +88,23 @@ func (r Report) JudgmentLines(fit Fit) []string {
 	return append([]string{"判断 " + ticklog.ShortTS(r.LastOrchestrator.TS)}, lines...)
 }
 
-// oneLine は reason を 1 行の平文にする。reason は orchestrator が issue 本文を読んで書く文で、改行や端末の制御文字
-// (ESC など) を含みうる。1 件 1 行を保ち、端末に制御文字を撃ち込ませないため、制御文字を空白にして空白を畳む。
+// oneLine は reason の改行と制御文字 (ESC など) を空白にする。reason は orchestrator が issue 本文を読んで書く文で、
+// それらを含みうる。1 件 1 行を保ち、端末に制御文字を撃ち込ませないため。
 func oneLine(reason string) string {
-	plain := strings.Map(func(r rune) rune {
+	return strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) {
 			return ' '
 		}
 		return r
 	}, reason)
-	return strings.Join(strings.Fields(plain), " ")
 }
 
-// cut は端末なら line を端末の幅で切る。
-func (f Fit) cut(line string) string {
+// reason は端末なら、前置き (表示幅 used) の後ろに残る幅で reason を切る。前置き (`#<issue> <action>:`) は切らない。
+func (f Fit) reason(reason string, used int) string {
 	if f.terminalWidth == 0 {
-		return line
+		return reason
 	}
-	return termtext.Cut(line, f.terminalWidth)
+	return termtext.Cut(reason, max(0, f.terminalWidth-used))
 }
 
 // NoteLines は注記の行。
