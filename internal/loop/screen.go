@@ -40,6 +40,8 @@ type view struct {
 	// last は loop が回した直近の tick。まだ 1 回も終えていなければ nil
 	last   *tick.Outcome
 	report status.Report
+	// fit は表の ACTIVITY の切り詰め方
+	fit status.Fit
 }
 
 // lines は画面の行。withGuide が false なら操作案内を除く (stdout が端末でないときと、止まった後の画面)。
@@ -56,7 +58,7 @@ func (v view) lines(withGuide bool) []string {
 		}
 	}
 	lines = append(lines, v.report.NoteLines()...)
-	lines = append(lines, v.report.TableLines()...)
+	lines = append(lines, v.report.TableLines(v.fit)...)
 	if withGuide {
 		lines = append(lines, "", guide)
 	}

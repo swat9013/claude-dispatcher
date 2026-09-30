@@ -92,7 +92,7 @@ func TestStatusShowsTheTickAndAnOrchestratorRowWhileTheOrchestratorRuns(t *testi
 		t.Fatalf("見出しに orchestrator 実行中の状態欄が無い:\n%s", r.stdout)
 	}
 	row := orchestratorRow(r.stdout)
-	want := regexp.MustCompile(`^- orch running \d+s ` + orchestratorAgentID + ` busy/working - - - \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$`)
+	want := regexp.MustCompile(`^- orch running \d+s ` + orchestratorAgentID + ` busy/working - - - \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z( |$)`)
 	if !want.MatchString(strings.Join(row, " ")) {
 		t.Fatalf("orchestrator の行 = %v:\n%s", row, r.stdout)
 	}
