@@ -68,7 +68,6 @@ _Avoid_: blocked, escalated
 
 **無言の終了**:
 worker が CL にも人待ちにも至らずに、wip を剥がして終わった状態。worker 契約が失敗扱いにする終わり方で、`status` の STATE の `silent` に当たる。wip が残っていれば stale wip と呼び、無言の終了とは区別する。
-_Avoid_: silent exit, 空振り
 
 ## 役とやり取り
 

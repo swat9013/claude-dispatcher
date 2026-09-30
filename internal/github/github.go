@@ -320,6 +320,9 @@ type CLState struct {
 	State  string `json:"state"`
 }
 
+// Settled は CL が worker の成果として残っている (open か merge 済み) か。close されただけの CL は数えない。
+func (c CLState) Settled() bool { return c.State == "OPEN" || c.State == "MERGED" }
+
 // LatestCLsWindow は LatestCLs が branch ごとに新しい順に読む CL の本数。fork の CL を読み飛ばす分の余裕。
 // 本数は formats.md §10 (status の CL 列) にも書いてあるので、変えるときは一緒に直す
 const LatestCLsWindow = 10

@@ -261,7 +261,7 @@ project を省略すると、config root の下の全 project (§9 の `projects
   - issue ごとの最新の起動記録で、issue に `dispatcher:wip` が付いているか、process が生きているか、起動 (起動した tick の `ts`) から 24 時間以内のもの (24 時間は固定の値。起動記録に終了時刻は無いので起動から数える)
   - それより古い起動記録で、process が生きているもの
 
-  wip は issue の今の worker にだけ掛ける (古い起動記録に掛けると、再入で起こし直した issue の前回の worker が stale に見える)。`running` と `stale` は時間と関係なく載り、終わった worker の結末 (`cl` / `human` / `silent`) は起動から 24 時間だけ載る。process の生死は起動部が見分ける。`claude -p` では pid の command 行に `session_id` が在るかで見る (pid は再利用される。system.md §13)
+  wip は issue の今の worker にだけ掛ける (古い起動記録に掛けると、再入で起こし直した issue の前回の worker が stale に見える)。`running` と `stale` は時間と関係なく載り、終わった worker の結末 (`cl` / `human` / `silent`) は起動から 24 時間だけ載る。process の生死は起動部が見分ける。`claude -p` では pid の command 行に `session_id` が在るかで見る (pid は再利用される。system.md §13)。STATE が `stale` の行が stale wip の手掛かり (system.md §1)
 - 外部 process (gh / git / claude / ps) が失敗した列は `?` にして表は出し、何を読めなかったかを `! <理由>` の注記行に残す
 
 表は project ごとに 1 段:

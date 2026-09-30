@@ -136,7 +136,7 @@ func (w Worker) State() Probed[WorkerState] {
 	if !w.CL.Known {
 		return Probed[WorkerState]{}
 	}
-	if cl := w.CL.Value; cl != nil && (cl.State == "OPEN" || cl.State == "MERGED") {
+	if w.CL.Value != nil && w.CL.Value.Settled() {
 		return known(StateCL)
 	}
 	if !w.Human.Known {
@@ -148,14 +148,11 @@ func (w Worker) State() Probed[WorkerState] {
 	return known(StateSilent)
 }
 
-// needsHuman は STATE の判定に人待ちを読む必要がある (process が死んでいて、wip も open / merge 済みの CL も無い) か。
+// needsHuman は STATE の判定に人待ちを読む必要があるか。判定の段を State 1 か所に置くため、人待ちを読めていない
+// (Human が ?) ときに State が ? になる行を、人待ちを読む必要のある行とする。
 func (w Worker) needsHuman() bool {
-	endedWithoutWIP := w.Alive.Known && !w.Alive.Value && w.WIP.Known && !w.WIP.Value
-	if !endedWithoutWIP || !w.CL.Known {
-		return false
-	}
-	cl := w.CL.Value
-	return cl == nil || (cl.State != "OPEN" && cl.State != "MERGED")
+	w.Human = known(false)
+	return w.State() != (Worker{Alive: w.Alive, WIP: w.WIP, CL: w.CL}).State()
 }
 
 // Session は `claude agents --json` の行のうち表に出す分。
@@ -263,7 +260,7 @@ func listed(spawns []spawnRecord, alive func(ticklog.Spawned) Probed[bool], wip 
 		a, w := alive(s.Spawned), wip(s.Issue)
 		running := a.Known && a.Value
 		stale := latest && w.Known && w.Value
-		recent := latest && now.Sub(s.tick.At) < recentlySpawned
+		recent := latest && now.Sub(s.tick.At) <= recentlySpawned
 		if !running && !stale && !recent {
 			continue
 		}
@@ -319,7 +316,7 @@ func (c *collector) wip(cfg config.Config, cfgErr error, gh github.Runner) func(
 	}
 	numbers, err := github.WIPIssues(gh, cfg.IssueRepo)
 	if err != nil {
-		c.note("wip を読めない — WIP は ? で、process の生きている worker と起動から 24 時間以内の worker だけを載せた (%v)", err)
+		c.note("wip を読めない — WIP は ? で、process の生きている worker と起動から %s 以内の worker だけを載せた (%v)", FormatElapsed(recentlySpawned), err)
 		return unknown
 	}
 	return func(issue int) Probed[bool] { return known(slices.Contains(numbers, issue)) }

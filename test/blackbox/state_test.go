@@ -11,16 +11,6 @@ import (
 // status の STATE 列 (formats.md §10): running / stale / cl / human / silent を上から順に判定し、終わった worker も起動から
 // 24 時間は載せる。
 
-// writeSpawnedTickLineAt は issue 42 の worker を at に起動した tick 行を log.jsonl に置く。
-func (s *sandbox) writeSpawnedTickLineAt(at time.Time) {
-	s.t.Helper()
-	line := map[string]any{
-		"ts": at.UTC().Format("2006-01-02T15:04:05.000000Z"), "project": s.project, "cwd": s.clone, "result": "ok",
-		"spawned": []map[string]any{{"issue": 42, "kind": "start", "pid": workerPID, "log": "/x.log", "session_id": workerSession}},
-	}
-	mustWrite(s.t, s.logFile(), mustJSON(s.t, line)+"\n")
-}
-
 // setHuman は `ready-for-human` の付いた issue を決める。
 func (s *sandbox) setHuman(numbers ...int) {
 	listed := []map[string]int{}
@@ -134,5 +124,18 @@ func TestStateIsUnknownWithANoteWhenReadyForHumanCannotBeRead(t *testing.T) {
 
 	if got := stateOf(t, r.stdout); got != "?" || !strings.Contains(r.stdout, "  ! ready-for-human を読めない") {
 		t.Fatalf("STATE = %q, want ? と注記\n%s", got, r.stdout)
+	}
+}
+
+func TestStatusDoesNotReadReadyForHumanWhenNoRowNeedsIt(t *testing.T) {
+	s := newSandbox(t)
+	s.endedWorkerScenario()
+	s.respondLatestCLs(map[int]latestCLPage{42: {cls: []latestCL{{number: 57, state: "OPEN"}}}})
+	s.respond("gh", stubwire.Rule{ArgsPrefix: []string{"issue", "list"}, ArgContains: humanLabel, Exit: 1, Stderr: "boom\n"})
+
+	r := s.statusPS()
+
+	if got := stateOf(t, r.stdout); got != "cl" || strings.Contains(r.stdout, "ready-for-human を読めない") {
+		t.Fatalf("STATE = %q, want cl のまま (人待ちを読む行が無いので読まない)\n%s", got, r.stdout)
 	}
 }

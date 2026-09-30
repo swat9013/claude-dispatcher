@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/swat9013/claude-dispatcher/test/blackbox/stubwire"
 )
@@ -24,8 +25,19 @@ const (
 // writeSpawnedTickLine は issue 42 の worker を起動した tick 行を log.jsonl に置く。
 func (s *sandbox) writeSpawnedTickLine() {
 	s.t.Helper()
+	s.writeSpawnedTickLineWithTS(spawnedTS)
+}
+
+// writeSpawnedTickLineAt は issue 42 の worker を at に起動した tick 行を log.jsonl に置く。
+func (s *sandbox) writeSpawnedTickLineAt(at time.Time) {
+	s.t.Helper()
+	s.writeSpawnedTickLineWithTS(at.UTC().Format("2006-01-02T15:04:05.000000Z"))
+}
+
+func (s *sandbox) writeSpawnedTickLineWithTS(ts string) {
+	s.t.Helper()
 	line := map[string]any{
-		"ts": spawnedTS, "project": s.project, "cwd": s.clone, "result": "ok",
+		"ts": ts, "project": s.project, "cwd": s.clone, "result": "ok",
 		"observed": map[string]int{"issues": 1, "cls": 0}, "candidates": 1, "wip": 0, "instructions": map[string]int{"start": 1},
 		"instruction_file": "/x", "orchestrator": map[string]any{"exit_code": 0, "seconds": 1.0, "timed_out": false, "session_id": "o"},
 		"spawned": []map[string]any{{"issue": 42, "kind": "start", "pid": workerPID, "log": "/x.log", "session_id": workerSession}},

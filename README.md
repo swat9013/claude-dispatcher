@@ -100,14 +100,14 @@ ssh 越しの session 等で keyring の認証が読めず tick が `auth_error`
 
 loop を撃った端末の画面が一番早い。1 行目に loop の状態 (待機と次の tick の時刻 / tick 実行中 / 停止待ち)、2 行目に直近の tick の結果が出る。tick が失敗していれば、その理由が `!` の行に出る (形式は [`docs/design/formats.md`](docs/design/formats.md) §13)。
 
-別の端末からは `status` で見る。見出しに loop が生きているか (`loop 稼働中` / `loop なし`) と最終 tick を出し、log.jsonl の起動記録を起点に、process の生死・wip label・作業ツリー・CL を読み直して今の worker を並べる。
+別の端末からは `status` で見る。見出しに loop が生きているか (`loop 稼働中` / `loop なし`) と最終 tick を出し、log.jsonl の起動記録を起点に、process の生死・wip label・作業ツリー・CL・人待ち (`ready-for-human`) を読み直して worker を並べる。走っている worker と stale wip のほか、終わった worker も起動から 24 時間は結末 (`cl` / `human` / `silent`) を出して載せる。
 
 ```sh
 claude-dispatcher status ps myproj      # 1 回だけ
 claude-dispatcher status watch          # 全 project を 5 秒ごとに描き直す (Ctrl-C で終わる)
 ```
 
-`STATE` が `exited` なのに `WIP` が `yes` の行は、worker が wip を剥がさずに死んだ issue (stale wip)。issue を確かめて、wip label を手で外す。
+`STATE` が `stale` の行は、worker が wip を剥がさずに死んだ issue (stale wip)。issue を確かめて、wip label を手で外す。`silent` の行は、worker が CL にも人待ちにも至らずに終わった issue (無言の終了)。
 
 過去の tick の結果は log.jsonl に 1 行ずつ残る。置き場は `claude-dispatcher paths --json myproj` で引ける。
 
