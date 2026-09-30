@@ -4,6 +4,9 @@ package precheck
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,10 +22,13 @@ type Problem struct {
 	Error   string
 }
 
+// String は `trigger <名前>: <理由>` の 1 行。
+func (p Problem) String() string { return fmt.Sprintf("trigger %s: %s", p.Trigger, p.Error) }
+
 // Check は workflow 定義の trigger を宣言順に確かめ、落ちたものを返す。home は HOME (`~/.claude/` の親)。
 func Check(def workflow.Definition, home string) []Problem {
 	var problems []Problem
-	var names map[string]bool
+	var found *scan
 	for _, t := range def.Triggers {
 		action := strings.TrimLeft(t.Action, " \t\r\n")
 		switch {
@@ -30,34 +36,66 @@ func Check(def workflow.Definition, home string) []Problem {
 			problems = append(problems, Problem{t.Name, "action が template 変数で始まるので、先頭の skill を確かめられない"})
 		case strings.HasPrefix(action, "/"):
 			name := strings.Fields(action)[0][1:]
-			if names == nil {
-				names = available(def.Dir, home, def.Claude.Args)
+			if found == nil {
+				found = available(def.Dir, home, def.Claude.Args)
 			}
-			if !names[name] {
-				problems = append(problems, Problem{t.Name, "action の先頭の /" + name + " が見つからない (plugin・repo の .claude・~/.claude の skill と command)"})
+			if !found.names[name] {
+				problems = append(problems, Problem{t.Name, "action の先頭の /" + name + " が見つからない (plugin・repo の .claude・~/.claude の skill と command)" + found.unreadableNote()})
 			}
 		}
 	}
 	return problems
 }
 
-// available は呼べる skill と command の名前の組。
-func available(clone, home string, claudeArgs []string) map[string]bool {
-	names := map[string]bool{}
-	add := func(prefix string, list []string) {
-		for _, n := range list {
-			names[prefix+n] = true
+// scan は置き場を探した結果: 呼べる名前と、読めなかった置き場 (無いのではなく、読み出しか解析に失敗したもの)。
+type scan struct {
+	names      map[string]bool
+	unreadable []string
+}
+
+func (s *scan) add(names ...string) {
+	for _, n := range names {
+		s.names[n] = true
+	}
+}
+
+// failed は、読めなかった置き場を覚える。無い (ErrNotExist) のは失敗に数えない。
+func (s *scan) failed(path string, err error) {
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		s.unreadable = append(s.unreadable, fmt.Sprintf("%s (%v)", path, err))
+	}
+}
+
+// unreadableNote は、見つからない理由に添える、読めなかった置き場。無ければ ""。
+func (s *scan) unreadableNote() string {
+	if len(s.unreadable) == 0 {
+		return ""
+	}
+	return " · 読めなかった置き場: " + strings.Join(s.unreadable, ", ")
+}
+
+// available は呼べる skill と command の名前を探す。
+func available(clone, home string, claudeArgs []string) *scan {
+	s := &scan{names: map[string]bool{}}
+	for _, base := range []string{filepath.Join(clone, ".claude"), filepath.Join(home, ".claude")} {
+		for _, k := range s.skillsUnder(filepath.Join(base, "skills")) {
+			s.add(k.name)
+		}
+		s.add(s.commandsUnder(filepath.Join(base, "commands"))...)
+	}
+	for _, p := range s.plugins(clone, home, claudeArgs) {
+		for _, k := range s.pluginSkills(p) {
+			s.add(p.name + ":" + k.name)
+			if k.named {
+				// front matter に name を持つ plugin の skill は、他と重ならなければ接頭辞なしでも呼べる
+				s.add(k.name)
+			}
+		}
+		for _, c := range s.pluginCommands(p) {
+			s.add(p.name + ":" + c)
 		}
 	}
-	for _, base := range []string{filepath.Join(clone, ".claude"), filepath.Join(home, ".claude")} {
-		add("", skillsUnder(filepath.Join(base, "skills")))
-		add("", commandsUnder(filepath.Join(base, "commands")))
-	}
-	for _, p := range plugins(clone, home, claudeArgs) {
-		add(p.name+":", p.skills())
-		add(p.name+":", p.commands())
-	}
-	return names
+	return s
 }
 
 // plugin は plugin 1 つ。manifest は `.claude-plugin/plugin.json` の中身。
@@ -74,64 +112,89 @@ type manifest struct {
 }
 
 // readPlugin は dir の plugin を読む。manifest が無いか読めなければ fallback の名前で、既定の置き場だけを見る。
-func readPlugin(dir, fallback string) plugin {
+func (s *scan) readPlugin(dir, fallback string) plugin {
 	p := plugin{dir: dir, name: fallback}
-	raw, err := os.ReadFile(filepath.Join(dir, ".claude-plugin", "plugin.json"))
-	if err == nil && json.Unmarshal(raw, &p.manifest) == nil && p.manifest.Name != "" {
+	file := filepath.Join(dir, ".claude-plugin", "plugin.json")
+	raw, err := os.ReadFile(file)
+	if err != nil {
+		s.failed(file, err)
+		return p
+	}
+	if err := json.Unmarshal(raw, &p.manifest); err != nil {
+		s.failed(file, err)
+		return p
+	}
+	if p.manifest.Name != "" {
 		p.name = p.manifest.Name
 	}
 	return p
 }
 
-// skills は plugin の `skills/` と、manifest の `skills` が挙げる path の skill。
-func (p plugin) skills() []string {
-	list := skillsUnder(filepath.Join(p.dir, "skills"))
-	for _, path := range paths(p.manifest.Skills) {
+// skill は skill 1 つ。named は、名前が front matter の name から来たか (dir の名前でなく)。
+type skill struct {
+	name  string
+	named bool
+}
+
+// pluginSkills は plugin の root の `SKILL.md`・`skills/`・manifest の `skills` が挙げる path の skill。
+func (s *scan) pluginSkills(p plugin) []skill {
+	var list []skill
+	if _, err := os.Stat(filepath.Join(p.dir, "SKILL.md")); err == nil {
+		list = append(list, s.readSkill(p.dir))
+	}
+	list = append(list, s.skillsUnder(filepath.Join(p.dir, "skills"))...)
+	for _, path := range s.paths(p, "skills", p.manifest.Skills) {
 		path = filepath.Join(p.dir, path)
 		if _, err := os.Stat(filepath.Join(path, "SKILL.md")); err == nil {
-			list = append(list, skillName(path))
+			list = append(list, s.readSkill(path))
 		} else {
-			list = append(list, skillsUnder(path)...)
+			list = append(list, s.skillsUnder(path)...)
 		}
 	}
 	return list
 }
 
-// commands は plugin の `commands/` と、manifest の `commands` が挙げる path の command。manifest の path が既定の置き場を
-// 置き換えるか足すかは確かめられていないので、見つからないと取り違えない側 (足す) に倒す。
-func (p plugin) commands() []string {
-	list := commandsUnder(filepath.Join(p.dir, "commands"))
-	for _, path := range paths(p.manifest.Commands) {
+// pluginCommands は plugin の `commands/` と、manifest の `commands` が挙げる path の command。manifest の path が既定の
+// 置き場を置き換えるか足すかは確かめていないので、見つからないと取り違えない側 (足す) に倒す (formats.md §2.9)。
+func (s *scan) pluginCommands(p plugin) []string {
+	list := s.commandsUnder(filepath.Join(p.dir, "commands"))
+	for _, path := range s.paths(p, "commands", p.manifest.Commands) {
 		path = filepath.Join(p.dir, path)
 		if strings.HasSuffix(path, ".md") {
 			list = append(list, strings.TrimSuffix(filepath.Base(path), ".md"))
 		} else {
-			list = append(list, commandsUnder(path)...)
+			list = append(list, s.commandsUnder(path)...)
 		}
 	}
 	return list
 }
 
-// paths は manifest の path の項目 (文字列か文字列の列) を読む。それ以外の形 (対応表など) は読まない。
-func paths(raw json.RawMessage) []string {
+// paths は manifest の path の項目 (文字列か文字列の列) を読む。それ以外の形 (対応表など) は読めなかった置き場に数える。
+func (s *scan) paths(p plugin, key string, raw json.RawMessage) []string {
+	if len(raw) == 0 {
+		return nil
+	}
 	var one string
-	if json.Unmarshal(raw, &one) == nil && one != "" {
+	if json.Unmarshal(raw, &one) == nil {
 		return []string{one}
 	}
 	var list []string
-	_ = json.Unmarshal(raw, &list)
+	if err := json.Unmarshal(raw, &list); err != nil {
+		s.failed(filepath.Join(p.dir, ".claude-plugin", "plugin.json")+" の "+key, err)
+	}
 	return list
 }
 
 // plugins は事前検査が探す plugin: installed_plugins.json が挙げるもの・skills の dir に置いたもの・--plugin-dir。
-func plugins(clone, home string, claudeArgs []string) []plugin {
-	list := installed(home)
+func (s *scan) plugins(clone, home string, claudeArgs []string) []plugin {
+	list := s.installed(home)
 	for _, base := range []string{filepath.Join(clone, ".claude", "skills"), filepath.Join(home, ".claude", "skills")} {
-		entries, _ := os.ReadDir(base)
+		entries, err := os.ReadDir(base)
+		s.failed(base, err)
 		for _, e := range entries {
 			dir := filepath.Join(base, e.Name())
 			if _, err := os.Stat(filepath.Join(dir, ".claude-plugin", "plugin.json")); err == nil {
-				list = append(list, readPlugin(dir, e.Name()))
+				list = append(list, s.readPlugin(dir, e.Name()))
 			}
 		}
 	}
@@ -148,17 +211,18 @@ func plugins(clone, home string, claudeArgs []string) []plugin {
 		if !filepath.IsAbs(dir) {
 			dir = filepath.Join(clone, dir)
 		}
-		list = append(list, readPlugin(dir, filepath.Base(dir)))
+		list = append(list, s.readPlugin(dir, filepath.Base(dir)))
 	}
 	return list
 }
 
 // installed は `~/.claude/plugins/installed_plugins.json` が挙げる plugin のうち、scope が user のもの。project / local の
-// plugin は install した path (projectPath) でだけ読まれ、worker の cwd (workspace) では読まれないので数えない。file が
-// 無いか読めなければ無い。
-func installed(home string) []plugin {
-	raw, err := os.ReadFile(filepath.Join(home, ".claude", "plugins", "installed_plugins.json"))
+// plugin は install した path (projectPath) でだけ読まれ、worker の cwd (workspace) では読まれないので数えない。
+func (s *scan) installed(home string) []plugin {
+	file := filepath.Join(home, ".claude", "plugins", "installed_plugins.json")
+	raw, err := os.ReadFile(file)
 	if err != nil {
+		s.failed(file, err)
 		return nil
 	}
 	var doc struct {
@@ -167,64 +231,59 @@ func installed(home string) []plugin {
 			InstallPath string `json:"installPath"`
 		} `json:"plugins"`
 	}
-	if json.Unmarshal(raw, &doc) != nil {
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		s.failed(file, err)
 		return nil
 	}
 	var list []plugin
 	for key, entries := range doc.Plugins {
 		name, _, _ := strings.Cut(key, "@")
 		for _, e := range entries {
-			if e.InstallPath == "" || e.Scope != "user" {
-				continue
+			if e.InstallPath != "" && e.Scope == "user" {
+				list = append(list, s.readPlugin(e.InstallPath, name))
 			}
-			list = append(list, readPlugin(e.InstallPath, name))
 		}
 	}
 	return list
 }
 
-// skillsUnder は dir の直下の `<dir>/SKILL.md` の skill の名前。
-func skillsUnder(dir string) []string {
-	entries, _ := os.ReadDir(dir)
-	var list []string
+// skillsUnder は dir の直下の `<dir>/SKILL.md` の skill。
+func (s *scan) skillsUnder(dir string) []skill {
+	entries, err := os.ReadDir(dir)
+	s.failed(dir, err)
+	var list []skill
 	for _, e := range entries {
 		path := filepath.Join(dir, e.Name())
 		if _, err := os.Stat(filepath.Join(path, "SKILL.md")); err == nil {
-			list = append(list, skillName(path))
+			list = append(list, s.readSkill(path))
 		}
 	}
 	return list
 }
 
-// skillName は skill の dir の `SKILL.md` の front matter の name。無ければ dir の名前。
-func skillName(dir string) string {
-	if name := frontMatterName(filepath.Join(dir, "SKILL.md")); name != "" {
-		return name
-	}
-	return filepath.Base(dir)
-}
-
-// frontMatterName は markdown の先頭の `---` で囲んだ YAML の front matter の `name` を読む。無いか読めなければ ""。
-func frontMatterName(file string) string {
+// readSkill は skill の dir の `SKILL.md` の YAML の front matter の name を読む。無ければ dir の名前。
+func (s *scan) readSkill(dir string) skill {
+	file := filepath.Join(dir, "SKILL.md")
 	raw, err := os.ReadFile(file)
 	if err != nil {
-		return ""
+		s.failed(file, err)
+		return skill{name: filepath.Base(dir)}
 	}
 	rest, ok := strings.CutPrefix(strings.ReplaceAll(string(raw), "\r\n", "\n"), "---\n")
-	if !ok {
-		return ""
-	}
-	front, _, ok := strings.Cut(rest, "\n---")
-	if !ok {
-		return ""
+	front, _, closed := strings.Cut(rest, "\n---")
+	if !ok || !closed {
+		return skill{name: filepath.Base(dir)}
 	}
 	var doc struct {
 		Name string `yaml:"name"`
 	}
-	if yaml.Unmarshal([]byte(front), &doc) != nil {
-		return ""
+	if err := yaml.Unmarshal([]byte(front), &doc); err != nil {
+		s.failed(file, err)
 	}
-	return doc.Name
+	if doc.Name == "" {
+		return skill{name: filepath.Base(dir)}
+	}
+	return skill{name: doc.Name, named: true}
 }
 
 // maxCommandDepth は command を探す dir の深さの上限 (symlink の輪で回り続けないため)
@@ -232,16 +291,18 @@ const maxCommandDepth = 8
 
 // commandsUnder は dir の下の `*.md` の command の名前。dir からの相対 path の `/` を `:` にする。dotfiles で symlink に
 // することが多いので、dir と途中の dir の symlink を辿る。
-func commandsUnder(dir string) []string {
+func (s *scan) commandsUnder(dir string) []string {
 	var list []string
 	var walk func(dir, prefix string, depth int)
 	walk = func(dir, prefix string, depth int) {
-		entries, _ := os.ReadDir(dir)
+		entries, err := os.ReadDir(dir)
+		s.failed(dir, err)
 		for _, e := range entries {
 			path := filepath.Join(dir, e.Name())
 			info, err := os.Stat(path)
 			switch {
 			case err != nil:
+				s.failed(path, err)
 			case info.IsDir() && depth < maxCommandDepth:
 				walk(path, prefix+e.Name()+":", depth+1)
 			case !info.IsDir() && strings.HasSuffix(e.Name(), ".md"):

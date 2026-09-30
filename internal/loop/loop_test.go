@@ -34,6 +34,8 @@ type tickPlan struct {
 	fail error
 	// stopDuring が nil でなければ、この tick の観測の途中に停止要求を送る
 	stopDuring os.Signal
+	// blocked はこの tick の事前検査に落ちる trigger の名前
+	blocked []string
 }
 
 // memoryStore は in-memory の issue 置き場。
@@ -154,7 +156,13 @@ func (h *harness) run(t *testing.T) []string {
 			return h.withAttempts(def), err
 		},
 		Definition: h.withAttempts(definition(time.Minute, h.maxConcurrent)),
-		Precheck:   noProblems,
+		Precheck: func(workflow.Definition) []precheck.Problem {
+			var problems []precheck.Problem
+			for _, name := range h.plans[tick-1].blocked {
+				problems = append(problems, precheck.Problem{Trigger: name, Error: "見つからない"})
+			}
+			return problems
+		},
 		Store: func(workflow.Definition) loop.Store {
 			// scope key と観測は、その tick が読み直した workflow 定義の plan で答える
 			return memoryStore{scopeKey: func() string {
@@ -465,6 +473,23 @@ func TestWorkerThatFailsAfterAStopRequestHasNoRestartInTheStatus(t *testing.T) {
 
 	if len(last.Workers) != 1 || last.Workers[0].Phase != status.WaitingRetry || last.Workers[0].RetryAt != nil || last.Workers[0].StartedAt != nil {
 		t.Fatalf("worker = %+v, want 再起動の予定も起動の時刻も無い再起動待ち", last.Workers)
+	}
+}
+
+func TestRetryWaitsWhileItsTriggerFailsThePrecheckAndRestartsWhenItPasses(t *testing.T) {
+	// 周期 5s、backoff 10s。2 回目の tick (5s) で implement が事前検査に落ち、3 回目 (10s) で直る
+	h := &harness{plans: []tickPlan{
+		{load: good(5 * time.Second)}, {load: good(5 * time.Second), blocked: []string{"implement"}},
+		{load: good(5 * time.Second), blocked: []string{"implement"}}, {load: good(5 * time.Second)},
+	}, maxConcurrent: 1, maxAttempts: 2}
+
+	h.run(t)
+
+	if len(h.jobs) != 2 || h.jobs[1].Attempt != 2 {
+		t.Fatalf("起動 = %+v, want 直った後に attempt 2 を 1 回", h.jobs)
+	}
+	if slices.Contains(h.waits, 0) {
+		t.Fatalf("待ち = %v, 事前検査に落ちている間に明けた予定で回り直した", h.waits)
 	}
 }
 

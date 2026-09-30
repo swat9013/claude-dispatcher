@@ -27,12 +27,6 @@ type Exec struct {
 	Timeout time.Duration
 }
 
-// Ready は gh を解決できるかを確かめる。loop の起動時に、tick で落ち続ける前に止めるために使う。
-func (g Exec) Ready() error {
-	_, err := deps.Lookup("gh", g.Env)
-	return err
-}
-
 func (g Exec) Run(args ...string) ([]byte, error) {
 	path, err := deps.Lookup("gh", g.Env)
 	if err != nil {
@@ -40,6 +34,19 @@ func (g Exec) Run(args ...string) ([]byte, error) {
 	}
 	out, err := proc.Command{Path: path, Env: g.Env, Timeout: g.Timeout}.Output(args...)
 	return []byte(out), err
+}
+
+// CurrentRepo は cwd の clone の repo (`gh repo view` が返すもの)。
+func CurrentRepo(gh Runner) (Repo, error) {
+	out, err := gh.Run("repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner")
+	if err != nil {
+		return Repo{}, fmt.Errorf("cwd で gh repo view が失敗した: %w", err)
+	}
+	repo, err := ParseRepo(strings.TrimSpace(string(out)))
+	if err != nil {
+		return Repo{}, fmt.Errorf("gh repo view の応答 %q: %w", strings.TrimSpace(string(out)), err)
+	}
+	return repo, nil
 }
 
 // Repo は GitHub の repo (`owner/name`)。

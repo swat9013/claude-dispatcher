@@ -33,21 +33,37 @@ func TestSetupTemplateAloneLetsTheDryRunPassWithoutPlugins(t *testing.T) {
 	}
 }
 
-func TestSetupWritesTheRepoOfTheCloneAndLeavesApprovedCLsUnset(t *testing.T) {
-	s := newSandbox(t)
+// setupTemplate は workflow 定義の無い clone で setup を撃ち、置いた雛形を返す。
+func (s *sandbox) setupTemplate() string {
+	s.t.Helper()
 	if err := os.Remove(s.workflowFile()); err != nil {
-		t.Fatal(err)
+		s.t.Fatal(err)
 	}
 	s.respond("gh", repoView)
-
-	r := s.run("setup")
-
-	assertExit(t, r, 0)
+	assertExit(s.t, s.run("setup"), 0)
 	written, err := os.ReadFile(s.workflowFile())
 	if err != nil {
-		t.Fatal(err)
+		s.t.Fatal(err)
 	}
-	if !strings.Contains(string(written), "  repo: acme/widgets\n") || strings.Contains(string(written), "\n      approved: true") {
+	return string(written)
+}
+
+func TestSetupWritesTheRepoOfTheClone(t *testing.T) {
+	s := newSandbox(t)
+
+	written := s.setupTemplate()
+
+	if !strings.Contains(written, "  repo: acme/widgets\n") {
+		t.Fatalf("雛形:\n%s", written)
+	}
+}
+
+func TestSetupLeavesApprovedCLsUnset(t *testing.T) {
+	s := newSandbox(t)
+
+	written := s.setupTemplate()
+
+	if strings.Contains(written, "\n      approved: true") {
 		t.Fatalf("雛形:\n%s", written)
 	}
 }

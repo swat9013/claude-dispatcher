@@ -280,7 +280,8 @@ func (l *loop) tick() {
 		l.tickFailed(oneLine(err))
 		return
 	}
-	candidates, ambiguous := trigger.Evaluate(def.Triggers, open)
+	// 事前検査に落ちた trigger は評価から外す。その trigger に当たる作業対象は、宣言順で後ろの trigger に当たれば起動する
+	candidates, ambiguous := trigger.Evaluate(l.evaluable(def), open)
 	v := &view{open: open, ambiguous: trigger.AmbiguousRefs(ambiguous), branches: l.claimedBranches()}
 	l.sweep(store, open)
 	l.clearAbandoned(def, v)
@@ -299,9 +300,6 @@ func (l *loop) tick() {
 			continue
 		}
 		if _, abandoned := l.abandoned[ref]; abandoned {
-			continue
-		}
-		if l.isBlocked(c.Trigger.Name) {
 			continue
 		}
 		if l.launch(def, c) {
@@ -366,6 +364,17 @@ func (l *loop) claimedBranches() func() (map[string][]target.Ref, bool) {
 // isBlocked は trigger が事前検査に落ちているか。
 func (l *loop) isBlocked(name string) bool {
 	return slices.ContainsFunc(l.blocked, func(p precheck.Problem) bool { return p.Trigger == name })
+}
+
+// evaluable は workflow 定義の trigger のうち、事前検査に落ちていないもの (宣言順のまま)。
+func (l *loop) evaluable(def workflow.Definition) []trigger.Trigger {
+	var triggers []trigger.Trigger
+	for _, t := range def.Triggers {
+		if !l.isBlocked(t.Name) {
+			triggers = append(triggers, t)
+		}
+	}
+	return triggers
 }
 
 // blockedFields は tick の行の blocked の値。

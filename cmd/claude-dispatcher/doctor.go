@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
-	"slices"
 	"strings"
 
 	"github.com/swat9013/claude-dispatcher/internal/deps"
@@ -39,32 +38,10 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "ok   workflow 定義 %s\n", abs)
 	failed := false
-	if _, err := loop.OpenItems(e.store(def), def); err != nil {
-		fmt.Fprintf(stdout, "NG   issue 置き場 %s: %s\n", def.Tracker.Repo, printable.Line(err.Error()))
-		failed = true
-	} else {
-		fmt.Fprintf(stdout, "ok   issue 置き場 %s\n", def.Tracker.Repo)
-	}
-	// loop の起動時と同じく、worker と CL の branch の読み出しに撃つ command を解決できるか (formats.md §6)
-	commands := []string{def.Claude.Command}
-	if slices.Contains(def.Kinds(), target.KindCL) {
-		commands = append(commands, "git")
-	}
-	for _, name := range commands {
-		if path, err := deps.Lookup(name, e.env); err != nil {
-			fmt.Fprintf(stdout, "NG   %s\n", printable.Line(err.Error()))
+	for _, check := range []func(environment, workflow.Definition, io.Writer) bool{checkStore, checkCommands, checkPrecheck} {
+		if !check(e, def, stdout) {
 			failed = true
-		} else {
-			fmt.Fprintf(stdout, "ok   %s %s\n", name, path)
 		}
-	}
-	if problems := e.precheck(def); len(problems) > 0 {
-		for _, p := range problems {
-			fmt.Fprintf(stdout, "NG   trigger %s: %s\n", p.Trigger, p.Error)
-		}
-		failed = true
-	} else {
-		fmt.Fprintln(stdout, "ok   事前検査")
 	}
 	for _, w := range promiseWarnings(def) {
 		fmt.Fprintf(stdout, "警告 %s\n", w)
@@ -77,6 +54,43 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 		return exitFailed
 	}
 	return 0
+}
+
+// checkStore は issue 置き場を読めるかを確かめる。
+func checkStore(e environment, def workflow.Definition, stdout io.Writer) bool {
+	if _, err := loop.OpenItems(e.store(def), def); err != nil {
+		fmt.Fprintf(stdout, "NG   issue 置き場 %s: %s\n", def.Tracker.Repo, printable.Line(err.Error()))
+		return false
+	}
+	fmt.Fprintf(stdout, "ok   issue 置き場 %s\n", def.Tracker.Repo)
+	return true
+}
+
+// checkCommands は、loop の起動時と同じく依存 CLI を解決できるかを確かめる (formats.md §6)。
+func checkCommands(e environment, def workflow.Definition, stdout io.Writer) bool {
+	ok := true
+	for _, name := range requiredCommands(def) {
+		if path, err := deps.Lookup(name, e.env); err != nil {
+			fmt.Fprintf(stdout, "NG   %s\n", printable.Line(err.Error()))
+			ok = false
+		} else {
+			fmt.Fprintf(stdout, "ok   %s %s\n", name, path)
+		}
+	}
+	return ok
+}
+
+// checkPrecheck は事前検査 (formats.md §2.9) を通す。
+func checkPrecheck(e environment, def workflow.Definition, stdout io.Writer) bool {
+	problems := e.precheck(def)
+	for _, p := range problems {
+		fmt.Fprintf(stdout, "NG   %s\n", p)
+	}
+	if len(problems) > 0 {
+		return false
+	}
+	fmt.Fprintln(stdout, "ok   事前検査")
+	return true
 }
 
 // promiseWarnings は、利用者の約束に頼る CL 側の trigger の宣言 (system.md §11)。

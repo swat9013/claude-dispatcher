@@ -15,7 +15,7 @@ const missingSkill = "trigger implement: action の先頭の /missing が見つ�
 
 func TestLoopDoesNotStartWhenTheLeadingSkillOfATriggerIsMissing(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(workflowWithTriggers("\n  - {name: implement, on: issue, action: /missing}"))
+	s.writeWorkflowWithoutCommands(workflowWithTriggers("\n  - {name: implement, on: issue, action: /missing}"))
 
 	r := s.run("loop")
 
@@ -27,7 +27,7 @@ func TestLoopDoesNotStartWhenTheLeadingSkillOfATriggerIsMissing(t *testing.T) {
 
 func TestDryRunFailsWhenTheLeadingSkillOfATriggerIsMissing(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(workflowWithTriggers("\n  - {name: implement, on: issue, action: /missing}"))
+	s.writeWorkflowWithoutCommands(workflowWithTriggers("\n  - {name: implement, on: issue, action: /missing}"))
 
 	r := s.dryRun()
 
@@ -54,7 +54,9 @@ func TestLeadingSkillOfTheRepoPassesTheCheck(t *testing.T) {
 	assertExit(t, r, 0)
 }
 
-func TestTickLaunchesTheOtherTriggersWhenOneLosesItsLeadingSkill(t *testing.T) {
+func TestTriggerThatLosesItsLeadingSkillIsLeftOutOfTheEvaluation(t *testing.T) {
+	// 事前検査に落ちた urgent は評価から外れるので、urgent と implement の両方に当たる issue#43 は implement の候補になる
+	// (usecases.md UC-5)
 	s := newSandbox(t)
 	s.writeWorkflow(s.abandonedWorkflow())
 	s.onClaude(stubwire.Rule{ReleaseFile: s.releaseFile()})
@@ -69,11 +71,8 @@ func TestTickLaunchesTheOtherTriggersWhenOneLosesItsLeadingSkill(t *testing.T) {
 	s.setIssues(readyIssue(42), urgent)
 
 	loop.waitForOutput(regexp.MustCompile(`起動 issue#42 \(implement`))
-	loop.waitForOutput(regexp.MustCompile(`tick ok · .* · 起動しない trigger: urgent \(action の先頭の /urgent が見つからない`))
+	loop.waitForOutput(regexp.MustCompile(`tick ok · 候補 2: implement issue #42, implement issue #43 · 起動しない trigger: urgent \(action の先頭の /urgent が見つからない`))
 	s.waitStatus("起動しない trigger urgent: action の先頭の /urgent が見つからない")
-	if starts := s.events("start"); len(starts) != 1 {
-		t.Fatalf("start の行 = %d 行, want issue#42 の 1 行だけ (issue#43 は urgent に当たる)", len(starts))
-	}
 }
 
 func TestRetryOfATriggerThatLostItsSkillDoesNotHoldTheSlot(t *testing.T) {

@@ -116,6 +116,16 @@ func (e environment) store(def workflow.Definition) loop.Store {
 	return github.NewStore(e.gh(def), def.Tracker.Repo)
 }
 
+// requiredCommands は loop が撃つ依存 CLI: gh と claude.command。CL 側の trigger があれば、claim の workspace の branch を
+// 読むのに git も撃つ。
+func requiredCommands(def workflow.Definition) []string {
+	commands := []string{"gh", def.Claude.Command}
+	if slices.Contains(def.Kinds(), target.KindCL) {
+		commands = append(commands, "git")
+	}
+	return commands
+}
+
 // precheck は workflow 定義の事前検査 (formats.md §2.9)。~/.claude は loop の環境の HOME から引く。
 func (e environment) precheck(def workflow.Definition) []precheck.Problem {
 	return precheck.Check(def, e.getenv("HOME"))
@@ -177,7 +187,7 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 	// 起動時と試運転は人が画面の前にいるので、事前検査のどれが落ちても失敗させ、全部を直させる (system.md §8)
 	if problems := e.precheck(def); len(problems) > 0 {
 		for _, p := range problems {
-			fmt.Fprintf(stderr, "trigger %s: %s\n", p.Trigger, p.Error)
+			fmt.Fprintln(stderr, p)
 		}
 		return exitUsage
 	}
@@ -185,18 +195,9 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 		return dryRunOnce(e, def, stdout, stderr)
 	}
 
-	// 起動時は人が画面の前にいるので、tick で落ちる前に gh と claude を解決できることを確かめる (system.md §8)
-	if err := e.gh(def).Ready(); err != nil {
-		fmt.Fprintln(stderr, err)
-		return exitFailed
-	}
-	if _, err := deps.Lookup(def.Claude.Command, e.env); err != nil {
-		fmt.Fprintln(stderr, err)
-		return exitFailed
-	}
-	// CL 側の trigger があれば、claim の workspace の branch を読むのに git を撃つ
-	if slices.Contains(def.Kinds(), target.KindCL) {
-		if _, err := deps.Lookup("git", e.env); err != nil {
+	// 起動時は人が画面の前にいるので、tick で落ちる前に依存 CLI を解決できることを確かめる (system.md §8)
+	for _, name := range requiredCommands(def) {
+		if _, err := deps.Lookup(name, e.env); err != nil {
 			fmt.Fprintln(stderr, err)
 			return exitFailed
 		}
@@ -401,14 +402,9 @@ func runSetup(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 	e := newEnvironment()
-	out, err := github.Exec{Env: e.env, Timeout: ghTimeout}.Run("repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner")
+	repo, err := github.CurrentRepo(e.gh(workflow.Definition{}))
 	if err != nil {
-		fmt.Fprintf(stderr, "tracker.repo を決められない (cwd で gh repo view が失敗した): %v\n", err)
-		return exitFailed
-	}
-	repo, err := github.ParseRepo(strings.TrimSpace(string(out)))
-	if err != nil {
-		fmt.Fprintf(stderr, "tracker.repo を決められない (gh repo view の応答 %q): %v\n", strings.TrimSpace(string(out)), err)
+		fmt.Fprintf(stderr, "tracker.repo を決められない: %v\n", err)
 		return exitFailed
 	}
 	// 確かめてから書くまでの間に他が書いても、上書きしない

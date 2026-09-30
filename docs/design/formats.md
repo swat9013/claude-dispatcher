@@ -250,8 +250,9 @@ trigger ごとに、action の先頭の skill か command が呼べるかを確�
 - 名前の当て方
   - skill の名前は、`SKILL.md` の YAML の front matter の `name`。無ければ dir の名前
   - command の名前は、`commands/` からの相対 path の `.md` を除き、`/` を `:` にしたもの (`commands/foo/bar.md` は `foo:bar`)。symlink の dir も辿る
-  - plugin の skill と command は `<plugin の名前>:<名前>` で呼ぶ。plugin の名前は `.claude-plugin/plugin.json` の `name`
-  - plugin の skill は、plugin の `skills/<dir>/SKILL.md` と、`plugin.json` の `skills` が挙げる path (その path の `SKILL.md`、無ければその下の `<dir>/SKILL.md`)。command は、plugin の `commands/` と、`plugin.json` の `commands` が挙げる path
+  - plugin の skill と command は `<plugin の名前>:<名前>` で呼ぶ。plugin の名前は `.claude-plugin/plugin.json` の `name`。front matter に `name` を持つ plugin の skill は、接頭辞の無い `<名前>` でも呼ぶ
+  - plugin の skill は、plugin の root の `SKILL.md`・`skills/<dir>/SKILL.md`・`plugin.json` の `skills` が挙げる path (その path の `SKILL.md`、無ければその下の `<dir>/SKILL.md`)。command は、plugin の `commands/` と、`plugin.json` の `commands` が挙げる path
+  - `plugin.json` の `commands` が `commands/` を置き換えるか足すかは確かめていないので、足す側に倒す (Claude Code の plugin の文書に書かれたら合わせる)
 - action の先頭を template 変数で始める (前の空白を除いて `{{` で始まる) と、先頭の `/名前` を確かめられないので、その trigger を失敗させる
 - 先頭が `/` でも template 変数でもない action は、確かめない
 - 誤りは trigger を名指しして 1 件 1 行で出す
@@ -265,7 +266,7 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 |---|---|
 | `loop` の起動時 (§6) | 起動を失敗させる (exit 2) |
 | 試運転 (§5) | 失敗させる (exit 2) |
-| tick の中 (§6) | その trigger だけを起動しない (再起動も)。他の trigger は評価して起動する |
+| tick の中 (§6) | その trigger だけを評価から外し、再起動もしない。他の trigger は評価して起動する (外した trigger にも当たる作業対象は、他の trigger の候補になる) |
 | `doctor` (§7.4) | `NG` の行に出す |
 
 - Claude Code に組み込みの command (`/review` など) は 3 つの置き場に無いので、見つからないと数える
@@ -370,11 +371,11 @@ claude-dispatcher loop [<workflow の path>]
 
 1. 突き合わせ: 走っている worker の作業対象を読み直し、終端 (issue の close、CL の merge か close) になっていれば worker を止め、`after_run` と `before_remove` を撃って workspace を消す。trigger から外れただけでは止めない
 2. 終わった worker のうち、作業対象を読み直せなかったものを読み直す
-3. workflow 定義を読み直し、事前検査 (§2.9) を通して snapshot を作る。事前検査に落ちた trigger は、手順 6 と 7 で起動しない
+3. workflow 定義を読み直し、事前検査 (§2.9) を通して snapshot を作る。事前検査に落ちた trigger は、手順 6 で再起動せず、手順 7 の評価から外す
 4. 掃除: workspace root の下の `issue-<番号>` と `cl-<番号>` のうち、claim が無く open な一覧にも無いものを読み直し、終端になっていれば `before_remove` を撃って消す。起動の直後の tick が起動時の掃除を兼ね、以後の tick が、claim を解いた後に終端になったものと消し損ねたものを拾う
 5. 打ち切りを解く: 打ち切った作業対象のうち、snapshot に無いか、打ち切ったときの trigger の述語に当たらなくなったもの (その trigger が workflow 定義から消えたもの・曖昧な CL になったものを含む) の打ち切りを解く。conflict を計算中の CL は、外れたとは数えない
 6. 再起動: backoff の明けた再起動待ちの claim を、次の「再起動」の規則で起動する
-7. trigger を評価し (§2.4)、候補のうち claim も打ち切りもされていないものを、`limits.max_concurrent` から走っている worker と再起動待ちの claim を引いた数だけ起動する (確かめ待ちの claim は数えない)
+7. trigger を評価し (§2.4)、候補のうち claim も打ち切りもされていないものを、`limits.max_concurrent` から走っている worker と再起動待ちの claim を引いた数だけ起動する (確かめ待ちの claim と、事前検査に落ちた trigger の再起動待ちの claim は数えない)
    - CL の候補は、claim している作業対象の workspace で checkout されている branch を head に持つもの (同じ repo の CL) を外す。branch は workspace を cwd にして `git symbolic-ref --short -q HEAD` で読む。workspace が無い・git の作業ツリーでない・detached HEAD なら branch は無いとする
    - branch をそれ以外の理由で読めなければ、error の行を残し、その tick は CL の候補を起動しない (同じ branch に worker を重ねないため)
 
@@ -567,59 +568,11 @@ exit: 0 = 書いた・既にある / 2 = 引数の誤り / 1 = repo を決めら
 
 **雛形**: 汎用の action (実装・conflict・review・CI) を置く。action は先頭に skill を書かない文で、plugin の無い環境でも事前検査 (§2.9) に通る。承認済みの CL (`approved: true`) に当てる trigger は置かない (merge を worker に任せるかは利用者が決める)。
 
-```markdown
----
-tracker:
-  kind: github
-  repo: <setup が埋める owner/name>
-polling:
-  interval: 5m
-hooks:
-  after_create: git -C "$CLAUDE_DISPATCHER_CLONE" worktree add --detach "$CLAUDE_DISPATCHER_WORKSPACE"
-  before_remove: git -C "$CLAUDE_DISPATCHER_CLONE" worktree remove --force "$CLAUDE_DISPATCHER_WORKSPACE"
-limits:
-  max_concurrent: 1
-claude:
-  args: [--permission-mode, auto]
-triggers:
-  - name: implement
-    on: issue
-    when:
-      labels:
-        all: [ready-for-agent]
-      blocked: false
-    action: |
-      issue #{{ .issue.number }} ({{ .issue.url }}) を実装する。branch claude-dispatcher/issue-{{ .issue.number }} で pull request を出し、ready-for-agent を外す。…
-  - name: resolve-conflict
-    on: cl
-    when:
-      conflict: true
-      head: claude-dispatcher/*
-      draft: false
-    action: |
-      pull request #{{ .cl.number }} ({{ .cl.url }}) の conflict を解く。head branch を detach で取り出し、`git push origin HEAD:{{ .cl.head }}` で push する。…
-  - name: address-review
-    on: cl
-    when:
-      review_unresolved: true
-      head: claude-dispatcher/*
-      draft: false
-    action: |
-      pull request #{{ .cl.number }} ({{ .cl.url }}) の未解決の review に応える。…
-  - name: fix-ci
-    on: cl
-    when:
-      ci_failed: true
-      head: claude-dispatcher/*
-      draft: false
-    action: |
-      pull request #{{ .cl.number }} ({{ .cl.url }}) の失敗している CI を直す。…
-  # 承認済みの CL に当てる trigger (approved: true) は置かない。merge を worker に任せるなら自分で足す
----
-<共通 prompt: 無人の worker としての作業規約>
-```
+雛形の全文は `internal/scaffold/WORKFLOW.md` が正本。雛形が満たす性質は次のとおり。
 
-- 上は抜粋 (action の文と本文を略した)。全文は `internal/scaffold/WORKFLOW.md`
+- `hooks` は clone から `git worktree add --detach` で workspace を作り、`git worktree remove --force` で消す
+- `limits.max_concurrent` は 1、`claude.args` は `[--permission-mode, auto]`
+- trigger は 4 つ: `implement` (issue の `labels.all: [ready-for-agent]`・`blocked: false`)、`resolve-conflict` (`conflict: true`)・`address-review` (`review_unresolved: true`)・`fix-ci` (`ci_failed: true`)。CL 側の 3 つは `head: claude-dispatcher/*`・`draft: false` で絞る
 - 実装の worker は `claude-dispatcher/issue-<番号>` の branch で CL を出し、CL 側の trigger は `head: claude-dispatcher/*` で自分の出した CL に絞る
 - CL の worker は head branch を detach で取り出して push する。issue の workspace は issue が閉じるまで残り、その branch を checkout したままで、同じ branch は 2 つの worktree で checkout できないため
 
@@ -627,16 +580,17 @@ triggers:
 
 1. workflow 定義を読めて、検査 (§2.8) に通る。落ちたら以降は確かめない
 2. gh の認証が通り、issue 置き場が見える (open な作業対象を読める)
-3. `claude.command` を解決できる。`on: cl` の trigger があれば git も (loop の起動時の検査と同じ。§6)
+3. gh と `claude.command` を解決できる。`on: cl` の trigger があれば git も (loop の起動時の検査と同じ。§6)
 4. 事前検査 (§2.9)。落ちた trigger ごとに `NG` の行
 5. 利用者の約束に頼る宣言を `警告` の行に出す (system.md §11)
    - `approved: true` の CL 側の trigger (merge を worker に任せうる)
-   - `head`・`labels`・`same_repo: true` のどれも書いていない CL 側の trigger (人の CL や fork の CL に worker を送りうる)
+   - `head`・`labels.all`・`labels.any`・`same_repo: true` のどれも書いていない CL 側の trigger (人の CL や fork の CL に worker を送りうる)
 6. Claude Code の settings (`permissions.allow`) に要りそうな entry を表示する。CLI は settings を書かない (ADR 0004)
 
 ```
 ok   workflow 定義 /path/to/WORKFLOW.md
 ok   issue 置き場 acme/widgets
+ok   gh /opt/homebrew/bin/gh
 ok   claude /opt/homebrew/bin/claude
 ok   git /usr/bin/git
 NG   trigger fix-ci: action の先頭の /fix が見つからない (plugin・repo の .claude・~/.claude の skill と command)

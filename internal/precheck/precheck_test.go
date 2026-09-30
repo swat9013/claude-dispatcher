@@ -113,12 +113,39 @@ func TestSkillOfAnInstalledPluginIsCalledWithThePluginName(t *testing.T) {
 	p.assertFound(t, "/tools:tdd")
 }
 
-func TestSkillOfAPluginIsNotCalledByItsBareName(t *testing.T) {
+func TestSkillOfAPluginWithoutANameIsNotCalledByItsBareName(t *testing.T) {
 	p := newPlaces(t)
 	dir := p.installed(t, "tools@market", "tools", "user", "")
-	write(t, filepath.Join(dir, "skills/tdd/SKILL.md"), "---\nname: tdd\n---\n")
+	write(t, filepath.Join(dir, "skills/tdd/SKILL.md"), "---\ndescription: x\n---\n")
 
 	p.assertMissing(t, "/tdd")
+}
+
+func TestSkillOfAPluginWithANameIsAlsoCalledByTheBareName(t *testing.T) {
+	p := newPlaces(t)
+	dir := p.installed(t, "tools@market", "tools", "user", "")
+	write(t, filepath.Join(dir, "skills/review/SKILL.md"), "---\nname: fancy\n---\n")
+
+	p.assertFound(t, "/fancy")
+}
+
+func TestSkillAtTheRootOfAPluginIsCalledWithThePluginName(t *testing.T) {
+	p := newPlaces(t)
+	dir := p.installed(t, "tools@market", "tools", "user", "")
+	write(t, filepath.Join(dir, "SKILL.md"), "---\nname: review\n---\n")
+
+	p.assertFound(t, "/tools:review")
+}
+
+func TestMissingNameShowsThePlacesThatCouldNotBeRead(t *testing.T) {
+	p := newPlaces(t)
+	write(t, filepath.Join(p.home, ".claude/plugins/installed_plugins.json"), "{壊れた")
+
+	got := p.check("/tools:ship")
+
+	if !strings.Contains(got, "見つからない") || !strings.Contains(got, "読めなかった置き場: "+filepath.Join(p.home, ".claude/plugins/installed_plugins.json")) {
+		t.Fatalf("検査 = %q", got)
+	}
 }
 
 func TestCommandOfAnInstalledPluginIsCalledWithThePluginName(t *testing.T) {
