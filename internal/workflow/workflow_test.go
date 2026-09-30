@@ -315,3 +315,11 @@ func TestYAMLSyntaxErrorNamesTheLineInTheFile(t *testing.T) {
 		t.Fatalf("誤り = %q, want file の行番号 (line 3)", got[0])
 	}
 }
+
+func TestWorkflowOfThisRepositoryPassesTheCheck(t *testing.T) {
+	// この repo 自身の workflow 定義 (repo 直下の WORKFLOW.md) が、形式の変更で検査に落ちていないか。事前検査は plugin の
+	// 有無で変わるので、ここでは通さない
+	if _, err := workflow.Load(filepath.Join("..", "..", "WORKFLOW.md"), func(string) string { return "" }); err != nil {
+		t.Fatal(err)
+	}
+}
