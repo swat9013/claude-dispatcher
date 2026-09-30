@@ -17,6 +17,19 @@ func Width(s string) int {
 	return width
 }
 
+// Cut は s を表示幅 width に収まるところまでで切る。
+func Cut(s string, width int) string {
+	used := 0
+	for i, r := range s {
+		w := Width(string(r))
+		if used+w > width {
+			return s[:i]
+		}
+		used += w
+	}
+	return s
+}
+
 // Pad は s の後ろを空白で埋めて表示幅を width にする (既に超えていればそのまま)。
 func Pad(s string, width int) string {
 	return s + strings.Repeat(" ", max(0, width-Width(s)))

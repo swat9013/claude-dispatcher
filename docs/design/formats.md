@@ -267,14 +267,14 @@ project を省略すると、config root の下の全 project (§9 の `projects
 ```
 myproj  loop 稼働中  tick 実行中 · orchestrator 3m (上限 15m)  最終 tick 2026-09-26T03:00:00Z ok
   ! <注記>
-ISSUE  KIND   STATE    ELAPSED  SESSION  BRANCH  WIP  CL        TICK
--      orch   running  3m       -        -       -    -         2026-09-26T03:05:00Z
-#42    start  running  12m      -        +3      yes  #57 OPEN  2026-09-26T02:48:00Z
+ISSUE  KIND   STATE    ELAPSED  SESSION  BRANCH  WIP  CL        TICK                  ACTIVITY
+-      orch   running  3m       -        -       -    -         2026-09-26T03:05:00Z  4s Bash gh issue list
+#42    start  running  12m      -        +3      yes  #57 OPEN  2026-09-26T02:48:00Z  12s Bash go test ./...
 ```
 
 見出しの 2 欄目は、この project の loop の process が在れば `loop 稼働中`、無ければ `loop なし`、process の一覧を読めなければ `loop ?`。その後に、tick が走っている間だけ、loop の画面の 1 行目 (§13.1) と同じ綴りの状態欄を置く: `tick 実行中 · <tick の開始からの経過>`、orchestrator の実行中は `tick 実行中 · orchestrator <orchestrator の起動からの経過> (上限 15m)`。
 
-orchestrator の実行中は、表の先頭に orchestrator の行を 1 行置く: ISSUE `-`・KIND `orch`・STATE `running`・ELAPSED は orchestrator の起動からの経過・SESSION は worker の行と同じく `claude agents --json` を orchestrator の session id で引く・BRANCH / WIP / CL `-`・TICK は tick の開始時刻。worker の行が無くても、この行があれば表を出す。
+orchestrator の実行中は、表の先頭に orchestrator の行を 1 行置く: ISSUE `-`・KIND `orch`・STATE `running`・ELAPSED は orchestrator の起動からの経過・SESSION は worker の行と同じく `claude agents --json` を orchestrator の session id で引く・BRANCH / WIP / CL `-`・TICK は tick の開始時刻・ACTIVITY は worker の行と同じく orchestrator の session id の transcript から。worker の行が無くても、この行があれば表を出す。
 
 | 列 | 中身 |
 |---|---|
@@ -285,6 +285,16 @@ orchestrator の実行中は、表の先頭に orchestrator の行を 1 行置�
 | BRANCH | cwd の clone に `worktree-issue-<issue>` の作業ツリーがあれば `origin/HEAD` からの ahead 数 (`+3`)、無ければ `-` |
 | WIP | issue に `dispatcher:wip` が付いているか (`yes` / `no`) |
 | CL | CL 置き場の repo 自身の head branch (fork でない) `worktree-issue-<issue>` の最新 CL (`#<番号> <state>`。state は `OPEN` / `CLOSED` / `MERGED`)、無ければ `-`。同じ名前の branch の CL を新しい順に 10 本まで読み、fork の CL を読み飛ばす。10 本とも fork の CL でまだ続きがあれば、その issue だけ `?` にして注記を残す |
+| ACTIVITY | 最新の活動 `<最後の event からの経過> <内容>` (`12s Bash go test ./...` / `3m Edit internal/x.go`)。STATE が `running` の行と orchestrator の行だけに出し、それ以外は `-`。下の「ACTIVITY」 |
+
+**ACTIVITY**: Claude Code の transcript から読む。worker log は `claude -p` の text 出力で終了まで 0 byte のことがあるが、transcript は走っている間も書き足される。
+
+- 探し方: `<Claude Code の設定 dir>/projects/*/<session_id>.jsonl` を glob で探す。設定 dir は `CLAUDE_CONFIG_DIR` があればそれ、無ければ `~/.claude`。cwd から dir 名を作る Claude Code の規則 (文書化されていない) は再現しない。`session_id` は起動記録 (tick 行の `spawned[].session_id`)、orchestrator の行は `tick.now` の `orchestrator.session_id`
+- file の末尾 (256KiB) だけを読み、最後の完全な行から後ろ向きに読む (transcript は大きくなるため)
+- 経過は、時刻 (`timestamp`) を持つ最後の行からの経過。綴りは ELAPSED と同じ
+- 内容は、最後の tool 呼び出し (tool 名と主な引数: `Bash` は command の 1 行目、`Edit` / `Write` / `Read` は file の path、それ以外は tool 名だけ)。最後の tool 呼び出しの後に assistant の発話があれば、発話の 1 行目。読んだ範囲にどちらも無ければ経過だけ
+- stdout が端末なら、行が端末の幅に収まるように切り詰める。端末でなければ、内容を 60 文字で切り詰める
+- transcript の中身の形は Claude Code の内部の仕様で、それへの依存はこの列 1 つに閉じる。file が見つからないか、形が読めなければ、その行の ACTIVITY を `?` にして注記を残す。ほかの列には影響させない
 
 `tick.now` は JSON 1 行 (key は下表)。tick の 1 回分が lock を取った直後に書き、段階が変わるたびに書き直し (同じ dir の一時 file から rename する。読み手に書きかけを見せない)、tick 行を書いた後、lock を外す前に消す。error・panic・loop の停止要求で終わる経路でも消す。単発の `tick` を signal で止めたときと、process が kill されたときは残る — status は pid の照合でそれを無視する。`tick --dry-run` と、`setup` / `doctor` の試運転は書かない (state dir に何も書かない — §7 / §12)。tick は読まない — 指示の導出にも lock の判定にも使わない、表示のための痕跡。書けないか消せなければ、tick は止めずに (result も変えずに) 理由を 1 行ずつ残す。単発の `tick` は stderr に、loop は画面の `!` 行 (§13.1) に出す。
 
@@ -376,8 +386,8 @@ stdout が端末のとき、`status ps <project>` の表 (§10) の見出し行�
 myproj  loop 5m  待機 · 次の tick 2026-09-26T03:05:00Z (あと 3m)
 最終 tick 2026-09-26T03:00:00Z ok · 指示 start 1 · 起動 #42
   ! <注記>
-ISSUE  KIND   STATE    ELAPSED  SESSION  BRANCH  WIP  CL        TICK
-#42    start  running  12m      -        +3      yes  #57 OPEN  2026-09-26T02:48:00Z
+ISSUE  KIND   STATE    ELAPSED  SESSION  BRANCH  WIP  CL        TICK                  ACTIVITY
+#42    start  running  12m      -        +3      yes  #57 OPEN  2026-09-26T02:48:00Z  12s Bash go test ./...
 
 Ctrl+C で停止
 ```
@@ -387,7 +397,7 @@ Ctrl+C で停止
 | 1 行目 | project・`loop <interval>`・状態 (下表) |
 | `最終 tick` | loop が回した直近の tick の `ts`・`result`・指示の種別と件数 (0 件なら `指示 0`)・起動した worker の issue (無ければ省く)。まだ 1 回も終えていなければ `最終 tick なし` |
 | `!` 行 | 直近の tick の `error` (`result` が `ok` 以外のとき。tick 行を log.jsonl に書けなかったときは `result` に関わらず、書けなかった理由を含めて出す)、直近の tick が `tick.now` を書けなかった・消せなかった理由 (§10)、`status` の注記 (§10) |
-| 表 | `status` と同じ (§10)。orchestrator の実行中はその行も出る。載せる行が無ければ出さない |
+| 表 | `status` と同じ (§10。ACTIVITY 列を含み、端末なら幅に収める)。orchestrator の実行中はその行も出る。載せる行が無ければ出さない |
 | 最終行 | 操作案内 (下表) |
 
 | 状態 | 1 行目の状態欄 | 操作案内 |

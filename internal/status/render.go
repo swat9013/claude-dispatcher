@@ -14,14 +14,29 @@ import (
 // unknownCell は読めなかった値の表の綴り (formats.md §10)
 const unknownCell = "?"
 
-var columns = []string{"ISSUE", "KIND", "STATE", "ELAPSED", "SESSION", "BRANCH", "WIP", "CL", "TICK"}
+var columns = []string{"ISSUE", "KIND", "STATE", "ELAPSED", "SESSION", "BRANCH", "WIP", "CL", "TICK", "ACTIVITY"}
+
+// activityContentLimit は stdout が端末でないときに ACTIVITY の内容を切り詰める文字数 (formats.md §10)
+const activityContentLimit = 60
+
+// Fit は ACTIVITY の切り詰め方 (formats.md §10)。FitTerminal か FitPlain で作る。
+type Fit struct {
+	// terminalWidth は行を収める端末の幅。0 なら端末でない
+	terminalWidth int
+}
+
+// FitTerminal は行が端末の幅 width に収まるように ACTIVITY を切り詰める。
+func FitTerminal(width int) Fit { return Fit{terminalWidth: width} }
+
+// FitPlain は stdout が端末でないときの切り詰め方: ACTIVITY の内容を 60 文字で切る。
+var FitPlain = Fit{}
 
 // RenderTable は project ごとに見出し・注記・表を並べ、project の間を空行で区切る (formats.md §10)。
-func RenderTable(reports []Report) string {
+func RenderTable(reports []Report, fit Fit) string {
 	blocks := make([]string, 0, len(reports))
 	for _, r := range reports {
 		lines := append([]string{r.Heading()}, r.NoteLines()...)
-		blocks = append(blocks, strings.Join(append(lines, r.TableLines()...), "\n"))
+		blocks = append(blocks, strings.Join(append(lines, r.TableLines(fit)...), "\n"))
 	}
 	return strings.Join(blocks, "\n\n")
 }
@@ -73,7 +88,8 @@ func (r Report) NoteLines() []string {
 }
 
 // TableLines は表の行 (列の見出し行を含む)。orchestrator の実行中はその行を先頭に置く。載せる行が無ければ空。
-func (r Report) TableLines() []string {
+// 最後の列 ACTIVITY は fit に従って切り詰める。
+func (r Report) TableLines(fit Fit) []string {
 	var orchestrator *RunningOrchestrator
 	if r.Tick != nil {
 		orchestrator = r.Tick.Orchestrator
@@ -86,18 +102,31 @@ func (r Report) TableLines() []string {
 	if orchestrator != nil {
 		rows = append(rows, []string{
 			"-", "orch", "running", FormatElapsed(orchestrator.Elapsed), cell(orchestrator.Session, sessionCell), "-", "-", "-", ticklog.ShortTS(r.Tick.TS),
+			cell(orchestrator.Activity, fit.activityCell),
 		})
 	}
 	for _, w := range r.Workers {
 		rows = append(rows, []string{
 			fmt.Sprintf("#%d", w.Spawn.Issue), w.Spawn.Kind, cell(w.Alive, stateCell), FormatElapsed(w.Elapsed),
 			cell(w.Session, sessionCell), cell(w.Branch, branchCell), cell(w.WIP, wipCell), cell(w.CL, clCell), ticklog.ShortTS(w.TickTS),
+			cell(w.Activity, fit.activityCell),
 		})
 	}
+	last := len(columns) - 1
 	widths := make([]int, len(columns))
 	for _, row := range rows {
-		for i, c := range row {
+		for i, c := range row[:last] {
 			widths[i] = max(widths[i], termtext.Width(c))
+		}
+	}
+	if fit.terminalWidth > 0 {
+		// ACTIVITY 以外の列と区切りの残りに収める
+		room := fit.terminalWidth
+		for _, w := range widths[:last] {
+			room -= w + 2
+		}
+		for _, row := range rows[1:] {
+			row[last] = termtext.Cut(row[last], max(room, 0))
 		}
 	}
 	for _, row := range rows {
@@ -122,6 +151,21 @@ func FormatElapsed(d time.Duration) string {
 		return fmt.Sprintf("%dh%02dm", seconds/3600, seconds%3600/60)
 	}
 	return fmt.Sprintf("%dd%02dh", seconds/86400, seconds%86400/3600)
+}
+
+// activityCell は `<最後の event からの経過> <内容>`。running でない行 (nil) は `-`。端末でなければ内容を 60 文字で切る
+// (端末なら行の幅に収める切り詰めを TableLines が後で行う)。
+func (f Fit) activityCell(a *Activity) string {
+	if a == nil {
+		return "-"
+	}
+	doing := a.Doing
+	if f.terminalWidth == 0 {
+		if runes := []rune(doing); len(runes) > activityContentLimit {
+			doing = string(runes[:activityContentLimit])
+		}
+	}
+	return strings.TrimSpace(FormatElapsed(a.Since) + " " + doing)
 }
 
 func stateCell(alive bool) string {

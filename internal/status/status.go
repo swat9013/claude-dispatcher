@@ -41,6 +41,8 @@ type Probes struct {
 	Gh func(config.Config) (github.Runner, error)
 	// Git は cwd の clone で git を撃つ
 	Git func(args ...string) (string, error)
+	// ClaudeConfigDir は Claude Code の設定 dir。transcript をこの下の projects で探す (ClaudeConfigDir 関数が決める)
+	ClaudeConfigDir string
 }
 
 // Observer は機械の観測を読む口。本番は ps と claude を撃つ CommandObserver、テストは fake。
@@ -102,7 +104,9 @@ type RunningTick struct {
 type RunningOrchestrator struct {
 	Elapsed time.Duration
 	Session Probed[*Session]
-	// sessionID は Session を引く鍵 (tick.now の session id)
+	// Activity は transcript から読んだ最新の活動
+	Activity Probed[*Activity]
+	// sessionID は Session と Activity を引く鍵 (tick.now の session id)
 	sessionID string
 }
 
@@ -116,6 +120,8 @@ type Worker struct {
 	Session Probed[*Session]
 	Branch  Probed[*Branch]
 	CL      Probed[*github.CLState]
+	// Activity は process が生きている worker だけ埋まる。それ以外は Value が nil (表では `-`)
+	Activity Probed[*Activity]
 }
 
 // Session は `claude agents --json` の行のうち表に出す分。
@@ -158,7 +164,35 @@ func (c *collector) collect(project paths.Project, home string, now time.Time) R
 	c.report.Tick = c.runningTick(project, now)
 	c.collectWorkers(project, home, now)
 	c.fillSessions()
+	c.fillActivities(now)
 	return c.report
+}
+
+// fillActivities は orchestrator の行と running の worker の行の ACTIVITY を transcript から埋める。読めない行は ? にして
+// 注記を残し、ほかの列には影響させない (transcript の形は Claude Code の内部の仕様なので)。
+func (c *collector) fillActivities(now time.Time) {
+	if c.report.Tick != nil && c.report.Tick.Orchestrator != nil {
+		o := c.report.Tick.Orchestrator
+		o.Activity = c.activity(o.sessionID, "orchestrator", now)
+	}
+	for i := range c.report.Workers {
+		w := &c.report.Workers[i]
+		if !w.Alive.Known || !w.Alive.Value {
+			w.Activity = known[*Activity](nil)
+			continue
+		}
+		w.Activity = c.activity(w.Spawn.SessionID, fmt.Sprintf("#%d", w.Spawn.Issue), now)
+	}
+}
+
+// activity は sessionID の transcript から最新の活動を読む。row は注記で行を名指す綴り。
+func (c *collector) activity(sessionID, row string, now time.Time) Probed[*Activity] {
+	a, err := readActivity(c.probes.ClaudeConfigDir, sessionID, now)
+	if err != nil {
+		c.note("%s の transcript を読めない — ACTIVITY は ? (%v)", row, err)
+		return Probed[*Activity]{}
+	}
+	return known(a)
 }
 
 // fillSessions は orchestrator の行と worker の行の SESSION を埋める。どちらの行も無ければ claude agents を読まない。
