@@ -45,6 +45,7 @@ const usage = `usage:
   claude-dispatcher status [<workflow の path>]
   claude-dispatcher paths --json [<workflow の path>]
   claude-dispatcher setup [<workflow の path>]
+  claude-dispatcher doctor [<workflow の path>]
   claude-dispatcher --version
 `
 
@@ -69,6 +70,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runPaths(args[1:], stdout, stderr)
 	case "setup":
 		return runSetup(args[1:], stdout, stderr)
+	case "doctor":
+		return runDoctor(args[1:], stdout, stderr)
 	case "-h", "--help", "help":
 		fmt.Fprint(stdout, usage)
 		return 0
