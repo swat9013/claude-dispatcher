@@ -17,7 +17,7 @@ var ref = target.Ref{Kind: target.KindIssue, Number: 7}
 func manager(t *testing.T, root string) workspace.Manager {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git が無い")
+		t.Fatal("git が無い (git は CL 側の trigger で loop が撃つ依存)")
 	}
 	return workspace.Manager{Root: root, Env: []string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir()}}
 }

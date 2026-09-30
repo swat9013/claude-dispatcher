@@ -176,7 +176,17 @@ func ghRules(issues []issue, cls []cl) []stubwire.Rule {
 
 // ghResponses は ghRules を gh の応答 file の中身にしたもの。
 func (s *sandbox) ghResponses(issues ...issue) stubwire.FileWrite {
-	raw, err := json.Marshal(ghRules(issues, nil))
+	return s.storeResponses(issues, nil)
+}
+
+// clResponses は cls だけを返す gh の応答 file の中身。worker の代役が CL の状態を書き換えるときに使う。
+func (s *sandbox) clResponses(cls ...cl) stubwire.FileWrite {
+	return s.storeResponses(nil, cls)
+}
+
+// storeResponses は ghRules を gh の応答 file の中身にしたもの。
+func (s *sandbox) storeResponses(issues []issue, cls []cl) stubwire.FileWrite {
+	raw, err := json.Marshal(ghRules(issues, cls))
 	if err != nil {
 		s.t.Fatal(err)
 	}
@@ -266,15 +276,6 @@ func (c cl) node() map[string]any {
 		"reviewThreads":     map[string]any{"totalCount": len(threads), "nodes": threads},
 		"commits":           map[string]any{"nodes": []map[string]any{{"commit": map[string]any{"statusCheckRollup": rollup}}}},
 	}
-}
-
-// clResponses は cls だけを返す gh の応答 file の中身。worker の代役が CL の状態を書き換えるときに使う。
-func (s *sandbox) clResponses(cls ...cl) stubwire.FileWrite {
-	raw, err := json.Marshal(ghRules(nil, cls))
-	if err != nil {
-		s.t.Fatal(err)
-	}
-	return stubwire.FileWrite{Path: stubwire.ResponsesFile(s.stubRoot, "gh"), Content: string(raw)}
 }
 
 // failGh は gh の呼び出しを stderr と exit で失敗させる。

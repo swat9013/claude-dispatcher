@@ -238,18 +238,46 @@ func TestRereadCLFailureOtherThanAMissingCLIsNotClosed(t *testing.T) {
 }
 
 func TestCLWithoutRequiredReviewsIsApprovedByAWritersApprovalWithoutChangeRequests(t *testing.T) {
-	for reviews, want := range map[string]bool{
-		`[{"state":"APPROVED"}]`:                               true,
-		`[{"state":"APPROVED"},{"state":"CHANGES_REQUESTED"}]`: false,
-		`[]`: false,
-	} {
-		node := clNode(5, "")
-		node = strings.Replace(node, `"latestOpinionatedReviews":{"totalCount":0,"nodes":[]}`, `"latestOpinionatedReviews":{"totalCount":0,"nodes":`+reviews+`}`, 1)
+	cases := []struct {
+		name    string
+		reviews string
+		want    bool
+	}{
+		{"承認だけなら承認済み", `[{"state":"APPROVED"}]`, true},
+		{"変更要求が残っていれば承認済みでない", `[{"state":"APPROVED"},{"state":"CHANGES_REQUESTED"}]`, false},
+		{"review が無ければ承認済みでない", `[]`, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			node := strings.Replace(clNode(5, ""), `"latestOpinionatedReviews":{"totalCount":0,"nodes":[]}`, `"latestOpinionatedReviews":{"totalCount":0,"nodes":`+c.reviews+`}`, 1)
 
-		cl, err := rereadCL(t, response{out: []byte(`{"data":{"repository":{"pullRequest":` + node + `}}}`)})
+			cl, err := rereadCL(t, response{out: []byte(`{"data":{"repository":{"pullRequest":` + node + `}}}`)})
 
-		if err != nil || cl.Approved != want {
-			t.Errorf("%s: approved = %v (%v), want %v", reviews, cl.Approved, err, want)
-		}
+			if err != nil || cl.Approved != c.want {
+				t.Fatalf("approved = %v (%v), want %v", cl.Approved, err, c.want)
+			}
+		})
+	}
+}
+
+func TestCLWithRequiredReviewsFollowsTheReviewDecision(t *testing.T) {
+	node := strings.Replace(clNode(5, ""), `"reviewDecision":null`, `"reviewDecision":"REVIEW_REQUIRED"`, 1)
+	node = strings.Replace(node, `"latestOpinionatedReviews":{"totalCount":0,"nodes":[]}`, `"latestOpinionatedReviews":{"totalCount":1,"nodes":[{"state":"APPROVED"}]}`, 1)
+
+	cl, err := rereadCL(t, response{out: []byte(`{"data":{"repository":{"pullRequest":` + node + `}}}`)})
+
+	if err != nil || cl.Approved {
+		t.Fatalf("approved = %v (%v), want reviewDecision に従って承認済みでない", cl.Approved, err)
+	}
+}
+
+func TestCLWithMoreWriterReviewsThanOneRoundTripIsTruncated(t *testing.T) {
+	node := strings.Replace(clNode(5, ""), `"latestOpinionatedReviews":{"totalCount":0,"nodes":[]}`, `"latestOpinionatedReviews":{"totalCount":101,"nodes":[]}`, 1)
+
+	_, err := rereadCL(t, response{out: []byte(`{"data":{"repository":{"pullRequest":` + node + `}}}`)})
+
+	var failure *target.Failure
+	if !errors.As(err, &failure) || failure.Kind != target.Truncated {
+		t.Fatalf("err = %v", err)
 	}
 }

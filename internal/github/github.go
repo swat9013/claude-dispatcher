@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"regexp"
 	"slices"
 	"strings"
@@ -233,10 +232,10 @@ func (s Store) issue(number int) (target.Issue, error) {
 
 // normalize は応答の issue 1 件を作業対象の形に写す。
 func (s Store) normalize(n issueNode) (target.Issue, error) {
-	if err := s.readAll(fmt.Sprintf("issue #%d", n.Number), map[string]connectionCount{
-		"label":    {n.Labels.TotalCount, len(n.Labels.Nodes)},
-		"assignee": {n.Assignees.TotalCount, len(n.Assignees.Nodes)},
-		"依存先":      {n.BlockedBy.TotalCount, len(n.BlockedBy.Nodes)},
+	if err := s.readAll(fmt.Sprintf("issue #%d", n.Number), []connectionCount{
+		{"label", n.Labels.TotalCount, len(n.Labels.Nodes)},
+		{"assignee", n.Assignees.TotalCount, len(n.Assignees.Nodes)},
+		{"依存先", n.BlockedBy.TotalCount, len(n.BlockedBy.Nodes)},
 	}); err != nil {
 		return target.Issue{}, err
 	}
@@ -422,10 +421,10 @@ func approved(n clNode) bool {
 
 // normalizeCL は応答の CL 1 件を作業対象の形に写す (CL の状態の語彙へ写す。system.md §6)。
 func (s Store) normalizeCL(n clNode) (target.CL, error) {
-	if err := s.readAll(fmt.Sprintf("CL #%d", n.Number), map[string]connectionCount{
-		"label":         {n.Labels.TotalCount, len(n.Labels.Nodes)},
-		"review thread": {n.ReviewThreads.TotalCount, len(n.ReviewThreads.Nodes)},
-		"review":        {n.LatestOpinionatedReviews.TotalCount, len(n.LatestOpinionatedReviews.Nodes)},
+	if err := s.readAll(fmt.Sprintf("CL #%d", n.Number), []connectionCount{
+		{"label", n.Labels.TotalCount, len(n.Labels.Nodes)},
+		{"review thread", n.ReviewThreads.TotalCount, len(n.ReviewThreads.Nodes)},
+		{"review", n.LatestOpinionatedReviews.TotalCount, len(n.LatestOpinionatedReviews.Nodes)},
 	}); err != nil {
 		return target.CL{}, err
 	}
@@ -460,15 +459,18 @@ func (s Store) normalizeCL(n clNode) (target.CL, error) {
 	return cl, nil
 }
 
-// connectionCount は connection の件数 (total) と、1 往復で読めた件数 (read)。
-type connectionCount struct{ total, read int }
+// connectionCount は connection (name) の件数 (total) と、1 往復で読めた件数 (read)。
+type connectionCount struct {
+	name        string
+	total, read int
+}
 
 // readAll は、作業対象 (what) の connection を 1 往復で読み切れたかを確かめる。読み切れなければ Truncated の失敗を返す。
 // 切り詰めた像から候補を出さない。
-func (s Store) readAll(what string, counts map[string]connectionCount) error {
-	for _, name := range slices.Sorted(maps.Keys(counts)) {
-		if c := counts[name]; c.total > c.read {
-			return s.fail(target.Truncated, fmt.Errorf("%s の %s が %d 件あり、1 往復で読める %d 件を超えた", what, name, c.total, connectionSize))
+func (s Store) readAll(what string, counts []connectionCount) error {
+	for _, c := range counts {
+		if c.total > c.read {
+			return s.fail(target.Truncated, fmt.Errorf("%s の %s が %d 件あり、1 往復で読める %d 件を超えた", what, c.name, c.total, connectionSize))
 		}
 	}
 	return nil

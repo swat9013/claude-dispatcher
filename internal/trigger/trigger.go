@@ -34,10 +34,10 @@ func (t Trigger) Matches(item target.Item) bool {
 }
 
 // Undecided は、作業対象が trigger に当たるかをまだ決められないか。conflict の条件を持つ CL の trigger は、CL host が
-// conflict を計算し終えるまで当たるとも外れたとも決めない。
+// conflict を計算し終えるまで当たるとも外れたとも決めない。終端の CL は決められる (終端として扱う)。
 func (t Trigger) Undecided(item target.Item) bool {
 	cl, ok := item.(target.CL)
-	return ok && t.On == target.KindCL && t.CL.Conflict != nil && cl.Mergeable == target.MergeUnknown
+	return ok && !cl.Closed && t.On == target.KindCL && t.CL.Conflict != nil && cl.Mergeable == target.MergeUnknown
 }
 
 // Author は作者の立場の条件。空なら立場を問わない。

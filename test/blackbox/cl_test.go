@@ -392,3 +392,21 @@ func TestEndedCLWorkerIsNotCompletedWhileItsConflictIsBeingComputed(t *testing.T
 		t.Fatalf("conflict を計算中なのに終わり方を決めた: %v", ends)
 	}
 }
+
+func TestEndedCLWorkerOfAMergedCLIsCompletedEvenWhileItsConflictIsBeingComputed(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflow(s.clWorkflow("{conflict: true}"))
+	conflicting := readyCL(5)
+	conflicting.mergeable = "CONFLICTING"
+	merged := readyCL(5)
+	merged.mergeable, merged.state = "UNKNOWN", "MERGED"
+	s.setStore(nil, []cl{conflicting})
+	s.onClaude(stubwire.Rule{Writes: []stubwire.FileWrite{s.clResponses(merged)}})
+
+	s.startLoop()
+
+	end := s.waitEvents("end", 1)[0]
+	if end["target"] != "cl#5" || end["outcome"] != "completed" || end["reason"] != "終端" {
+		t.Fatalf("end の行 = %v, want 終端の completed", end)
+	}
+}

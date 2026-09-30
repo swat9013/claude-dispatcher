@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -283,9 +284,9 @@ func (l *loop) tick() {
 type view struct {
 	open      []target.Item
 	ambiguous map[target.Ref]bool
-	// branches は claim している作業対象の workspace の branch と、その claim の作業対象を読む。ok が false なら読めない
-	// branch があった
-	branches func() (owners map[string]target.Ref, ok bool)
+	// branches は claim している作業対象の workspace の branch と、それを checkout している claim の作業対象を読む。ok が
+	// false なら読めない branch があった
+	branches func() (owners map[string][]target.Ref, ok bool)
 }
 
 // outsideTick は tick の外から retry を呼ぶときの view (無い)
@@ -298,21 +299,20 @@ func (v *view) branchHeld(cl target.CL, self target.Ref) bool {
 	if !ok {
 		return true
 	}
-	owner, held := owners[cl.Head]
-	return cl.SameRepo && held && owner != self
+	return cl.SameRepo && slices.ContainsFunc(owners[cl.Head], func(owner target.Ref) bool { return owner != self })
 }
 
 // claimedBranches は、claim している作業対象の workspace で checkout されている branch を読む関数を返す。読むのは最初に
 // 呼ばれたとき (CL を起動しようとしたとき) の 1 回だけ。読めない branch があれば error の行を残し、ok を false で返す
 // (その tick は CL の worker を起動しない)。
-func (l *loop) claimedBranches() func() (map[string]target.Ref, bool) {
-	var owners map[string]target.Ref
+func (l *loop) claimedBranches() func() (map[string][]target.Ref, bool) {
+	var owners map[string][]target.Ref
 	var ok bool
-	return func() (map[string]target.Ref, bool) {
+	return func() (map[string][]target.Ref, bool) {
 		if owners != nil {
 			return owners, ok
 		}
-		owners, ok = map[string]target.Ref{}, true
+		owners, ok = map[string][]target.Ref{}, true
 		for ref, c := range l.claims {
 			branch, err := l.o.Workspaces(l.definitionOf(c)).Branch(ref)
 			if err != nil {
@@ -321,7 +321,7 @@ func (l *loop) claimedBranches() func() (map[string]target.Ref, bool) {
 				continue
 			}
 			if branch != "" {
-				owners[branch] = ref
+				owners[branch] = append(owners[branch], ref)
 			}
 		}
 		return owners, ok

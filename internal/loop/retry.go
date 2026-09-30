@@ -105,6 +105,9 @@ func (l *loop) retry(store Store, v *view) {
 			continue
 		}
 		c.trigger = current
+		if current.Undecided(item) {
+			continue
+		}
 		if settled := l.settle(ref, c, item); settled != "" {
 			l.releaseWaiting(ref, c, settled)
 			continue
@@ -117,9 +120,6 @@ func (l *loop) retry(store Store, v *view) {
 			if v.branchHeld(cl, ref) {
 				continue
 			}
-		}
-		if current.Undecided(item) {
-			continue
 		}
 		c.item, c.waitingSlot = item, false
 		c.attempt++
