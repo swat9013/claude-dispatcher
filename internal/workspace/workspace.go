@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/swat9013/claude-dispatcher/internal/proc"
+	"github.com/swat9013/claude-dispatcher/internal/target"
 )
 
 // Hooks は workspace の hooks の shell script。空の hook は撃たない。
@@ -37,7 +38,7 @@ type Manager struct {
 
 // Path は issue の workspace の path。root の外へは出ない (番号だけから作る)。
 func (m Manager) Path(number int) string {
-	return filepath.Join(m.Root, "issue-"+strconv.Itoa(number))
+	return filepath.Join(m.Root, target.FileName(number))
 }
 
 // Prepare は workspace を用意する。無ければ作って after_create を撃ち (失敗したら作りかけを消す)、before_run を撃つ。
@@ -74,9 +75,10 @@ func (m Manager) Remove(number int) error {
 	return hookErr
 }
 
+// issueDir は target.FileName の綴りの dir
 var issueDir = regexp.MustCompile(`^issue-([0-9]+)$`)
 
-// Existing は root の下にある issue の workspace の番号を返す。root が無ければ空。
+// Existing は root の下にある issue の workspace の番号を返す。root が無ければ空。番号として読めない dir は飛ばす。
 func (m Manager) Existing() ([]int, error) {
 	entries, err := os.ReadDir(m.Root)
 	if errors.Is(err, os.ErrNotExist) {
@@ -87,8 +89,11 @@ func (m Manager) Existing() ([]int, error) {
 	}
 	var numbers []int
 	for _, e := range entries {
-		if m := issueDir.FindStringSubmatch(e.Name()); m != nil && e.IsDir() {
-			n, _ := strconv.Atoi(m[1])
+		m := issueDir.FindStringSubmatch(e.Name())
+		if m == nil || !e.IsDir() {
+			continue
+		}
+		if n, err := strconv.Atoi(m[1]); err == nil && target.FileName(n) == e.Name() {
 			numbers = append(numbers, n)
 		}
 	}

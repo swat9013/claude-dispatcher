@@ -50,3 +50,18 @@ func Render(name, text string, vars Vars) (string, error) {
 	}
 	return out.String(), nil
 }
+
+// sample は Check が描画に使う変数。条件の分岐の中の変数まで確かめるよう、どの値も空にしない。
+var sample = Vars{
+	Issue:     target.Issue{Number: 1, Title: "title", URL: "https://example.com/1", Labels: []string{"label"}},
+	Trigger:   "trigger",
+	Attempt:   1,
+	Workspace: "/workspace",
+}
+
+// Check は text を見本の変数で描画してみて、描画の失敗 (綴りの誤り・未知の変数・未知の関数) を返す。
+// workflow 定義の検査で、作業対象を読む前に落とすために使う。
+func Check(name, text string) error {
+	_, err := Render(name, text, sample)
+	return err
+}

@@ -19,7 +19,7 @@ import (
 	"github.com/swat9013/claude-dispatcher/internal/workflow"
 )
 
-// 周期を待つ振る舞い (tick ごとの読み直し・周期の選び方・停止)。black-box テストは周期の下限 (1m) を待てないので、ここで見る。
+// 周期を待つ振る舞い (tick ごとの読み直し・周期の選び方・停止)。周期を分の単位で選ぶ振る舞いは black-box テストが待てないので、ここで見る。
 
 const startScope = "scope-a"
 
@@ -36,12 +36,12 @@ type tickPlan struct {
 
 // memoryIssues は in-memory の issue 置き場。
 type memoryIssues struct {
-	scopeKey string
+	scopeKey func() string
 	observe  func() ([]target.Issue, error)
 	reread   func(number int) (target.Issue, error)
 }
 
-func (m memoryIssues) ScopeKey() string                       { return m.scopeKey }
+func (m memoryIssues) ScopeKey() string                       { return m.scopeKey() }
 func (m memoryIssues) OpenIssues() ([]target.Issue, error)    { return m.observe() }
 func (m memoryIssues) Issue(number int) (target.Issue, error) { return m.reread(number) }
 
@@ -62,6 +62,8 @@ type harness struct {
 	stop  os.Signal
 	// maxConcurrent は並列上限。0 なら worker を起動しない
 	maxConcurrent int
+	// open は置き場の open な issue の番号 (空なら 1 だけ)
+	open []int
 	// rereadFailures は、終わった worker の作業対象の読み直しを最初に何回失敗させるか
 	rereadFailures int
 	// delivered は、起動した worker の event を loop が受け取り終えると閉じる。周期はそれを待ってから進める
@@ -97,13 +99,14 @@ func (h *harness) run(t *testing.T) []string {
 		},
 		Definition: definition(time.Minute, h.maxConcurrent),
 		Open: func(workflow.Definition) loop.Issues {
-			// 起動時の掃除と tick の突き合わせは、その tick の plan を読む前にも置き場を開く
-			plan := h.plans[max(tick-1, 0)]
-			scope := startScope
-			if plan.scope != "" {
-				scope = plan.scope
-			}
-			return memoryIssues{scopeKey: scope, observe: func() ([]target.Issue, error) {
+			// scope key と観測は、その tick が読み直した workflow 定義の plan で答える
+			return memoryIssues{scopeKey: func() string {
+				if scope := h.plans[tick-1].scope; scope != "" {
+					return scope
+				}
+				return startScope
+			}, observe: func() ([]target.Issue, error) {
+				plan := h.plans[tick-1]
 				h.reads++
 				if plan.stopDuring != nil {
 					signals <- plan.stopDuring
@@ -111,7 +114,15 @@ func (h *harness) run(t *testing.T) []string {
 				if plan.fail != nil {
 					return nil, plan.fail
 				}
-				return []target.Issue{{Number: 1}}, nil
+				numbers := h.open
+				if len(numbers) == 0 {
+					numbers = []int{1}
+				}
+				issues := make([]target.Issue, len(numbers))
+				for i, n := range numbers {
+					issues[i] = target.Issue{Number: n}
+				}
+				return issues, nil
 			}, reread: func(number int) (target.Issue, error) {
 				h.rereads++
 				if h.rereads <= h.rereadFailures {
@@ -124,9 +135,9 @@ func (h *harness) run(t *testing.T) []string {
 		Launch: func(_ workflow.Definition, job worker.Job, events chan<- worker.Event) loop.Worker {
 			h.launches++
 			go func() {
-				events <- worker.Event{Number: job.Issue.Number, Started: &worker.Started{PID: 1}}
+				events <- worker.Started{Number: job.Issue.Number, PID: 1}
 				code := 0
-				events <- worker.Event{Number: job.Issue.Number, Ended: &worker.Result{ExitCode: &code}}
+				events <- worker.Ended{Number: job.Issue.Number, Result: worker.Result{ExitCode: &code}}
 				h.once.Do(func() { close(h.delivered) })
 			}()
 			return endedWorker{}
@@ -260,8 +271,22 @@ func TestStopLineNamesTheSignal(t *testing.T) {
 	}
 }
 
+func rereadFailsOnce() *harness {
+	return &harness{plans: []tickPlan{{load: good(time.Minute)}, {load: good(time.Minute)}, {load: good(time.Minute)}}, maxConcurrent: 1, rereadFailures: 1}
+}
+
+func TestEndedWorkerWhoseIssueCannotBeReadLeavesAnErrorLine(t *testing.T) {
+	h := rereadFailsOnce()
+
+	h.run(t)
+
+	if !strings.Contains(h.stdout.String(), "error issue#1: 終わった worker の作業対象を読み直せない (次の tick で読み直す)") {
+		t.Fatalf("出力:\n%s", h.stdout.String())
+	}
+}
+
 func TestEndedWorkerWhoseIssueCannotBeReadIsCheckedAgainOnTheNextTick(t *testing.T) {
-	h := &harness{plans: []tickPlan{{load: good(time.Minute)}, {load: good(time.Minute)}, {load: good(time.Minute)}}, maxConcurrent: 1, rereadFailures: 1}
+	h := rereadFailsOnce()
 
 	lines := h.run(t)
 
@@ -274,7 +299,14 @@ func TestEndedWorkerWhoseIssueCannotBeReadIsCheckedAgainOnTheNextTick(t *testing
 	if len(ends) == 0 || !strings.HasSuffix(ends[0], "終了 issue#1 (implement): failed — trigger に当たったまま") {
 		t.Fatalf("出力:\n%s", h.stdout.String())
 	}
-	if !strings.Contains(h.stdout.String(), "error issue#1: 終わった worker の作業対象を読み直せない (次の tick で読み直す)") {
-		t.Fatalf("読み直しの失敗が出ていない:\n%s", h.stdout.String())
+}
+
+func TestWorkerWaitingToBeCheckedDoesNotTakeASlot(t *testing.T) {
+	h := &harness{plans: []tickPlan{{load: good(time.Minute)}, {load: good(time.Minute)}}, maxConcurrent: 1, open: []int{1, 2}, rereadFailures: 99}
+
+	h.run(t)
+
+	if h.launches != 2 {
+		t.Fatalf("起動した数 = %d, want 2 (確かめ待ちの issue#1 が並列の枠を塞いだ)", h.launches)
 	}
 }

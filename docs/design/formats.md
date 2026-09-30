@@ -93,7 +93,7 @@ triggers:                    # 必須。1 つ以上
 | `tracker.repo` | 文字列 | issue 置き場。`<owner>/<name>` |
 | `tracker.token` | 文字列 | gh に環境変数 `GH_TOKEN` として渡す token。`$VAR` でだけ書ける (値そのものを書かない)。省くと、loop を起動した環境の認証を gh がそのまま使う |
 | `polling.interval` | 文字列 | 周期。Go の duration の綴り (`90s` / `5m` / `1h30m`) で、1s 以上 24h 以下。短い周期は tracker の rate limit を食う |
-| `workspace.root` | 文字列 | workspace を置く dir。相対 path は workflow 定義の dir から、`~/` は HOME から。`$VAR` で書ける |
+| `workspace.root` | 文字列 | workspace を置く dir。相対 path は workflow 定義の dir から、`~/` は HOME から (HOME が絶対 path でなければ失敗)。`$VAR` で書ける |
 | `hooks.after_create` | 文字列 | workspace を作った直後に撃つ shell script。失敗したら workspace を消し、その attempt は失敗 |
 | `hooks.before_run` | 文字列 | worker を起動する前に毎回撃つ。失敗したら、その attempt は失敗 |
 | `hooks.after_run` | 文字列 | worker が終わった後 (止めたときも) に毎回撃つ。失敗は log に残して続ける |
@@ -170,6 +170,7 @@ action と本文 (共通 prompt) は、worker を起動するたびに Go の te
 | `.workspace` | workspace の絶対 path |
 
 - 未知の変数 (`.issue.body` など) と未知の関数は、描画の失敗にする。描画に失敗した attempt は失敗
+- workflow 定義の検査 (§2.7) で、action と本文を見本の変数 (どれも空でない値) で描画してみる。描画できなければ検査で落とすので、作業対象を読んでから描画に失敗するのは、見本では通った分岐だけになる
 - 例: `/swat-skills:playbook-implementation issue #{{ .issue.number }} ({{ .issue.url }})`
 
 ### 2.7 検査
@@ -183,6 +184,7 @@ action と本文 (共通 prompt) は、worker を起動するたびに Go の te
 - 上の表の各項目の制約 (`polling.interval` の範囲・trigger の名前の綴りと重複・`assignee` と `unassigned` の併記・空の `labels.any`・空の `action`)
 - `$VAR` の未設定と、`tracker.token` に値そのものを書いたこと
 - 同じ key を 1 つの対応表に 2 回書いたこと
+- action と本文の template を描画できないこと (§2.6。綴りの誤り・未知の変数・未知の関数)
 
 ## 3. exit code
 
@@ -205,7 +207,7 @@ action と本文 (共通 prompt) は、worker を起動するたびに Go の te
 |---|---|---|
 | `tick` | tick の終わり | `result` (`ok` / `error`)・`candidates` (候補の数)・`launched` (起動した作業対象の列)・`error` (`result` が `error` のとき) |
 | `start` | worker を起動した | `target`・`trigger`・`attempt`・`session_id`・`workspace`・`pid` |
-| `end` | claim を解いた | `target`・`trigger`・`attempt`・`session_id`・`outcome`・`reason`・`exit_code` (process が終わったときだけ) |
+| `end` | claim を解いた | `target`・`trigger`・`attempt`・`session_id`・`outcome`・`reason`・`exit_code` (process が自分で終わったときだけ。signal で止まったら載せない) |
 | `error` | 処理は続けるが、運用者が知るべき失敗 | `target` (あれば)・`error` |
 
 - `target` は `issue#<番号>`
@@ -213,11 +215,12 @@ action と本文 (共通 prompt) は、worker を起動するたびに Go の te
 
 | 値 | 意味 |
 |---|---|
-| `completed` | worker が終わった後、作業対象が起動した trigger から外れていた。または終端になっていた |
-| `failed` | worker が失敗した (異常終了・hook の失敗・描画の失敗・起動できない)、または trigger に当たったまま終わった |
+| `completed` | worker が終わった後、作業対象が起動した trigger から外れていた。または終端になっていた。worker 自身が失敗していても completed とし、`reason` に失敗を添える |
+| `failed` | worker が終わった後も作業対象が trigger に当たったままで、worker が失敗した (異常終了・hook の失敗・描画の失敗・起動できない) か、正常に終わった |
 | `stopped` | loop が止めた (作業対象が終端になった・2 回目の停止要求) |
 
-- `error` の行を書く場面: `after_run` と `before_remove` の失敗・workspace を消せない・終わった worker の作業対象を読み直せない (claim を持ったまま次の tick で読み直す)
+- `error` の行を書く場面: `after_run` と `before_remove` の失敗・workspace を消せない (次の tick の掃除で消し直す)・終わった worker の作業対象を読み直せない (claim を持ったまま次の tick で読み直す)・止める worker の process group に signal を送れない
+- log.jsonl に行を書けなければ、そのことを stdout に出して続ける
 - `session_id` は CLI が発行して `--session-id` で渡した値。Claude Code の transcript へ辿る鍵
 
 ## 5. 試運転 (`loop --dry-run`)
@@ -270,8 +273,11 @@ claude-dispatcher loop [<workflow の path>]
 
 1. 突き合わせ: 走っている worker の作業対象を読み直し、終端になっていれば worker を止め、`after_run` と `before_remove` を撃って workspace を消す。trigger から外れただけでは止めない
 2. 終わった worker のうち、作業対象を読み直せなかったものを読み直す
-3. workflow 定義を読み直して snapshot を作り、trigger を評価する
-4. 候補のうち claim されていないものを、`limits.max_concurrent` から走っている worker を引いた数だけ起動する
+3. workflow 定義を読み直して snapshot を作る
+4. 掃除: workspace root の下の `issue-<番号>` のうち、claim が無く open な issue の一覧にも無いものを読み直し、終端になっていれば `before_remove` を撃って消す。起動の直後の tick が起動時の掃除を兼ね、以後の tick が、claim を解いた後に終端になったものと消し損ねたものを拾う
+5. trigger を評価し、候補のうち claim されていないものを、`limits.max_concurrent` から走っている worker を引いた数だけ起動する (確かめ待ちの claim は数えない)
+
+- 作業対象の読み直しで issue が消えていたら (削除・移管。gh が `Could not resolve to an Issue` を返すか、応答に issue が無い)、終端と同じに扱う
 
 **worker の 1 回分**:
 
@@ -280,13 +286,15 @@ claude-dispatcher loop [<workflow の path>]
 3. 次の argv で起動する。cwd は workspace、stdin は空、stdout と stderr は `workers/issue-<番号>.log` に追記する
 
    ```
-   <claude.command> <claude.args…> -p --output-format stream-json --verbose --session-id <uuid> --append-system-prompt-file <prompts の path> <描画した action>
+   <claude.command> <claude.args…> -p --output-format stream-json --verbose --session-id <uuid> --append-system-prompt-file <prompts の path> -- <描画した action>
    ```
 
-4. 終わったら `after_run` を撃ち、作業対象を読み直す。終端か、起動した trigger から外れていれば `completed`、当たったままなら `failed` として claim を解く
-   - 失敗した作業対象は、次の tick で改めて候補になる (retry と打ち切りは #79)
+   - action は `--` の後ろに置く (`-` で始まる action を option と読ませない)
+   - stream-json の出力は worker log に追記するだけで、loop はまだ読まない (stall の検知で読むのは #79)
 
-**起動時の掃除**: loop は起動時に workspace root の下の `issue-<番号>` を読み、作業対象が終端になっていれば `before_remove` を撃って消す。
+4. 終わったら `after_run` を撃ち、作業対象を読み直す。終端か、起動した trigger から外れていれば `completed`、当たったままなら `failed` として claim を解く
+   - `failed` の作業対象は、起動した trigger から一度外れるまで起動し直さない (loop を起動し直すと忘れる。retry と backoff は #79 が置き換える)
+   - workspace を消すときは、worker を起動したときの workflow 定義の `workspace.root` と hooks を使う
 
 **出力** (#81 で loop の画面に作り直す。今の形は仮): log.jsonl (§4) に書く行を、人が読む形で stdout にも 1 行ずつ追記する。
 
@@ -307,8 +315,8 @@ claude-dispatcher loop [<workflow の path>]
 
 | 受けたとき | 振る舞い |
 |---|---|
-| 1 回目 | 新しい tick と起動をやめ、走っている worker の終了を待って (終わり方の処理を済ませて) 止まる。走っていなければ直ちに止まる |
-| 2 回目 | 走っている worker の process group を止め、`after_run` を撃ち、`stopped` の `end` 行を書いて止まる |
+| 1 回目 | 新しい tick と起動をやめ、走っている worker の終了を待って (終わり方の処理を済ませて) 止まる。待つ間も周期ごとに突き合わせ (tick の手順 1) だけを撃ち、終端になった作業対象の worker は止める。走っていなければ直ちに止まる |
+| 2 回目 | 走っている worker の process group に SIGTERM を送り、5s で終わらなければ SIGKILL を送る。worker が終わったら group に残った process も SIGKILL で止め、`after_run` を撃ち、`stopped` の `end` 行を書いて止まる |
 
 exit: 0 = 停止要求で止まった / 1・2・3 = 起動時の検査 (上表)。
 

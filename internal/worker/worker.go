@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -31,29 +30,37 @@ type Job struct {
 	Prompt string
 }
 
-// Event は worker の起動か終わり。どちらか一方だけを持つ。
-type Event struct {
-	Number  int
-	Started *Started
-	Ended   *Result
-}
+// Event は worker の起動 (Started) か終わり (Ended)。
+type Event interface{ isEvent() }
 
 // Started は claude を起動したこと。
 type Started struct {
+	Number    int
 	PID       int
 	Workspace string
 }
+
+// Ended は worker 1 回分が終わったこと。
+type Ended struct {
+	Number int
+	Result Result
+}
+
+func (Started) isEvent() {}
+func (Ended) isEvent()   {}
 
 // Result は worker 1 回分の終わり方。
 type Result struct {
 	// Failure は attempt の失敗の理由 (hook・描画・起動の失敗、異常終了)。失敗でなければ ""
 	Failure string
-	// ExitCode は claude の process が終わったときの exit code。起動に至らなければ nil
+	// ExitCode は claude の process が自分で終わったときの exit code。起動に至らないか、signal で終わったなら nil
 	ExitCode *int
 	// Stopped は Stop で止めたか
 	Stopped bool
 	// AfterRunError は after_run の失敗。処理は続けるので、失敗とは数えない
 	AfterRunError string
+	// StopError は止めるときに process group へ signal を送れなかった理由
+	StopError string
 }
 
 // Runner は worker を起動する。
@@ -92,14 +99,17 @@ func (r *Run) stopped() bool {
 // Start は job の worker を別の goroutine で進め、起動と終わりを events に送る。終わりは必ず 1 回送る。
 func (r Runner) Start(job Job, events chan<- Event) *Run {
 	run := &Run{stop: make(chan struct{})}
+	n := job.Issue.Number
 	go func() {
-		result := r.attempt(job, run, func(s Started) { events <- Event{Number: job.Issue.Number, Started: &s} })
-		events <- Event{Number: job.Issue.Number, Ended: &result}
+		result := r.attempt(job, run, func(pid int, workspace string) {
+			events <- Started{Number: n, PID: pid, Workspace: workspace}
+		})
+		events <- Ended{Number: n, Result: result}
 	}()
 	return run
 }
 
-func (r Runner) attempt(job Job, run *Run, started func(Started)) Result {
+func (r Runner) attempt(job Job, run *Run, started func(pid int, workspace string)) Result {
 	n := job.Issue.Number
 	path, err := r.Workspaces.Prepare(n)
 	if err != nil {
@@ -113,70 +123,113 @@ func (r Runner) attempt(job Job, run *Run, started func(Started)) Result {
 }
 
 // launch は描画して claude を起動し、終わるか止められるまで待つ。
-func (r Runner) launch(job Job, run *Run, workspacePath string, started func(Started)) Result {
+func (r Runner) launch(job Job, run *Run, workspacePath string, started func(pid int, workspace string)) Result {
 	if run.stopped() {
 		return Result{Stopped: true}
 	}
-	vars := render.Vars{Issue: job.Issue, Trigger: job.Trigger.Name, Attempt: job.Attempt, Workspace: workspacePath}
-	action, err := render.Render("action", job.Trigger.Action, vars)
+	action, promptFile, err := r.render(job, workspacePath)
 	if err != nil {
 		return Result{Failure: err.Error()}
 	}
-	prompt, err := render.Render("共通 prompt", job.Prompt, vars)
-	if err != nil {
-		return Result{Failure: err.Error()}
-	}
-	promptFile := filepath.Join(r.StateDir, "prompts", "issue-"+strconv.Itoa(job.Issue.Number)+".md")
-	if err := writeFile(promptFile, prompt); err != nil {
-		return Result{Failure: fmt.Sprintf("共通 prompt を書けない: %v", err)}
-	}
+	// command は attempt ごとに PATH から引き直す (loop を止めずに claude を入れ替えても、次の attempt から追従する)
 	command, err := deps.Lookup(r.Command, r.Env)
 	if err != nil {
 		return Result{Failure: err.Error()}
 	}
-	logFile := filepath.Join(r.StateDir, "workers", "issue-"+strconv.Itoa(job.Issue.Number)+".log")
-	log, err := openAppend(logFile)
+	log, err := openAppend(filepath.Join(r.StateDir, "workers", target.FileName(job.Issue.Number)+".log"))
 	if err != nil {
 		return Result{Failure: fmt.Sprintf("worker log を開けない: %v", err)}
 	}
 	defer log.Close()
 
+	// action は `--` の後ろに置く (`-` で始まる action を claude が option と読まないように)
 	args := append(append([]string{}, r.Args...), "-p", "--output-format", "stream-json", "--verbose",
-		"--session-id", job.SessionID, "--append-system-prompt-file", promptFile, action)
+		"--session-id", job.SessionID, "--append-system-prompt-file", promptFile, "--", action)
 	cmd := exec.Command(command, args...)
 	cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = workspacePath, r.Env, log, log
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
 		return Result{Failure: fmt.Sprintf("%s を起動できない: %v", r.Command, err)}
 	}
-	started(Started{PID: cmd.Process.Pid, Workspace: workspacePath})
+	started(cmd.Process.Pid, workspacePath)
+	return wait(cmd, run)
+}
 
+// render は action を描画し、共通 prompt を描画して state dir の file に書く。
+func (r Runner) render(job Job, workspacePath string) (action, promptFile string, err error) {
+	vars := render.Vars{Issue: job.Issue, Trigger: job.Trigger.Name, Attempt: job.Attempt, Workspace: workspacePath}
+	action, err = render.Render("action", job.Trigger.Action, vars)
+	if err != nil {
+		return "", "", err
+	}
+	prompt, err := render.Render("共通 prompt", job.Prompt, vars)
+	if err != nil {
+		return "", "", err
+	}
+	promptFile = filepath.Join(r.StateDir, "prompts", target.FileName(job.Issue.Number)+".md")
+	if err := writeFile(promptFile, prompt); err != nil {
+		return "", "", fmt.Errorf("共通 prompt を書けない: %w", err)
+	}
+	return action, promptFile, nil
+}
+
+// wait は起動した claude が終わるか、止められるまで待つ。
+func wait(cmd *exec.Cmd, run *Run) Result {
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
-	stopped := false
+	var result Result
 	select {
 	case <-done:
 	case <-run.stop:
-		stopped = true
-		stopGroup(cmd.Process.Pid, done)
+		// 子の終了と同時に届いたら終了を優先する (select はどちらも選びうる)。自分で終わった worker を止めたことにすると、
+		// 終わり方を確かめないまま claim を解いてしまう
+		select {
+		case <-done:
+		default:
+			result.Stopped = true
+			if err := stopGroup(cmd.Process.Pid, done); err != nil {
+				result.StopError = err.Error()
+			}
+		}
 	}
-	code := cmd.ProcessState.ExitCode()
-	result := Result{ExitCode: &code, Stopped: stopped}
-	if !stopped && code != 0 {
-		result.Failure = fmt.Sprintf("exit %d", code)
+	if status, ok := cmd.ProcessState.Sys().(syscall.WaitStatus); ok && status.Exited() {
+		code := status.ExitStatus()
+		result.ExitCode = &code
+	}
+	if !result.Stopped && (result.ExitCode == nil || *result.ExitCode != 0) {
+		result.Failure = "異常終了 (" + cmd.ProcessState.String() + ")"
 	}
 	return result
 }
 
-// stopGroup は process group に SIGTERM を送り、stopGrace のうちに終わらなければ SIGKILL を送って、終わるまで待つ。
-func stopGroup(pid int, done <-chan error) {
-	_ = syscall.Kill(-pid, syscall.SIGTERM)
+// stopGroup は process group に SIGTERM を送り、stopGrace のうちに claude が終わらなければ SIGKILL を送って、終わるまで待つ。
+// claude が終わった後も、group に残った子 (claude が起こした tool の process) を SIGKILL で止める。workspace を消すか
+// 次の attempt が使う前に、そこを cwd にした process を残さないため。
+func stopGroup(pid int, done <-chan error) error {
+	var errs []error
+	if err := kill(pid, syscall.SIGTERM); err != nil {
+		errs = append(errs, err)
+	}
 	select {
 	case <-done:
 	case <-time.After(stopGrace):
-		_ = syscall.Kill(-pid, syscall.SIGKILL)
+		if err := kill(pid, syscall.SIGKILL); err != nil {
+			errs = append(errs, err)
+		}
 		<-done
 	}
+	if err := kill(pid, syscall.SIGKILL); err != nil {
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
+}
+
+// kill は process group に sig を送る。group がもう無い (ESRCH) のは失敗と数えない。
+func kill(pid int, sig syscall.Signal) error {
+	if err := syscall.Kill(-pid, sig); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return fmt.Errorf("process group %d に %v を送れない: %w", pid, sig, err)
+	}
+	return nil
 }
 
 func writeFile(file, content string) error {

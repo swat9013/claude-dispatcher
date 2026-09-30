@@ -15,8 +15,8 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/swat9013/claude-dispatcher/internal/github"
+	"github.com/swat9013/claude-dispatcher/internal/render"
 	"github.com/swat9013/claude-dispatcher/internal/trigger"
-	"github.com/swat9013/claude-dispatcher/internal/workspace"
 )
 
 // Definition は検査に通った workflow 定義。
@@ -28,13 +28,22 @@ type Definition struct {
 	Interval time.Duration
 	// WorkspaceRoot は workspace を置く dir の絶対 path
 	WorkspaceRoot string
-	Hooks         workspace.Hooks
+	Hooks         Hooks
 	// MaxConcurrent は同時に走らせる worker の上限
 	MaxConcurrent int
 	Claude        Claude
 	Triggers      []trigger.Trigger
 	// Prompt は本文 (共通 prompt) の template
 	Prompt string
+}
+
+// Hooks は workspace の hooks の shell script (空なら撃たない) と、1 つの hook の上限時間。
+type Hooks struct {
+	AfterCreate  string
+	BeforeRun    string
+	AfterRun     string
+	BeforeRemove string
+	Timeout      time.Duration
 }
 
 // Claude は worker の起動の仕方。
@@ -92,13 +101,16 @@ func Load(path string, getenv func(string) string) (Definition, error) {
 	dir := filepath.Dir(path)
 	def := Definition{
 		Dir: dir, Interval: DefaultInterval, WorkspaceRoot: filepath.Join(dir, DefaultWorkspaceRoot),
-		Hooks: workspace.Hooks{Timeout: DefaultHookTimeout}, MaxConcurrent: 1, Claude: Claude{Command: DefaultClaudeCommand}, Prompt: body,
+		Hooks: Hooks{Timeout: DefaultHookTimeout}, MaxConcurrent: 1, Claude: Claude{Command: DefaultClaudeCommand}, Prompt: body,
 	}
 	root := &yaml.Node{Kind: yaml.MappingNode}
 	if len(doc.Content) == 1 {
 		root = resolve(doc.Content[0])
 	}
 	c.decode(root, &def)
+	if err := render.Check("本文", body); err != nil {
+		c.problems = append(c.problems, problem{text: fmt.Sprintf("本文 (共通 prompt): %v", err)})
+	}
 	if len(c.problems) > 0 {
 		return Definition{}, &Errors{Path: path, Problems: c.lines()}
 	}
@@ -220,7 +232,7 @@ func (c *checker) decode(root *yaml.Node, def *Definition) {
 			c.mapping(key, n, path, map[string]field{
 				"root": {read: func(_, n *yaml.Node, path string) {
 					if s, ok := c.variableOrLiteral(n, path); ok {
-						def.WorkspaceRoot = c.absolute(def.Dir, s)
+						def.WorkspaceRoot = c.absolute(n, path, def.Dir, s)
 					}
 				}},
 			})
@@ -249,18 +261,23 @@ func (c *checker) decode(root *yaml.Node, def *Definition) {
 	})
 }
 
-// absolute は path を絶対 path にする。`~/` は HOME から、相対 path は dir から。
-func (c *checker) absolute(dir, path string) string {
+// absolute は s を絶対 path にする。`~/` は HOME から、相対 path は dir から。HOME が空なら `~/` を読めない誤りにする。
+func (c *checker) absolute(n *yaml.Node, path, dir, s string) string {
 	switch {
-	case strings.HasPrefix(path, "~/"):
-		return filepath.Join(c.getenv("HOME"), path[2:])
-	case filepath.IsAbs(path):
-		return filepath.Clean(path)
+	case strings.HasPrefix(s, "~/"):
+		home := c.getenv("HOME")
+		if !filepath.IsAbs(home) {
+			c.fail(n, path, "HOME が絶対 path でないので ~/ を読めない")
+			return ""
+		}
+		return filepath.Join(home, s[2:])
+	case filepath.IsAbs(s):
+		return filepath.Clean(s)
 	}
-	return filepath.Join(dir, path)
+	return filepath.Join(dir, s)
 }
 
-func (c *checker) hooks(owner, n *yaml.Node, path string, h *workspace.Hooks) {
+func (c *checker) hooks(owner, n *yaml.Node, path string, h *Hooks) {
 	script := func(target *string) field {
 		return field{read: func(_, n *yaml.Node, path string) { *target, _ = c.str(n, path) }}
 	}
@@ -398,6 +415,8 @@ func (c *checker) triggers(n *yaml.Node, path string) []trigger.Trigger {
 				s, ok := c.str(n, path)
 				if ok && strings.TrimSpace(s) == "" {
 					c.fail(n, path, "空白だけにできない")
+				} else if err := render.Check("action", s); ok && err != nil {
+					c.fail(n, path, "%v", err)
 				}
 				t.Action = s
 			}},

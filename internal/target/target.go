@@ -25,6 +25,12 @@ type Issue struct {
 	OpenBlockers int
 }
 
+// Name は作業対象の表示名 (log の `target` の値)。
+func Name(number int) string { return fmt.Sprintf("issue#%d", number) }
+
+// FileName は作業対象ごとの file と dir の名前 (workspace・描画した共通 prompt・worker log)。
+func FileName(number int) string { return fmt.Sprintf("issue-%d", number) }
+
 // FailureKind は観測の失敗の分類 (SPEC §11.4)。
 type FailureKind int
 

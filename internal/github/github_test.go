@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/swat9013/claude-dispatcher/internal/github"
+	"github.com/swat9013/claude-dispatcher/internal/proc"
 	"github.com/swat9013/claude-dispatcher/internal/target"
 )
 
@@ -91,5 +92,73 @@ func TestOnlyOpenBlockersAreCountedAsUnresolved(t *testing.T) {
 
 	if issues[0].OpenBlockers != 2 {
 		t.Fatalf("未解決の依存先 = %d, want 2", issues[0].OpenBlockers)
+	}
+}
+
+// response は gh の 1 回分の応答を返す Runner (gh の代役)。
+type response struct {
+	out []byte
+	err error
+}
+
+func (r response) Run(...string) ([]byte, error) { return r.out, r.err }
+
+func reread(t *testing.T, r response) (target.Issue, error) {
+	t.Helper()
+	return github.NewIssueStore(r, github.Repo{Owner: "acme", Name: "widgets"}).Issue(42)
+}
+
+func TestRereadIssueThatIsClosedIsClosed(t *testing.T) {
+	node := strings.Replace(issueNode(42, "OWNER"), `"number":42,`, `"number":42,"state":"CLOSED",`, 1)
+
+	issue, err := reread(t, response{out: []byte(`{"data":{"repository":{"issue":` + node + `}}}`)})
+
+	if err != nil || !issue.Closed || issue.Number != 42 {
+		t.Fatalf("issue = %+v (%v), want 終端", issue, err)
+	}
+}
+
+func TestRereadIssueThatIsOpenIsNotClosed(t *testing.T) {
+	node := strings.Replace(issueNode(42, "OWNER"), `"number":42,`, `"number":42,"state":"OPEN",`, 1)
+
+	issue, err := reread(t, response{out: []byte(`{"data":{"repository":{"issue":` + node + `}}}`)})
+
+	if err != nil || issue.Closed {
+		t.Fatalf("issue = %+v (%v), want open", issue, err)
+	}
+}
+
+func TestRereadIssueThatGhCannotResolveIsClosed(t *testing.T) {
+	gone := &proc.Error{Name: "gh", Args: []string{"api", "graphql"}, Exit: 1, Stderr: "GraphQL: Could not resolve to an Issue with the number of 42. (repository.issue)"}
+
+	issue, err := reread(t, response{err: gone})
+
+	if err != nil || !issue.Closed {
+		t.Fatalf("issue = %+v (%v), want 消えた issue は終端", issue, err)
+	}
+}
+
+func TestRereadIssueMissingFromTheResponseIsClosed(t *testing.T) {
+	issue, err := reread(t, response{out: []byte(`{"data":{"repository":{"issue":null}}}`)})
+
+	if err != nil || !issue.Closed {
+		t.Fatalf("issue = %+v (%v), want 終端", issue, err)
+	}
+}
+
+func TestRereadIssueOfARepositoryMissingFromTheResponseIsNotVisible(t *testing.T) {
+	_, err := reread(t, response{out: []byte(`{"data":{"repository":null}}`)})
+
+	var failure *target.Failure
+	if !errors.As(err, &failure) || failure.Kind != target.NotVisible {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestRereadFailureOtherThanAMissingIssueIsNotClosed(t *testing.T) {
+	_, err := reread(t, response{err: &proc.Error{Name: "gh", Args: []string{"api", "graphql"}, Exit: 1, Stderr: "HTTP 502"}})
+
+	if err == nil {
+		t.Fatal("gh の失敗を終端として読んだ")
 	}
 }

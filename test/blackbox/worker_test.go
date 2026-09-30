@@ -11,7 +11,6 @@ import (
 	"strings"
 	"syscall"
 	"testing"
-	"time"
 
 	"github.com/swat9013/claude-dispatcher/test/blackbox/stubwire"
 )
@@ -53,9 +52,13 @@ func (s *sandbox) workspace(number int) string {
 	return filepath.Join(s.clone, ".claude-dispatcher", "workspaces", "issue-"+strconv.Itoa(number))
 }
 
-// onClaude は claude の stub の応答を r にする。stdout は stream-json の 1 行を既定で出す。
+// onClaude は claude の stub の応答を r にする。stdout は stream-json の 1 行を既定で出す。release を待つ stub は、
+// テストの後片付けで release して、テストが先に終わっても居残らせない。
 func (s *sandbox) onClaude(r stubwire.Rule) {
 	s.t.Helper()
+	if r.ReleaseFile != "" {
+		s.t.Cleanup(func() { _ = os.WriteFile(r.ReleaseFile, nil, 0o644) })
+	}
 	if r.Stdout == "" {
 		r.Stdout = `{"type":"result","subtype":"success"}` + "\n"
 	}
@@ -171,7 +174,7 @@ func TestWorkerGetsTheCommonPromptAsSystemPromptAndTheActionAsTheUserPrompt(t *t
 	file := argValueAfter(argv, "--append-system-prompt-file")
 	want := []string{"--permission-mode", "auto", "-p", "--output-format", "stream-json", "--verbose",
 		"--session-id", asString(start["session_id"]), "--append-system-prompt-file", file,
-		"/implement issue #42 (implement, attempt 1)"}
+		"--", "/implement issue #42 (implement, attempt 1)"}
 	if !slices.Equal(argv, want) {
 		t.Fatalf("argv = %q\nwant %q", argv, want)
 	}
@@ -253,20 +256,16 @@ func TestWorkerThatEndsStillMatchingTheTriggerFails(t *testing.T) {
 	}
 }
 
-func TestActionThatCannotBeRenderedFailsWithoutLaunching(t *testing.T) {
+func TestLoopWithAnActionThatCannotBeRenderedFailsToStart(t *testing.T) {
 	s := newSandbox(t)
 	s.writeWorkflow(strings.Replace(s.workerWorkflow(""), "{{ .trigger.name }}", "{{ .issue.body }}", 1))
 	s.setIssues(readyIssue(42))
-	s.onClaude(stubwire.Rule{})
 
-	s.startLoop()
+	r := s.run("loop")
 
-	end := s.waitEvents("end", 1)[0]
-	if end["outcome"] != "failed" || !strings.Contains(asString(end["reason"]), "描画") {
-		t.Fatalf("end の行 = %v, want 描画の失敗", end)
-	}
-	if calls := s.calls("claude"); len(calls) != 0 {
-		t.Fatalf("描画に失敗したのに claude を起動した: %v", calls[0].Argv)
+	assertExit(t, r, 2)
+	if !strings.Contains(r.stderr, "triggers[0].action") || len(s.calls("claude")) != 0 {
+		t.Fatalf("stderr:\n%s", r.stderr)
 	}
 }
 
@@ -314,7 +313,9 @@ func TestFirstStopRequestWaitsForTheRunningWorker(t *testing.T) {
 	loop.signal(syscall.SIGINT)
 
 	loop.waitForOutput(regexp.MustCompile(` 停止待ち: `))
-	time.Sleep(300 * time.Millisecond)
+	// 停止待ちの間も周期ごとに作業対象を読み直す。読み直しが届いたら、少なくとも 1 周期は止まらずに待った
+	rereads := len(s.calls("gh"))
+	waitFor(t, func() bool { return len(s.calls("gh")) > rereads }, "停止待ちの間に作業対象を読み直さない")
 	if !loop.running() {
 		t.Fatal("1 回目の停止要求で、worker の終了を待たずに止まった")
 	}
@@ -338,12 +339,170 @@ func TestSecondStopRequestStopsTheRunningWorker(t *testing.T) {
 	loop.signal(syscall.SIGINT)
 
 	assertExit(t, loop.wait(), 0)
-	if ends := s.events("end"); len(ends) != 1 || ends[0]["outcome"] != "stopped" {
+	ends := s.events("end")
+	if len(ends) != 1 || ends[0]["outcome"] != "stopped" {
 		t.Fatalf("end の行 = %v, want stopped", ends)
+	}
+	if code, ok := ends[0]["exit_code"]; ok {
+		t.Fatalf("signal で止めた worker に exit_code %v が載った", code)
 	}
 	if _, err := os.Stat(s.mark("after_run-42")); err != nil {
 		t.Fatalf("止めた worker の after_run を撃っていない: %v", err)
 	}
+}
+
+func TestIssueThatComesBackToTheTriggerAfterCompletingIsLaunchedAgain(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflow(s.workerWorkflow(""))
+	s.setIssues(readyIssue(42))
+	done := readyIssue(42)
+	done.labels = nil
+	s.onClaude(stubwire.Rule{Writes: []stubwire.FileWrite{s.ghResponses(done)}})
+	s.startLoop()
+	s.waitEvents("end", 1)
+
+	s.setIssues(readyIssue(42))
+
+	s.waitEvents("start", 2)
+}
+
+func TestWorkerThatFailsButLeavesTheTriggerIsCompleted(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflow(s.workerWorkflow(""))
+	s.setIssues(readyIssue(42))
+	done := readyIssue(42)
+	done.labels = nil
+	s.onClaude(stubwire.Rule{Exit: 1, Writes: []stubwire.FileWrite{s.ghResponses(done)}})
+
+	s.startLoop()
+
+	end := s.waitEvents("end", 1)[0]
+	if end["outcome"] != "completed" || !strings.Contains(asString(end["reason"]), "worker は") {
+		t.Fatalf("end の行 = %v, want 失敗を添えた completed", end)
+	}
+}
+
+func TestFailedIssueIsNotLaunchedAgainWhileItStillMatchesTheTrigger(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflow(s.workerWorkflow(""))
+	s.setIssues(readyIssue(42))
+	s.onClaude(stubwire.Rule{})
+	s.startLoop()
+	s.waitEvents("end", 1)
+
+	ticks := len(s.events("tick"))
+	s.waitEvents("tick", ticks+2)
+
+	if calls := s.calls("claude"); len(calls) != 1 {
+		t.Fatalf("claude の呼び出し = %d 回, want 1 (失敗した issue を起動し直した)", len(calls))
+	}
+}
+
+func TestFailedIssueIsLaunchedAgainAfterLeavingTheTriggerOnce(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflow(s.workerWorkflow(""))
+	s.setIssues(readyIssue(42))
+	s.onClaude(stubwire.Rule{})
+	s.startLoop()
+	s.waitEvents("end", 1)
+	offTrigger := readyIssue(42)
+	offTrigger.labels = nil
+	s.setIssues(offTrigger)
+	ticks := len(s.events("tick"))
+	s.waitEvents("tick", ticks+2)
+
+	s.setIssues(readyIssue(42))
+
+	s.waitEvents("start", 2)
+}
+
+func TestFailingAfterCreateHookRemovesTheWorkspaceAndFails(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflow(regexp.MustCompile(`(?m)^  after_create: .*$`).ReplaceAllString(s.workerWorkflow(""), "  after_create: exit 4"))
+	s.setIssues(readyIssue(42))
+	s.onClaude(stubwire.Rule{})
+
+	s.startLoop()
+
+	end := s.waitEvents("end", 1)[0]
+	if end["outcome"] != "failed" || !strings.Contains(asString(end["reason"]), "after_create") {
+		t.Fatalf("end の行 = %v, want after_create の失敗", end)
+	}
+	if _, err := os.Stat(s.workspace(42)); !os.IsNotExist(err) {
+		t.Fatalf("作りかけの workspace が残っている: %v", err)
+	}
+}
+
+func TestFailingAfterRunHookIsLoggedAndTheWorkerStillEnds(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflow(regexp.MustCompile(`(?m)^  after_run: .*$`).ReplaceAllString(s.workerWorkflow(""), "  after_run: exit 5"))
+	s.setIssues(readyIssue(42))
+	done := readyIssue(42)
+	done.labels = nil
+	s.onClaude(stubwire.Rule{Writes: []stubwire.FileWrite{s.ghResponses(done)}})
+
+	s.startLoop()
+
+	end := s.waitEvents("end", 1)[0]
+	if end["outcome"] != "completed" {
+		t.Fatalf("end の行 = %v, want after_run の失敗では completed のまま", end)
+	}
+	errs := s.waitEvents("error", 1)
+	if !strings.Contains(asString(errs[0]["error"]), "after_run") {
+		t.Fatalf("error の行 = %v", errs)
+	}
+}
+
+func TestHookThatRunsPastItsTimeoutIsStoppedAndFails(t *testing.T) {
+	s := newSandbox(t)
+	workflow := regexp.MustCompile(`(?m)^  before_run: .*$`).ReplaceAllString(s.workerWorkflow(""), "  before_run: 'while :; do :; done'\n  timeout: 1s")
+	s.writeWorkflow(workflow)
+	s.setIssues(readyIssue(42))
+	s.onClaude(stubwire.Rule{})
+
+	s.startLoop()
+
+	end := s.waitEvents("end", 1)[0]
+	if end["outcome"] != "failed" || !strings.Contains(asString(end["reason"]), "before_run") {
+		t.Fatalf("end の行 = %v, want before_run の timeout", end)
+	}
+}
+
+func TestWorkerOfAnIssueClosedWhileWaitingToStopIsStopped(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflow(s.workerWorkflow(""))
+	s.setIssues(readyIssue(42))
+	s.onClaude(stubwire.Rule{ReleaseFile: s.releaseFile()})
+	loop := s.startLoop()
+	s.waitEvents("start", 1)
+	loop.signal(syscall.SIGINT)
+	loop.waitForOutput(regexp.MustCompile(` 停止待ち: `))
+	closed := readyIssue(42)
+	closed.closed = true
+
+	s.setIssues(closed)
+
+	assertExit(t, loop.wait(), 0)
+	if ends := s.events("end"); len(ends) != 1 || ends[0]["outcome"] != "stopped" {
+		t.Fatalf("end の行 = %v, want 終端で stopped", ends)
+	}
+}
+
+func TestWorkspaceOfAnIssueClosedAfterItsWorkerCompletedIsRemoved(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflow(s.workerWorkflow(""))
+	s.setIssues(readyIssue(42))
+	done := readyIssue(42)
+	done.labels = nil
+	s.onClaude(stubwire.Rule{Writes: []stubwire.FileWrite{s.ghResponses(done)}})
+	s.startLoop()
+	s.waitEvents("end", 1)
+	closed := readyIssue(42)
+	closed.closed = true
+
+	s.setIssues(closed)
+
+	waitFor(t, func() bool { _, err := os.Stat(s.workspace(42)); return os.IsNotExist(err) }, "claim を解いた後に終端になった issue の workspace が消えない")
 }
 
 func TestLoopRemovesTheWorkspacesOfClosedIssuesWhenItStarts(t *testing.T) {

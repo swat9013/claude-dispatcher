@@ -12,7 +12,7 @@ import (
 )
 
 // `loop` の起動時の検査・scope key の lock・停止 (formats.md §6)。
-// 周期 (1m 以上) を待つ振る舞い (tick ごとの読み直し) は internal/loop の単体テストが持つ。
+// 周期を分の単位で待つ振る舞い (tick ごとの読み直し) は internal/loop の単体テストが持つ。
 
 var (
 	loopStartedLine = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z loop を始めた: `)

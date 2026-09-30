@@ -9,7 +9,6 @@ import (
 
 	"github.com/swat9013/claude-dispatcher/internal/trigger"
 	"github.com/swat9013/claude-dispatcher/internal/workflow"
-	"github.com/swat9013/claude-dispatcher/internal/workspace"
 )
 
 // workflow 定義の読み込みと検査 (formats.md §2)。
@@ -81,6 +80,10 @@ func TestErrorsNameTheItem(t *testing.T) {
 		{"未知の作業対象の種類", strings.Replace(valid, "on: issue", "on: pr", 1), []string{"triggers[0].on", "pr"}},
 		{"空白だけの action", strings.Replace(valid, "    action: |\n      /implement\n", "    action: \" \"\n", 1), []string{"triggers[0].action"}},
 		{"action の欠落", strings.Replace(valid, "    action: |\n      /implement\n", "", 1), []string{"triggers[0].action"}},
+		{"action の未知の変数", strings.Replace(valid, "      /implement\n", "      /implement {{ .issue.body }}\n", 1), []string{"triggers[0].action", "body"}},
+		{"action の未知の関数", strings.Replace(valid, "      /implement\n", "      /implement {{ upper .issue.title }}\n", 1), []string{"triggers[0].action", "upper"}},
+		{"本文の未知の変数", valid + "{{ .issue.body }}\n", []string{"本文", "body"}},
+		{"HOME が無いのに ~/", strings.Replace(valid, "triggers:", "workspace:\n  root: ~/ws\ntriggers:", 1), []string{"workspace.root", "HOME"}},
 		{"型の誤り", strings.Replace(valid, "all: [ready-for-agent]", "all: ready-for-agent", 1), []string{"triggers[0].when.labels.all"}},
 		{"未知の作者の立場", strings.Replace(valid, "        all: [ready-for-agent]", "        all: [ready-for-agent]\n      author: owner", 1), []string{"triggers[0].when.author", "owner"}},
 		{"assignee と unassigned の併記", strings.Replace(valid, "        all: [ready-for-agent]", "        all: [ready-for-agent]\n      assignee: alice\n      unassigned: true", 1), []string{"triggers[0].when"}},
@@ -151,7 +154,7 @@ triggers:`, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := workspace.Hooks{AfterCreate: "echo created", BeforeRun: "echo run", AfterRun: "echo ran", BeforeRemove: "echo remove", Timeout: 5 * time.Second}
+	want := workflow.Hooks{AfterCreate: "echo created", BeforeRun: "echo run", AfterRun: "echo ran", BeforeRemove: "echo remove", Timeout: 5 * time.Second}
 	if def.WorkspaceRoot != filepath.Join(def.Dir, "work") || def.Hooks != want || def.MaxConcurrent != 3 ||
 		def.Claude.Command != "my-claude" || strings.Join(def.Claude.Args, " ") != "--permission-mode auto" ||
 		def.Triggers[0].Action != "/implement\n" {

@@ -3,7 +3,6 @@
 package loop
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -60,17 +59,55 @@ type Options struct {
 	After func(d time.Duration) <-chan time.Time
 }
 
+// phase は claim の段階。
+type phase int
+
+const (
+	// phaseRunning は worker が走っている
+	phaseRunning phase = iota
+	// phaseStopping は loop が worker を止めている
+	phaseStopping
+	// phaseAwaitingVerification は worker が終わったが、作業対象を読み直せず終わり方を確かめ待ち
+	phaseAwaitingVerification
+)
+
+// stopReason は loop が worker を止めた理由。
+type stopReason string
+
+const (
+	stoppedAtTerminal stopReason = "終端"
+	stoppedByRequest  stopReason = "停止要求"
+)
+
+// 終わった worker の作業対象を読み直したときの理由
+const (
+	reasonLeftTrigger  = "trigger から外れた"
+	reasonStillMatches = "trigger に当たったまま"
+)
+
+// outcome は claim を解いたときの終わり方 (formats.md §4)。
+type outcome string
+
+const (
+	completed outcome = "completed"
+	failed    outcome = "failed"
+	stopped   outcome = "stopped"
+)
+
 // claim は loop が worker を起動中か、終わり方を確かめ待ちの作業対象。
 type claim struct {
 	issue     target.Issue
 	trigger   trigger.Trigger
 	attempt   int
 	sessionID string
-	// run は走っている worker。終わって確かめ待ちなら nil
+	// workspaces は起動したときの workflow 定義の workspace の口。途中で定義が変わっても、同じ workspace を消す
+	workspaces Workspaces
+	phase      phase
+	// run は phaseRunning と phaseStopping の worker
 	run Worker
-	// stopReason は loop が worker を止めた理由。止めていなければ ""
-	stopReason string
-	// ended は終わった worker の終わり方。作業対象を読み直せず、確かめ待ちのときだけ持つ
+	// stopReason は phaseStopping の理由
+	stopReason stopReason
+	// ended は phaseAwaitingVerification の worker の終わり方
 	ended *worker.Result
 }
 
@@ -78,17 +115,23 @@ type loop struct {
 	o      Options
 	def    workflow.Definition
 	claims map[int]*claim
+	// held は失敗で終わった作業対象と、起動した trigger の名前。その trigger から外れるまで起動し直さない
+	// (retry と backoff は #79 が置き換える)
+	held   map[int]string
 	events chan worker.Event
+	rec    recorder
 	// stopping は受けた停止要求の数
 	stopping int
 	lastStop os.Signal
 }
 
-// Run は停止要求で止まるまで tick を回す。起動時に終端の workspace を掃除し、直後に 1 回 tick を撃ち、以後は tick の終了から
-// 周期だけ待つ。
+// Run は停止要求で止まるまで tick を回す。起動の直後に 1 回 tick を撃ち、以後は tick の終了から周期だけ待つ。
+// 停止待ちの間は起動せず、周期ごとに走っている worker の作業対象だけを読み直す。
 func Run(o Options) int {
-	l := &loop{o: o, def: o.Definition, claims: map[int]*claim{}, events: make(chan worker.Event)}
-	l.cleanUp()
+	l := &loop{
+		o: o, def: o.Definition, claims: map[int]*claim{}, held: map[int]string{}, events: make(chan worker.Event),
+		rec: recorder{log: o.Log, stdout: o.Stdout, now: o.Now, scope: o.ScopeKey},
+	}
 	var next <-chan time.Time
 	l.tick()
 	for {
@@ -101,7 +144,7 @@ func Run(o Options) int {
 		if l.stopping > 0 && l.running() == 0 {
 			return l.exit()
 		}
-		if l.stopping == 0 && next == nil {
+		if next == nil {
 			next = o.After(l.def.Interval)
 		}
 		select {
@@ -113,6 +156,8 @@ func Run(o Options) int {
 			next = nil
 			if l.stopping == 0 {
 				l.tick()
+			} else {
+				l.reconcile(l.o.Open(l.def))
 			}
 		}
 	}
@@ -127,122 +172,150 @@ func (l *loop) requestStop(sig os.Signal) {
 		return
 	}
 	if l.stopping == 1 {
-		l.human("停止待ち: 走っている worker %d 本の終了を待つ (もう一度で止める)", running)
+		l.rec.human("停止待ち: 走っている worker %d 本の終了を待つ (もう一度で止める)", running)
 		return
 	}
 	for _, c := range l.claims {
-		if c.run != nil && c.stopReason == "" {
-			c.stopReason = "停止要求"
-			c.run.Stop()
+		if c.phase == phaseRunning {
+			l.stop(c, stoppedByRequest)
 		}
 	}
 }
 
 func (l *loop) exit() int {
 	for n, c := range l.claims {
-		l.logError(n, fmt.Sprintf("終わり方を確かめられないまま止まる (%s)", c.trigger.Name))
+		l.rec.error(n, fmt.Sprintf("終わり方を確かめられないまま止まる (%s)", c.trigger.Name))
 	}
-	l.human("loop を止めた (停止要求 %s)", SignalName(l.lastStop))
+	l.rec.human("loop を止めた (停止要求 %s)", SignalName(l.lastStop))
 	return 0
 }
 
-// running は走っている worker の数。
+// running は走っている worker (止めている途中を含む) の数。
 func (l *loop) running() int {
 	n := 0
 	for _, c := range l.claims {
-		if c.run != nil {
+		if c.phase == phaseRunning || c.phase == phaseStopping {
 			n++
 		}
 	}
 	return n
 }
 
-// cleanUp は、終端になった作業対象の workspace を消す (system.md §7)。
-func (l *loop) cleanUp() {
-	ws := l.o.Workspaces(l.def)
-	numbers, err := ws.Existing()
-	if err != nil {
-		l.logError(0, err.Error())
-		return
-	}
-	issues := l.o.Open(l.def)
-	for _, n := range numbers {
-		issue, err := issues.Issue(n)
-		if err != nil {
-			l.logError(n, fmt.Sprintf("workspace を掃除できない (読み直せない): %s", oneLine(err)))
-			continue
-		}
-		if issue.Closed {
-			if err := ws.Remove(n); err != nil {
-				l.logError(n, oneLine(err))
-				continue
-			}
-			l.human("掃除 issue#%d: 終端の workspace を消した", n)
-		}
-	}
-}
-
 // tick は 1 周期分の仕事をする (formats.md §6 の tick の手順)。
 func (l *loop) tick() {
-	issues := l.o.Open(l.def)
-	l.reconcile(issues)
-	l.recheck(issues)
+	current := l.o.Open(l.def)
+	l.reconcile(current)
+	l.recheck(current)
 	def, err := l.o.Load()
 	if err != nil {
-		l.tickError("workflow 定義の誤り: " + oneLine(err))
+		l.rec.tickError("workflow 定義の誤り: " + oneLine(err))
+		return
+	}
+	issues := l.o.Open(def)
+	if key := issues.ScopeKey(); key != l.o.ScopeKey {
+		// 別の置き場を指す版は採らない。走っている worker の読み直しと掃除は、起動時の置き場のまま続ける
+		l.rec.tickError(fmt.Sprintf("workflow 定義の scope key %s が起動時の %s と違う (loop を起動し直す)", key, l.o.ScopeKey))
 		return
 	}
 	l.def = def
-	issues = l.o.Open(def)
-	if key := issues.ScopeKey(); key != l.o.ScopeKey {
-		l.tickError(fmt.Sprintf("workflow 定義の scope key %s が起動時の %s と違う (loop を起動し直す)", key, l.o.ScopeKey))
-		return
-	}
 	open, err := issues.OpenIssues()
 	if err != nil {
-		l.tickError(oneLine(err))
+		l.rec.tickError(oneLine(err))
 		return
 	}
+	l.sweep(issues, open)
 	candidates := trigger.Evaluate(def.Triggers, open)
+	l.release(candidates)
 	var launched []string
 	for _, c := range candidates {
-		if len(l.claims) >= def.MaxConcurrent {
+		if l.running() >= def.MaxConcurrent {
 			break
 		}
 		if _, claimed := l.claims[c.Issue.Number]; claimed {
 			continue
 		}
+		if _, held := l.held[c.Issue.Number]; held {
+			continue
+		}
 		if l.launch(def, c) {
-			launched = append(launched, targetName(c.Issue.Number))
+			launched = append(launched, target.Name(c.Issue.Number))
 		}
 	}
-	l.write("tick", map[string]any{"result": "ok", "candidates": len(candidates), "launched": nonNil(launched)},
+	l.rec.event("tick", map[string]any{"result": "ok", "candidates": len(candidates), "launched": nonNil(launched)},
 		"tick ok · %s", Summary(candidates))
 }
 
 // reconcile は走っている worker の作業対象を読み直し、終端になっていれば worker を止める。trigger から外れただけでは止めない。
 func (l *loop) reconcile(issues Issues) {
 	for n, c := range l.claims {
-		if c.run == nil || c.stopReason != "" {
+		if c.phase != phaseRunning {
 			continue
 		}
 		issue, err := issues.Issue(n)
 		if err != nil {
-			l.logError(n, "走っている worker の作業対象を読み直せない: "+oneLine(err))
+			l.rec.error(n, "走っている worker の作業対象を読み直せない: "+oneLine(err))
 			continue
 		}
 		if issue.Closed {
-			c.stopReason = "終端"
-			c.run.Stop()
+			l.stop(c, stoppedAtTerminal)
 		}
 	}
+}
+
+func (l *loop) stop(c *claim, reason stopReason) {
+	c.phase, c.stopReason = phaseStopping, reason
+	c.run.Stop()
 }
 
 // recheck は、終わったが作業対象を読み直せなかった worker を確かめ直す。
 func (l *loop) recheck(issues Issues) {
 	for n, c := range l.claims {
-		if c.run == nil && c.ended != nil {
-			l.verify(issues, n, c, *c.ended)
+		if c.phase == phaseAwaitingVerification {
+			l.verify(issues, n, c)
+		}
+	}
+}
+
+// sweep は、claim の無い workspace のうち作業対象が終端になったものを消す。open な issue の一覧に無いものだけを読み直す。
+// loop の起動の直後の tick が起動時の掃除を兼ね、以後の tick が claim を解いた後に終端になったものと、消し損ねたものを拾う。
+func (l *loop) sweep(issues Issues, open []target.Issue) {
+	ws := l.o.Workspaces(l.def)
+	numbers, err := ws.Existing()
+	if err != nil {
+		l.rec.error(0, oneLine(err))
+		return
+	}
+	isOpen := map[int]bool{}
+	for _, i := range open {
+		isOpen[i.Number] = true
+	}
+	for _, n := range numbers {
+		if _, claimed := l.claims[n]; claimed || isOpen[n] {
+			continue
+		}
+		issue, err := issues.Issue(n)
+		if err != nil {
+			l.rec.error(n, "workspace を掃除できない (読み直せない): "+oneLine(err))
+			continue
+		}
+		if issue.Closed && l.remove(ws, n) {
+			l.rec.human("掃除 %s: 終端の workspace を消した", target.Name(n))
+		}
+	}
+}
+
+// release は、失敗で終わった作業対象のうち、起動した trigger から外れたものを再び候補にする。
+func (l *loop) release(candidates []trigger.Candidate) {
+	for n, name := range l.held {
+		matched := false
+		for _, c := range candidates {
+			if c.Issue.Number == n && c.Trigger.Name == name {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			delete(l.held, n)
 		}
 	}
 }
@@ -251,10 +324,10 @@ func (l *loop) launch(def workflow.Definition, c trigger.Candidate) bool {
 	n := c.Issue.Number
 	sessionID, err := l.o.NewSessionID()
 	if err != nil {
-		l.logError(n, err.Error())
+		l.rec.error(n, err.Error())
 		return false
 	}
-	cl := &claim{issue: c.Issue, trigger: *c.Trigger, attempt: 1, sessionID: sessionID}
+	cl := &claim{issue: c.Issue, trigger: *c.Trigger, attempt: 1, sessionID: sessionID, workspaces: l.o.Workspaces(def), phase: phaseRunning}
 	cl.run = l.o.Launch(def, worker.Job{Issue: c.Issue, Trigger: *c.Trigger, Attempt: cl.attempt, SessionID: sessionID, Prompt: def.Prompt}, l.events)
 	l.claims[n] = cl
 	return true
@@ -262,107 +335,103 @@ func (l *loop) launch(def workflow.Definition, c trigger.Candidate) bool {
 
 // handle は worker の起動か終わりを受ける。
 func (l *loop) handle(ev worker.Event) {
-	c, ok := l.claims[ev.Number]
-	if !ok {
-		return
-	}
-	if ev.Started != nil {
-		l.write("start", map[string]any{
-			"target": targetName(ev.Number), "trigger": c.trigger.Name, "attempt": c.attempt,
-			"session_id": c.sessionID, "workspace": ev.Started.Workspace, "pid": ev.Started.PID,
-		}, "起動 %s (%s, attempt %d, session %s)", targetName(ev.Number), c.trigger.Name, c.attempt, c.sessionID)
-		return
-	}
-	result := *ev.Ended
-	c.run = nil
-	if result.AfterRunError != "" {
-		l.logError(ev.Number, result.AfterRunError)
-	}
-	if result.Stopped {
-		if c.stopReason == "終端" {
-			l.removeWorkspace(ev.Number)
+	switch ev := ev.(type) {
+	case worker.Started:
+		c, ok := l.claimOf(ev.Number)
+		if !ok {
+			return
 		}
-		l.end(ev.Number, c, "stopped", c.stopReason, result)
-		return
+		name := target.Name(ev.Number)
+		l.rec.event("start", map[string]any{
+			"target": name, "trigger": c.trigger.Name, "attempt": c.attempt,
+			"session_id": c.sessionID, "workspace": ev.Workspace, "pid": ev.PID,
+		}, "起動 %s (%s, attempt %d, session %s)", name, c.trigger.Name, c.attempt, c.sessionID)
+	case worker.Ended:
+		c, ok := l.claimOf(ev.Number)
+		if !ok {
+			return
+		}
+		result := ev.Result
+		c.run = nil
+		for _, message := range []string{result.AfterRunError, result.StopError} {
+			if message != "" {
+				l.rec.error(ev.Number, message)
+			}
+		}
+		if result.Stopped {
+			if c.stopReason == stoppedAtTerminal {
+				l.remove(c.workspaces, ev.Number)
+			}
+			l.end(ev.Number, c, stopped, string(c.stopReason), result)
+			return
+		}
+		c.phase, c.ended = phaseAwaitingVerification, &result
+		l.verify(l.o.Open(l.def), ev.Number, c)
 	}
-	l.verify(l.o.Open(l.def), ev.Number, c, result)
+}
+
+// claimOf は作業対象の claim を返す。無ければ運用者に残す (claim の無い worker は起動しないので、起きれば loop の誤り)。
+func (l *loop) claimOf(n int) (*claim, bool) {
+	c, ok := l.claims[n]
+	if !ok {
+		l.rec.error(n, "claim の無い作業対象の worker の event を受けた")
+	}
+	return c, ok
 }
 
 // verify は終わった worker の作業対象を読み直し、終わり方を決めて claim を解く。読み直せなければ claim を持ったまま次の tick で
-// 確かめ直す (完了とも失敗とも数えない)。
-func (l *loop) verify(issues Issues, n int, c *claim, result worker.Result) {
+// 確かめ直す (完了とも失敗とも数えない)。作業対象が終端か trigger から外れていれば、worker 自身の失敗に関わらず完了とする。
+func (l *loop) verify(issues Issues, n int, c *claim) {
 	issue, err := issues.Issue(n)
 	if err != nil {
-		c.ended = &result
-		l.logError(n, "終わった worker の作業対象を読み直せない (次の tick で読み直す): "+oneLine(err))
+		l.rec.error(n, "終わった worker の作業対象を読み直せない (次の tick で読み直す): "+oneLine(err))
 		return
 	}
-	outcome, reason := "completed", "trigger から外れた"
+	result := *c.ended
 	switch {
 	case issue.Closed:
-		l.removeWorkspace(n)
-		reason = "終端"
-		if result.Failure != "" {
-			outcome, reason = "failed", result.Failure
-		}
+		l.remove(c.workspaces, n)
+		l.end(n, c, completed, withFailure(string(stoppedAtTerminal), result), result)
+	case !c.trigger.When.Matches(issue):
+		l.end(n, c, completed, withFailure(reasonLeftTrigger, result), result)
 	case result.Failure != "":
-		outcome, reason = "failed", result.Failure
-	case c.trigger.When.Matches(issue):
-		outcome, reason = "failed", "trigger に当たったまま"
-	}
-	l.end(n, c, outcome, reason, result)
-}
-
-func (l *loop) removeWorkspace(n int) {
-	if err := l.o.Workspaces(l.def).Remove(n); err != nil {
-		l.logError(n, oneLine(err))
+		l.held[n] = c.trigger.Name
+		l.end(n, c, failed, result.Failure, result)
+	default:
+		l.held[n] = c.trigger.Name
+		l.end(n, c, failed, reasonStillMatches, result)
 	}
 }
 
-func (l *loop) end(n int, c *claim, outcome, reason string, result worker.Result) {
+// withFailure は完了の理由に、worker 自身の失敗を添える。
+func withFailure(reason string, result worker.Result) string {
+	if result.Failure == "" {
+		return reason
+	}
+	return reason + " (worker は " + result.Failure + ")"
+}
+
+// remove は workspace を消す。消せなければ error の行を残し、次の tick の掃除で消し直す。
+func (l *loop) remove(ws Workspaces, n int) bool {
+	if err := ws.Remove(n); err != nil {
+		l.rec.error(n, oneLine(err))
+		return false
+	}
+	return true
+}
+
+func (l *loop) end(n int, c *claim, o outcome, reason string, result worker.Result) {
+	name := target.Name(n)
 	fields := map[string]any{
-		"target": targetName(n), "trigger": c.trigger.Name, "attempt": c.attempt, "session_id": c.sessionID,
-		"outcome": outcome, "reason": reason,
+		"target": name, "trigger": c.trigger.Name, "attempt": c.attempt, "session_id": c.sessionID,
+		"outcome": string(o), "reason": reason,
 	}
 	if result.ExitCode != nil {
 		fields["exit_code"] = *result.ExitCode
 	}
 	delete(l.claims, n)
-	l.write("end", fields, "終了 %s (%s): %s — %s", targetName(n), c.trigger.Name, outcome, reason)
+	l.rec.event("end", fields, "終了 %s (%s): %s — %s", name, c.trigger.Name, o, reason)
 }
-
-func (l *loop) tickError(message string) {
-	l.write("tick", map[string]any{"result": "error", "error": message}, "tick error · %s", message)
-}
-
-// logError は処理を続けるが運用者が知るべき失敗を残す。n が 0 なら作業対象を持たない。
-func (l *loop) logError(n int, message string) {
-	fields := map[string]any{"error": message}
-	if n == 0 {
-		l.write("error", fields, "error: %s", message)
-		return
-	}
-	fields["target"] = targetName(n)
-	l.write("error", fields, "error %s: %s", targetName(n), message)
-}
-
-// write は log.jsonl に 1 行書き、同じ事象を人が読む行で stdout に出す。書き込みの失敗では止まらない。
-func (l *loop) write(event string, fields map[string]any, format string, a ...any) {
-	fields["ts"] = l.o.Now().UTC().Format(time.RFC3339)
-	fields["scope"] = l.o.ScopeKey
-	fields["event"] = event
-	if raw, err := json.Marshal(fields); err == nil {
-		_, _ = fmt.Fprintf(l.o.Log, "%s\n", raw)
-	}
-	l.human(format, a...)
-}
-
-// human は時刻を前置した 1 行を stdout に出す。読み手の消えた pipe への書き込みの失敗では止まらない。
-func (l *loop) human(format string, a ...any) {
-	_, _ = fmt.Fprintf(l.o.Stdout, "%s %s\n", l.o.Now().UTC().Format(time.RFC3339), fmt.Sprintf(format, a...))
-}
-
-func targetName(n int) string { return fmt.Sprintf("issue#%d", n) }
 
 func nonNil(s []string) []string {
 	if s == nil {
