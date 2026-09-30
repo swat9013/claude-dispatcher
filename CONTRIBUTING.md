@@ -4,7 +4,12 @@
 
 ## セットアップ
 
-- 前提ツールは [README の「前提」](README.md#前提) のとおり (Claude Code / plugin `swat-skills@swat9013` / `gh`)
+- 前提ツールは [README の「前提」](README.md#前提) のとおり (Claude Code / `gh` / git)
+- この repo の [WORKFLOW.md](WORKFLOW.md) の action は Claude Code plugin `swat-skills@swat9013` ([swat9013/claude-skills](https://github.com/swat9013/claude-skills)) の playbook を呼ぶので、この repo で loop を回すなら入れる (user scope)
+  ```
+  /plugin marketplace add swat9013/claude-skills
+  /plugin install swat-skills@swat9013
+  ```
 - 加えて `golangci-lint` を CI と同じ版 (.github/workflows/checks.yml の `lint` job の `version:`) で入れる。公式の install script に版を渡して binary を入れる (手順は <https://golangci-lint.run/docs/welcome/install/>)。brew などの package manager は版を選べず、CI と版がずれるので使わない。`go install` と go.mod の `tool` directive は golangci-lint の公式が動作を保証していない
 - 加えて `pre-commit` (4.4.0 以上) を入れ、clone ごとに 1 回 `pre-commit install` を撃つ (commit 時と push 前の hook が両方入る)。gitleaks・actionlint・shellcheck は pre-commit が hook 環境として build するので別途の導入は要らない (初回の build に network が要る)
   - Go は手元の版が [go.mod](go.mod) の `toolchain` 行より古くても、`go` コマンドがその版を取ってきて使う (`GOTOOLCHAIN` の既定の `auto`)。hook も `go` コマンド経由で撃つので、手元と CI で同じ版の Go が動く
@@ -41,7 +46,7 @@ claude-dispatcher-dev loop
 検査の置き場は次の 2 点で決めている。
 
 - **CI に置く検査は、同じものを手元 (pre-commit) でも撃てるようにする**。dispatcher は CL の CI が落ちると `fix-ci` の trigger で worker を起動し、worker は手元で再現できない失敗を推測で直さず人へ返す ([WORKFLOW.md](WORKFLOW.md) の共通 prompt)。CI にしか無い検査が落ちると、worker は毎回人へ返すことになる
-- **CL の変更と無関係に赤くなりうる検査は、PR の gate にしない**。network 上の脆弱性 DB を引く govulncheck がこれに当たる。gate にすると、新しい脆弱性が公開されたときに、開いている worker の CL に一斉に `cl.ci_failed` の trigger が当たる
+- **CL の変更と無関係に赤くなりうる検査は、PR の gate にしない**。network 上の脆弱性 DB を引く govulncheck がこれに当たる。gate にすると、新しい脆弱性が公開されたときに、開いている worker の CL に一斉に `fix-ci` の trigger が当たる
 
 検査と撃たれる場所:
 

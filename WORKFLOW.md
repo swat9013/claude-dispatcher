@@ -6,8 +6,8 @@ tracker:
 polling:
   interval: 5m
 hooks:
-  # workspace は clone の detach した worktree にする。branch は issue の worker だけが切る。同じ branch は 2 つの worktree
-  # で checkout できないので、pull request の worker は head branch を detach で取り出して push する (action に書いてある)
+  # workspace は clone の detach した worktree にする。branch は issue の worker だけが切る。pull request の worker の
+  # 取り出し方と push の仕方は本文の「pull request の worker」
   after_create: git -C "$CLAUDE_DISPATCHER_CLONE" fetch origin && git -C "$CLAUDE_DISPATCHER_CLONE" worktree add --detach "$CLAUDE_DISPATCHER_WORKSPACE" origin/main
   before_remove: git -C "$CLAUDE_DISPATCHER_CLONE" worktree remove --force "$CLAUDE_DISPATCHER_WORKSPACE"
 limits:
@@ -24,35 +24,34 @@ triggers:
     on: cl
     when:
       conflict: true
-      head: worktree-issue-*
+      # worker の pull request (implement が切る branch の綴り) だけに当てる。人へ返したもの (ready-for-human) は外す
+      head: &worker_branch worktree-issue-*
       draft: false
-      labels:
+      labels: &not_handed_back
         none: [ready-for-human]
     action: |
       /swat-skills:playbook-conflict-resolution pull request #{{ .cl.number }} ({{ .cl.url }}) の conflict を解く。
-      head branch {{ .cl.head }} を detach で取り出し (`git fetch origin {{ .cl.head }}` の後に `git checkout --detach FETCH_HEAD`)、base branch (`gh pr view {{ .cl.number }} --json baseRefName`。stack した pull request では main でない) を merge して conflict を解き、`git push origin HEAD:{{ .cl.head }}` で push する。
+      base branch (`gh pr view {{ .cl.number }} --json baseRefName`。stack した pull request では main でない) を merge して conflict を解く。
   - name: address-review
     on: cl
     when:
       review_unresolved: true
-      head: worktree-issue-*
+      head: *worker_branch
       draft: false
-      labels:
-        none: [ready-for-human]
+      labels: *not_handed_back
     action: |
       /swat-skills:playbook-review-response pull request #{{ .cl.number }} ({{ .cl.url }}) の未解決の review thread に応える。
-      head branch {{ .cl.head }} を detach で取り出し (`git fetch origin {{ .cl.head }}` の後に `git checkout --detach FETCH_HEAD`)、直した commit を `git push origin HEAD:{{ .cl.head }}` で push し、応えた thread を resolve する。
+      直した commit を push し、応えた thread を resolve する。
   - name: fix-ci
     on: cl
     when:
       ci_failed: true
-      head: worktree-issue-*
+      head: *worker_branch
       draft: false
-      labels:
-        none: [ready-for-human]
+      labels: *not_handed_back
     action: |
       /swat-skills:playbook-ci-fix pull request #{{ .cl.number }} ({{ .cl.url }}) の失敗している CI を直す。
-      head branch {{ .cl.head }} を detach で取り出し (`git fetch origin {{ .cl.head }}` の後に `git checkout --detach FETCH_HEAD`)、原因を直した commit を `git push origin HEAD:{{ .cl.head }}` で push する。push したら CI の結果は待たずに終えてよい。
+      原因を直した commit を push したら、CI の結果は待たずに終えてよい。
   - name: implement
     on: issue
     when:
@@ -75,6 +74,13 @@ triggers:
 - 作業は workspace `{{ .workspace }}` (この repo の clone の worktree) の中だけで行う。cwd を動かさない
 - 作業ツリーに入れない一時 file (レビューの出力・issue や pull request の本文) は、workspace の外の `{{ .workspace }}.<用途>.md` に書き、使い終えたら消す
 - branch と pull request の規約は、この repo の CONTRIBUTING.md の「commit・PR 規約」に従う
+- action の先頭の playbook の step は、逐語で todolist へ写してから通す。飛ばす step には `skip: <理由>` を残す
+
+## pull request の worker
+
+- head branch は issue の workspace が checkout したままなので、この workspace では detach で取り出す: `git fetch origin <head branch>` の後に `git checkout --detach FETCH_HEAD`
+- push は `git push origin HEAD:<head branch>` で撃つ
+- 当たった条件 (conflict・未解決の review thread・CI の失敗) を 1 つも解消できずに終えるなら、下の「人へ返す」で終える
 
 ## gh の撃ち方
 
@@ -111,7 +117,7 @@ triggers:
 
 人しか出せない入力が要る・作業ツリーの外の実体しか残らない・permission に止められて進めない、のどれかに当たったら、推測で進めずに次の順で終える。permission が止めた操作は迂回しない。
 
-1. 途中の成果があれば commit して push する
+1. 途中の成果があれば commit して push する。担当範囲の外で見つけた欠陥と直さなかったレビューの指摘は、上の「残りを issue にする」で issue にする。担当の作業対象自身の残り (実装が要る残タスクを含む) は issue にせず、下の引き渡しの「人が次にやること」に書く (別の issue にすると、人へ返した作業対象とその残りが分かれて散る)
 2. 作業対象 (issue か pull request) に、次の 3 節の引き渡しコメントを書く。読むのは文脈を持たない人なので、log を開かずに次の一手が分かる形にする
 
    ```
