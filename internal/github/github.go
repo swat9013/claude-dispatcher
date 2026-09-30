@@ -285,7 +285,17 @@ func OpenPRs(gh Runner, repo, issueRepo config.Repo) ([]PR, error) {
 
 // WIPIssues は repo の open issue のうち wip label の付いた番号を返す (status が worker の wip を読む)。
 func WIPIssues(gh Runner, repo config.Repo) ([]int, error) {
-	out, err := gh.Run("issue", "list", "-R", repo.String(), "--label", config.WIPLabel, "--state", "open",
+	return labeledIssues(gh, repo, config.WIPLabel)
+}
+
+// HumanIssues は repo の open issue のうち人待ち (ready-for-human) の付いた番号を返す (status が worker の結末を読む)。
+func HumanIssues(gh Runner, repo config.Repo) ([]int, error) {
+	return labeledIssues(gh, repo, config.HumanLabel)
+}
+
+// labeledIssues は repo の open issue のうち label の付いた番号を返す。
+func labeledIssues(gh Runner, repo config.Repo, label string) ([]int, error) {
+	out, err := gh.Run("issue", "list", "-R", repo.String(), "--label", label, "--state", "open",
 		"--limit", fmt.Sprint(IssueListLimit), "--json", "number")
 	if err != nil {
 		return nil, err
@@ -295,7 +305,7 @@ func WIPIssues(gh Runner, repo config.Repo) ([]int, error) {
 		return nil, fmt.Errorf("gh issue list の出力を読めない: %w", err)
 	}
 	if len(listed) >= IssueListLimit {
-		return nil, fmt.Errorf("%w: wip の付いた issue が %d 件以上ある (%s)", ErrTruncated, IssueListLimit, repo)
+		return nil, fmt.Errorf("%w: %s の付いた issue が %d 件以上ある (%s)", ErrTruncated, label, IssueListLimit, repo)
 	}
 	numbers := make([]int, 0, len(listed))
 	for _, i := range listed {
@@ -309,6 +319,9 @@ type CLState struct {
 	Number int    `json:"number"`
 	State  string `json:"state"`
 }
+
+// Settled は CL が worker の成果として残っている (open か merge 済み) か。close されただけの CL は数えない。
+func (c CLState) Settled() bool { return c.State == "OPEN" || c.State == "MERGED" }
 
 // LatestCLsWindow は LatestCLs が branch ごとに新しい順に読む CL の本数。fork の CL を読み飛ばす分の余裕。
 // 本数は formats.md §10 (status の CL 列) にも書いてあるので、変えるときは一緒に直す

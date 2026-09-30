@@ -109,7 +109,7 @@ func (r Report) TableLines(fit Fit) []string {
 	}
 	for _, w := range r.Workers {
 		rows = append(rows, []string{
-			fmt.Sprintf("#%d", w.Spawn.Issue), w.Spawn.Kind, cell(w.Alive, stateCell), FormatElapsed(w.Elapsed),
+			fmt.Sprintf("#%d", w.Spawn.Issue), w.Spawn.Kind, cell(w.State(), stateCell), FormatElapsed(w.Elapsed),
 			cell(w.Session, sessionCell), cell(w.Branch, branchCell), cell(w.WIP, wipCell), cell(w.CL, clCell), ticklog.ShortTS(w.TickTS), "",
 		})
 		activities = append(activities, w.Activity)
@@ -178,12 +178,7 @@ func (f Fit) activityCell(a *Activity, room int) string {
 	return termtext.Cut(strings.TrimSpace(FormatElapsed(a.Since)+" "+doing), room)
 }
 
-func stateCell(alive bool) string {
-	if alive {
-		return "running"
-	}
-	return "exited"
-}
+func stateCell(s WorkerState) string { return string(s) }
 
 func wipCell(v bool) string {
 	if v {

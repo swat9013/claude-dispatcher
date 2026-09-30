@@ -16,7 +16,7 @@ CLI の subcommand は役割で 3 群に分かれる。
 | 観測 | `status` / `paths` | 何も書かない (読み取り専用) |
 | 導入 | `setup` / `doctor` | `setup` だけが書く: config の雛形と state dir (config が無いときだけ作り、既存は上書きしない)・tracker label (導入者の承認後)。Claude Code の settings はどちらも書かない |
 
-`status` は log の `spawned` (起動記録) を起点に、wip の付いた issue と生きている worker process を 1 行ずつ並べ、worker の生死 (起動部が答える — §13)・wip・紐づく CL を毎回読み直して出す。**process が死んでいるのに wip が残っている行が stale wip の手掛かり**になる (snapshot からは区別できないが、起動記録と process の生死を突き合わせる `status` からは見える)。起動記録を持たない wip (orchestrator が付けた後に止まり、worker が起動されなかったもの) は `status` にも出ない。見出しには project の loop が生きているか (process の一覧で見る) と最終 tick を出す。
+`status` は log の `spawned` (起動記録) を起点に、wip の付いた issue・生きている worker process・起動から 24 時間以内の worker を 1 行ずつ並べ、worker の生死 (起動部が答える — §13)・wip・紐づく CL・人待ちを毎回読み直して、worker の結末 (`running` / `stale` / `cl` / `human` / `silent`) を出す。**STATE が `stale` の行 (process が死んでいるのに wip が残っている) が stale wip の手掛かり**になる (snapshot からは区別できないが、起動記録と process の生死を突き合わせる `status` からは見える)。起動記録を持たない wip (orchestrator が付けた後に止まり、worker が起動されなかったもの) は `status` にも出ない。見出しには project の loop が生きているか (process の一覧で見る) と最終 tick を出す。
 
 | アクター | 方向 | 関わり |
 |---|---|---|

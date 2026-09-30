@@ -259,7 +259,11 @@ project を省略すると、config root の下の全 project (§9 の `projects
 
 - **読み取り専用**: state dir にも外部 store にも書かない。lock file も作らず、lock も取らない (取ると、その一瞬に重なった tick が `locked` の行を残し、起動しようとした loop が拒まれる)。loop が生きているかは process の一覧 (`claude-dispatcher … loop <project>` の process) で見る
 - **走っている tick**: tick が lock を持つ間だけ置く `tick.now` を読む (下の「`tick.now`」)。file の `pid` の process が居ないか、その command 行が `claude-dispatcher tick <project>` / `claude-dispatcher loop <project> …` でなければ (pid の再利用)、異常終了で残った file として無視し、注記に残す。command 行は先頭 (argv[0]) から照合する (worker の command 行には spawn prompt の本文が載り、途中の綴りに当たりうる)。ただし process の一覧を読んだ後に書かれた file は、一覧に pid が写っていないだけなので、注記せずに出さない (次の描き直しで出る)。process の一覧を読めなければ確かめられないので出さない
-- **載せる worker**: log.jsonl の tick 行の `spawned` のうち、issue ごとの最新の起動記録で issue に `dispatcher:wip` が付いているか process が生きているもの、と、それより古い起動記録で process が生きているもの (wip は issue の今の worker にだけ掛ける。古い起動記録に掛けると、再入で起こし直した issue の前回の worker が stale wip に見える)。process の生死は起動部が見分ける。`claude -p` では pid の command 行に `session_id` が在るかで見る (pid は再利用される。system.md §13)。process が死んでいて wip が残っている行が stale wip の手掛かり (system.md §1)
+- **載せる worker**: log.jsonl の tick 行の `spawned` のうち、次のどれかに当たるもの
+  - issue ごとの最新の起動記録で、issue に `dispatcher:wip` が付いているか、process が生きているか、起動 (起動した tick の `ts`) から 24 時間以内のもの (24 時間は固定の値。起動記録に終了時刻は無いので起動から数える)
+  - それより古い起動記録で、process が生きているもの
+
+  wip は issue の今の worker にだけ掛ける (古い起動記録に掛けると、再入で起こし直した issue の前回の worker が stale に見える)。`running` と `stale` は時間と関係なく載り、終わった worker の結末 (`cl` / `human` / `silent`) は起動から 24 時間だけ載る。process の生死は起動部が見分ける。`claude -p` では pid の command 行に `session_id` が在るかで見る (pid は再利用される。system.md §13)。STATE が `stale` の行が stale wip の手掛かり (system.md §1)
 - 外部 process (gh / git / claude / ps) が失敗した列は `?` にして表は出し、何を読めなかったかを `! <理由>` の注記行に残す
 
 表は project ごとに 1 段:
@@ -279,7 +283,7 @@ orchestrator の実行中は、表の先頭に orchestrator の行を 1 行置�
 | 列 | 中身 |
 |---|---|
 | ISSUE / KIND / TICK | 起動記録の issue・kind・起動した tick の `ts` (秒まで) |
-| STATE | `running` / `exited` |
+| STATE | worker の結末。下の順に判定し、最初に当たった値を出す: `running` (process が生きている) → `stale` (process は死んでいるが issue に wip が残っている。CL があっても `stale` — 人が回収すべきものを先に見せる) → `cl` (CL 列の CL が `OPEN` か `MERGED`) → `human` (issue に `ready-for-human` が付いている) → `silent` (どれでもない。無言の終了 — CONTEXT.md)。判定に要る値 (生死・wip・CL・`ready-for-human`) を読めなければ `?` にして注記を残す。`ready-for-human` は判定がそこまで進む行があるときだけ読む。綴りは機構の定数で config では変えられない |
 | ELAPSED | 起動した tick からの経過 (`45s` / `12m` / `3h05m` / `2d04h`) |
 | SESSION | `claude agents --json` に同じ session が居れば `<id> <status>/<state>`、居なければ `-` |
 | BRANCH | cwd の clone に `worktree-issue-<issue>` の作業ツリーがあれば `origin/HEAD` からの ahead 数 (`+3`)、無ければ `-` |
