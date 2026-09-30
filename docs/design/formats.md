@@ -218,6 +218,7 @@ action と本文 (共通 prompt) は、worker を起動するたびに Go の te
 | `retry` | `failed` の後、次の attempt を予定した | `target`・`trigger`・`attempt`・`next_attempt`・`session_id`・`backoff` (秒。小数を含む) |
 | `release` | 再起動を待つ claim を、起動せずに解いた | `target`・`trigger`・`attempt`・`session_id`・`reason` (`終端` / `trigger から外れた` / `trigger が workflow 定義から消えた`) |
 | `abandon` | attempt の上限で打ち切った | `target`・`trigger`・`attempt`・`session_id` |
+| `wait_slot` | backoff が明けた再起動が、並列上限に空きが無くて待ち始めた (1 回の待ちにつき 1 行) | `target`・`trigger`・`next_attempt`・`max_concurrent` |
 | `unabandon` | 打ち切りを解いた (打ち切ったときの trigger から外れたのを観測した) | `target`・`trigger` |
 | `error` | 処理は続けるが、運用者が知るべき失敗 | `target` (あれば)・`error` |
 
@@ -323,7 +324,7 @@ claude-dispatcher loop [<workflow の path>]
    - stream の file が `limits.stall_timeout` のあいだ伸びないか、起動からの経過が `limits.run_timeout` を超えたら、process group を止めて失敗とする (止め方は 2 回目の停止要求と同じ)。止める判断と停止要求が重なったら、停止要求で止めたことにする
 
 4. 終わったら `after_run` を撃ち、作業対象を読み直す。終端か、起動した trigger から外れていれば `completed` として claim を解き、当たったままなら `failed` として再起動 (上) に回す
-   - workspace を消すときは、worker を起動したときの workflow 定義の `workspace.root` と hooks を使う
+   - workspace を消すときは、worker を最初に起動したときの `workspace.root` と、消す時点の workflow 定義の hooks を使う
 
 **出力** (#81 で loop の画面に作り直す。今の形は仮): log.jsonl (§4) に書く行を、人が読む形で stdout にも 1 行ずつ追記する。
 

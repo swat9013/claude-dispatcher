@@ -176,7 +176,7 @@ func Run(o Options) int {
 		case <-l.wake:
 			l.wake = nil
 			if l.stopping == 0 {
-				l.retry(l.o.Open(l.def), nil)
+				l.retry(l.o.Open(l.def), outsideTick)
 			}
 		}
 	}
@@ -396,7 +396,7 @@ func (l *loop) handle(ev worker.Event) {
 		l.verify(issues, ev.Number, c)
 		if l.stopping == 0 {
 			// 空いた枠で、空きを待っていた再起動を試みる
-			l.retry(issues, nil)
+			l.retry(issues, outsideTick)
 		}
 	}
 }

@@ -425,3 +425,13 @@ func TestWorkerThatFailsAfterAStopRequestIsNotScheduledForRetry(t *testing.T) {
 		t.Fatalf("出力:\n%s", out)
 	}
 }
+
+func TestBackoffDoublesAfterEachFailedAttempt(t *testing.T) {
+	h := &harness{plans: []tickPlan{{load: good(time.Minute)}, {load: good(time.Minute)}, {load: good(time.Minute)}, {load: good(time.Minute)}}, maxConcurrent: 1, maxAttempts: 3}
+
+	h.run(t)
+
+	if !strings.Contains(h.stdout.String(), "再起動を予定 issue#1 (implement, attempt 3, 20s 後)") {
+		t.Fatalf("出力:\n%s", h.stdout.String())
+	}
+}

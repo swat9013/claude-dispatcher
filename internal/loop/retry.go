@@ -80,7 +80,8 @@ func (l *loop) retry(issues Issues, open []target.Issue) {
 		if l.running() >= l.def.MaxConcurrent {
 			if !c.waitingSlot {
 				c.waitingSlot = true
-				l.rec.human("再起動を待つ %s (%s, attempt %d): 並列上限 %d に空きが出るまで待つ", target.Name(n), c.trigger.Name, c.attempt+1, l.def.MaxConcurrent)
+				l.rec.event("wait_slot", map[string]any{"target": target.Name(n), "trigger": c.trigger.Name, "next_attempt": c.attempt + 1, "max_concurrent": l.def.MaxConcurrent},
+					"再起動を待つ %s (%s, attempt %d): 並列上限 %d に空きが出るまで待つ", target.Name(n), c.trigger.Name, c.attempt+1, l.def.MaxConcurrent)
 			}
 			continue
 		}
@@ -105,14 +106,25 @@ func (l *loop) retry(issues Issues, open []target.Issue) {
 	}
 }
 
+// outsideTick は tick の外から retry を呼ぶときの open な issue の一覧 (無い)
+var outsideTick []target.Issue
+
 // reread は作業対象を読み直す。open な issue の一覧にあればそれを使い、無ければ置き場から 1 件読む。
 func reread(issues Issues, open []target.Issue, n int) (target.Issue, error) {
-	for _, issue := range open {
-		if issue.Number == n {
-			return issue, nil
-		}
+	if issue, ok := findIssue(open, n); ok {
+		return issue, nil
 	}
 	return issues.Issue(n)
+}
+
+// findIssue は open な issue の一覧から番号の issue を探す。
+func findIssue(open []target.Issue, n int) (target.Issue, bool) {
+	for _, issue := range open {
+		if issue.Number == n {
+			return issue, true
+		}
+	}
+	return target.Issue{}, false
 }
 
 // triggerNamed は workflow 定義から名前の trigger を引く。
@@ -162,10 +174,6 @@ func stillMatches(def workflow.Definition, open []target.Issue, n int, triggerNa
 	if !ok {
 		return false
 	}
-	for _, issue := range open {
-		if issue.Number == n {
-			return t.When.Matches(issue)
-		}
-	}
-	return false
+	issue, ok := findIssue(open, n)
+	return ok && t.When.Matches(issue)
 }

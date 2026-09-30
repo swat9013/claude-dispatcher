@@ -197,6 +197,19 @@ func TestStalledWorkerIsStoppedAndCountedAsAFailure(t *testing.T) {
 	}
 }
 
+func TestStalledAttemptIsRetried(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflow(s.workerWorkflow(fastRetry + "  stall_timeout: 1s\n"))
+	s.setIssues(readyIssue(42))
+	s.onClaude(stubwire.Rule{ReleaseFile: s.releaseFile()})
+
+	s.startLoop()
+
+	if retry := s.waitEvents("retry", 1)[0]; retry["next_attempt"] != float64(2) {
+		t.Fatalf("retry の行 = %v, want stall の後に attempt 2", retry)
+	}
+}
+
 func TestWorkerThatRunsPastItsTimeLimitIsStoppedAndCountedAsAFailure(t *testing.T) {
 	s := newSandbox(t)
 	s.writeWorkflow(s.workerWorkflow(fastRetry + "  stall_timeout: 0s\n  run_timeout: 1s\n"))
@@ -208,6 +221,32 @@ func TestWorkerThatRunsPastItsTimeLimitIsStoppedAndCountedAsAFailure(t *testing.
 	end := s.waitEvents("end", 1)[0]
 	if end["outcome"] != "failed" || !strings.Contains(asString(end["reason"]), "上限時間") {
 		t.Fatalf("end の行 = %v, want 上限時間の失敗", end)
+	}
+}
+
+func TestAttemptPastItsTimeLimitIsRetried(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflow(s.workerWorkflow(fastRetry + "  stall_timeout: 0s\n  run_timeout: 1s\n"))
+	s.setIssues(readyIssue(42))
+	s.onClaude(stubwire.Rule{ReleaseFile: s.releaseFile()})
+
+	s.startLoop()
+
+	if retry := s.waitEvents("retry", 1)[0]; retry["next_attempt"] != float64(2) {
+		t.Fatalf("retry の行 = %v, want 上限時間の後に attempt 2", retry)
+	}
+}
+
+func TestWorkerThatExitsAbnormallyIsRetried(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflow(s.workerWorkflow(fastRetry))
+	s.setIssues(readyIssue(42))
+	s.onClaude(stubwire.Rule{Exit: 1})
+
+	s.startLoop()
+
+	if retry := s.waitEvents("retry", 1)[0]; retry["next_attempt"] != float64(2) {
+		t.Fatalf("retry の行 = %v, want 異常終了の後に attempt 2", retry)
 	}
 }
 
@@ -232,6 +271,9 @@ func TestRetryWaitingForAFreeSlotDoesNotAdvanceTheAttempt(t *testing.T) {
 	s.waitEvents("tick", ticks+3)
 	if starts := s.startsOf("issue#42"); len(starts) != 1 {
 		t.Fatalf("issue#42 の start の行 = %v, want 空きが出るまで再起動しない", starts)
+	}
+	if waits := s.events("wait_slot"); len(waits) != 1 || waits[0]["target"] != "issue#42" {
+		t.Fatalf("wait_slot の行 = %v, want 空き待ちを 1 行", waits)
 	}
 
 	s.release()
@@ -305,5 +347,20 @@ func TestStopRequestDropsWaitingRetriesWithAnErrorLine(t *testing.T) {
 	assertExit(t, loop.wait(), 0)
 	if errs := s.events("error"); len(errs) != 1 || !strings.Contains(asString(errs[0]["error"]), "再起動を待ったまま止まる") {
 		t.Fatalf("error の行 = %v", errs)
+	}
+}
+
+func TestWaitingRetryIsReleasedWhenItsTriggerIsRemovedFromTheWorkflow(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflow(s.workerWorkflow(slowRetry))
+	s.setIssues(readyIssue(42))
+	s.onClaude(stubwire.Rule{})
+	s.startLoop()
+	s.waitEvents("retry", 1)
+
+	s.writeWorkflow(strings.Replace(s.workerWorkflow(slowRetry), "name: implement", "name: renamed", 1))
+
+	if release := s.waitEvents("release", 1)[0]; release["reason"] != "trigger が workflow 定義から消えた" {
+		t.Fatalf("release の行 = %v", release)
 	}
 }

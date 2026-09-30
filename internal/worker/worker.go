@@ -185,13 +185,20 @@ type streamWatch struct {
 	changed time.Time
 }
 
-// silentFor は stream の file が最後に伸びてからの時間。file を読めなければ伸びていないと見なす。
-func (w *streamWatch) silentFor(now time.Time) time.Duration {
-	if info, err := w.file.Stat(); err == nil && info.Size() != w.size {
+// observe は now の時点の file の大きさを見て、伸びていれば伸びた時刻を進める。file を読めなければ、その失敗を返す。
+func (w *streamWatch) observe(now time.Time) error {
+	info, err := w.file.Stat()
+	if err != nil {
+		return fmt.Errorf("stream の file を読めない: %w", err)
+	}
+	if info.Size() != w.size {
 		w.size, w.changed = info.Size(), now
 	}
-	return now.Sub(w.changed)
+	return nil
 }
+
+// silentFor は stream の file が最後に伸びてから now までの時間。
+func (w *streamWatch) silentFor(now time.Time) time.Duration { return now.Sub(w.changed) }
 
 // render は action を描画し、共通 prompt を描画して state dir の file に書く。
 func (r Runner) render(job Job, workspacePath string) (action, promptFile string, err error) {
@@ -241,7 +248,9 @@ func (r Runner) wait(cmd *exec.Cmd, run *Run, stream *os.File) Result {
 func (r Runner) watch(done <-chan error, run *Run, stream *os.File) (result Result, ended bool) {
 	started := time.Now()
 	w := &streamWatch{file: stream, changed: started}
-	w.silentFor(started)
+	if err := w.observe(started); err != nil {
+		return Result{Failure: err.Error()}, false
+	}
 	var tick <-chan time.Time
 	if r.Definition.StallTimeout > 0 || r.Definition.RunTimeout > 0 {
 		ticker := time.NewTicker(watchInterval)
@@ -255,6 +264,9 @@ func (r Runner) watch(done <-chan error, run *Run, stream *os.File) (result Resu
 		case <-run.stop:
 			return Result{Stopped: true}, false
 		case now := <-tick:
+			if err := w.observe(now); err != nil {
+				return Result{Failure: err.Error()}, false
+			}
 			if reason := r.overdue(now.Sub(started), w.silentFor(now)); reason != "" {
 				return Result{Failure: reason}, false
 			}
