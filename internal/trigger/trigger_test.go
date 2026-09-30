@@ -110,3 +110,55 @@ func TestCandidatesCreatedAtTheSameTimeAreOrderedByNumber(t *testing.T) {
 		t.Fatalf("候補 = %v, want %v", got, want)
 	}
 }
+
+func TestEachCLFilterNarrowsTheCLsItMatches(t *testing.T) {
+	cases := []struct {
+		name      string
+		predicate trigger.CLPredicate
+		matching  []target.CL
+		missing   []target.CL
+	}{
+		{"書いていない条件は何にでも当たる", trigger.CLPredicate{},
+			[]target.CL{{}, {Draft: true, Labels: []string{"x"}, Mergeable: target.MergeConflict}}, nil},
+		{"labels は issue 側と同じに比べる", trigger.CLPredicate{LabelsAll: []string{"Ready"}, LabelsNone: []string{"hold"}},
+			[]target.CL{{Labels: []string{"ready"}}}, []target.CL{{Labels: []string{"ready", "hold"}}, {}}},
+		{"head は pattern に当たる同じ repo の branch に当たる", trigger.CLPredicate{Head: "worktree-issue-*"},
+			[]target.CL{{Head: "worktree-issue-7", SameRepo: true}},
+			[]target.CL{{Head: "worktree-issue-7"}, {Head: "feature/x", SameRepo: true}, {Head: "worktree-issue-7/x", SameRepo: true}}},
+		{"head は大文字と小文字を区別する", trigger.CLPredicate{Head: "fix-*"},
+			nil, []target.CL{{Head: "Fix-1", SameRepo: true}}},
+		{"same_repo: false は fork の CL に当たる", trigger.CLPredicate{SameRepo: no()},
+			[]target.CL{{}}, []target.CL{{SameRepo: true}}},
+		{"author: collaborator は作者が collaborator の CL に当たる", trigger.CLPredicate{Author: trigger.Collaborator},
+			[]target.CL{{AuthorIsCollaborator: true}}, []target.CL{{}}},
+		{"draft: true は draft の CL に当たる", trigger.CLPredicate{Draft: yes()},
+			[]target.CL{{Draft: true}}, []target.CL{{}}},
+		{"conflict は計算中の CL に true でも false でも当たらない", trigger.CLPredicate{Conflict: no()},
+			[]target.CL{{Mergeable: target.MergeClean}}, []target.CL{{Mergeable: target.MergeUnknown}, {Mergeable: target.MergeConflict}}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			for _, cl := range c.matching {
+				if !c.predicate.Matches(cl) {
+					t.Errorf("%+v に当たらない", cl)
+				}
+			}
+			for _, cl := range c.missing {
+				if c.predicate.Matches(cl) {
+					t.Errorf("%+v に当たった", cl)
+				}
+			}
+		})
+	}
+}
+
+func TestIssueTriggerDoesNotMatchACLAndCLTriggerDoesNotMatchAnIssue(t *testing.T) {
+	triggers := []trigger.Trigger{{Name: "i", On: target.KindIssue}, {Name: "c", On: target.KindCL}}
+
+	candidates := trigger.Evaluate(triggers, []target.Item{target.Issue{Number: 1}, target.CL{Number: 2}})
+
+	if len(candidates) != 2 || candidates[0].Trigger.Name != "i" || candidates[0].Item.Ref() != (target.Ref{Kind: target.KindIssue, Number: 1}) ||
+		candidates[1].Trigger.Name != "c" || candidates[1].Item.Ref() != (target.Ref{Kind: target.KindCL, Number: 2}) {
+		t.Fatalf("候補 = %+v", candidates)
+	}
+}

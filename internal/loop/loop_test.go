@@ -48,8 +48,9 @@ func (m memoryStore) Read(ref target.Ref) (target.Item, error) { return m.reread
 // noWorkspaces は workspace を持たない掃除の口。
 type noWorkspaces struct{}
 
-func (noWorkspaces) Existing() ([]target.Ref, error) { return nil, nil }
-func (noWorkspaces) Remove(target.Ref) error         { return nil }
+func (noWorkspaces) Existing() ([]target.Ref, error)   { return nil, nil }
+func (noWorkspaces) Remove(target.Ref) error           { return nil }
+func (noWorkspaces) Branch(target.Ref) (string, error) { return "", nil }
 
 // endedWorker は起動するとすぐに正常に終わる worker。
 type endedWorker struct{}

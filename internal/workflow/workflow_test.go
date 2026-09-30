@@ -111,6 +111,13 @@ func TestErrorsNameTheItem(t *testing.T) {
 		{"YAML として読めない", strings.Replace(valid, "tracker:", "tracker: [", 1), []string{"YAML"}},
 		{"front matter が無い", "共通 prompt だけ\n", []string{"front matter"}},
 		{"front matter が閉じていない", "---\ntracker:\n  kind: github\n", []string{"front matter"}},
+		{"CL の述語に issue 側の key", withTriggers("\n  - {name: f, on: cl, when: {assignee: alice}, action: /f}"), []string{"triggers[0].when.assignee"}},
+		{"issue の述語に CL 側の key", withTriggers("\n  - {name: f, on: issue, when: {draft: false}, action: /f}"), []string{"triggers[0].when.draft"}},
+		{"CL の語彙の型", withTriggers("\n  - {name: f, on: cl, when: {conflict: yes please}, action: /f}"), []string{"triggers[0].when.conflict"}},
+		{"head の pattern の綴り", withTriggers("\n  - {name: f, on: cl, when: {head: \"[\"}, action: /f}"), []string{"triggers[0].when.head"}},
+		{"head と same_repo: false の併記", withTriggers("\n  - {name: f, on: cl, when: {head: a-*, same_repo: false}, action: /f}"), []string{"triggers[0].when", "same_repo"}},
+		{"CL の action の issue の変数", withTriggers("\n  - {name: f, on: cl, action: \"/f {{ .issue.number }}\"}"), []string{"triggers[0].action", "issue"}},
+		{"CL の trigger があるときの本文の issue の変数", withTriggers("\n  - {name: f, on: cl, action: /f}") + "{{ .issue.number }}\n", []string{"本文", "issue"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -122,6 +129,23 @@ func TestErrorsNameTheItem(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestCLTriggerIsRead(t *testing.T) {
+	def, err := load(t, withTriggers(`
+  - name: fix
+    when: {ci_failed: true, approved: false, head: worktree-issue-*, draft: false, labels: {none: [hold]}, author: collaborator}
+    on: cl
+    action: /fix {{ .cl.number }} {{ .cl.head }}`), nil)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := def.Triggers[0].CL
+	if def.Triggers[0].On != target.KindCL || p.CIFailed == nil || !*p.CIFailed || p.Approved == nil || *p.Approved ||
+		p.Head != "worktree-issue-*" || p.Draft == nil || *p.Draft || strings.Join(p.LabelsNone, ",") != "hold" || p.Author != "collaborator" {
+		t.Fatalf("trigger = %+v", def.Triggers[0])
 	}
 }
 

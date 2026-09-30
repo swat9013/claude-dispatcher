@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -30,6 +31,8 @@ type Workspaces interface {
 	Existing() ([]target.Ref, error)
 	// Remove は before_remove を撃ってから workspace を消す
 	Remove(ref target.Ref) error
+	// Branch は workspace で checkout されている branch の名前。workspace が無いか branch を指していなければ ""
+	Branch(ref target.Ref) (string, error)
 }
 
 // Worker は走っている worker 1 回分。
@@ -251,10 +254,15 @@ func (l *loop) tick() {
 	l.clearAbandoned(def, open)
 	l.retry(store, open)
 	candidates := trigger.Evaluate(def.Triggers, open)
+	branches, branchesRead := l.claimedBranches(candidates)
 	var launched []string
 	for _, c := range candidates {
 		if l.running()+l.waitingRetry() >= def.MaxConcurrent {
 			break
+		}
+		if cl, ok := c.Item.(target.CL); ok && (!branchesRead || (cl.SameRepo && branches[cl.Head])) {
+			// claim している作業対象の branch に、CL の worker を重ねない
+			continue
 		}
 		ref := c.Item.Ref()
 		if _, claimed := l.claims[ref]; claimed {
@@ -267,8 +275,60 @@ func (l *loop) tick() {
 			launched = append(launched, ref.String())
 		}
 	}
-	l.rec.event("tick", map[string]any{"result": "ok", "candidates": len(candidates), "launched": nonNil(launched)},
-		"tick ok · %s", Summary(candidates))
+	ambiguous := trigger.Ambiguous(open)
+	l.rec.event("tick", map[string]any{"result": "ok", "candidates": len(candidates), "launched": nonNil(launched), "ambiguous": ambiguousFields(ambiguous)},
+		"tick ok · %s%s", Summary(candidates), ambiguousSummary(ambiguous))
+}
+
+// claimedBranches は、claim している作業対象の workspace で checkout されている branch の名前を返す。候補に CL が無ければ
+// 読まない。読めない branch があれば error の行を残して false を返す (その tick は CL の worker を起動しない)。
+func (l *loop) claimedBranches(candidates []trigger.Candidate) (map[string]bool, bool) {
+	branches := map[string]bool{}
+	if !slices.ContainsFunc(candidates, func(c trigger.Candidate) bool { return c.Item.Ref().Kind == target.KindCL }) {
+		return branches, true
+	}
+	read := true
+	for ref, c := range l.claims {
+		branch, err := l.o.Workspaces(l.definitionOf(c)).Branch(ref)
+		if err != nil {
+			l.rec.error(ref, "この tick は CL の worker を起動しない: "+oneLine(err))
+			read = false
+			continue
+		}
+		if branch != "" {
+			branches[branch] = true
+		}
+	}
+	return branches, read
+}
+
+// ambiguousFields は tick の行の ambiguous の値。
+func ambiguousFields(ambiguous []trigger.AmbiguousHead) []map[string]any {
+	fields := []map[string]any{}
+	for _, a := range ambiguous {
+		fields = append(fields, map[string]any{"head": a.Head, "targets": refNames(a.Targets)})
+	}
+	return fields
+}
+
+// ambiguousSummary は tick の人が読む行に足す、曖昧な CL の欄。無ければ ""。
+func ambiguousSummary(ambiguous []trigger.AmbiguousHead) string {
+	if len(ambiguous) == 0 {
+		return ""
+	}
+	heads := make([]string, len(ambiguous))
+	for i, a := range ambiguous {
+		heads[i] = fmt.Sprintf("%s (%s)", a.Head, strings.Join(refNames(a.Targets), ", "))
+	}
+	return " · 曖昧な CL: " + strings.Join(heads, ", ")
+}
+
+func refNames(refs []target.Ref) []string {
+	names := make([]string, len(refs))
+	for i, ref := range refs {
+		names[i] = ref.String()
+	}
+	return names
 }
 
 // OpenItems は、workflow 定義の trigger に現れる種類の open な作業対象を置き場から全件読む。

@@ -1,4 +1,4 @@
-// Package github は gh CLI を撃って GitHub の issue 置き場を読む adapter (system.md §13)。tracker には書かない。
+// Package github は gh CLI を撃って GitHub の issue 置き場と CL 置き場を読む adapter (system.md §13)。tracker には書かない。
 package github
 
 import (
@@ -63,7 +63,7 @@ func ParseRepo(text string) (Repo, error) {
 // ScopeKey は repo の issue 置き場を指す scope key。GitHub の owner と repo の名前は大文字と小文字を区別しないので小文字にする。
 func ScopeKey(repo Repo) string { return strings.ToLower("github.com/" + repo.String()) }
 
-// Store は repo の issue 置き場を読む部品。
+// Store は repo の issue 置き場と CL 置き場を読む部品。
 type Store struct {
 	gh   Runner
 	repo Repo
@@ -78,6 +78,8 @@ func (s Store) Open(kind target.Kind) ([]target.Item, error) {
 	switch kind {
 	case target.KindIssue:
 		return items(s.OpenIssues())
+	case target.KindCL:
+		return items(s.OpenCLs())
 	}
 	return nil, fmt.Errorf("未知の作業対象の種類 %q", kind)
 }
@@ -87,6 +89,8 @@ func (s Store) Read(ref target.Ref) (target.Item, error) {
 	switch ref.Kind {
 	case target.KindIssue:
 		return s.Issue(ref.Number)
+	case target.KindCL:
+		return s.CL(ref.Number)
 	}
 	return nil, fmt.Errorf("未知の作業対象の種類 %q", ref.Kind)
 }
@@ -102,7 +106,7 @@ func items[T target.Item](list []T, err error) ([]target.Item, error) {
 	return out, nil
 }
 
-// connectionSize は issue ごとに 1 往復で読む label・assignee・依存先の上限。超えたら読み切れないとして失敗させる
+// connectionSize は作業対象ごとに 1 往復で読む label・assignee・依存先・review thread の上限。超えたら読み切れないとして失敗させる
 const connectionSize = 100
 
 // issueFields は issue 1 件について読む field。一覧と 1 件の読み直しで同じものを読む
@@ -262,6 +266,189 @@ func (s Store) normalize(n issueNode) (target.Issue, error) {
 		}
 	}
 	return i, nil
+}
+
+// clFields は CL 1 件について読む field。一覧と 1 件の読み直しで同じものを読む。review thread の書き手は、thread の
+// 最初の comment の作者
+var clFields = fmt.Sprintf(`
+        number
+        title
+        url
+        state
+        createdAt
+        authorAssociation
+        isDraft
+        isCrossRepository
+        headRefName
+        headRepository { nameWithOwner }
+        mergeable
+        reviewDecision
+        labels(first: %[1]d) { totalCount nodes { name } }
+        reviewThreads(first: %[1]d) { totalCount nodes { isResolved comments(first: 1) { nodes { authorAssociation } } } }
+        commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }`, connectionSize)
+
+var clsQuery = `
+query($owner: String!, $name: String!, $endCursor: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequests(states: OPEN, first: 50, after: $endCursor, orderBy: {field: CREATED_AT, direction: ASC}) {
+      pageInfo { hasNextPage endCursor }
+      nodes {` + clFields + `
+      }
+    }
+  }
+}`
+
+var clQuery = `
+query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {` + clFields + `
+    }
+  }
+}`
+
+// clNode は clFields の応答。
+type clNode struct {
+	Number            int
+	Title             string
+	URL               string
+	State             string
+	CreatedAt         time.Time
+	AuthorAssociation string
+	IsDraft           bool
+	IsCrossRepository bool
+	HeadRefName       string
+	HeadRepository    *struct{ NameWithOwner string }
+	Mergeable         string
+	ReviewDecision    *string
+	Labels            connection[struct{ Name string }]
+	ReviewThreads     connection[struct {
+		IsResolved bool
+		Comments   struct {
+			Nodes []struct{ AuthorAssociation string }
+		}
+	}]
+	Commits struct {
+		Nodes []struct {
+			Commit struct {
+				StatusCheckRollup *struct{ State string }
+			}
+		}
+	}
+}
+
+type clPage struct {
+	Data struct {
+		Repository *struct {
+			PullRequests struct {
+				Nodes []clNode
+			}
+		}
+	}
+}
+
+// OpenCLs は repo の open な CL を全件読み、正規化して返す。失敗は *target.Failure。
+func (s Store) OpenCLs() ([]target.CL, error) {
+	out, err := s.gh.Run("api", "graphql", "--paginate", "--slurp",
+		"-f", "query="+clsQuery, "-f", "owner="+s.repo.Owner, "-f", "name="+s.repo.Name)
+	if err != nil {
+		return nil, s.fail(classify(err), err)
+	}
+	var pages []clPage
+	if err := json.Unmarshal(out, &pages); err != nil {
+		return nil, s.fail(target.Unavailable, fmt.Errorf("gh api graphql の出力を読めない: %w", err))
+	}
+	cls := []target.CL{}
+	for _, page := range pages {
+		if page.Data.Repository == nil {
+			return nil, s.fail(target.NotVisible, errors.New("gh api graphql の出力に repository が無い"))
+		}
+		for _, n := range page.Data.Repository.PullRequests.Nodes {
+			cl, err := s.normalizeCL(n)
+			if err != nil {
+				return nil, err
+			}
+			cls = append(cls, cl)
+		}
+	}
+	return cls, nil
+}
+
+// clGone は、読み直した CL が消えているときの gh の文言。消えた CL は終端と同じに扱う
+const clGone = "Could not resolve to a PullRequest"
+
+// CL は CL 1 件を読み直す。merge か close されていれば Closed。消えた CL も Closed として返す。失敗は *target.Failure。
+func (s Store) CL(number int) (target.CL, error) {
+	out, err := s.gh.Run("api", "graphql",
+		"-f", "query="+clQuery, "-f", "owner="+s.repo.Owner, "-f", "name="+s.repo.Name, "-F", fmt.Sprintf("number=%d", number))
+	var failed *proc.Error
+	if errors.As(err, &failed) && strings.Contains(failed.Stderr, clGone) {
+		return target.CL{Number: number, Closed: true}, nil
+	}
+	if err != nil {
+		return target.CL{}, s.fail(classify(err), err)
+	}
+	var payload struct {
+		Data struct {
+			Repository *struct{ PullRequest *clNode }
+		}
+	}
+	if err := json.Unmarshal(out, &payload); err != nil {
+		return target.CL{}, s.fail(target.Unavailable, fmt.Errorf("gh api graphql の出力を読めない: %w", err))
+	}
+	switch {
+	case payload.Data.Repository == nil:
+		return target.CL{}, s.fail(target.NotVisible, errors.New("gh api graphql の出力に repository が無い"))
+	case payload.Data.Repository.PullRequest == nil:
+		return target.CL{Number: number, Closed: true}, nil
+	}
+	return s.normalizeCL(*payload.Data.Repository.PullRequest)
+}
+
+// mergeability は GitHub の mergeable の値を CL の merge conflict の有無に写す。
+var mergeability = map[string]target.Mergeability{"MERGEABLE": target.MergeClean, "CONFLICTING": target.MergeConflict}
+
+// normalizeCL は応答の CL 1 件を作業対象の形に写す (CL の状態の語彙へ写す。system.md §6)。
+func (s Store) normalizeCL(n clNode) (target.CL, error) {
+	for _, c := range []struct {
+		what        string
+		total, read int
+	}{
+		{"label", n.Labels.TotalCount, len(n.Labels.Nodes)},
+		{"review thread", n.ReviewThreads.TotalCount, len(n.ReviewThreads.Nodes)},
+	} {
+		if c.total > c.read {
+			return target.CL{}, s.fail(target.Truncated, fmt.Errorf("CL #%d の %s が %d 件あり、1 往復で読める %d 件を超えた", n.Number, c.what, c.total, connectionSize))
+		}
+	}
+	cl := target.CL{
+		Number:               n.Number,
+		Title:                n.Title,
+		URL:                  n.URL,
+		Closed:               n.State != "OPEN",
+		CreatedAt:            n.CreatedAt,
+		AuthorIsCollaborator: collaboratorAssociations[n.AuthorAssociation],
+		Head:                 n.HeadRefName,
+		SameRepo:             !n.IsCrossRepository,
+		Draft:                n.IsDraft,
+		Mergeable:            mergeability[n.Mergeable],
+		Approved:             n.ReviewDecision != nil && *n.ReviewDecision == "APPROVED",
+	}
+	if n.HeadRepository != nil {
+		cl.HeadRepo = n.HeadRepository.NameWithOwner
+	}
+	for _, l := range n.Labels.Nodes {
+		cl.Labels = append(cl.Labels, l.Name)
+	}
+	for _, t := range n.ReviewThreads.Nodes {
+		if !t.IsResolved && len(t.Comments.Nodes) > 0 && collaboratorAssociations[t.Comments.Nodes[0].AuthorAssociation] {
+			cl.ReviewUnresolved = true
+		}
+	}
+	if commits := n.Commits.Nodes; len(commits) > 0 && commits[0].Commit.StatusCheckRollup != nil {
+		state := commits[0].Commit.StatusCheckRollup.State
+		cl.CIFailed = state == "FAILURE" || state == "ERROR"
+	}
+	return cl, nil
 }
 
 // collaboratorAssociations は collaborator と数える作者の立場 (GitHub の CommentAuthorAssociation)

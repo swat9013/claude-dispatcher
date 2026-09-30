@@ -1,4 +1,4 @@
-// Package target は作業対象 (open な issue) の正規化した形と鍵と、置き場の部品が返す分類済みの失敗を持つ (system.md §13)。
+// Package target は作業対象 (open な issue と CL) の正規化した形と鍵と、置き場の部品が返す分類済みの失敗を持つ (system.md §13)。
 // trigger の評価は、この形だけを見る。adapter の生の応答を覗かない。
 package target
 
@@ -27,14 +27,56 @@ type Issue struct {
 	OpenBlockers int
 }
 
+// CL は open な CL 1 件。CL host の綴りは adapter が CL の状態の語彙へ写し終えている (system.md §6)。
+type CL struct {
+	Number int
+	Title  string
+	URL    string
+	// Closed は CL が終端 (merge か close) か。open な CL の一覧からは常に false
+	Closed    bool
+	CreatedAt time.Time
+	Labels    []string
+	// AuthorIsCollaborator は作者が collaborator か
+	AuthorIsCollaborator bool
+	// Head は head branch の名前
+	Head string
+	// HeadRepo は head branch のある repo (`owner/name`)。曖昧な CL を数えるときに、fork の同じ名前の branch と分ける
+	HeadRepo string
+	// SameRepo は head が CL の置き場と同じ repo の branch か (fork でないか)
+	SameRepo bool
+	Draft    bool
+	// Mergeable は merge conflict の有無 (cl.conflict)
+	Mergeable Mergeability
+	// ReviewUnresolved は collaborator が書いた未解決の review thread が 1 本以上あるか (cl.review_unresolved)
+	ReviewUnresolved bool
+	// CIFailed は head commit の checks が失敗しているか (cl.ci_failed)
+	CIFailed bool
+	// Approved は承認済みか (cl.approved)
+	Approved bool
+}
+
+// Mergeability は CL の merge conflict の有無。
+type Mergeability int
+
+const (
+	// MergeUnknown は CL host がまだ conflict を計算し終えていない
+	MergeUnknown Mergeability = iota
+	// MergeClean は conflict が無い
+	MergeClean
+	// MergeConflict は conflict がある
+	MergeConflict
+)
+
 // Kind は作業対象の種類。
 type Kind string
 
-// KindIssue は issue の作業対象
-const KindIssue Kind = "issue"
+const (
+	KindIssue Kind = "issue"
+	KindCL    Kind = "cl"
+)
 
 // kinds は作業対象の種類の全部 (置き場の名前から種類を読むときに使う)
-var kinds = []Kind{KindIssue}
+var kinds = []Kind{KindIssue, KindCL}
 
 // Ref は作業対象を指す鍵 (種類と番号)。claim と workspace はこの鍵で持つ。
 type Ref struct {
@@ -63,7 +105,7 @@ func ParseFileName(name string) (Ref, bool) {
 	return Ref{}, false
 }
 
-// Item は正規化した作業対象 1 件 (Issue)。
+// Item は正規化した作業対象 1 件 (Issue か CL)。
 type Item interface {
 	Ref() Ref
 	// Terminal は作業対象が終端か
@@ -78,6 +120,11 @@ func (i Issue) Ref() Ref           { return Ref{Kind: KindIssue, Number: i.Numbe
 func (i Issue) Terminal() bool     { return i.Closed }
 func (i Issue) Created() time.Time { return i.CreatedAt }
 func (i Issue) Heading() string    { return i.Title }
+
+func (c CL) Ref() Ref           { return Ref{Kind: KindCL, Number: c.Number} }
+func (c CL) Terminal() bool     { return c.Closed }
+func (c CL) Created() time.Time { return c.CreatedAt }
+func (c CL) Heading() string    { return c.Title }
 
 // FailureKind は観測の失敗の分類 (SPEC §11.4)。
 type FailureKind int

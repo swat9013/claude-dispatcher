@@ -12,7 +12,7 @@ import (
 
 // Vars は template に渡す変数。
 type Vars struct {
-	// Item は worker の作業対象。`.issue` の変数になる
+	// Item は worker の作業対象。issue なら `.issue`、CL なら `.cl` の変数になる
 	Item      target.Item
 	Trigger   string
 	Attempt   int
@@ -34,6 +34,14 @@ func (v Vars) data() map[string]any {
 			"title":  item.Title,
 			"url":    item.URL,
 			"labels": nonNil(item.Labels),
+		}
+	case target.CL:
+		data["cl"] = map[string]any{
+			"number": item.Number,
+			"title":  item.Title,
+			"url":    item.URL,
+			"labels": nonNil(item.Labels),
+			"head":   item.Head,
 		}
 	}
 	return data
@@ -59,17 +67,15 @@ func Render(name, text string, vars Vars) (string, error) {
 	return out.String(), nil
 }
 
-// sample は Check が描画に使う変数。条件の分岐の中の変数まで確かめるよう、どの値も空にしない。
-var sample = Vars{
-	Item:      target.Issue{Number: 1, Title: "title", URL: "https://example.com/1", Labels: []string{"label"}},
-	Trigger:   "trigger",
-	Attempt:   1,
-	Workspace: "/workspace",
+// samples は Check が描画に使う、作業対象の種類ごとの見本の作業対象。条件の分岐の中の変数まで確かめるよう、どの値も空にしない。
+var samples = map[target.Kind]target.Item{
+	target.KindIssue: target.Issue{Number: 1, Title: "title", URL: "https://example.com/1", Labels: []string{"label"}},
+	target.KindCL:    target.CL{Number: 1, Title: "title", URL: "https://example.com/1", Labels: []string{"label"}, Head: "branch"},
 }
 
-// Check は text を見本の変数で描画してみて、描画の失敗 (綴りの誤り・未知の変数・未知の関数) を返す。
+// Check は text を kind の作業対象の見本の変数で描画してみて、描画の失敗 (綴りの誤り・未知の変数・未知の関数) を返す。
 // workflow 定義の検査で、作業対象を読む前に落とすために使う。
-func Check(name, text string) error {
-	_, err := Render(name, text, sample)
+func Check(name, text string, kind target.Kind) error {
+	_, err := Render(name, text, Vars{Item: samples[kind], Trigger: "trigger", Attempt: 1, Workspace: "/workspace"})
 	return err
 }

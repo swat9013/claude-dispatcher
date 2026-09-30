@@ -162,3 +162,17 @@ func TestRereadFailureOtherThanAMissingIssueIsNotClosed(t *testing.T) {
 		t.Fatal("gh の失敗を終端として読んだ")
 	}
 }
+
+func TestCLWithMoreReviewThreadsThanOneRoundTripIsTruncated(t *testing.T) {
+	node := `{"number":5,"title":"t","state":"OPEN","createdAt":"2026-01-01T00:00:00Z","authorAssociation":"OWNER","isDraft":false,
+		"isCrossRepository":false,"headRefName":"b","headRepository":{"nameWithOwner":"acme/widgets"},"mergeable":"MERGEABLE",
+		"reviewDecision":null,"labels":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":101,"nodes":[]},"commits":{"nodes":[]}}`
+	store := github.NewStore(pages(`[{"data":{"repository":{"pullRequests":{"nodes":[`+node+`]}}}}]`), github.Repo{Owner: "acme", Name: "widgets"})
+
+	_, err := store.Open(target.KindCL)
+
+	var failure *target.Failure
+	if !errors.As(err, &failure) || failure.Kind != target.Truncated {
+		t.Fatalf("err = %v", err)
+	}
+}

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/swat9013/claude-dispatcher/internal/deps"
 	"github.com/swat9013/claude-dispatcher/internal/proc"
 	"github.com/swat9013/claude-dispatcher/internal/target"
 )
@@ -90,6 +91,34 @@ func (m Manager) Existing() ([]target.Ref, error) {
 		}
 	}
 	return refs, nil
+}
+
+// branchTimeout は workspace の branch を読む git 1 回の上限
+const branchTimeout = 10 * time.Second
+
+// Branch は作業対象の workspace で checkout されている branch の名前を返す。workspace が無い・git の作業ツリーでない・
+// detached HEAD なら "" を返す。git は Env の PATH から探す。
+func (m Manager) Branch(ref target.Ref) (string, error) {
+	path := m.Path(ref)
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
+	git, err := deps.Lookup("git", m.Env)
+	if err != nil {
+		return "", err
+	}
+	out, err := proc.Command{Path: git, Env: m.Env, Dir: path, Timeout: branchTimeout}.Output("symbolic-ref", "--short", "-q", "HEAD")
+	var failed *proc.Error
+	switch {
+	case errors.As(err, &failed) && failed.Exit == 1:
+		// -q の symbolic-ref は、HEAD が branch を指していない (detached) と何も出さずに 1 で終わる
+		return "", nil
+	case errors.As(err, &failed) && strings.Contains(failed.Stderr, "not a git repository"):
+		return "", nil
+	case err != nil:
+		return "", fmt.Errorf("workspace の branch を読めない (%s): %w", path, err)
+	}
+	return strings.TrimSpace(out), nil
 }
 
 // run は hook の script を workspace を cwd にして `sh -c` で撃つ。空なら撃たない。

@@ -43,15 +43,15 @@ var RecordedEnv = []string{
 	"HOME", "PATH", "XDG_CONFIG_HOME", "XDG_STATE_HOME",
 }
 
-// Rule は応答 1 つ。ArgsPrefix と ArgContains の両方に当たった呼び出しに応答する。
+// Rule は応答 1 つ。ArgsPrefix と ArgsContain の両方に当たった呼び出しに応答する。
 type Rule struct {
 	// ArgsPrefix は argv[1:] の先頭一致。空なら何にでも当たる
 	ArgsPrefix []string `json:"args_prefix,omitempty"`
-	// ArgContains は argv[1:] のどれかが含む部分文字列。空なら条件にしない
-	ArgContains string `json:"arg_contains,omitempty"`
-	Stdout      string `json:"stdout,omitempty"`
-	Stderr      string `json:"stderr,omitempty"`
-	Exit        int    `json:"exit,omitempty"`
+	// ArgsContain は部分文字列の列。どれも argv[1:] のどれかが含む。空なら条件にしない
+	ArgsContain []string `json:"args_contain,omitempty"`
+	Stdout      string   `json:"stdout,omitempty"`
+	Stderr      string   `json:"stderr,omitempty"`
+	Exit        int      `json:"exit,omitempty"`
 	// Writes は応答の前に書く file (worker の代役が外部 store を書き換える: gh の応答 file を書き換えるなど)
 	Writes []FileWrite `json:"writes,omitempty"`
 	// ReleaseFile が空でなければ、その file が現れるまで終わらない (長く走る worker の代役)。
