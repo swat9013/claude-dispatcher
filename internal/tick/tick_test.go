@@ -52,9 +52,10 @@ type fakeLauncher struct {
 	workers []string
 }
 
-func (f *fakeLauncher) RunOrchestrator(prompt, logFile string, timeout time.Duration, stop <-chan struct{}) (launch.OrchestratorRun, error) {
+func (f *fakeLauncher) RunOrchestrator(prompt, logFile string, timeout time.Duration, stop <-chan struct{}, onStart func(string, time.Time)) (launch.OrchestratorRun, error) {
 	f.prompts = append(f.prompts, prompt)
 	f.stop = stop
+	onStart("fake-orchestrator-session", time.Now())
 	return f.orchestrate(prompt), nil
 }
 
@@ -380,5 +381,17 @@ func must(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestATickThatCannotWriteTickNowStillRunsAndSaysWhy(t *testing.T) {
+	e := newEnv(t)
+	// tick.now の置き場を中身のある dir で塞ぐ: 書き直し (rename) も削除も失敗する
+	must(t, os.MkdirAll(filepath.Join(e.project.TickNowFile(), "x"), 0o755))
+
+	out := e.once(fakeGh{issues: "[]"}, &fakeLauncher{}, nil)
+
+	if out.Result != tick.ResultOK || len(out.TickNowErrors) == 0 {
+		t.Fatalf("result %s / TickNowErrors %v, want ok のまま書けなかった理由を返す", out.Result.Name, out.TickNowErrors)
 	}
 }

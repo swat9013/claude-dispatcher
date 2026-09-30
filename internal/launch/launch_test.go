@@ -37,10 +37,13 @@ func processState(pid int) string {
 	return strings.TrimSpace(string(out))
 }
 
+// ignoreStart は起動の通知を受け流す
+func ignoreStart(string, time.Time) {}
+
 func TestRunOrchestratorStopsItOnAStopRequestAndSaysSo(t *testing.T) {
 	c := fakeClaude(t, "sleep 30")
 
-	run, err := c.RunOrchestrator("prompt", filepath.Join(t.TempDir(), "o.log"), time.Minute, closed())
+	run, err := c.RunOrchestrator("prompt", filepath.Join(t.TempDir(), "o.log"), time.Minute, closed(), ignoreStart)
 
 	if err != nil || run.End != proc.Stopped {
 		t.Fatalf("run = %+v, err = %v, want 停止要求で止めた", run, err)
@@ -50,7 +53,7 @@ func TestRunOrchestratorStopsItOnAStopRequestAndSaysSo(t *testing.T) {
 func TestRunOrchestratorTellsATimeoutApartFromAStopRequest(t *testing.T) {
 	c := fakeClaude(t, "sleep 30")
 
-	run, err := c.RunOrchestrator("prompt", filepath.Join(t.TempDir(), "o.log"), 100*time.Millisecond, nil)
+	run, err := c.RunOrchestrator("prompt", filepath.Join(t.TempDir(), "o.log"), 100*time.Millisecond, nil, ignoreStart)
 
 	if err != nil || run.End != proc.TimedOut {
 		t.Fatalf("run = %+v, err = %v, want 上限時間で止めた", run, err)
@@ -69,7 +72,7 @@ func TestStoppingTheOrchestratorLeavesAWorkerRunning(t *testing.T) {
 		}
 	})
 
-	if _, err := c.RunOrchestrator("prompt", filepath.Join(t.TempDir(), "o.log"), time.Minute, closed()); err != nil {
+	if _, err := c.RunOrchestrator("prompt", filepath.Join(t.TempDir(), "o.log"), time.Minute, closed(), ignoreStart); err != nil {
 		t.Fatal(err)
 	}
 

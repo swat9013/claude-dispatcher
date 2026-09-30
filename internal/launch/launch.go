@@ -20,7 +20,9 @@ import (
 type Launcher interface {
 	// RunOrchestrator は orchestrator を起動して終了を待つ。timeout を超えるか stop が閉じたら process group ごと止め、
 	// どちらで止めたかを返す。stop が nil なら停止要求は届かない。出力は logFile へ落とす。起動できなかったときだけ error を返す。
-	RunOrchestrator(prompt, logFile string, timeout time.Duration, stop <-chan struct{}) (OrchestratorRun, error)
+	// onStart は起動できた直後に、終了を待つ前に session id と起動時刻 (OrchestratorRun.Seconds の起点と同じ値) を渡して呼ぶ
+	// (走っている間の orchestrator を status に見せるため)。nil は渡さない — 呼び出し側は必ず起動を知る。
+	RunOrchestrator(prompt, logFile string, timeout time.Duration, stop <-chan struct{}, onStart func(sessionID string, started time.Time)) (OrchestratorRun, error)
 	// SpawnWorker は worker を新しい process session として起動し、待たずに返す。出力は logFile へ落とす。
 	// worker の終了は起動した process の中で回収する (長く生きる loop に zombie を溜めない)。
 	SpawnWorker(prompt, logFile string) (WorkerLaunch, error)
@@ -77,12 +79,13 @@ func (c ClaudePrint) start(prompt, logFile string) (*exec.Cmd, string, error) {
 	return cmd, sessionID, nil
 }
 
-func (c ClaudePrint) RunOrchestrator(prompt, logFile string, timeout time.Duration, stop <-chan struct{}) (OrchestratorRun, error) {
+func (c ClaudePrint) RunOrchestrator(prompt, logFile string, timeout time.Duration, stop <-chan struct{}, onStart func(sessionID string, started time.Time)) (OrchestratorRun, error) {
 	started := time.Now()
 	cmd, sessionID, err := c.start(prompt, logFile)
 	if err != nil {
 		return OrchestratorRun{}, err
 	}
+	onStart(sessionID, started)
 	// 異常終了は exit code で log に残すので、Wait の error は見ない
 	end, _ := proc.Wait(cmd, timeout, stop)
 	return OrchestratorRun{
