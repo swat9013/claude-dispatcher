@@ -78,6 +78,10 @@ _Avoid_: playbook, command, spawn prompt
 workflow 定義の本文。どの action にも添えて worker に渡す、project 共通の文面。
 _Avoid_: 契約, system prompt
 
+**当たる / 外れる**:
+作業対象が trigger の述語を満たすことを「当たる」、満たさなくなることを「外れる」と言う。
+_Avoid_: 述語が真 / 偽になる, match, 解消
+
 **候補**:
 いずれかの trigger に当たり、claim も打ち切りもされていない作業対象。
 _Avoid_: queue, backlog
@@ -89,7 +93,7 @@ _Avoid_: anomaly, error
 ## 起動と終わり方
 
 **worker**:
-loop が 1 つの作業対象について子 process として起動する、使い切りの LLM セッション。action を実行し、trigger の述語を偽にして終わる。
+loop が 1 つの作業対象について子 process として起動する、使い切りの LLM セッション。action を実行し、作業対象を trigger から外して終わる。
 _Avoid_: agent, runner
 
 **claim**:
@@ -101,12 +105,12 @@ _Avoid_: wip, lock, assignee
 _Avoid_: worktree (作り方の 1 つにすぎない), sandbox
 
 **完了**:
-worker が終わった後に、起動した trigger の述語が偽になっていること。述語を偽にするのは action の責務である。
+worker が終わった後に、作業対象が起動した trigger から外れていること。外すのは action の責務である。
 _Avoid_: done, success
 
 **attempt**:
-同じ作業対象について、完了するまでに worker を起動した回数。worker が失敗するか、終わっても述語が真のままなら 1 つ進む。
+同じ作業対象について、完了するまでに worker を起動した回数。worker が失敗するか、終わっても trigger に当たったままなら 1 つ進む。
 
 **打ち切り**:
-attempt が上限に達した作業対象を、loop がそれ以上起動しないこと。述語が一度偽になったのを観測すると解ける。
+attempt が上限に達した作業対象を、loop がそれ以上起動しないこと。作業対象が一度 trigger から外れたのを観測すると解ける。
 _Avoid_: give up, dead letter

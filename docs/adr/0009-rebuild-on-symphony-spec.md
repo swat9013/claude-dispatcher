@@ -47,7 +47,7 @@ SPEC と今の形は、次の 3 点で正反対の選択をしている。論点
 - **作業対象は issue と CL の 2 種類にする。機械は issue と CL を紐づけない**
   - CL 側の trigger は CL の状態だけを見る
   - どの branch で作業するかは worker が決める
-- **完了は、action が trigger の述語を偽にすることで表す** (SPEC の handoff state と同じ)
+- **完了は、action が作業対象を trigger から外すことで表す** (SPEC の handoff state と同じ)
   - dispatcher が持つ label (`dispatcher:wip`・`ready-for-human`) はなくなる
 - **action は prompt そのものにする**
   - skill を使うときは、prompt の先頭に `/skill-name` を書く
@@ -73,17 +73,17 @@ SPEC と今の形は、次の 3 点で正反対の選択をしている。論点
 2. **CL 側の trigger を機械が評価する**
    - SPEC の機械は CL を見ず、手直しは人が tracker の state を `Rework` に戻すことで起きる
    - GitHub の issue には state が open / closed しかないので、CL の状態を機械が読んで trigger にする
-3. **正常に終わっても述語が真のままなら、失敗と同じく backoff して attempt を数える。上限に達したら打ち切る**
+3. **正常に終わっても trigger に当たったままなら、失敗と同じく backoff して attempt を数える。上限に達したら打ち切る**
    - SPEC は正常終了なら 1 秒後に続きを起動し、回数に上限を持たない
    - SPEC がそうするのは、Codex の worker が turn の上限で作業の途中に正常終了するため
-   - `claude -p` は作業が終わるまで走るので、正常終了して述語が真のままなのは action の不具合とみなせる
+   - `claude -p` は作業が終わるまで走るので、正常終了して当たったままなのは action の不具合とみなせる
    - 上限がないと、1 つの action の不具合が利用枠を使い続ける
    - 打ち切りは memory に持ち、tracker には書かない
 4. **二重起動は scope key の lock で防ぐ**
    - SPEC は claim を memory に持つが、複数の process が同じ tracker に向くことを定めていない
-5. **走っている worker は、述語が偽になっても止めない。作業対象が終端になったときだけ止める**
+5. **走っている worker は、作業対象が trigger から外れても止めない。作業対象が終端になったときだけ止める**
    - SPEC は、実行中の issue が active でなくなると worker を止める
-   - こちらでは、action 自身が作業の途中で述語を偽にする (label を外すなど)。述語が偽になった時点で止めると、後始末を打ち切ってしまう
+   - こちらでは、action 自身が作業の途中で作業対象を trigger から外す (label を外すなど)。外れた時点で止めると、後始末を打ち切ってしまう
 6. **空き slot を待つ間は attempt を進めない**
    - SPEC §16.6 は、空きが無くて再起動できないときも attempt を進める
    - こちらは attempt の上限で打ち切るので、進めると空きを待つだけで打ち切りの回数を使ってしまう

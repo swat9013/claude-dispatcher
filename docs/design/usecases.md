@@ -55,7 +55,7 @@ Cockburn『ユースケース実践ガイド』(Writing Effective Use Cases) の
 - **Level**: user-goal (sea)
 - **Trigger**: tick の評価で候補が 1 件以上ある
 - **事前条件**: 並列上限に空きがある
-- **成功保証**: worker が終わった後に、起動した trigger の述語が偽になっていて、作業対象の claim が解けている
+- **成功保証**: worker が終わった後に、作業対象が起動した trigger から外れていて、作業対象の claim が解けている
 
 **Main Success Scenario**
 
@@ -63,8 +63,8 @@ Cockburn『ユースケース実践ガイド』(Writing Effective Use Cases) の
 2. loop が作業対象の workspace を用意する (無ければ作って hooks を撃つ)
 3. loop が action と共通 prompt を描画し、worker を子 process として起動する
 4. loop が worker の stream を読み、画面と状態 file に進行を出す
-5. worker が action を実行し、trigger の述語を偽にして終わる
-6. loop が作業対象を読み直し、述語が偽であることを確かめて claim を解く
+5. worker が action を実行し、作業対象を trigger から外して終わる
+6. loop が作業対象を読み直し、trigger から外れたことを確かめて claim を解く
 7. loop が起動と終わり方を log に残す
 
 **Extensions**
@@ -74,8 +74,8 @@ Cockburn『ユースケース実践ガイド』(Writing Effective Use Cases) の
 - **3a.** action の描画に失敗した (未知の変数)、または claude を起動できなかった
   - 3a1. loop はこの attempt を失敗として扱い、UC-3 へ進む
 - **5a.** worker が、作業対象を見送るか人へ返すと判断した
-  - 5a1. worker は、そのことを外部 store に残し (コメント・label)、述語を偽にして終わる。step 6 へ進む
-- **6a.** 述語が真のまま残った、または worker が異常終了した
+  - 5a1. worker は、そのことを外部 store に残し (コメント・label)、作業対象を trigger から外して終わる。step 6 へ進む
+- **6a.** trigger に当たったまま残った、または worker が異常終了した
   - 6a1. UC-3 へ進む
 
 ## UC-3 完了しなかった作業対象を retry し、上限で打ち切る
@@ -83,24 +83,24 @@ Cockburn『ユースケース実践ガイド』(Writing Effective Use Cases) の
 - **Primary Actor**: 人間 (loop を起動した運用者)
 - **Scope**: dispatcher (機械システム)
 - **Level**: user-goal (sea)
-- **Trigger**: worker の attempt が失敗した (異常終了・stall・述語が真のまま)
+- **Trigger**: worker の attempt が失敗した (異常終了・stall・trigger に当たったまま)
 - **事前条件**: 作業対象に claim がある
 - **成功保証**: 作業対象は、完了するか、終端になるか、打ち切られて log と `status` に出ている。1 つの action の不具合が、上限を超えて起動を繰り返していない
 
 **Main Success Scenario**
 
 1. loop が attempt を 1 つ進め、backoff の間は作業対象を再起動待ちとして claim したまま置く
-2. 待ちが明けたら、loop が作業対象を読み直し、起動した trigger の述語がまだ真であることを確かめる
+2. 待ちが明けたら、loop が作業対象を読み直し、起動した trigger にまだ当たっていることを確かめる
 3. loop が同じ workspace で、前の session を続ける worker を起動する (UC-2 の step 2 へ)
 
 **Extensions**
 
 - **1a.** attempt が上限に達した
   - 1a1. loop は作業対象を打ち切り、claim を解き、打ち切りを log と状態 file に出す
-  - 1a2. 以後の tick で述語が一度偽になったのを観測したら、loop は打ち切りを解く。人が label を付け直せば再び候補になる
+  - 1a2. 以後の tick で作業対象が一度 trigger から外れたのを観測したら、loop は打ち切りを解く。人が label を付け直せば再び候補になる
 - **2a.** 作業対象が終端になっていた
   - 2a1. loop は claim を解き、workspace を消して終わる
-- **2b.** 述語が偽になっていた (人か別の手が動かした)
+- **2b.** trigger から外れていた (人か別の手が動かした)
   - 2b1. loop は完了として claim を解いて終わる
 - **2c.** 並列上限に空きが無い
   - 2c1. loop は attempt を進めずに、空きを待ち直す
@@ -127,7 +127,7 @@ Cockburn『ユースケース実践ガイド』(Writing Effective Use Cases) の
   - 1a1. loop はその worker を止め、失敗として UC-3 へ渡す
 - **2a.** 読み直しに失敗した
   - 2a1. loop は worker を止めずに走らせ続け、次の tick で読み直す (SPEC §8.5)
-- **2b.** 述語が偽になっていた (worker が作業の途中で label を外したなど)
+- **2b.** trigger から外れていた (worker が作業の途中で label を外したなど)
   - 2b1. loop は worker を止めない。worker の終了後に UC-2 の step 6 で完了を確かめる
 
 ## UC-5 project を導入する
@@ -164,7 +164,7 @@ Cockburn『ユースケース実践ガイド』(Writing Effective Use Cases) の
 - **Level**: user-goal (sea)
 - **Trigger**: 運用者が dispatcher を止めたい (端末を閉じる・binary を更新する・使うのをやめる)
 - **事前条件**: loop が走っている
-- **成功保証**: 新しい worker が起動しない。止めた時点の worker は、終わったか止められたかが log に残っている。止められた作業対象は、次に起動した loop が述語から再び拾える
+- **成功保証**: 新しい worker が起動しない。止めた時点の worker は、終わったか止められたかが log に残っている。止められた作業対象は、trigger に当たったままなら、次に起動した loop が再び拾える
 
 **Main Success Scenario**
 
@@ -181,4 +181,4 @@ Cockburn『ユースケース実践ガイド』(Writing Effective Use Cases) の
   - 1b1. 1 回目の停止要求と同じく step 2 へ進む。画面は見えないので、止まったことは別の端末の `status` で確かめる
 - **3a.** 運用者が worker の終わりを待てず、もう一度停止を求めた
   - 3a1. loop は走っている worker の process group を止め、hooks を撃ち、止めた作業対象を log に残して step 4 へ進む
-  - 3a2. 止められた worker が途中まで書いた成果は、workspace と remote branch に残る。次に起動した loop は、述語が真のままなら同じ workspace で続きから始める
+  - 3a2. 止められた worker が途中まで書いた成果は、workspace と remote branch に残る。次に起動した loop は、trigger に当たったままなら同じ workspace で続きから始める

@@ -49,7 +49,7 @@ CLI の subcommand は、役割で 3 群に分かれる。
         │  4. trigger の評価 → 候補                  │
         │  5. 空いている分だけ起動 ──▶ workspace ──▶ worker (claude -p、loop の子)
         │                                (hooks)     stream-json ──▶ loop
-        │  worker の終了 → 述語の再評価 → 完了 / attempt+1 → backoff / 打ち切り
+        │  worker の終了 → 外れたか確かめる → 完了 / attempt+1 → backoff / 打ち切り
         └─ 状態 file・log を書く ──▶ status / loop の画面
 ```
 
@@ -84,8 +84,8 @@ dispatcher は、状態の意味を定めない。issue の label が何を表�
 | workspace | workflow 定義が決める root の下の作業場所 (既定は clone 配下) | loop (hooks) | 作業対象が終端になるまで |
 
 - **候補 = いずれかの trigger に当たり ∧ claim されておらず ∧ 打ち切られていない作業対象**
-- **完了 = worker が終わった後に、起動した trigger の述語が偽になっていること**
-  - 述語を偽にするのは action の責務 (SPEC の handoff state と同じ)
+- **完了 = worker が終わった後に、作業対象が起動した trigger から外れていること**
+  - 外すのは action の責務 (SPEC の handoff state と同じ)
   - 例: 実装の action は、CL を開いたら着手可の label を外す
 - **途中成果は remote branch と workspace に残る**。workspace は attempt を跨いで残すので、2 回目以降の worker は前の状態から続ける
 - **issue と CL を機械は紐づけない**
@@ -100,7 +100,7 @@ dispatcher は、状態の意味を定めない。issue の label が何を表�
 | 主体 | やってよいこと | やらないこと |
 |---|---|---|
 | CLI (`loop`) | 外部 store の観測と正規化<br>trigger の評価<br>claim・attempt・打ち切りの記憶<br>workspace の作成と削除 (hooks を撃つ)<br>worker の起動・監視・停止<br>状態 file と log を書くこと | tracker・CL への書き込み<br>宣言にない判断 (見送り・優先順位の変更) |
-| worker | action の実行 (実装・CL 作成・コメント・label の付け替えなど)<br>trigger の述語を偽にすること<br>見送ること・人へ返すこと | loop への問い合わせ<br>permission が止めた操作の迂回 |
+| worker | action の実行 (実装・CL 作成・コメント・label の付け替えなど)<br>作業対象を trigger から外すこと<br>見送ること・人へ返すこと | loop への問い合わせ<br>permission が止めた操作の迂回 |
 | 人間 | workflow 定義を書くこと・triage・merge (workflow 定義で worker に任せない限り) | — |
 
 宣言の誤りによる事故は、次の 2 段で塞ぐ。
@@ -164,8 +164,8 @@ trigger は、作業対象に対する述語と action の組。workflow 定義�
   - どの CL を作業対象にするか決まらないため
   - SPEC §11.3 の「正規化できない記録は外して log に出す」と同じ扱い
 - **dedup は持たない**
-  - 完了した作業対象は述語が偽なので、再び当たらない
-  - 述語が真のまま残った作業対象は、retry (§7) が扱う
+  - 完了した作業対象は trigger から外れているので、再び当たらない
+  - 当たったまま残った作業対象は、retry (§7) が扱う
 
 ## 7. 起動・retry・打ち切り
 
@@ -177,7 +177,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。
    - 走っている worker ごとに、stream の最後の event からの経過を見る
    - stall の上限を超えた worker は止め、失敗として扱う
    - 走っている作業対象を外部 store で読み直し、終端になっていれば worker を止めて workspace を消す
-   - 述語が偽になっただけでは止めない (ADR 0009 の SPEC から外れるところ 5)
+   - trigger から外れただけでは止めない (ADR 0009 の SPEC から外れるところ 5)
 2. **workflow 定義の読み直しと事前検査** (§8)
    - 読めない・文法に合わないときは、この tick は何も起動しない。突き合わせは続ける
    - action の先頭の `/名前` が見つからない trigger だけは、その trigger を起動しない。他の trigger は評価する
@@ -192,19 +192,19 @@ SPEC §7・§8・§16 の状態機械を土台にする。
 3. `claude -p` を子 process として起動し、stream を読む
    - attempt が 2 回目以降なら、前の session を `--resume` で続ける
 4. 終了後に `after_run` を撃つ
-5. 作業対象を読み直し、起動した trigger の述語を再評価する
-   - 偽なら **完了**。claim を解く
-   - 真のままなら、worker が正常終了していても **失敗と同じに扱う** (ADR 0009 の SPEC から外れるところ 3)
+5. 作業対象を読み直し、起動した trigger から外れたかを確かめる
+   - 外れていれば **完了**。claim を解く
+   - 当たったままなら、worker が正常終了していても **失敗と同じに扱う** (ADR 0009 の SPEC から外れるところ 3)
 
 **失敗の扱い**。
 
 - **attempt を 1 つ進め、backoff して再起動を待つ**
   - backoff の式は SPEC §8.4 のまま: `min(10s × 2^(attempt−1), 上限)`。上限の既定は 5 分
-  - 再起動の前に作業対象を読み直す。終端になっていれば claim を解き、述語が偽になっていれば完了として claim を解く
+  - 再起動の前に作業対象を読み直す。終端になっていれば claim を解き、trigger から外れていれば完了として claim を解く
   - 空きが無ければ、attempt を進めずに待ち直す。空きを待つことで打ち切りの回数を使わないため (SPEC §16.6 は進める)
 - **attempt が上限に達したら打ち切る**
   - 打ち切りは memory に持ち、log と `status` に出す。tracker には書かない
-  - 述語が一度偽になったのを tick で観測すると解ける。人が label を外して付け直せば、再び候補になる
+  - 作業対象が一度 trigger から外れたのを tick で観測すると解ける。人が label を外して付け直せば、再び候補になる
   - loop を起動し直すと消える
 
 **workspace**。
@@ -262,7 +262,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。
     - 新しい起動と再起動待ちをやめる
     - 走っている worker の終了を待って止まる
   - 2 回目: 走っている worker の process group を止め、`after_run` を撃ってから止まる
-  - worker は loop の子なので、loop が死ねば worker も止まる。止まった worker の作業対象は、次に起動した loop が述語から再び拾う
+  - worker は loop の子なので、loop が死ねば worker も止まる。止まった worker の作業対象は、trigger に当たったままなら、次に起動した loop が再び拾う
 - **loop の画面が第一の観測点**
   - 走っている worker の表 (作業対象・trigger・attempt・経過・stream の最新の活動) を描き直す
   - loop の見出し (状態・次の tick の時刻・直近の tick の結果と error) も描き直す
