@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/swat9013/claude-dispatcher/internal/github"
 	"github.com/swat9013/claude-dispatcher/internal/termtext"
@@ -73,14 +74,24 @@ func (r Report) JudgmentLines(fit Fit) []string {
 		if action := tick.Action(d.Action); action != tick.ActionSkip && action != tick.ActionReadyForHuman {
 			continue
 		}
-		// 1 件 1 行に保つ (reason は orchestrator が書く 1 文で、改行を含みうる)
-		reason := strings.Join(strings.Fields(d.Reason), " ")
-		lines = append(lines, fit.cut(fmt.Sprintf("  #%d %s: %s", d.Issue, d.Action, reason)))
+		lines = append(lines, fit.cut(fmt.Sprintf("  #%d %s: %s", d.Issue, d.Action, oneLine(d.Reason))))
 	}
 	if len(lines) == 0 {
 		return nil
 	}
 	return append([]string{"判断 " + ticklog.ShortTS(r.LastOrchestrator.TS)}, lines...)
+}
+
+// oneLine は reason を 1 行の平文にする。reason は orchestrator が issue 本文を読んで書く文で、改行や端末の制御文字
+// (ESC など) を含みうる。1 件 1 行を保ち、端末に制御文字を撃ち込ませないため、制御文字を空白にして空白を畳む。
+func oneLine(reason string) string {
+	plain := strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, reason)
+	return strings.Join(strings.Fields(plain), " ")
 }
 
 // cut は端末なら line を端末の幅で切る。

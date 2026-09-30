@@ -259,7 +259,7 @@ project を省略すると、config root の下の全 project (§9 の `projects
 - **読み取り専用**: state dir にも外部 store にも書かない。lock file も作らず、lock も取らない (取ると、その一瞬に重なった tick が `locked` の行を残し、起動しようとした loop が拒まれる)。loop が生きているかは process の一覧 (`claude-dispatcher … loop <project>` の process) で見る
 - **載せる worker**: log.jsonl の tick 行の `spawned` のうち、issue ごとの最新の起動記録で issue に `dispatcher:wip` が付いているか process が生きているもの、と、それより古い起動記録で process が生きているもの (wip は issue の今の worker にだけ掛ける。古い起動記録に掛けると、再入で起こし直した issue の前回の worker が stale wip に見える)。process の生死は起動部が見分ける。`claude -p` では pid の command 行に `session_id` が在るかで見る (pid は再利用される。system.md §13)。process が死んでいて wip が残っている行が stale wip の手掛かり (system.md §1)
 - 外部 process (gh / git / claude / ps) が失敗した列は `?` にして表は出し、何を読めなかったかを `! <理由>` の注記行に残す
-- **判断の行**: log.jsonl の最も新しい orchestrator 行 (§4.2) の `decisions` のうち、`action` が `skip` と `ready-for-human` のものを 1 件 1 行 `  #<issue> <action>: <reason>` で出し、その前に判断した時刻の行 `判断 <その行の ts (秒まで)>` を置く。`start` / `reenter` は出さない (採った issue は worker として表に出る)。その後の tick で orchestrator が起動されなくても、同じ判断を出し続ける。該当する decision が 0 件なら、時刻の行も出さない。`reason` の改行は空白に畳む。stdout が端末なら、行が端末の幅に収まるように reason を切り詰める。端末でなければ切り詰めない
+- **判断の行**: log.jsonl の最も新しい orchestrator 行 (§4.2) の `decisions` のうち、`action` が `skip` と `ready-for-human` のものを 1 件 1 行 `  #<issue> <action>: <reason>` で出し、その前に判断した時刻の行 `判断 <その行の ts (秒まで)>` を置く。`start` / `reenter` は出さない (採った issue は worker として表に出る)。その後の tick で orchestrator が起動されなくても、同じ判断を出し続ける。該当する decision が 0 件なら、時刻の行も出さない。`reason` の改行と制御文字 (ESC など) は空白にして畳む (1 件 1 行を保ち、端末に制御文字を撃ち込ませない)。stdout が端末なら、行が端末の幅に収まるように reason を切り詰める。端末でなければ切り詰めない
 
 表は project ごとに 1 段 (見出し → 判断の行 → 注記行 → 表):
 

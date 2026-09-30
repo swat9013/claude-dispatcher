@@ -34,3 +34,11 @@ func TestJudgmentLinesFoldAMultiLineReasonIntoOneLine(t *testing.T) {
 		t.Fatalf("JudgmentLines = %q, want %q", got, want)
 	}
 }
+
+func TestJudgmentLinesDoNotPassTerminalControlCharactersThrough(t *testing.T) {
+	got := reportWithSkip("仕様が\x1b[2J無い").JudgmentLines(FitPlain())
+
+	if want := []string{"判断 2026-09-26T03:00:00Z", "  #51 skip: 仕様が [2J無い"}; !slices.Equal(got, want) {
+		t.Fatalf("JudgmentLines = %q, want %q", got, want)
+	}
+}
