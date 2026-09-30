@@ -12,7 +12,8 @@ import (
 
 // Vars は template に渡す変数。
 type Vars struct {
-	Issue     target.Issue
+	// Item は worker の作業対象。`.issue` の変数になる
+	Item      target.Item
 	Trigger   string
 	Attempt   int
 	Workspace string
@@ -21,21 +22,28 @@ type Vars struct {
 // data は Vars を template の変数の名前 (`.issue.number` など) に写す。map にするのは、未知の変数を
 // missingkey=error で描画の失敗にするため (struct の field は template の綴りと合わない)。
 func (v Vars) data() map[string]any {
-	labels := v.Issue.Labels
-	if labels == nil {
-		labels = []string{}
-	}
-	return map[string]any{
-		"issue": map[string]any{
-			"number": v.Issue.Number,
-			"title":  v.Issue.Title,
-			"url":    v.Issue.URL,
-			"labels": labels,
-		},
+	data := map[string]any{
 		"trigger":   map[string]any{"name": v.Trigger},
 		"attempt":   v.Attempt,
 		"workspace": v.Workspace,
 	}
+	switch item := v.Item.(type) {
+	case target.Issue:
+		data["issue"] = map[string]any{
+			"number": item.Number,
+			"title":  item.Title,
+			"url":    item.URL,
+			"labels": nonNil(item.Labels),
+		}
+	}
+	return data
+}
+
+func nonNil(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
 }
 
 // Render は text を描画する。name は失敗を名指しするときの綴り (`action` など)。
@@ -53,7 +61,7 @@ func Render(name, text string, vars Vars) (string, error) {
 
 // sample は Check が描画に使う変数。条件の分岐の中の変数まで確かめるよう、どの値も空にしない。
 var sample = Vars{
-	Issue:     target.Issue{Number: 1, Title: "title", URL: "https://example.com/1", Labels: []string{"label"}},
+	Item:      target.Issue{Number: 1, Title: "title", URL: "https://example.com/1", Labels: []string{"label"}},
 	Trigger:   "trigger",
 	Attempt:   1,
 	Workspace: "/workspace",

@@ -35,19 +35,19 @@ type Manager struct {
 	Env []string
 }
 
-// Path は issue の workspace の path。root の外へは出ない (番号だけから作る)。
-func (m Manager) Path(number int) string {
-	return filepath.Join(m.Root, target.FileName(number))
+// Path は作業対象の workspace の path。root の外へは出ない (種類と番号だけから作る)。
+func (m Manager) Path(ref target.Ref) string {
+	return filepath.Join(m.Root, ref.FileName())
 }
 
 // Prepare は workspace を用意する。無ければ作って after_create を撃ち (失敗したら作りかけを消す)、before_run を撃つ。
-func (m Manager) Prepare(number int) (string, error) {
-	path := m.Path(number)
+func (m Manager) Prepare(ref target.Ref) (string, error) {
+	path := m.Path(ref)
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
 		if err := os.MkdirAll(path, 0o755); err != nil {
 			return "", fmt.Errorf("workspace を作れない (%s): %w", path, err)
 		}
-		if err := m.run("after_create", m.Hooks.AfterCreate, number); err != nil {
+		if err := m.run("after_create", m.Hooks.AfterCreate, ref); err != nil {
 			if rmErr := os.RemoveAll(path); rmErr != nil {
 				return "", fmt.Errorf("%w (作りかけの workspace も消せない: %v)", err, rmErr)
 			}
@@ -56,26 +56,26 @@ func (m Manager) Prepare(number int) (string, error) {
 	} else if err != nil {
 		return "", fmt.Errorf("workspace を読めない (%s): %w", path, err)
 	}
-	if err := m.run("before_run", m.Hooks.BeforeRun, number); err != nil {
+	if err := m.run("before_run", m.Hooks.BeforeRun, ref); err != nil {
 		return "", err
 	}
 	return path, nil
 }
 
 // AfterRun は after_run を撃つ。
-func (m Manager) AfterRun(number int) error { return m.run("after_run", m.Hooks.AfterRun, number) }
+func (m Manager) AfterRun(ref target.Ref) error { return m.run("after_run", m.Hooks.AfterRun, ref) }
 
 // Remove は before_remove を撃ってから workspace を消す。before_remove が失敗しても消す。返す error はどちらの失敗も含む。
-func (m Manager) Remove(number int) error {
-	hookErr := m.run("before_remove", m.Hooks.BeforeRemove, number)
-	if err := os.RemoveAll(m.Path(number)); err != nil {
-		return errors.Join(hookErr, fmt.Errorf("workspace を消せない (%s): %w", m.Path(number), err))
+func (m Manager) Remove(ref target.Ref) error {
+	hookErr := m.run("before_remove", m.Hooks.BeforeRemove, ref)
+	if err := os.RemoveAll(m.Path(ref)); err != nil {
+		return errors.Join(hookErr, fmt.Errorf("workspace を消せない (%s): %w", m.Path(ref), err))
 	}
 	return hookErr
 }
 
-// Existing は root の下にある issue の workspace の番号を返す。root が無ければ空。番号として読めない dir は飛ばす。
-func (m Manager) Existing() ([]int, error) {
+// Existing は root の下にある workspace の作業対象を返す。root が無ければ空。作業対象の名前として読めない dir は飛ばす。
+func (m Manager) Existing() ([]target.Ref, error) {
 	entries, err := os.ReadDir(m.Root)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -83,26 +83,26 @@ func (m Manager) Existing() ([]int, error) {
 	if err != nil {
 		return nil, fmt.Errorf("workspace root を読めない (%s): %w", m.Root, err)
 	}
-	var numbers []int
+	var refs []target.Ref
 	for _, e := range entries {
-		if n, ok := target.NumberOf(e.Name()); ok && e.IsDir() {
-			numbers = append(numbers, n)
+		if ref, ok := target.ParseFileName(e.Name()); ok && e.IsDir() {
+			refs = append(refs, ref)
 		}
 	}
-	return numbers, nil
+	return refs, nil
 }
 
 // run は hook の script を workspace を cwd にして `sh -c` で撃つ。空なら撃たない。
-func (m Manager) run(name, script string, number int) error {
+func (m Manager) run(name, script string, ref target.Ref) error {
 	if script == "" {
 		return nil
 	}
-	path := m.Path(number)
+	path := m.Path(ref)
 	env := append(append([]string{}, m.Env...),
 		"CLAUDE_DISPATCHER_WORKSPACE="+path,
 		"CLAUDE_DISPATCHER_CLONE="+m.Clone,
-		"CLAUDE_DISPATCHER_KIND=issue",
-		"CLAUDE_DISPATCHER_NUMBER="+strconv.Itoa(number),
+		"CLAUDE_DISPATCHER_KIND="+string(ref.Kind),
+		"CLAUDE_DISPATCHER_NUMBER="+strconv.Itoa(ref.Number),
 	)
 	_, err := proc.Command{Path: "/bin/sh", Env: env, Dir: path, Timeout: m.Hooks.Timeout}.Output("-c", script)
 	var failed *proc.Error

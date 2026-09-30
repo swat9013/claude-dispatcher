@@ -34,22 +34,22 @@ type tickPlan struct {
 	stopDuring os.Signal
 }
 
-// memoryIssues は in-memory の issue 置き場。
-type memoryIssues struct {
+// memoryStore は in-memory の issue 置き場。
+type memoryStore struct {
 	scopeKey func() string
-	observe  func() ([]target.Issue, error)
-	reread   func(number int) (target.Issue, error)
+	observe  func() ([]target.Item, error)
+	reread   func(ref target.Ref) (target.Item, error)
 }
 
-func (m memoryIssues) ScopeKey() string                       { return m.scopeKey() }
-func (m memoryIssues) OpenIssues() ([]target.Issue, error)    { return m.observe() }
-func (m memoryIssues) Issue(number int) (target.Issue, error) { return m.reread(number) }
+func (m memoryStore) ScopeKey() string                         { return m.scopeKey() }
+func (m memoryStore) Open(target.Kind) ([]target.Item, error)  { return m.observe() }
+func (m memoryStore) Read(ref target.Ref) (target.Item, error) { return m.reread(ref) }
 
 // noWorkspaces は workspace を持たない掃除の口。
 type noWorkspaces struct{}
 
-func (noWorkspaces) Existing() ([]int, error) { return nil, nil }
-func (noWorkspaces) Remove(int) error         { return nil }
+func (noWorkspaces) Existing() ([]target.Ref, error) { return nil, nil }
+func (noWorkspaces) Remove(target.Ref) error         { return nil }
 
 // endedWorker は起動するとすぐに正常に終わる worker。
 type endedWorker struct{}
@@ -85,7 +85,7 @@ type harness struct {
 
 func definition(interval time.Duration, maxConcurrent int) workflow.Definition {
 	return workflow.Definition{Interval: interval, MaxConcurrent: maxConcurrent, MaxAttempts: 1, MaxRetryBackoff: 5 * time.Minute,
-		Triggers: []trigger.Trigger{{Name: "implement", On: trigger.Issue}}}
+		Triggers: []trigger.Trigger{{Name: "implement", On: target.KindIssue}}}
 }
 
 func (h *harness) now() time.Time {
@@ -144,14 +144,14 @@ func (h *harness) run(t *testing.T) []string {
 			return h.withAttempts(def), err
 		},
 		Definition: h.withAttempts(definition(time.Minute, h.maxConcurrent)),
-		Open: func(workflow.Definition) loop.Issues {
+		Store: func(workflow.Definition) loop.Store {
 			// scope key と観測は、その tick が読み直した workflow 定義の plan で答える
-			return memoryIssues{scopeKey: func() string {
+			return memoryStore{scopeKey: func() string {
 				if scope := h.plans[tick-1].scope; scope != "" {
 					return scope
 				}
 				return startScope
-			}, observe: func() ([]target.Issue, error) {
+			}, observe: func() ([]target.Item, error) {
 				plan := h.plans[tick-1]
 				h.reads++
 				if plan.stopDuring != nil {
@@ -164,17 +164,17 @@ func (h *harness) run(t *testing.T) []string {
 				if len(numbers) == 0 {
 					numbers = []int{1}
 				}
-				issues := make([]target.Issue, len(numbers))
+				issues := make([]target.Item, len(numbers))
 				for i, n := range numbers {
 					issues[i] = target.Issue{Number: n}
 				}
 				return issues, nil
-			}, reread: func(number int) (target.Issue, error) {
+			}, reread: func(ref target.Ref) (target.Item, error) {
 				h.rereads++
 				if h.rereads <= h.rereadFailures {
-					return target.Issue{}, errors.New("gh の失敗")
+					return nil, errors.New("gh の失敗")
 				}
-				return target.Issue{Number: number}, nil
+				return target.Issue{Number: ref.Number}, nil
 			}}
 		},
 		Workspaces: func(workflow.Definition) loop.Workspaces { return noWorkspaces{} },
@@ -183,9 +183,9 @@ func (h *harness) run(t *testing.T) []string {
 			h.begin()
 			go func() {
 				defer h.done()
-				events <- worker.Started{Number: job.Issue.Number, PID: 1}
+				events <- worker.Started{Target: job.Item.Ref(), PID: 1}
 				code := 0
-				events <- worker.Ended{Number: job.Issue.Number, Result: worker.Result{ExitCode: &code}}
+				events <- worker.Ended{Target: job.Item.Ref(), Result: worker.Result{ExitCode: &code}}
 			}()
 			return endedWorker{}
 		},
@@ -375,8 +375,8 @@ func TestLineThatCannotBeWrittenToTheLogIsReportedOnStdout(t *testing.T) {
 	loop.Run(loop.Options{
 		Load:       func() (workflow.Definition, error) { return definition(time.Minute, 0), nil },
 		Definition: definition(time.Minute, 0),
-		Open: func(workflow.Definition) loop.Issues {
-			return memoryIssues{scopeKey: func() string { return startScope }, observe: func() ([]target.Issue, error) { return nil, nil }}
+		Store: func(workflow.Definition) loop.Store {
+			return memoryStore{scopeKey: func() string { return startScope }, observe: func() ([]target.Item, error) { return nil, nil }}
 		},
 		Workspaces:   func(workflow.Definition) loop.Workspaces { return noWorkspaces{} },
 		NewSessionID: func() (string, error) { return "", nil },

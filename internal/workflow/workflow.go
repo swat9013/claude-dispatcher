@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/swat9013/claude-dispatcher/internal/github"
 	"github.com/swat9013/claude-dispatcher/internal/render"
+	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/trigger"
 )
 
@@ -56,6 +58,17 @@ type Hooks struct {
 type Claude struct {
 	Command string
 	Args    []string
+}
+
+// Kinds は trigger に現れる作業対象の種類を、trigger の宣言順に重ねずに返す。
+func (d Definition) Kinds() []target.Kind {
+	var kinds []target.Kind
+	for _, t := range d.Triggers {
+		if !slices.Contains(kinds, t.On) {
+			kinds = append(kinds, t.On)
+		}
+	}
+	return kinds
 }
 
 // Tracker は issue 置き場の設定。
@@ -442,13 +455,13 @@ func (c *checker) triggers(n *yaml.Node, path string) []trigger.Trigger {
 			}},
 			"on": {required: true, read: func(_, n *yaml.Node, path string) {
 				if s, ok := c.str(n, path); ok {
-					if trigger.Kind(s) != trigger.Issue {
-						c.fail(n, path, "未知の値 %q (%s)", s, trigger.Issue)
+					if target.Kind(s) != target.KindIssue {
+						c.fail(n, path, "未知の値 %q (%s)", s, target.KindIssue)
 					}
-					t.On = trigger.Kind(s)
+					t.On = target.Kind(s)
 				}
 			}},
-			"when": {read: func(key, n *yaml.Node, path string) { c.issuePredicate(key, n, path, &t.When) }},
+			"when": {read: func(key, n *yaml.Node, path string) { c.issuePredicate(key, n, path, &t.Issue) }},
 			"action": {required: true, read: func(_, n *yaml.Node, path string) {
 				s, ok := c.str(n, path)
 				if ok && strings.TrimSpace(s) == "" {

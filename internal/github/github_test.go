@@ -39,7 +39,7 @@ func TestRepoThatGhCannotResolveIsNotFound(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	store := github.NewIssueStore(github.Exec{Env: []string{"PATH=" + filepath.Dir(gh)}, Timeout: 5 * time.Second}, github.Repo{Owner: "acme", Name: "x"})
+	store := github.NewStore(github.Exec{Env: []string{"PATH=" + filepath.Dir(gh)}, Timeout: 5 * time.Second}, github.Repo{Owner: "acme", Name: "x"})
 
 	_, err := store.OpenIssues()
 
@@ -66,7 +66,7 @@ func issueNode(number int, association string, blockers ...string) string {
 
 func openIssues(t *testing.T, nodes ...string) []target.Issue {
 	t.Helper()
-	store := github.NewIssueStore(pages(`[{"data":{"repository":{"issues":{"nodes":[`+strings.Join(nodes, ",")+`]}}}}]`), github.Repo{Owner: "acme", Name: "widgets"})
+	store := github.NewStore(pages(`[{"data":{"repository":{"issues":{"nodes":[`+strings.Join(nodes, ",")+`]}}}}]`), github.Repo{Owner: "acme", Name: "widgets"})
 	issues, err := store.OpenIssues()
 	if err != nil {
 		t.Fatal(err)
@@ -105,7 +105,7 @@ func (r response) Run(...string) ([]byte, error) { return r.out, r.err }
 
 func reread(t *testing.T, r response) (target.Issue, error) {
 	t.Helper()
-	return github.NewIssueStore(r, github.Repo{Owner: "acme", Name: "widgets"}).Issue(42)
+	return github.NewStore(r, github.Repo{Owner: "acme", Name: "widgets"}).Issue(42)
 }
 
 func TestRereadIssueThatIsClosedIsClosed(t *testing.T) {

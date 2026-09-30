@@ -63,15 +63,44 @@ func ParseRepo(text string) (Repo, error) {
 // ScopeKey は repo の issue 置き場を指す scope key。GitHub の owner と repo の名前は大文字と小文字を区別しないので小文字にする。
 func ScopeKey(repo Repo) string { return strings.ToLower("github.com/" + repo.String()) }
 
-// IssueStore は repo の issue 置き場を読む部品。
-type IssueStore struct {
+// Store は repo の issue 置き場を読む部品。
+type Store struct {
 	gh   Runner
 	repo Repo
 }
 
-func NewIssueStore(gh Runner, repo Repo) IssueStore { return IssueStore{gh: gh, repo: repo} }
+func NewStore(gh Runner, repo Repo) Store { return Store{gh: gh, repo: repo} }
 
-func (s IssueStore) ScopeKey() string { return ScopeKey(s.repo) }
+func (s Store) ScopeKey() string { return ScopeKey(s.repo) }
+
+// Open は種類の open な作業対象を全件読む。失敗は *target.Failure。
+func (s Store) Open(kind target.Kind) ([]target.Item, error) {
+	switch kind {
+	case target.KindIssue:
+		return items(s.OpenIssues())
+	}
+	return nil, fmt.Errorf("未知の作業対象の種類 %q", kind)
+}
+
+// Read は作業対象 1 件を読み直す。失敗は *target.Failure。
+func (s Store) Read(ref target.Ref) (target.Item, error) {
+	switch ref.Kind {
+	case target.KindIssue:
+		return s.Issue(ref.Number)
+	}
+	return nil, fmt.Errorf("未知の作業対象の種類 %q", ref.Kind)
+}
+
+func items[T target.Item](list []T, err error) ([]target.Item, error) {
+	if err != nil {
+		return nil, err
+	}
+	out := make([]target.Item, len(list))
+	for i, item := range list {
+		out[i] = item
+	}
+	return out, nil
+}
 
 // connectionSize は issue ごとに 1 往復で読む label・assignee・依存先の上限。超えたら読み切れないとして失敗させる
 const connectionSize = 100
@@ -138,7 +167,7 @@ type issuePage struct {
 }
 
 // OpenIssues は repo の open な issue を全件読み、正規化して返す。失敗は *target.Failure。
-func (s IssueStore) OpenIssues() ([]target.Issue, error) {
+func (s Store) OpenIssues() ([]target.Issue, error) {
 	// -f は生文字列。-F だと数字だけの owner / name が Int に型付けされ String! 変数に入らない
 	out, err := s.gh.Run("api", "graphql", "--paginate", "--slurp",
 		"-f", "query="+issuesQuery, "-f", "owner="+s.repo.Owner, "-f", "name="+s.repo.Name)
@@ -169,7 +198,7 @@ func (s IssueStore) OpenIssues() ([]target.Issue, error) {
 const issueGone = "Could not resolve to an Issue"
 
 // Issue は issue 1 件を読み直す。close されていれば Closed。消えた issue も Closed として返す。失敗は *target.Failure。
-func (s IssueStore) Issue(number int) (target.Issue, error) {
+func (s Store) Issue(number int) (target.Issue, error) {
 	out, err := s.gh.Run("api", "graphql",
 		"-f", "query="+issueQuery, "-f", "owner="+s.repo.Owner, "-f", "name="+s.repo.Name, "-F", fmt.Sprintf("number=%d", number))
 	var failed *proc.Error
@@ -197,7 +226,7 @@ func (s IssueStore) Issue(number int) (target.Issue, error) {
 }
 
 // normalize は応答の issue 1 件を作業対象の形に写す。
-func (s IssueStore) normalize(n issueNode) (target.Issue, error) {
+func (s Store) normalize(n issueNode) (target.Issue, error) {
 	for _, c := range []struct {
 		what        string
 		total, read int
@@ -238,7 +267,7 @@ func (s IssueStore) normalize(n issueNode) (target.Issue, error) {
 // collaboratorAssociations は collaborator と数える作者の立場 (GitHub の CommentAuthorAssociation)
 var collaboratorAssociations = map[string]bool{"OWNER": true, "MEMBER": true, "COLLABORATOR": true}
 
-func (s IssueStore) fail(kind target.FailureKind, err error) *target.Failure {
+func (s Store) fail(kind target.FailureKind, err error) *target.Failure {
 	return &target.Failure{Kind: kind, Place: s.repo.String(), Err: err}
 }
 

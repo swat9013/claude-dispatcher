@@ -9,7 +9,7 @@ import (
 )
 
 var vars = render.Vars{
-	Issue:     target.Issue{Number: 42, Title: "Fix it", URL: "https://github.com/acme/widgets/issues/42", Labels: []string{"bug", "p1"}},
+	Item:      target.Issue{Number: 42, Title: "Fix it", URL: "https://github.com/acme/widgets/issues/42", Labels: []string{"bug", "p1"}},
 	Trigger:   "implement",
 	Attempt:   2,
 	Workspace: "/ws/issue-42",
@@ -24,7 +24,7 @@ func TestVariablesAreRenderedByTheirNames(t *testing.T) {
 }
 
 func TestIssueWithoutLabelsRendersAnEmptyList(t *testing.T) {
-	got, err := render.Render("action", "{{ len .issue.labels }}", render.Vars{})
+	got, err := render.Render("action", "{{ len .issue.labels }}", render.Vars{Item: target.Issue{}})
 
 	if err != nil || got != "0" {
 		t.Fatalf("描画 = %q (%v), want 0", got, err)

@@ -12,17 +12,21 @@ import (
 // Trigger は workflow 定義が宣言する、作業対象に対する述語と action の組。
 type Trigger struct {
 	Name string
-	On   Kind
-	When IssuePredicate
+	On   target.Kind
+	// Issue は On が issue の trigger の述語
+	Issue IssuePredicate
 	// Action は worker に渡す prompt の template
 	Action string
 }
 
-// Kind は作業対象の種類。
-type Kind string
-
-// Issue は issue の作業対象。CL は #80 で足す
-const Issue Kind = "issue"
+// Matches は作業対象が trigger に当たるかを返す。trigger の種類と違う作業対象には当たらない。
+func (t Trigger) Matches(item target.Item) bool {
+	switch i := item.(type) {
+	case target.Issue:
+		return t.On == target.KindIssue && t.Issue.Matches(i)
+	}
+	return false
+}
 
 // Author は作者の立場の条件。空なら立場を問わない。
 type Author string
@@ -86,19 +90,19 @@ func all(labels []string, has func(string) bool) bool {
 // Candidate は trigger に当たった作業対象。
 type Candidate struct {
 	Trigger *Trigger
-	Issue   target.Issue
+	Item    target.Item
 	// order は Trigger の宣言順
 	order int
 }
 
-// Evaluate は issue ごとに trigger を宣言順に評価して最初に当たった 1 つを採り、候補を trigger の宣言順・作成日時の古い順・
+// Evaluate は作業対象ごとに trigger を宣言順に評価して最初に当たった 1 つを採り、候補を trigger の宣言順・作成日時の古い順・
 // 番号の小さい順に並べて返す。
-func Evaluate(triggers []Trigger, issues []target.Issue) []Candidate {
+func Evaluate(triggers []Trigger, items []target.Item) []Candidate {
 	candidates := []Candidate{}
-	for _, issue := range issues {
+	for _, item := range items {
 		for i := range triggers {
-			if triggers[i].On == Issue && triggers[i].When.Matches(issue) {
-				candidates = append(candidates, Candidate{Trigger: &triggers[i], Issue: issue, order: i})
+			if triggers[i].Matches(item) {
+				candidates = append(candidates, Candidate{Trigger: &triggers[i], Item: item, order: i})
 				break
 			}
 		}
@@ -108,10 +112,10 @@ func Evaluate(triggers []Trigger, issues []target.Issue) []Candidate {
 		if x.order != y.order {
 			return x.order < y.order
 		}
-		if !x.Issue.CreatedAt.Equal(y.Issue.CreatedAt) {
-			return x.Issue.CreatedAt.Before(y.Issue.CreatedAt)
+		if !x.Item.Created().Equal(y.Item.Created()) {
+			return x.Item.Created().Before(y.Item.Created())
 		}
-		return x.Issue.Number < y.Issue.Number
+		return x.Item.Ref().Number < y.Item.Ref().Number
 	})
 	return candidates
 }

@@ -1,4 +1,4 @@
-// Package target は作業対象 (open な issue) の正規化した形と、置き場の部品が返す分類済みの失敗を持つ (system.md §13)。
+// Package target は作業対象 (open な issue) の正規化した形と鍵と、置き場の部品が返す分類済みの失敗を持つ (system.md §13)。
 // trigger の評価は、この形だけを見る。adapter の生の応答を覗かない。
 package target
 
@@ -27,24 +27,57 @@ type Issue struct {
 	OpenBlockers int
 }
 
-// Name は作業対象の表示名 (log の `target` の値)。
-func Name(number int) string { return fmt.Sprintf("issue#%d", number) }
+// Kind は作業対象の種類。
+type Kind string
 
-// FileName は作業対象ごとの file と dir の名前 (workspace・描画した共通 prompt・worker log)。
-func FileName(number int) string { return fmt.Sprintf("issue-%d", number) }
+// KindIssue は issue の作業対象
+const KindIssue Kind = "issue"
 
-// NumberOf は FileName の綴りの name から番号を読む。その綴りでなければ false。
-func NumberOf(name string) (int, bool) {
-	digits, ok := strings.CutPrefix(name, "issue-")
-	if !ok {
-		return 0, false
-	}
-	n, err := strconv.Atoi(digits)
-	if err != nil || FileName(n) != name {
-		return 0, false
-	}
-	return n, true
+// kinds は作業対象の種類の全部 (置き場の名前から種類を読むときに使う)
+var kinds = []Kind{KindIssue}
+
+// Ref は作業対象を指す鍵 (種類と番号)。claim と workspace はこの鍵で持つ。
+type Ref struct {
+	Kind   Kind
+	Number int
 }
+
+// String は作業対象の表示名 (log の `target` の値。`issue#42` の綴り)。
+func (r Ref) String() string { return fmt.Sprintf("%s#%d", r.Kind, r.Number) }
+
+// FileName は作業対象ごとの file と dir の名前 (workspace・描画した共通 prompt・worker log。`issue-42` の綴り)。
+func (r Ref) FileName() string { return fmt.Sprintf("%s-%d", r.Kind, r.Number) }
+
+// ParseFileName は FileName の綴りの name から作業対象を読む。その綴りでなければ false。
+func ParseFileName(name string) (Ref, bool) {
+	for _, kind := range kinds {
+		digits, ok := strings.CutPrefix(name, string(kind)+"-")
+		if !ok {
+			continue
+		}
+		n, err := strconv.Atoi(digits)
+		if ref := (Ref{Kind: kind, Number: n}); err == nil && ref.FileName() == name {
+			return ref, true
+		}
+	}
+	return Ref{}, false
+}
+
+// Item は正規化した作業対象 1 件 (Issue)。
+type Item interface {
+	Ref() Ref
+	// Terminal は作業対象が終端か
+	Terminal() bool
+	// Created は作成日時 (候補の並べ方に使う)
+	Created() time.Time
+	// Heading は題名
+	Heading() string
+}
+
+func (i Issue) Ref() Ref           { return Ref{Kind: KindIssue, Number: i.Number} }
+func (i Issue) Terminal() bool     { return i.Closed }
+func (i Issue) Created() time.Time { return i.CreatedAt }
+func (i Issue) Heading() string    { return i.Title }
 
 // FailureKind は観測の失敗の分類 (SPEC §11.4)。
 type FailureKind int

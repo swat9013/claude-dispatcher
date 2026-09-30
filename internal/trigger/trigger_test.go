@@ -68,23 +68,32 @@ func TestEachIssuePredicateNarrowsTheIssuesItMatches(t *testing.T) {
 	}
 }
 
+// items は issue の列を作業対象の列にする。
+func items(issues []target.Issue) []target.Item {
+	out := make([]target.Item, len(issues))
+	for i, issue := range issues {
+		out[i] = issue
+	}
+	return out
+}
+
 func numbers(candidates []trigger.Candidate) []int {
 	var got []int
 	for _, c := range candidates {
-		got = append(got, c.Issue.Number)
+		got = append(got, c.Item.Ref().Number)
 	}
 	return got
 }
 
 func TestCandidatesOfOneTriggerAreOrderedByCreationTimeNotByNumber(t *testing.T) {
-	triggers := []trigger.Trigger{{Name: "t", On: trigger.Issue}}
+	triggers := []trigger.Trigger{{Name: "t", On: target.KindIssue}}
 	issues := []target.Issue{
 		{Number: 10, CreatedAt: base.Add(2 * time.Hour)},
 		{Number: 50, CreatedAt: base},
 		{Number: 30, CreatedAt: base.Add(time.Hour)},
 	}
 
-	got := numbers(trigger.Evaluate(triggers, issues))
+	got := numbers(trigger.Evaluate(triggers, items(issues)))
 
 	if want := []int{50, 30, 10}; !slices.Equal(got, want) {
 		t.Fatalf("候補 = %v, want %v", got, want)
@@ -92,10 +101,10 @@ func TestCandidatesOfOneTriggerAreOrderedByCreationTimeNotByNumber(t *testing.T)
 }
 
 func TestCandidatesCreatedAtTheSameTimeAreOrderedByNumber(t *testing.T) {
-	triggers := []trigger.Trigger{{Name: "t", On: trigger.Issue}}
+	triggers := []trigger.Trigger{{Name: "t", On: target.KindIssue}}
 	issues := []target.Issue{{Number: 9, CreatedAt: base}, {Number: 4, CreatedAt: base}}
 
-	got := numbers(trigger.Evaluate(triggers, issues))
+	got := numbers(trigger.Evaluate(triggers, items(issues)))
 
 	if want := []int{4, 9}; !slices.Equal(got, want) {
 		t.Fatalf("候補 = %v, want %v", got, want)

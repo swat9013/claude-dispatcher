@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/swat9013/claude-dispatcher/internal/trigger"
+	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/workflow"
 )
 
@@ -59,8 +59,8 @@ func TestValidDefinitionIsRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	if def.Tracker.Repo.String() != "acme/widgets" || def.Interval != workflow.DefaultInterval ||
-		len(def.Triggers) != 1 || def.Triggers[0].Name != "implement" || def.Triggers[0].On != trigger.Issue ||
-		strings.Join(def.Triggers[0].When.LabelsAll, ",") != "ready-for-agent" {
+		len(def.Triggers) != 1 || def.Triggers[0].Name != "implement" || def.Triggers[0].On != target.KindIssue ||
+		strings.Join(def.Triggers[0].Issue.LabelsAll, ",") != "ready-for-agent" {
 		t.Fatalf("読んだ定義 = %+v", def)
 	}
 }
@@ -198,8 +198,8 @@ func TestWhenWithoutAValueIsReadAsNoCondition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if def.Triggers[0].When.LabelsAll != nil || def.Triggers[0].When.Assignee != "" {
-		t.Fatalf("述語 = %+v, want 条件なし", def.Triggers[0].When)
+	if def.Triggers[0].Issue.LabelsAll != nil || def.Triggers[0].Issue.Assignee != "" {
+		t.Fatalf("述語 = %+v, want 条件なし", def.Triggers[0].Issue)
 	}
 }
 
@@ -217,8 +217,8 @@ func TestAnchoredValuesCanBeSharedWithAliases(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(def.Triggers[1].When.LabelsAll, ",") != "ready" {
-		t.Fatalf("alias の述語 = %+v", def.Triggers[1].When)
+	if strings.Join(def.Triggers[1].Issue.LabelsAll, ",") != "ready" {
+		t.Fatalf("alias の述語 = %+v", def.Triggers[1].Issue)
 	}
 }
 
