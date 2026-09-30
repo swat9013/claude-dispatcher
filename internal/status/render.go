@@ -80,7 +80,7 @@ func (r Report) JudgmentLines(fit Fit) []string {
 			continue
 		}
 		prefix := fmt.Sprintf("  #%d %s: ", d.Issue, d.Action)
-		lines = append(lines, prefix+fit.reason(oneLine(d.Reason), termtext.Width(prefix)))
+		lines = append(lines, prefix+fit.cutReason(oneLine(d.Reason), termtext.Width(prefix)))
 	}
 	if len(lines) == 0 {
 		return nil
@@ -99,8 +99,9 @@ func oneLine(reason string) string {
 	}, reason)
 }
 
-// reason は端末なら、前置き (表示幅 used) の後ろに残る幅で reason を切る。前置き (`#<issue> <action>:`) は切らない。
-func (f Fit) reason(reason string, used int) string {
+// cutReason は端末なら、前置き (表示幅 used) の後ろに残る幅で reason を切る。前置き (`#<issue> <action>:`) は切らない
+// ので、端末が前置きより狭いと行は端末の幅を超える。
+func (f Fit) cutReason(reason string, used int) string {
 	if f.terminalWidth == 0 {
 		return reason
 	}

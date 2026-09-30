@@ -86,6 +86,8 @@ func Read(file string) (log Log, broken int, err error) {
 			log.Ticks = append(log.Ticks, line)
 		case *OrchestratorLine:
 			log.LastOrchestrator = line
+		case unreadableOrchestratorLine:
+			log.LastOrchestrator = nil
 		}
 		if readErr == io.EOF {
 			return log, broken, nil
@@ -93,9 +95,12 @@ func Read(file string) (log Log, broken int, err error) {
 	}
 }
 
-// parse は 1 行を読む。line は tick 行なら Line、orchestrator 行なら *OrchestratorLine、空行か JSON として読めない行なら
-// nil。bad は読めなかった行。actor の在る行は key (ts / decisions) を読めなくても orchestrator 行として *OrchestratorLine
-// の nil を返す — 最も新しい orchestrator 行が読めないとき、それより古い判断を直近として出さないため。
+// unreadableOrchestratorLine は actor の在る (orchestrator 行と分かる) のに key (ts / decisions) を読めない行。
+// 最も新しい orchestrator 行がこれなら、それより古い判断を直近として出さない。
+type unreadableOrchestratorLine struct{}
+
+// parse は 1 行を読む。line は tick 行なら Line、orchestrator 行なら *OrchestratorLine か unreadableOrchestratorLine、
+// 空行か JSON として読めない行なら nil。bad は読めなかった行。
 func parse(raw []byte) (line any, bad bool) {
 	raw = bytes.TrimSpace(raw)
 	if len(raw) == 0 {
@@ -110,10 +115,10 @@ func parse(raw []byte) (line any, bad bool) {
 	if head.Actor != nil {
 		var orchestrator OrchestratorLine
 		if err := json.Unmarshal(raw, &orchestrator); err != nil {
-			return (*OrchestratorLine)(nil), true
+			return unreadableOrchestratorLine{}, true
 		}
 		if _, err := time.Parse(time.RFC3339Nano, orchestrator.TS); err != nil {
-			return (*OrchestratorLine)(nil), true
+			return unreadableOrchestratorLine{}, true
 		}
 		return &orchestrator, false
 	}

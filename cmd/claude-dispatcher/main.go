@@ -444,21 +444,31 @@ func surviveClosedStdout() {
 }
 
 // tableFit は w へ描く判断の行の出し方。端末なら今の幅に収め、端末でない (か幅を読めない) なら切り詰めない。
-// 端末かどうかは画面の描き方と同じ isTerminal で決め、ここでは幅だけを読む。
+// 端末かどうかは画面の描き方と同じ terminalFile で決め、ここでは幅だけを読む。
 func tableFit(w io.Writer) status.Fit {
-	if !isTerminal(w) {
+	f, ok := terminalFile(w)
+	if !ok {
 		return status.FitPlain()
 	}
-	if width, _, err := term.GetSize(int(w.(*os.File).Fd())); err == nil && width > 0 {
+	if width, _, err := term.GetSize(int(f.Fd())); err == nil && width > 0 {
 		return status.FitTerminal(width)
 	}
 	return status.FitPlain()
 }
 
-// isTerminal は w が端末か。端末でない character device (/dev/null 等) は端末に数えない。
+// isTerminal は w が端末か。
 func isTerminal(w io.Writer) bool {
+	_, ok := terminalFile(w)
+	return ok
+}
+
+// terminalFile は w が端末ならその file を返す。端末でない character device (/dev/null 等) は端末に数えない。
+func terminalFile(w io.Writer) (*os.File, bool) {
 	f, ok := w.(*os.File)
-	return ok && term.IsTerminal(int(f.Fd()))
+	if !ok || !term.IsTerminal(int(f.Fd())) {
+		return nil, false
+	}
+	return f, true
 }
 
 // --- paths ---

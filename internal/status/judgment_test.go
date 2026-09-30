@@ -43,6 +43,14 @@ func TestJudgmentLinesFoldAMultiLineReasonIntoOneLine(t *testing.T) {
 	}
 }
 
+func TestJudgmentLinesKeepTheSpacesOfTheReason(t *testing.T) {
+	got := reportWithSkip("仕様が\n\n無い  (2 回目)").JudgmentLines(FitPlain())
+
+	if want := []string{"判断 2026-09-26T03:00:00Z", "  #51 skip: 仕様が  無い  (2 回目)"}; !slices.Equal(got, want) {
+		t.Fatalf("JudgmentLines = %q, want %q", got, want)
+	}
+}
+
 func TestJudgmentLinesDoNotPassTerminalControlCharactersThrough(t *testing.T) {
 	got := reportWithSkip("仕様が\x1b[2J無い").JudgmentLines(FitPlain())
 
