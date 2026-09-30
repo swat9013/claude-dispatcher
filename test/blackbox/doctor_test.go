@@ -89,3 +89,15 @@ func TestDoctorStopsAtAnInvalidWorkflowWithoutCallingGh(t *testing.T) {
 	}
 	s.assertNoGh("workflow 定義が誤りの doctor は")
 }
+
+func TestDoctorFailsWhenTheClaudeCommandCannotBeResolved(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflow(strings.Replace(defaultWorkflow, "triggers:", "claude:\n  command: no-such-claude\ntriggers:", 1))
+
+	r := s.run("doctor")
+
+	assertExit(t, r, 1)
+	if !strings.Contains(r.stdout, "NG   ") || !strings.Contains(r.stdout, "no-such-claude") {
+		t.Fatalf("stdout:\n%s", r.stdout)
+	}
+}

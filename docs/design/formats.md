@@ -244,14 +244,14 @@ trigger ごとに、action の先頭の skill か command が呼べるかを確�
   - **repo の `.claude/`**: workflow 定義の dir の `.claude/skills/<dir>/SKILL.md` と `.claude/commands/<名前>.md`
   - **`~/.claude/`**: HOME の `.claude/skills/<dir>/SKILL.md` と `.claude/commands/<名前>.md`
   - **plugin**: 次の 3 つから見つけた plugin の skill と command
-    - `~/.claude/plugins/installed_plugins.json` が挙げる plugin (`scope` が `project` / `local` のものは、`projectPath` が workflow 定義の dir のものだけ)
+    - `~/.claude/plugins/installed_plugins.json` が挙げる plugin のうち、`scope` が `user` のもの。`project` / `local` の plugin は install した path でだけ読まれ、worker の cwd (workspace) では読まれないので数えない
     - repo の `.claude/skills/` と `~/.claude/skills/` の直下の dir のうち、`.claude-plugin/plugin.json` を持つもの
-    - `claude.args` の `--plugin-dir <path>`
+    - `claude.args` の `--plugin-dir <path>` (相対 path は workflow 定義の dir から)
 - 名前の当て方
-  - skill の名前は、`SKILL.md` の front matter の `name`。無ければ dir の名前
-  - command の名前は、`commands/` からの相対 path の `.md` を除き、`/` を `:` にしたもの (`commands/foo/bar.md` は `foo:bar`)
+  - skill の名前は、`SKILL.md` の YAML の front matter の `name`。無ければ dir の名前
+  - command の名前は、`commands/` からの相対 path の `.md` を除き、`/` を `:` にしたもの (`commands/foo/bar.md` は `foo:bar`)。symlink の dir も辿る
   - plugin の skill と command は `<plugin の名前>:<名前>` で呼ぶ。plugin の名前は `.claude-plugin/plugin.json` の `name`
-  - plugin の skill は、plugin の `skills/<dir>/SKILL.md` と、`plugin.json` の `skills` が挙げる path (その path の `SKILL.md`、無ければその下の `<dir>/SKILL.md`)。command は、`plugin.json` の `commands` が path を挙げればその path、無ければ `commands/`
+  - plugin の skill は、plugin の `skills/<dir>/SKILL.md` と、`plugin.json` の `skills` が挙げる path (その path の `SKILL.md`、無ければその下の `<dir>/SKILL.md`)。command は、plugin の `commands/` と、`plugin.json` の `commands` が挙げる path
 - action の先頭を template 変数で始める (前の空白を除いて `{{` で始まる) と、先頭の `/名前` を確かめられないので、その trigger を失敗させる
 - 先頭が `/` でも template 変数でもない action は、確かめない
 - 誤りは trigger を名指しして 1 件 1 行で出す
@@ -270,6 +270,7 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 
 - Claude Code に組み込みの command (`/review` など) は 3 つの置き場に無いので、見つからないと数える
 - plugin が有効か (settings の `enabledPlugins`) は見ない
+- 置き場は Claude Code の読み方より広めに取る (見つからないと取り違えて起動を止めない側に倒す)。広めに取った分は、worker の起動の後に claude が名前を解けずに失敗する
 
 ## 3. exit code
 
@@ -588,7 +589,7 @@ triggers:
         all: [ready-for-agent]
       blocked: false
     action: |
-      issue #{{ .issue.number }} ({{ .issue.url }}) を実装する。…
+      issue #{{ .issue.number }} ({{ .issue.url }}) を実装する。branch claude-dispatcher/issue-{{ .issue.number }} で pull request を出し、ready-for-agent を外す。…
   - name: resolve-conflict
     on: cl
     when:
@@ -596,7 +597,7 @@ triggers:
       head: claude-dispatcher/*
       draft: false
     action: |
-      CL #{{ .cl.number }} ({{ .cl.url }}) の conflict を解く。…
+      pull request #{{ .cl.number }} ({{ .cl.url }}) の conflict を解く。head branch を detach で取り出し、`git push origin HEAD:{{ .cl.head }}` で push する。…
   - name: address-review
     on: cl
     when:
@@ -604,7 +605,7 @@ triggers:
       head: claude-dispatcher/*
       draft: false
     action: |
-      CL #{{ .cl.number }} ({{ .cl.url }}) の未解決の review に応える。…
+      pull request #{{ .cl.number }} ({{ .cl.url }}) の未解決の review に応える。…
   - name: fix-ci
     on: cl
     when:
@@ -612,27 +613,32 @@ triggers:
       head: claude-dispatcher/*
       draft: false
     action: |
-      CL #{{ .cl.number }} ({{ .cl.url }}) の失敗している CI を直す。…
+      pull request #{{ .cl.number }} ({{ .cl.url }}) の失敗している CI を直す。…
   # 承認済みの CL に当てる trigger (approved: true) は置かない。merge を worker に任せるなら自分で足す
 ---
 <共通 prompt: 無人の worker としての作業規約>
 ```
 
-- 全文は `internal/scaffold/WORKFLOW.md`。実装の worker は `claude-dispatcher/issue-<番号>` の branch で CL を出し、CL 側の trigger は `head: claude-dispatcher/*` で自分の出した CL に絞る
+- 上は抜粋 (action の文と本文を略した)。全文は `internal/scaffold/WORKFLOW.md`
+- 実装の worker は `claude-dispatcher/issue-<番号>` の branch で CL を出し、CL 側の trigger は `head: claude-dispatcher/*` で自分の出した CL に絞る
+- CL の worker は head branch を detach で取り出して push する。issue の workspace は issue が閉じるまで残り、その branch を checkout したままで、同じ branch は 2 つの worktree で checkout できないため
 
 **`doctor`**: 導入を確かめる。何も書かない。確かめたことを 1 件 1 行で、`ok` / `NG` / `警告` を頭に付けて stdout に出す。
 
 1. workflow 定義を読めて、検査 (§2.8) に通る。落ちたら以降は確かめない
 2. gh の認証が通り、issue 置き場が見える (open な作業対象を読める)
-3. 事前検査 (§2.9)。落ちた trigger ごとに `NG` の行
-4. 利用者の約束に頼る宣言を `警告` の行に出す (system.md §11)
+3. `claude.command` を解決できる。`on: cl` の trigger があれば git も (loop の起動時の検査と同じ。§6)
+4. 事前検査 (§2.9)。落ちた trigger ごとに `NG` の行
+5. 利用者の約束に頼る宣言を `警告` の行に出す (system.md §11)
    - `approved: true` の CL 側の trigger (merge を worker に任せうる)
    - `head`・`labels`・`same_repo: true` のどれも書いていない CL 側の trigger (人の CL や fork の CL に worker を送りうる)
-5. Claude Code の settings (`permissions.allow`) に要りそうな entry を表示する。CLI は settings を書かない (ADR 0004)
+6. Claude Code の settings (`permissions.allow`) に要りそうな entry を表示する。CLI は settings を書かない (ADR 0004)
 
 ```
 ok   workflow 定義 /path/to/WORKFLOW.md
 ok   issue 置き場 acme/widgets
+ok   claude /opt/homebrew/bin/claude
+ok   git /usr/bin/git
 NG   trigger fix-ci: action の先頭の /fix が見つからない (plugin・repo の .claude・~/.claude の skill と command)
 警告 trigger merge: approved: true の CL に action を当てている (merge を worker に任せうる)
 警告 trigger fix-ci: head・labels・same_repo: true のどれでも絞っていない (人の CL や fork の CL に worker を送りうる)

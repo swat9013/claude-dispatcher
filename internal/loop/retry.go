@@ -63,7 +63,8 @@ func (l *loop) arm() {
 	}
 	var earliest time.Time
 	for _, c := range l.claims {
-		if c.phase == phaseWaitingRetry && (earliest.IsZero() || c.retryAt.Before(earliest)) {
+		// 事前検査に落ちている trigger の claim は tick だけが試み直す (予定に入れると、明けた予定で回り続ける)
+		if c.phase == phaseWaitingRetry && !l.isBlocked(c.trigger.Name) && (earliest.IsZero() || c.retryAt.Before(earliest)) {
 			earliest = c.retryAt
 		}
 	}
@@ -97,10 +98,6 @@ func (l *loop) retry(store Store, v *view) {
 			l.releaseWaiting(ref, c, reasonTriggerRemoved)
 			continue
 		}
-		if l.isBlocked(current.Name) {
-			// 事前検査に落ちている trigger は、直るまで attempt を進めずに待ち直す (次の tick で確かめ直す)
-			continue
-		}
 		if ref.Kind == target.KindCL && v == outsideTick {
 			continue
 		}
@@ -125,6 +122,11 @@ func (l *loop) retry(store Store, v *view) {
 			if v.branchHeld(cl, ref) {
 				continue
 			}
+		}
+		if l.isBlocked(current.Name) {
+			// 事前検査に落ちている trigger は、直るまで attempt を進めずに待ち直す (tick が確かめ直す)。終端や trigger から
+			// 外れたことは上で確かめているので、待つ間も claim は解ける
+			continue
 		}
 		c.item, c.waitingSlot = item, false
 		c.attempt++
@@ -170,11 +172,12 @@ func (l *loop) releaseWaiting(ref target.Ref, c *claim, reason string) {
 		"再起動せずに解いた %s (%s): %s", name, c.trigger.Name, reason)
 }
 
-// waitingRetry は再起動待ちの claim の数。
+// waitingRetry は再起動待ちの claim の数。事前検査に落ちている trigger の claim は、直るまで起動しないので数えない
+// (並列の枠を塞いで他の trigger を止めない)。
 func (l *loop) waitingRetry() int {
 	n := 0
 	for _, c := range l.claims {
-		if c.phase == phaseWaitingRetry {
+		if c.phase == phaseWaitingRetry && !l.isBlocked(c.trigger.Name) {
 			n++
 		}
 	}

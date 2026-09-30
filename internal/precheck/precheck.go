@@ -3,12 +3,12 @@
 package precheck
 
 import (
-	"bufio"
 	"encoding/json"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/swat9013/claude-dispatcher/internal/workflow"
 )
@@ -97,14 +97,11 @@ func (p plugin) skills() []string {
 	return list
 }
 
-// commands は manifest の `commands` が挙げる path の command。挙げていなければ `commands/`。
+// commands は plugin の `commands/` と、manifest の `commands` が挙げる path の command。manifest の path が既定の置き場を
+// 置き換えるか足すかは確かめられていないので、見つからないと取り違えない側 (足す) に倒す。
 func (p plugin) commands() []string {
-	listed := paths(p.manifest.Commands)
-	if len(listed) == 0 {
-		return commandsUnder(filepath.Join(p.dir, "commands"))
-	}
-	var list []string
-	for _, path := range listed {
+	list := commandsUnder(filepath.Join(p.dir, "commands"))
+	for _, path := range paths(p.manifest.Commands) {
 		path = filepath.Join(p.dir, path)
 		if strings.HasSuffix(path, ".md") {
 			list = append(list, strings.TrimSuffix(filepath.Base(path), ".md"))
@@ -128,7 +125,7 @@ func paths(raw json.RawMessage) []string {
 
 // plugins は事前検査が探す plugin: installed_plugins.json が挙げるもの・skills の dir に置いたもの・--plugin-dir。
 func plugins(clone, home string, claudeArgs []string) []plugin {
-	list := installed(clone, home)
+	list := installed(home)
 	for _, base := range []string{filepath.Join(clone, ".claude", "skills"), filepath.Join(home, ".claude", "skills")} {
 		entries, _ := os.ReadDir(base)
 		for _, e := range entries {
@@ -156,9 +153,10 @@ func plugins(clone, home string, claudeArgs []string) []plugin {
 	return list
 }
 
-// installed は `~/.claude/plugins/installed_plugins.json` が挙げる plugin。scope が project / local のものは、
-// projectPath が clone のものだけ。file が無いか読めなければ無い。
-func installed(clone, home string) []plugin {
+// installed は `~/.claude/plugins/installed_plugins.json` が挙げる plugin のうち、scope が user のもの。project / local の
+// plugin は install した path (projectPath) でだけ読まれ、worker の cwd (workspace) では読まれないので数えない。file が
+// 無いか読めなければ無い。
+func installed(home string) []plugin {
 	raw, err := os.ReadFile(filepath.Join(home, ".claude", "plugins", "installed_plugins.json"))
 	if err != nil {
 		return nil
@@ -167,7 +165,6 @@ func installed(clone, home string) []plugin {
 		Plugins map[string][]struct {
 			Scope       string `json:"scope"`
 			InstallPath string `json:"installPath"`
-			ProjectPath string `json:"projectPath"`
 		} `json:"plugins"`
 	}
 	if json.Unmarshal(raw, &doc) != nil {
@@ -177,7 +174,7 @@ func installed(clone, home string) []plugin {
 	for key, entries := range doc.Plugins {
 		name, _, _ := strings.Cut(key, "@")
 		for _, e := range entries {
-			if e.InstallPath == "" || (e.Scope == "project" || e.Scope == "local") && filepath.Clean(e.ProjectPath) != filepath.Clean(clone) {
+			if e.InstallPath == "" || e.Scope != "user" {
 				continue
 			}
 			list = append(list, readPlugin(e.InstallPath, name))
@@ -207,39 +204,51 @@ func skillName(dir string) string {
 	return filepath.Base(dir)
 }
 
-// frontMatterName は markdown の先頭の `---` で囲んだ front matter から `name:` の値を読む。無ければ ""。
+// frontMatterName は markdown の先頭の `---` で囲んだ YAML の front matter の `name` を読む。無いか読めなければ ""。
 func frontMatterName(file string) string {
-	f, err := os.Open(file)
+	raw, err := os.ReadFile(file)
 	if err != nil {
 		return ""
 	}
-	defer f.Close()
-	lines := bufio.NewScanner(f)
-	if !lines.Scan() || strings.TrimSpace(lines.Text()) != "---" {
+	rest, ok := strings.CutPrefix(strings.ReplaceAll(string(raw), "\r\n", "\n"), "---\n")
+	if !ok {
 		return ""
 	}
-	for lines.Scan() {
-		line := lines.Text()
-		if strings.TrimSpace(line) == "---" {
-			return ""
-		}
-		if value, ok := strings.CutPrefix(line, "name:"); ok {
-			return strings.Trim(strings.TrimSpace(value), `"'`)
-		}
+	front, _, ok := strings.Cut(rest, "\n---")
+	if !ok {
+		return ""
 	}
-	return ""
+	var doc struct {
+		Name string `yaml:"name"`
+	}
+	if yaml.Unmarshal([]byte(front), &doc) != nil {
+		return ""
+	}
+	return doc.Name
 }
 
-// commandsUnder は dir の下の `*.md` の command の名前。dir からの相対 path の `/` を `:` にする。
+// maxCommandDepth は command を探す dir の深さの上限 (symlink の輪で回り続けないため)
+const maxCommandDepth = 8
+
+// commandsUnder は dir の下の `*.md` の command の名前。dir からの相対 path の `/` を `:` にする。dotfiles で symlink に
+// することが多いので、dir と途中の dir の symlink を辿る。
 func commandsUnder(dir string) []string {
 	var list []string
-	_ = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".md") {
-			return nil
+	var walk func(dir, prefix string, depth int)
+	walk = func(dir, prefix string, depth int) {
+		entries, _ := os.ReadDir(dir)
+		for _, e := range entries {
+			path := filepath.Join(dir, e.Name())
+			info, err := os.Stat(path)
+			switch {
+			case err != nil:
+			case info.IsDir() && depth < maxCommandDepth:
+				walk(path, prefix+e.Name()+":", depth+1)
+			case !info.IsDir() && strings.HasSuffix(e.Name(), ".md"):
+				list = append(list, prefix+strings.TrimSuffix(e.Name(), ".md"))
+			}
 		}
-		rel, _ := filepath.Rel(dir, strings.TrimSuffix(path, ".md"))
-		list = append(list, strings.ReplaceAll(filepath.ToSlash(rel), "/", ":"))
-		return nil
-	})
+	}
+	walk(dir, "", 0)
 	return list
 }

@@ -129,20 +129,13 @@ func TestCommandOfAnInstalledPluginIsCalledWithThePluginName(t *testing.T) {
 	p.assertFound(t, "/tools:ship")
 }
 
-func TestPluginInstalledForAnotherProjectIsNotFound(t *testing.T) {
-	p := newPlaces(t)
-	dir := p.installed(t, "tools@market", "tools", "project", "/somewhere/else")
-	write(t, filepath.Join(dir, "commands/ship.md"), "出す")
-
-	p.assertMissing(t, "/tools:ship")
-}
-
-func TestPluginInstalledForThisProjectIsFound(t *testing.T) {
+func TestPluginInstalledForAProjectIsNotFound(t *testing.T) {
+	// project の plugin は install した path でだけ読まれ、worker の cwd (workspace) では読まれない
 	p := newPlaces(t)
 	dir := p.installed(t, "tools@market", "tools", "project", p.clone)
 	write(t, filepath.Join(dir, "commands/ship.md"), "出す")
 
-	p.assertFound(t, "/tools:ship")
+	p.assertMissing(t, "/tools:ship")
 }
 
 func TestPluginPlacedUnderTheSkillsDirectoryUsesTheSkillPathsOfItsManifest(t *testing.T) {
@@ -163,15 +156,32 @@ func TestPluginDirectoryGivenToClaudeIsSearched(t *testing.T) {
 	p.assertFound(t, "/local:go", "--permission-mode", "auto", "--plugin-dir", "plugins/local")
 }
 
-func TestCommandPathsOfTheManifestReplaceTheCommandsDirectory(t *testing.T) {
+func TestCommandPathsOfTheManifestAreSearchedBesideTheCommandsDirectory(t *testing.T) {
 	p := newPlaces(t)
 	dir := filepath.Join(p.home, ".claude/skills/bundle")
 	write(t, filepath.Join(dir, ".claude-plugin/plugin.json"), `{"name": "bundle", "commands": ["./cmds/run.md"]}`)
 	write(t, filepath.Join(dir, "cmds/run.md"), "走る")
-	write(t, filepath.Join(dir, "commands/old.md"), "古い")
 
 	p.assertFound(t, "/bundle:run")
-	p.assertMissing(t, "/bundle:old")
+}
+
+func TestCommandsDirectoryThatIsASymlinkIsSearched(t *testing.T) {
+	p := newPlaces(t)
+	dotfiles := filepath.Join(p.home, "dotfiles/commands")
+	write(t, filepath.Join(dotfiles, "implement.md"), "実装する")
+	write(t, filepath.Join(p.home, ".claude/settings.json"), "{}")
+	if err := os.Symlink(dotfiles, filepath.Join(p.home, ".claude/commands")); err != nil {
+		t.Fatal(err)
+	}
+
+	p.assertFound(t, "/implement")
+}
+
+func TestSkillNameIsReadAsYAML(t *testing.T) {
+	p := newPlaces(t)
+	write(t, filepath.Join(p.home, ".claude/skills/deploy-staging/SKILL.md"), "---\nname: deploy  # staging だけ\n---\n本文")
+
+	p.assertFound(t, "/deploy")
 }
 
 func TestActionThatStartsWithATemplateVariableFails(t *testing.T) {

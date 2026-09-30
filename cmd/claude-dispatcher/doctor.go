@@ -4,9 +4,12 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"slices"
 	"strings"
 
+	"github.com/swat9013/claude-dispatcher/internal/deps"
 	"github.com/swat9013/claude-dispatcher/internal/loop"
+	"github.com/swat9013/claude-dispatcher/internal/printable"
 	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/workflow"
 )
@@ -37,10 +40,23 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "ok   workflow 定義 %s\n", abs)
 	failed := false
 	if _, err := loop.OpenItems(e.store(def), def); err != nil {
-		fmt.Fprintf(stdout, "NG   issue 置き場 %s: %s\n", def.Tracker.Repo, oneLine(err))
+		fmt.Fprintf(stdout, "NG   issue 置き場 %s: %s\n", def.Tracker.Repo, printable.Line(err.Error()))
 		failed = true
 	} else {
 		fmt.Fprintf(stdout, "ok   issue 置き場 %s\n", def.Tracker.Repo)
+	}
+	// loop の起動時と同じく、worker と CL の branch の読み出しに撃つ command を解決できるか (formats.md §6)
+	commands := []string{def.Claude.Command}
+	if slices.Contains(def.Kinds(), target.KindCL) {
+		commands = append(commands, "git")
+	}
+	for _, name := range commands {
+		if path, err := deps.Lookup(name, e.env); err != nil {
+			fmt.Fprintf(stdout, "NG   %s\n", printable.Line(err.Error()))
+			failed = true
+		} else {
+			fmt.Fprintf(stdout, "ok   %s %s\n", name, path)
+		}
 	}
 	if problems := e.precheck(def); len(problems) > 0 {
 		for _, p := range problems {
@@ -79,9 +95,4 @@ func promiseWarnings(def workflow.Definition) []string {
 		}
 	}
 	return warnings
-}
-
-// oneLine は err を 1 行にする。
-func oneLine(err error) string {
-	return strings.Join(strings.Fields(err.Error()), " ")
 }

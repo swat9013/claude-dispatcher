@@ -6,7 +6,8 @@ tracker:
 polling:
   interval: 5m
 hooks:
-  # workspace は clone の worktree にする。branch は worker が切る (action に書いてある)
+  # workspace は clone の detach した worktree にする。branch は issue の worker だけが切る。同じ branch は 2 つの worktree
+  # で checkout できないので、pull request の worker は head branch を detach で取り出して push する (action に書いてある)
   after_create: git -C "$CLAUDE_DISPATCHER_CLONE" worktree add --detach "$CLAUDE_DISPATCHER_WORKSPACE"
   before_remove: git -C "$CLAUDE_DISPATCHER_CLONE" worktree remove --force "$CLAUDE_DISPATCHER_WORKSPACE"
 limits:
@@ -33,7 +34,7 @@ triggers:
       draft: false
     action: |
       pull request #{{ .cl.number }} ({{ .cl.url }}) の conflict を解く。
-      head branch {{ .cl.head }} を checkout し、base branch を取り込んで conflict を解き、テストを通して push する。
+      head branch {{ .cl.head }} を detach で取り出し (`git fetch origin {{ .cl.head }} && git checkout --detach FETCH_HEAD`)、base branch を取り込んで conflict を解き、テストを通して `git push origin HEAD:{{ .cl.head }}` で push する。
   - name: address-review
     on: cl
     when:
@@ -42,7 +43,7 @@ triggers:
       draft: false
     action: |
       pull request #{{ .cl.number }} ({{ .cl.url }}) の未解決の review に応える。
-      head branch {{ .cl.head }} を checkout し、未解決の review thread ごとに、直して push するか、直さない理由を返信する。応えた thread は resolve する。
+      head branch {{ .cl.head }} を detach で取り出し (`git fetch origin {{ .cl.head }} && git checkout --detach FETCH_HEAD`)、未解決の review thread ごとに、直して `git push origin HEAD:{{ .cl.head }}` で push するか、直さない理由を返信する。応えた thread は resolve する。
   - name: fix-ci
     on: cl
     when:
@@ -51,7 +52,7 @@ triggers:
       draft: false
     action: |
       pull request #{{ .cl.number }} ({{ .cl.url }}) の失敗している CI を直す。
-      head branch {{ .cl.head }} を checkout し、失敗した check の log を読んで原因を直し、テストを通して push する。
+      head branch {{ .cl.head }} を detach で取り出し (`git fetch origin {{ .cl.head }} && git checkout --detach FETCH_HEAD`)、失敗した check の log を読んで原因を直し、テストを通して `git push origin HEAD:{{ .cl.head }}` で push する。
   # 承認済みの pull request に当てる trigger (approved: true) は置かない。merge を worker に任せるなら、自分で足す
 ---
 あなたは claude-dispatcher が無人で起動した worker です。人は画面の前にいません。
