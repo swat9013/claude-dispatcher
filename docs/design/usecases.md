@@ -85,7 +85,7 @@ Cockburn『ユースケース実践ガイド』(Writing Effective Use Cases) の
 - **Primary Actor**: 人間 (loop を起動した運用者)
 - **Scope**: dispatcher (機械システム)
 - **Level**: user-goal (sea)
-- **Trigger**: worker の attempt が失敗した (異常終了・stall・trigger に当たったまま)
+- **Trigger**: worker の attempt が失敗した (異常終了・stall・上限時間の超過・trigger に当たったまま)
 - **事前条件**: 作業対象に claim がある
 - **成功保証**: 作業対象は、完了するか、終端になるか、打ち切られて log と `status` に出ている。loop の 1 回の寿命の中では、1 つの action の不具合が上限を超えて起動を繰り返していない (打ち切りは loop を起動し直すと消える)
 
@@ -99,7 +99,8 @@ Cockburn『ユースケース実践ガイド』(Writing Effective Use Cases) の
 
 - **1a.** attempt が上限に達した
   - 1a1. loop は作業対象を打ち切り、claim を解き、打ち切りを log と状態 file に出す
-  - 1a2. 以後の tick で作業対象が一度 trigger から外れたのを観測したら、loop は打ち切りを解く。人が label を付け直せば再び候補になる
+  - 1a2. 打ち切った作業対象は、どの trigger に当たっても起動しない
+  - 1a3. 以後の tick で、作業対象が打ち切ったときの trigger から一度外れたのを観測したら、loop は打ち切りを解く。人が label を外して 1 周期待ち、付け直せば再び候補になる
 - **2a.** 作業対象が終端になっていた
   - 2a1. loop は claim を解き、workspace を消して終わる
 - **2b.** trigger から外れていた (人か別の手が動かした)
@@ -158,10 +159,12 @@ Cockburn『ユースケース実践ガイド』(Writing Effective Use Cases) の
 
 - **3a.** workflow 定義に誤りがある
   - 3a1. CLI が名指しで失敗する。導入者が直して step 3 へ戻る
-- **6a.** 同じ issue 置き場の loop が既に走っている
-  - 6a1. CLI は 2 本目の loop を起動時に拒む。導入者は走っている loop の画面を見る
-- **6b.** tick が認証の失敗で止まる (起動した環境から認証を取れない。ssh 越しの session など)
-  - 6b1. 導入者は認証を環境変数で渡して loop を起動し直す
+- **6a.** loop の起動時に workflow 定義の検査が落ちた (step 3 の後に定義を書き換えた、など)
+  - 6a1. loop は誤りを名指しして起動を失敗させる。導入者が直して step 3 へ戻る
+- **6b.** 同じ issue 置き場の loop が既に走っている
+  - 6b1. CLI は 2 本目の loop を起動時に拒む。導入者は走っている loop の画面を見る
+- **6c.** tick が認証の失敗で止まる (起動した環境から認証を取れない。ssh 越しの session など)
+  - 6c1. 導入者は認証を環境変数で渡して loop を起動し直す
 
 ## UC-6 loop を止める
 

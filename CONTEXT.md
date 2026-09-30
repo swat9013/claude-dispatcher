@@ -112,5 +112,5 @@ _Avoid_: done, success
 同じ作業対象について、完了するまでに worker を起動した回数。worker が失敗するか、終わっても trigger に当たったままなら 1 つ進む。
 
 **打ち切り**:
-attempt が上限に達した作業対象を、loop がそれ以上起動しないこと。作業対象が一度 trigger から外れたのを観測すると解ける。
+attempt が上限に達した作業対象を、loop がどの trigger でもそれ以上起動しないこと。打ち切ったときの trigger から作業対象が一度外れたのを観測すると解ける。
 _Avoid_: give up, dead letter

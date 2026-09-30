@@ -179,6 +179,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。
 1. **突き合わせ**
    - 走っている worker ごとに、stream の最後の event からの経過を見る
    - stall の上限を超えた worker は止め、失敗として扱う
+   - 起動からの経過が worker 1 回分の上限時間 (既定 1 時間。0 で無効) を超えた worker も止め、失敗として扱う。event を出し続けて stall にかからない worker が、並列の枠を塞ぎ続けないようにする
    - 走っている作業対象を外部 store で読み直し、終端になっていれば worker を止めて workspace を消す
    - trigger から外れただけでは止めない (ADR 0009「走っている worker は終端でだけ止める」)
 2. **workflow 定義の読み直しと事前検査** (§8)
@@ -193,7 +194,9 @@ SPEC §7・§8・§16 の状態機械を土台にする。
 1. workspace を用意する。無ければ作って `after_create` を撃ち、run の前に `before_run` を撃つ
 2. action と共通 prompt を描画する (§10)
 3. `claude -p` を子 process として起動し、stream を読む
-   - attempt が 2 回目以降なら、前の attempt の session を `--resume` で続ける。session id は同じ作業対象の attempt を通して 1 つで、log と状態 file にも同じ id を載せる
+   - 最初の attempt は CLI が発行した session id を `--session-id` で渡す。attempt が 2 回目以降なら、同じ id を `--resume` に渡して前の session を続ける。session id は同じ作業対象の attempt を通して 1 つで、log と状態 file にも同じ id を載せる
+   - 上限時間・stall・停止要求で止めた session も続けられる。Claude Code は session を進むごとに保存しており、process group ごと止めても、止めた時点までの会話が `--resume` で戻る
+   - Claude Code は session を cwd ごとに保存するので、続きの worker は同じ workspace の path で起動する
    - `--append-system-prompt-file` は `--resume` のときも毎回渡す
 4. 終了後に `after_run` を撃つ
 5. 作業対象を読み直し、起動した trigger から外れたかを確かめる
@@ -210,7 +213,9 @@ SPEC §7・§8・§16 の状態機械を土台にする。
   - 再起動は同じ trigger で続ける。宣言順で先の trigger に当たるようになっていても、その評価は claim が解けた後の tick で行う
 - **attempt が上限に達したら打ち切る**
   - 打ち切りは memory に持ち、log と `status` に出す。tracker には書かない
-  - 作業対象が一度 trigger から外れたのを tick で観測すると解ける。人が label を外して付け直せば、再び候補になる
+  - 打ち切りは作業対象ごとに持つ。打ち切った作業対象は、どの trigger に当たっても起動しない
+  - 打ち切ったときの trigger から作業対象が一度外れたのを tick で観測すると解ける。人が label を外して付け直せば、再び候補になる
+  - 外してから付け直すまでが 1 周期に収まると、外れたのを観測できない。`status` の打ち切りの表示に、label を外して 1 周期待つよう書く
   - loop を起動し直すと消える
 
 **workspace**。
@@ -232,7 +237,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。
   - tracker の種類と adapter の設定
   - trigger の列
   - hooks
-  - 並列上限・attempt の上限・backoff の上限・stall の上限・worker 1 回分の上限時間
+  - 並列上限・attempt の上限・backoff の上限・stall の上限・worker 1 回分の上限時間 (既定 1 時間。0 で無効)
   - 周期
   - `claude` の起動 command と引数
 - **本文は共通 prompt**
@@ -243,6 +248,8 @@ SPEC §7・§8・§16 の状態機械を土台にする。
   - 読めない版・文法に合わない版では、新しい起動を止める。走っている worker の突き合わせは続ける
 - **未知の key は名指しで失敗させる** (ADR 0009「未知の key は失敗させる」)
 - **事前検査** (SPEC §6.3)
+  - loop の起動時は、どの検査が落ちても起動を失敗させる。起動時は人が画面の前にいるので、全部を直させる
+  - tick の中では、落ちた検査の範囲だけを止める (§7)
   - tracker の設定が組み立てられること
   - trigger の述語が文法に合うこと
   - 各 trigger の action の template の**先頭の** `/名前` が、呼べる skill か command であること。見つからなければ、その trigger だけを起動しない (§7)
