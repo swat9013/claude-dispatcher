@@ -17,9 +17,12 @@ import (
 // Claude Code の transcript (`<設定 dir>/projects/*/<session_id>.jsonl`) から、走っているセッションの最新の活動を読む
 // (formats.md §10 の ACTIVITY)。transcript の中身の形は Claude Code の内部の仕様で、それへの依存はこの file に閉じる。
 
-// transcriptTails は transcript の末尾から読む量。transcript は大きくなるので全体は読まない。末尾の行が大きく (画像の
-// tool_result 等) 最初の量に時刻を持つ行が入らなければ、次の量で読み直す
-var transcriptTails = []int64{256 << 10, 4 << 20}
+const (
+	// transcriptTail は transcript の末尾から読む量。transcript は大きくなるので全体は読まない
+	transcriptTail = 256 << 10
+	// transcriptWideTail は、末尾の行が大きく (画像の tool_result 等) transcriptTail に時刻を持つ行が入らなかったときに読み直す量
+	transcriptWideTail = 4 << 20
+)
 
 // Activity は最新の活動。
 type Activity struct {
@@ -50,14 +53,14 @@ func readActivity(configDir, sessionID string, now time.Time) (*Activity, error)
 	if err != nil {
 		return nil, err
 	}
-	for _, tail := range transcriptTails {
+	for _, tail := range [...]int64{transcriptTail, transcriptWideTail} {
 		raw, whole, err := tailLines(file, tail)
 		if err != nil {
 			return nil, err
 		}
 		lines := decodeLines(raw)
 		if last, ok := lastEventTime(lines); ok {
-			return &Activity{Since: now.Sub(last), Doing: lastDoing(lines)}, nil
+			return &Activity{Since: now.Sub(last), Doing: terminalSafe(lastDoing(lines))}, nil
 		}
 		if whole {
 			break
@@ -192,13 +195,17 @@ func describeToolUse(item contentItem) string {
 	return strings.TrimSpace(item.Name + " " + arg)
 }
 
-// firstLine は s の 1 行目。端末へ出すので、制御文字 (ESC・tab・CR 等) は空白に置き換える — transcript の中身は model が書く。
 func firstLine(s string) string {
 	head, _, _ := strings.Cut(strings.TrimSpace(s), "\n")
-	return strings.TrimSpace(strings.Map(func(r rune) rune {
+	return strings.TrimSpace(head)
+}
+
+// terminalSafe は制御文字 (ESC・tab・CR 等) を空白に置き換える。内容は端末へ出し、transcript の中身は model が書くため。
+func terminalSafe(s string) string {
+	return strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) {
 			return ' '
 		}
 		return r
-	}, head))
+	}, s)
 }
