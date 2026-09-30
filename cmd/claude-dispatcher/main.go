@@ -20,6 +20,7 @@ import (
 	"github.com/swat9013/claude-dispatcher/internal/loop"
 	"github.com/swat9013/claude-dispatcher/internal/precheck"
 	"github.com/swat9013/claude-dispatcher/internal/printable"
+	"github.com/swat9013/claude-dispatcher/internal/scaffold"
 	"github.com/swat9013/claude-dispatcher/internal/state"
 	"github.com/swat9013/claude-dispatcher/internal/status"
 	"github.com/swat9013/claude-dispatcher/internal/target"
@@ -43,6 +44,7 @@ const usage = `usage:
   claude-dispatcher loop --dry-run [<workflow の path>]
   claude-dispatcher status [<workflow の path>]
   claude-dispatcher paths --json [<workflow の path>]
+  claude-dispatcher setup [<workflow の path>]
   claude-dispatcher --version
 `
 
@@ -65,6 +67,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runStatus(args[1:], stdout, stderr)
 	case "paths":
 		return runPaths(args[1:], stdout, stderr)
+	case "setup":
+		return runSetup(args[1:], stdout, stderr)
 	case "-h", "--help", "help":
 		fmt.Fprint(stdout, usage)
 		return 0
@@ -377,5 +381,47 @@ func runPaths(args []string, stdout, stderr io.Writer) int {
 		return exitFailed
 	}
 	fmt.Fprintf(stdout, "%s\n", raw)
+	return 0
+}
+
+// --- setup ---
+
+// runSetup は `setup [<workflow の path>]` を撃つ (formats.md §7.4): cwd の repo を tracker.repo に埋めた雛形を書く。
+// 既にある file は上書きしない。
+func runSetup(args []string, stdout, stderr io.Writer) int {
+	path, ok := workflowArg(args, nil, stderr)
+	if !ok {
+		return exitUsage
+	}
+	if _, err := os.Stat(path); err == nil {
+		fmt.Fprintf(stdout, "%s は既にあるので書かない\n", path)
+		return 0
+	}
+	e := newEnvironment()
+	out, err := github.Exec{Env: e.env, Timeout: ghTimeout}.Run("repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner")
+	if err != nil {
+		fmt.Fprintf(stderr, "tracker.repo を決められない (cwd で gh repo view が失敗した): %v\n", err)
+		return exitFailed
+	}
+	repo, err := github.ParseRepo(strings.TrimSpace(string(out)))
+	if err != nil {
+		fmt.Fprintf(stderr, "tracker.repo を決められない (gh repo view の応答 %q): %v\n", strings.TrimSpace(string(out)), err)
+		return exitFailed
+	}
+	// 確かめてから書くまでの間に他が書いても、上書きしない
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if errors.Is(err, os.ErrExist) {
+		fmt.Fprintf(stdout, "%s は既にあるので書かない\n", path)
+		return 0
+	}
+	if err == nil {
+		_, err = io.WriteString(file, scaffold.Workflow(repo.String()))
+		err = errors.Join(err, file.Close())
+	}
+	if err != nil {
+		fmt.Fprintf(stderr, "workflow 定義の雛形を書けない (%s): %v\n", path, err)
+		return exitFailed
+	}
+	fmt.Fprintf(stdout, "%s に workflow 定義の雛形を書いた (tracker.repo: %s)。project に合わせて直し、`claude-dispatcher loop --dry-run` で試運転する\n", path, repo)
 	return 0
 }
