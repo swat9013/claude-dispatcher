@@ -9,6 +9,22 @@
 - 加えて `pre-commit` (4.4.0 以上) を入れ、clone ごとに 1 回 `pre-commit install` を撃つ (commit 時と push 前の hook が両方入る)。gitleaks・actionlint・shellcheck は pre-commit が hook 環境として build するので別途の導入は要らない (初回の build に network が要る)
   - Go は手元の版が [go.mod](go.mod) の `toolchain` 行より古くても、`go` コマンドがその版を取ってきて使う (`GOTOOLCHAIN` の既定の `auto`)。hook も `go` コマンド経由で撃つので、手元と CI で同じ版の Go が動く
 
+## 開発中の claude-dispatcher を試す
+
+`scripts/claude-dispatcher-dev.sh` は、script がある checkout の claude-dispatcher を build し直してから、渡した引数で実行する。リリースを待たずに、手元の変更を実際の project で試せる。
+
+```sh
+alias claude-dispatcher-dev=~/src/claude-dispatcher/scripts/claude-dispatcher-dev.sh   # worktree で試すときは、その worktree の script を指す
+claude-dispatcher-dev --version   # 版に checkout の commit が出る (未 commit の変更があれば +dirty)
+claude-dispatcher-dev tick myproj --dry-run
+claude-dispatcher-dev loop myproj 5m
+```
+
+- **Homebrew 版と区別する**: 素の `claude-dispatcher` は PATH 上の版 (Homebrew 等) を呼ぶ。build した binary は、その checkout の `dist/dev/claude-dispatcher` に置く。basename を `claude-dispatcher` のままにするのは、`status` が process の argv[0] の basename で loop / tick を見分けるため
+- **走っている dev の loop は止まらない**: build は一時 file に書いてから rename で入れ替えるので、dev の loop を回したまま別の端末で撃ち直せる。loop は起動した時点の binary で回り続けるので、変更を効かせるには loop を撃ち直す
+- **状態は Homebrew 版と共有する**: 宣言 config と state dir ([docs/design/formats.md](docs/design/formats.md) §1) は Homebrew 版と同じものを読み書きする。同じ project の loop は 1 本しか動かせない (`loop.lock`) ので、Homebrew 版の loop を止めてから dev の loop を撃つ。分けたいときは `XDG_CONFIG_HOME` / `XDG_STATE_HOME` を上書きして撃つ
+- **tracker と CL host は本物**: dry-run でない tick は、実際の issue 置き場に label を付け、worker を起動する。試すなら使い捨ての issue に着手可 label を付けるか、`tick --dry-run` で止める
+
 ## branch・worktree 運用
 
 - 作業は issue 単位で行い、main から `worktree-issue-<n>` (`<n>` は issue 番号) の branch を切る
