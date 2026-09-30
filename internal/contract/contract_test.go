@@ -80,20 +80,6 @@ func TestContractRereadsConditionsInCatalogOrder(t *testing.T) {
 	}
 }
 
-func TestConditionCatalogMatchesTheDesignDoc(t *testing.T) {
-	system := read(t, "../../docs/design/system.md")
-	text := section(t, system, "## 6. 指示カタログ")
-
-	var got []string
-	for _, m := range regexp.MustCompile("(?m)^\\| `([a-z]+)` \\| .* \\| `playbook-").FindAllStringSubmatch(text, -1) {
-		got = append(got, m[1])
-	}
-
-	if want := catalogNames(); !slices.Equal(got, want) {
-		t.Fatalf("system.md §6 の条件カタログ = %v, CLI の条件カタログ = %v", got, want)
-	}
-}
-
 // actionTable は「| `<指示>` | … | `<action>` / `<action>` |」の行から 指示 → 許される action を読む。
 func actionTable(t *testing.T, text string) map[string][]string {
 	t.Helper()

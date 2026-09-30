@@ -1,6 +1,6 @@
 # ADR 0005: LLM セッションは `claude -p` で起動し、起動部を差し替え可能な部品に閉じる
 
-- Status: Accepted
+- Status: Accepted (worker を detach 起動する部分・orchestrator を起動する部分・起動引数と permission posture を固定する部分は ADR 0009 が置き換えた。worker は loop の子 process になり、起動引数は workflow 定義が決める。session id を CLI が発行する部分と、起動を 1 つの部品に閉じる部分は残る)
 - Date: 2026-09-26
 
 ## Context

@@ -1,6 +1,6 @@
 # ADR 0002: worker は orchestrator ではなく CLI が決定ファイルどおりに起動する
 
-- Status: Accepted
+- Status: Superseded by ADR 0009 (orchestrator と決定ファイルを廃止し、機械が trigger で worker を直接起動する)
 - Date: 2026-09-26
 
 ## Context

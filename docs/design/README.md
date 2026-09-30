@@ -6,19 +6,19 @@
 
 | file | 中身 |
 |---|---|
-| [`system.md`](system.md) | システム境界 / 全体図 / 解く問題 / 状態の表現 / 機械と LLM の線 / 指示カタログ / 各 file の責務 / 宣言 config / 駆動 / worker 契約 / 配布と外部依存 / スコープ外 / CLI の seam |
+| [`system.md`](system.md) | システム境界 / 全体図 / 解く問題 / 状態の表現 / 機械と LLM の線 / trigger / 起動・retry・打ち切り / workflow 定義 / 駆動 / worker に渡すもの / 配布と外部依存 / スコープ外 / CLI の seam |
 | [`usecases.md`](usecases.md) | Cockburn 縮約テンプレートによるユースケース。冒頭に記述規約 |
-| [`formats.md`](formats.md) | 置き場・config・exit code・log.jsonl・指示ファイル・決定ファイル・tick の失敗行・dry-run の出力・引き渡しコメント・`paths --json`・`status` / `setup` / `doctor` / `loop` の出力。black-box テストの参照先 |
+| [`formats.md`](formats.md) | 外から観測できる形式。black-box テストの参照先。ADR 0009 による移行中で、節ごとに新しい形式へ書き換える |
 
 用語は [`CONTEXT.md`](../../CONTEXT.md)。
 
 ## 設計を先に直す
 
-構造を変えるときは、実装 (CLI のコード / 同梱の契約 file) より先に上の正本を直す。実装が先に着地すると、設計 doc が実装の後追い要約に落ちて正本でなくなる。
+構造を変えるときは、実装 (CLI のコード) より先に上の正本を直す。実装が先に着地すると、設計 doc が実装の後追い要約に落ちて正本でなくなる。
 
 | 変えるもの | 正本 |
 |---|---|
-| 状態の表現と書き手、候補の定義式、機械と LLM の線、指示カタログ、宣言 config の項目と検査の姿勢、駆動、worker 契約の構造、配布と外部依存、CLI の seam (部品の責務と seam の位置) | `system.md` |
+| 状態の表現と書き手、候補の定義式、機械と LLM の線、trigger の文法と評価の規則、起動・retry・打ち切り、workflow 定義の項目と検査の姿勢、駆動、worker に渡すもの、配布と外部依存、CLI の seam (部品の責務と seam の位置) | `system.md` |
 | ユースケース | `usecases.md` |
 | 外から観測できる形式 | `formats.md` |
 
@@ -26,6 +26,6 @@
 
 ## ドメインモデル図を持たない理由
 
-dispatcher は専用の永続 store を持たず、状態はすべて外部 store の実体 (tracker の label / CL / remote branch) に置く。dispatcher 固有の永続 entity が無いので、集約・多重度として描く対象が無い。状態の表現は `system.md` §4 の表と候補の定義式で足りる。
+dispatcher は専用の永続 store を持たない。状態は、外部 store の実体 (tracker の label / CL / remote branch) と、loop の process と寿命を共にする memory (claim・attempt・打ち切り) に置く。dispatcher 固有の永続 entity が無いので、集約・多重度として描く対象が無い。状態の表現は `system.md` §4 の表と候補の定義式で足りる。
 
-dispatcher 固有の永続実体を導入する決定が出たとき (例: issue と CL の紐づけが closing reference で安定せず、明示の記録を持つと決めたとき) に図を足す。
+dispatcher 固有の永続実体を導入する決定が出たときに図を足す。例: 打ち切りを loop の起動を跨いで持つと決めたとき、issue と CL の紐づけを記録すると決めたとき。
