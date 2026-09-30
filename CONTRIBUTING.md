@@ -4,7 +4,7 @@
 
 ## セットアップ
 
-- 前提ツールは [README の「前提」](README.md#前提) のとおり (Claude Code / `gh` / git)
+- 前提ツールは [README の「前提」](README.md#前提) のとおり
 - この repo の [WORKFLOW.md](WORKFLOW.md) の action は Claude Code plugin `swat-skills@swat9013` ([swat9013/claude-skills](https://github.com/swat9013/claude-skills)) の playbook を呼ぶので、この repo で loop を回すなら入れる (user scope)
   ```
   /plugin marketplace add swat9013/claude-skills

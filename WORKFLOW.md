@@ -24,13 +24,14 @@ triggers:
     on: cl
     when:
       conflict: true
-      # worker の pull request (implement が切る branch の綴り) だけに当てる。人へ返したもの (ready-for-human) は外す
+      # worker の pull request (implement が切る branch の綴り) だけに当てる。人へ返したもの (ready-for-human) は外す。
+      # anchor はここで定義し、下の 2 つの trigger が alias で参照する (この trigger を消すなら、anchor を次の trigger へ移す)
       head: &worker_branch worktree-issue-*
       draft: false
       labels: &not_handed_back
         none: [ready-for-human]
     action: |
-      /swat-skills:playbook-conflict-resolution pull request #{{ .cl.number }} ({{ .cl.url }}) の conflict を解く。
+      /swat-skills:playbook-conflict-resolution pull request #{{ .cl.number }} ({{ .cl.url }}) の conflict を解く。head branch は {{ .cl.head }}。
       base branch (`gh pr view {{ .cl.number }} --json baseRefName`。stack した pull request では main でない) を merge して conflict を解く。
   - name: address-review
     on: cl
@@ -40,7 +41,7 @@ triggers:
       draft: false
       labels: *not_handed_back
     action: |
-      /swat-skills:playbook-review-response pull request #{{ .cl.number }} ({{ .cl.url }}) の未解決の review thread に応える。
+      /swat-skills:playbook-review-response pull request #{{ .cl.number }} ({{ .cl.url }}) の未解決の review thread に応える。head branch は {{ .cl.head }}。
       直した commit を push し、応えた thread を resolve する。
   - name: fix-ci
     on: cl
@@ -50,7 +51,7 @@ triggers:
       draft: false
       labels: *not_handed_back
     action: |
-      /swat-skills:playbook-ci-fix pull request #{{ .cl.number }} ({{ .cl.url }}) の失敗している CI を直す。
+      /swat-skills:playbook-ci-fix pull request #{{ .cl.number }} ({{ .cl.url }}) の失敗している CI を直す。head branch は {{ .cl.head }}。
       原因を直した commit を push したら、CI の結果は待たずに終えてよい。
   - name: implement
     on: issue
@@ -74,13 +75,13 @@ triggers:
 - 作業は workspace `{{ .workspace }}` (この repo の clone の worktree) の中だけで行う。cwd を動かさない
 - 作業ツリーに入れない一時 file (レビューの出力・issue や pull request の本文) は、workspace の外の `{{ .workspace }}.<用途>.md` に書き、使い終えたら消す
 - branch と pull request の規約は、この repo の CONTRIBUTING.md の「commit・PR 規約」に従う
-- action の先頭の playbook の step は、逐語で todolist へ写してから通す。飛ばす step には `skip: <理由>` を残す
+- action の先頭の playbook の step は、逐語で todolist へ写してから通す。飛ばす step には `skip: <理由>` を残し、飛ばした step と理由を pull request の本文 (pull request を出さずに終えるなら引き渡しコメント) にも書く
 
 ## pull request の worker
 
 - head branch は issue の workspace が checkout したままなので、この workspace では detach で取り出す: `git fetch origin <head branch>` の後に `git checkout --detach FETCH_HEAD`
 - push は `git push origin HEAD:<head branch>` で撃つ
-- 当たった条件 (conflict・未解決の review thread・CI の失敗) を 1 つも解消できずに終えるなら、下の「人へ返す」で終える
+- 当たった trigger の条件を 1 つも解消できずに終えるなら、下の「人へ返す」で終える
 
 ## gh の撃ち方
 
@@ -117,8 +118,9 @@ triggers:
 
 人しか出せない入力が要る・作業ツリーの外の実体しか残らない・permission に止められて進めない、のどれかに当たったら、推測で進めずに次の順で終える。permission が止めた操作は迂回しない。
 
-1. 途中の成果があれば commit して push する。担当範囲の外で見つけた欠陥と直さなかったレビューの指摘は、上の「残りを issue にする」で issue にする。担当の作業対象自身の残り (実装が要る残タスクを含む) は issue にせず、下の引き渡しの「人が次にやること」に書く (別の issue にすると、人へ返した作業対象とその残りが分かれて散る)
-2. 作業対象 (issue か pull request) に、次の 3 節の引き渡しコメントを書く。読むのは文脈を持たない人なので、log を開かずに次の一手が分かる形にする
+1. 途中の成果があれば commit して push する
+2. 残りを振り分ける。担当範囲の外で見つけた欠陥と直さなかったレビューの指摘は、上の「残りを issue にする」で issue にする。担当の作業対象自身の残り (実装が要る残タスクを含む) は issue にせず、次の引き渡しの「人が次にやること」に書く (別の issue にすると、人へ返した作業対象とその残りが分かれて散る)
+3. 作業対象 (issue か pull request) に、次の 3 節の引き渡しコメントを書く。読むのは文脈を持たない人なので、log を開かずに次の一手が分かる形にする
 
    ```
    ## 停止理由
@@ -132,7 +134,7 @@ triggers:
    - [ ] 解決したら ready-for-human の label を外す (issue なら ready-for-agent を付け直す)
    ```
 
-3. コメントを書いてから label を付け替える (label を先に動かすと、成果の所在を書く前に人が動く)
+4. コメントを書いてから label を付け替える (label を先に動かすと、成果の所在を書く前に人が動く)
    - issue: `ready-for-agent` を外し、`ready-for-human` を付ける
    - pull request: `ready-for-human` を付ける
 
