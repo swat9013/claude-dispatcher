@@ -71,7 +71,7 @@ func parse(raw []byte) (line Line, ok, bad bool) {
 	if doc.Actor != nil {
 		return Line{}, false, false
 	}
-	at, err := time.Parse(time.RFC3339Nano, doc.TS)
+	at, err := ParseTS(doc.TS)
 	if err != nil {
 		return Line{}, false, true
 	}
@@ -90,9 +90,18 @@ func Last(lines []Line) (Line, bool) {
 // TimeLayout は人が読む時刻の綴り (UTC、秒まで)。画面・失敗行・終了行が使う (formats.md §1)
 const TimeLayout = "2006-01-02T15:04:05Z"
 
+// TSLayout は log.jsonl の ts の綴り (RFC 3339 の UTC、マイクロ秒まで — formats.md §1)。tick.now の時刻も同じ綴り
+const TSLayout = "2006-01-02T15:04:05.000000Z"
+
+// FormatTS は時刻を ts の綴りにする。
+func FormatTS(t time.Time) string { return t.UTC().Format(TSLayout) }
+
+// ParseTS は ts の綴りの時刻を読む。
+func ParseTS(ts string) (time.Time, error) { return time.Parse(time.RFC3339Nano, ts) }
+
 // ShortTS は tick 行の ts を人が読む秒までの形にする (読めなければそのまま)。
 func ShortTS(ts string) string {
-	at, err := time.Parse(time.RFC3339Nano, ts)
+	at, err := ParseTS(ts)
 	if err != nil {
 		return ts
 	}

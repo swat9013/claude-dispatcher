@@ -20,6 +20,7 @@ macOS でも XDG に揃える (`~/Library` は使わない)。project ごとに�
 <state root>/<project>/
   log.jsonl                           tick 行と orchestrator 行 (§4)
   tick.lock                           tick の flock の対象
+  tick.now                            走っている tick の状態 (§10)。tick が lock を持つ間だけ在る
   loop.lock                           loop の生存期間の flock の対象 (§13)
   config-verified                     実在検査に通った config.toml の sha256 (hex 1 行)
   instructions/<stem>.json            指示ファイル (§5.1)。指示があった tick だけ
@@ -105,7 +106,7 @@ claude_token_file = "~/.config/claude-dispatcher/<project>/claude-token"
 | `spawned` | `orchestrator` があるとき。`result: error` でも起動済みの worker は載る |
 
 - 想定外の失敗 (panic 等) で止まった tick も `result: error` の行を残し、**それまでに確定した key (`instruction_file` / `orchestrator` / 起動済みの `spawned`) を載せる**。tick は段階ごとに行の中身を積み、最後に 1 行で書き出すので、どこで止まっても claude と worker を起動済みかが行から読める
-- `session_id` は CLI が起動ごとに発行して `--session-id` で渡した値。Claude Code の transcript `~/.claude/projects/<cwd から Claude Code が決める dir 名>/<session_id>.jsonl` へ辿る鍵で、`cwd` と組で引く
+- `session_id` は CLI が起動ごとに発行して `--session-id` で渡した値。Claude Code の transcript `<Claude Code の設定 dir>/projects/*/<session_id>.jsonl` へ辿る鍵 (dir 名は Claude Code が cwd から決めるが、その規則は文書化されていないので glob で探す — §10 の ACTIVITY)
 
 ### 4.2 orchestrator 行
 
@@ -257,6 +258,7 @@ claude-dispatcher status watch [<project>] [--interval <秒>]
 project を省略すると、config root の下の全 project (§9 の `projects`) を並べる。`watch` は `ps` の表を `--interval` 秒 (既定 5、1 以上 86400 以下) ごとに描き直し、Ctrl-C で終わる。loop の画面 (§13) も同じ表を使う。実装 repo の clone を cwd にして撃つ (BRANCH 列は cwd の clone の作業ツリーを読む)。
 
 - **読み取り専用**: state dir にも外部 store にも書かない。lock file も作らず、lock も取らない (取ると、その一瞬に重なった tick が `locked` の行を残し、起動しようとした loop が拒まれる)。loop が生きているかは process の一覧 (`claude-dispatcher … loop <project>` の process) で見る
+- **走っている tick**: tick が lock を持つ間だけ置く `tick.now` を読む (下の「`tick.now`」)。file の `pid` の process が居ないか、その command 行が `claude-dispatcher tick <project>` / `claude-dispatcher loop <project> …` でなければ (pid の再利用)、異常終了で残った file として無視し、注記に残す。command 行は先頭 (argv[0]) から照合する (worker の command 行には spawn prompt の本文が載り、途中の綴りに当たりうる)。ただし process の一覧を読んだ後に書かれた file は、一覧に pid が写っていないだけなので、注記せずに出さない (次の描き直しで出る)。process の一覧を読めなければ確かめられないので出さない
 - **載せる worker**: log.jsonl の tick 行の `spawned` のうち、次のどれかに当たるもの
   - issue ごとの最新の起動記録で、issue に `dispatcher:wip` が付いているか、process が生きているか、起動 (起動した tick の `ts`) から 24 時間以内のもの (24 時間は固定の値。起動記録に終了時刻は無いので起動から数える)
   - それより古い起動記録で、process が生きているもの
@@ -267,13 +269,16 @@ project を省略すると、config root の下の全 project (§9 の `projects
 表は project ごとに 1 段:
 
 ```
-myproj  loop 稼働中  最終 tick 2026-09-26T03:00:00Z ok
+myproj  loop 稼働中  tick 実行中 · orchestrator 3m (上限 15m)  最終 tick 2026-09-26T03:00:00Z ok
   ! <注記>
-ISSUE  KIND   STATE    ELAPSED  SESSION  BRANCH  WIP  CL        TICK
-#42    start  running  12m      -        +3      yes  #57 OPEN  2026-09-26T02:48:00Z
+ISSUE  KIND   STATE    ELAPSED  SESSION  BRANCH  WIP  CL        TICK                  ACTIVITY
+-      orch   running  3m       -        -       -    -         2026-09-26T03:05:00Z  4s Bash gh issue list
+#42    start  running  12m      -        +3      yes  #57 OPEN  2026-09-26T02:48:00Z  12s Bash go test ./...
 ```
 
-見出しの 2 欄目は、この project の loop の process が在れば `loop 稼働中`、無ければ `loop なし`、process の一覧を読めなければ `loop ?`。
+見出しの 2 欄目は、この project の loop の process が在れば `loop 稼働中`、無ければ `loop なし`、process の一覧を読めなければ `loop ?`。その後に、tick が走っている間だけ、loop の画面の 1 行目 (§13.1) と同じ綴りの状態欄を置く: `tick 実行中 · <tick の開始からの経過>`、orchestrator の実行中は `tick 実行中 · orchestrator <orchestrator の起動からの経過> (上限 15m)`。
+
+orchestrator の実行中は、表の先頭に orchestrator の行を 1 行置く: ISSUE `-`・KIND `orch`・STATE `running`・ELAPSED は orchestrator の起動からの経過・SESSION は worker の行と同じく `claude agents --json` を orchestrator の session id で引く・BRANCH / WIP / CL `-`・TICK は tick の開始時刻・ACTIVITY は worker の行と同じく orchestrator の session id の transcript から。worker の行が無くても、この行があれば表を出す。
 
 | 列 | 中身 |
 |---|---|
@@ -284,6 +289,26 @@ ISSUE  KIND   STATE    ELAPSED  SESSION  BRANCH  WIP  CL        TICK
 | BRANCH | cwd の clone に `worktree-issue-<issue>` の作業ツリーがあれば `origin/HEAD` からの ahead 数 (`+3`)、無ければ `-` |
 | WIP | issue に `dispatcher:wip` が付いているか (`yes` / `no`) |
 | CL | CL 置き場の repo 自身の head branch (fork でない) `worktree-issue-<issue>` の最新 CL (`#<番号> <state>`。state は `OPEN` / `CLOSED` / `MERGED`)、無ければ `-`。同じ名前の branch の CL を新しい順に 10 本まで読み、fork の CL を読み飛ばす。10 本とも fork の CL でまだ続きがあれば、その issue だけ `?` にして注記を残す |
+| ACTIVITY | 最新の活動 `<最後の event からの経過> <内容>` (`12s Bash go test ./...` / `3m Edit internal/x.go`)。STATE が `running` の行と orchestrator の行だけに出し、それ以外は `-`。下の「ACTIVITY」 |
+
+**ACTIVITY**: Claude Code の transcript から読む。worker log は `claude -p` の text 出力で終了まで 0 byte のことがあるが、transcript は走っている間も書き足される。
+
+- 探し方: `<Claude Code の設定 dir>/projects/*/<session_id>.jsonl` を glob で探す。設定 dir は `CLAUDE_CONFIG_DIR` があればそれ、無ければ `~/.claude`。cwd から dir 名を作る Claude Code の規則 (文書化されていない) は再現しない。`session_id` は起動記録 (tick 行の `spawned[].session_id`)、orchestrator の行は `tick.now` の `orchestrator.session_id`
+- 当たった file が複数あれば、最後に書かれたもの (mtime が最新) を読む
+- file の末尾 (256KiB) だけを読み、最後の完全な行から後ろ向きに読む (transcript は大きくなるため)。末尾の行が大きく (画像の tool_result 等) その範囲に時刻を持つ行が無ければ、4MiB で読み直す
+- 経過は、時刻 (`timestamp`) を持つ最後の行からの経過。綴りは ELAPSED と同じ
+- 内容は、最後の tool 呼び出し (tool 名と主な引数: `Bash` は command の 1 行目、`Edit` / `Write` / `Read` は file の path、それ以外は tool 名だけ)。最後の tool 呼び出しの後に assistant の発話があれば、発話の 1 行目。読んだ範囲にどちらも無ければ経過だけ (tool の引数を読めなければ tool 名だけ)。端末へ出すので、制御文字 (ESC・tab・CR 等) は空白に置き換える
+- stdout が端末なら、行が端末の幅に収まるように切り詰める。端末でなければ、内容を 60 文字で切り詰める
+- transcript の中身の形は Claude Code の内部の仕様で、それへの依存はこの列 1 つに閉じる。file が見つからないか、形が読めない (時刻を持つ行が 1 つも読めない) か、起動記録に session id が無ければ、その行の ACTIVITY を `?` にして注記を残す。ほかの列には影響させない
+
+`tick.now` は JSON 1 行 (key は下表)。tick の 1 回分が lock を取った直後に書き、段階が変わるたびに書き直し (同じ dir の一時 file から rename する。読み手に書きかけを見せない)、tick 行を書いた後、lock を外す前に消す。error・panic・loop の停止要求で終わる経路でも消す。単発の `tick` を signal で止めたときと、process が kill されたときは残る — status は pid の照合でそれを無視する。`tick --dry-run` と、`setup` / `doctor` の試運転は書かない (state dir に何も書かない — §7 / §12)。tick は読まない — 指示の導出にも lock の判定にも使わない、表示のための痕跡。書けないか消せなければ、tick は止めずに (result も変えずに) 理由を 1 行ずつ残す。単発の `tick` は stderr に、loop は画面の `!` 行 (§13.1) に出す。
+
+| key | 中身 |
+|---|---|
+| `pid` | tick を走らせている process (単発の `tick` か `loop`) |
+| `ts` | tick の開始時刻 (tick 行の `ts` と同じ値) |
+| `stage` | `observe` (観測中) / `orchestrator` (orchestrator 実行中) / `spawn` (orchestrator の終了の後、決定の検査と worker の起動中。正常終了でなければ、tick 行を書いて終わるまでの間) |
+| `orchestrator` | `stage` が `orchestrator` のときだけ在る。`started` (起動時刻。`ts` と同じ綴り)・`session_id` |
 
 exit: 0。指定した project が無い / project が 1 つも無いときは 2。
 
@@ -366,8 +391,8 @@ stdout が端末のとき、`status ps <project>` の表 (§10) の見出し行�
 myproj  loop 5m  待機 · 次の tick 2026-09-26T03:05:00Z (あと 3m)
 最終 tick 2026-09-26T03:00:00Z ok · 指示 start 1 · 起動 #42
   ! <注記>
-ISSUE  KIND   STATE    ELAPSED  SESSION  BRANCH  WIP  CL        TICK
-#42    start  running  12m      -        +3      yes  #57 OPEN  2026-09-26T02:48:00Z
+ISSUE  KIND   STATE    ELAPSED  SESSION  BRANCH  WIP  CL        TICK                  ACTIVITY
+#42    start  running  12m      -        +3      yes  #57 OPEN  2026-09-26T02:48:00Z  12s Bash go test ./...
 
 Ctrl+C で停止
 ```
@@ -376,8 +401,8 @@ Ctrl+C で停止
 |---|---|
 | 1 行目 | project・`loop <interval>`・状態 (下表) |
 | `最終 tick` | loop が回した直近の tick の `ts`・`result`・指示の種別と件数 (0 件なら `指示 0`)・起動した worker の issue (無ければ省く)。まだ 1 回も終えていなければ `最終 tick なし` |
-| `!` 行 | 直近の tick の `error` (`result` が `ok` 以外のとき。tick 行を log.jsonl に書けなかったときは `result` に関わらず、書けなかった理由を含めて出す) と、`status` の注記 (§10) |
-| 表 | `status` と同じ (§10)。載せる worker が居なければ出さない |
+| `!` 行 | 直近の tick の `error` (`result` が `ok` 以外のとき。tick 行を log.jsonl に書けなかったときは `result` に関わらず、書けなかった理由を含めて出す)、直近の tick が `tick.now` を書けなかった・消せなかった理由 (§10)、`status` の注記 (§10) |
+| 表 | `status` と同じ (§10。ACTIVITY 列を含み、端末なら幅に収める)。orchestrator の実行中はその行も出る。載せる行が無ければ出さない |
 | 最終行 | 操作案内 (下表) |
 
 | 状態 | 1 行目の状態欄 | 操作案内 |
@@ -410,7 +435,7 @@ SIGINT / SIGTERM / SIGHUP を同じに扱う。
   ```
 
   - `<理由>` は `停止要求 <signal 名>` (例 `停止要求 SIGINT`)。2 回目の停止要求で止めたときは `2 回目の停止要求で orchestrator を止めた — 経過は <orchestrator log の path>。wip を付けたまま残った issue が無いか確かめる` (orchestrator を起動する前なら `2 回目の停止要求で orchestrator を起動せずに止めた`)
-  - `<n>` は `status` の STATE が `running` の行の数。process の一覧か log.jsonl を読めなければ `?`。止まる前の最後の現況を組んでいる間に次の停止要求が来たら、組むのを待たずに直前の現況から数える
+  - `<n>` は `status` の worker の行のうち STATE が `running` の数 (orchestrator の行は数えない)。process の一覧か log.jsonl を読めなければ `?`。止まる前の最後の現況を組んでいる間に次の停止要求が来たら、組むのを待たずに直前の現況から数える
 - 2 回目の停止要求で止めた tick 行の `error` は `停止要求で orchestrator を止めた` か `停止要求で orchestrator を起動しなかった`
 - stdout への書き込みの失敗 (読み手の消えた pipe 等) では止まらない。描画を捨てて続け、停止要求で止まる。終了行を stdout に書けなければ stderr に出す
 - 走っている間の想定外の失敗 (panic) は stack trace を stderr に出し、tick なら `result: error` の最終 tick として見出しに、status の現況なら注記に載せて続ける (端末では次の描き直しで stack trace が画面から消えうるので、見出しと注記が残る観測点)

@@ -215,7 +215,8 @@ func TestStatusCLColumnIsUnknownOnlyForAnIssueWhoseWindowHoldsOnlyForkCLs(t *tes
 
 	r := s.statusPS()
 
-	if row := workerRow(r.stdout, 42); len(row) < 2 || row[len(row)-2] != "?" {
+	// 末尾は CL・TICK・ACTIVITY (transcript を置いていないので ?) の順
+	if row := workerRow(r.stdout, 42); len(row) < 3 || row[len(row)-3] != "?" {
 		t.Fatalf("#42 の CL 列が ? でない: %v\n%s", row, r.stdout)
 	}
 	if row := strings.Join(workerRow(r.stdout, 43), " "); !strings.Contains(row, "#58 OPEN") {

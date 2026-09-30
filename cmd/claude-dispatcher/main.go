@@ -177,6 +177,8 @@ func (e environment) statusProbes() status.Probes {
 		Workers: launch.ClaudePrintCensus,
 		Gh:      e.ghFor,
 		Git:     e.git,
+		// transcript の置き場 (ACTIVITY 列)。Claude Code と同じく CLAUDE_CONFIG_DIR を先に見る
+		ClaudeConfigDir: status.ClaudeConfigDir(os.Getenv, e.home),
 	}
 }
 
@@ -299,12 +301,12 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 	collect := func() []status.Report { return status.Collect(places, e.home, probes, time.Now) }
 
 	if !watch {
-		fmt.Fprintln(stdout, status.RenderTable(collect()))
+		fmt.Fprintln(stdout, status.RenderTable(collect(), tableFit(stdout)))
 		return 0
 	}
 	// Ctrl-C (SIGINT) で終わる。片付けるものを持たないので signal は既定の扱いに任せる
 	for {
-		fmt.Fprintf(stdout, "\033[H\033[2J%s\n", status.RenderTable(collect()))
+		fmt.Fprintf(stdout, "\033[H\033[2J%s\n", status.RenderTable(collect(), tableFit(stdout)))
 		time.Sleep(interval)
 	}
 }
@@ -425,6 +427,7 @@ func (e environment) loopOptions(project paths.Project, interval loop.Interval, 
 			return tick.Once(o)
 		},
 		Status: func() status.Report { return status.Collect([]paths.Project{project}, e.home, probes, time.Now)[0] },
+		Fit:    func() status.Fit { return tableFit(stdout) },
 		Now:    time.Now,
 		Poll:   loop.DefaultPoll,
 	}
@@ -440,6 +443,17 @@ func stopRequests() <-chan os.Signal {
 // surviveClosedStdout は、読み手の消えた stdout へ書いても SIGPIPE で倒れず、書き込みの失敗として返させる (system.md §9)。
 func surviveClosedStdout() {
 	signal.Notify(make(chan os.Signal, 1), syscall.SIGPIPE)
+}
+
+// tableFit は w へ描く表の ACTIVITY の切り詰め方。端末なら今の幅に収め、端末でない (か幅を読めない) なら内容を切る。
+func tableFit(w io.Writer) status.Fit {
+	if f, ok := w.(*os.File); ok {
+		// 端末でなければ (pipe・file・/dev/null) 幅を読めない
+		if width, _, err := term.GetSize(int(f.Fd())); err == nil && width > 0 {
+			return status.FitTerminal(width)
+		}
+	}
+	return status.FitPlain()
 }
 
 // isTerminal は w が端末か。端末でない character device (/dev/null 等) は端末に数えない。

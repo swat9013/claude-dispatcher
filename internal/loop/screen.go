@@ -40,6 +40,8 @@ type view struct {
 	// last は loop が回した直近の tick。まだ 1 回も終えていなければ nil
 	last   *tick.Outcome
 	report status.Report
+	// fit は表の ACTIVITY の切り詰め方
+	fit status.Fit
 }
 
 // lines は画面の行。withGuide が false なら操作案内を除く (stdout が端末でないときと、止まった後の画面)。
@@ -50,8 +52,13 @@ func (v view) lines(withGuide bool) []string {
 	if v.last != nil && (v.last.Result != tick.ResultOK || !v.last.Logged) {
 		lines = append(lines, "  ! "+v.last.Error)
 	}
+	if v.last != nil {
+		for _, msg := range v.last.TickNowErrors {
+			lines = append(lines, "  ! "+msg)
+		}
+	}
 	lines = append(lines, v.report.NoteLines()...)
-	lines = append(lines, v.report.TableLines()...)
+	lines = append(lines, v.report.TableLines(v.fit)...)
 	if withGuide {
 		lines = append(lines, "", guide)
 	}
@@ -75,10 +82,11 @@ func (v view) stateAndGuide() (state, guide string) {
 
 // progress は実行中の tick の経過。orchestrator を待つ間はその経過と上限を出す。
 func (v view) progress() string {
+	running := status.RunningTick{Elapsed: v.now.Sub(v.tickStarted)}
 	if !v.orchestratorStarted.IsZero() {
-		return fmt.Sprintf("orchestrator %s (上限 %s)", status.FormatElapsed(v.now.Sub(v.orchestratorStarted)), status.FormatElapsed(tick.OrchestratorTimeout))
+		running.Orchestrator = &status.RunningOrchestrator{Elapsed: v.now.Sub(v.orchestratorStarted)}
 	}
-	return status.FormatElapsed(v.now.Sub(v.tickStarted))
+	return running.Progress()
 }
 
 func (v view) lastTick() string {

@@ -45,8 +45,8 @@ func (b *syncBuffer) String() string {
 	return b.buf.String()
 }
 
-// loopProcess は走らせたままの loop。
-type loopProcess struct {
+// backgroundRun は走らせたままの binary (loop・背景で待たせた tick 等)。
+type backgroundRun struct {
 	t      *testing.T
 	cmd    *exec.Cmd
 	stdout *syncBuffer
@@ -55,20 +55,26 @@ type loopProcess struct {
 }
 
 // startLoop は clone を cwd にして `loop <project> 5m` を起動し、待たずに返す。stdout は端末でない (pipe)。
-func (s *sandbox) startLoop() *loopProcess {
+func (s *sandbox) startLoop() *backgroundRun {
 	s.t.Helper()
-	p := &loopProcess{t: s.t, stdout: &syncBuffer{}, stderr: &syncBuffer{}, done: make(chan struct{})}
-	p.cmd = s.loopCommand()
+	return s.startProcess(s.loopCommand())
+}
+
+// startProcess は cmd を起動し、待たずに返す。後片付けで、走っていれば kill する。
+func (s *sandbox) startProcess(cmd *exec.Cmd) *backgroundRun {
+	s.t.Helper()
+	p := &backgroundRun{t: s.t, stdout: &syncBuffer{}, stderr: &syncBuffer{}, done: make(chan struct{})}
+	p.cmd = cmd
 	p.cmd.Stdout, p.cmd.Stderr = p.stdout, p.stderr
 	if err := p.cmd.Start(); err != nil {
-		s.t.Fatalf("loop を起動できない: %v", err)
+		s.t.Fatalf("%v を起動できない: %v", cmd.Args, err)
 	}
 	// 終わり方は wait が p.cmd.ProcessState から読むので、Wait の error は見ない
 	go func() { _ = p.cmd.Wait(); close(p.done) }()
 	s.t.Cleanup(func() {
 		if p.running() {
 			if err := p.cmd.Process.Kill(); err != nil {
-				s.t.Errorf("loop を止められない: %v", err)
+				s.t.Errorf("%v を止められない: %v", cmd.Args, err)
 			}
 			<-p.done
 		}
@@ -77,7 +83,12 @@ func (s *sandbox) startLoop() *loopProcess {
 }
 
 func (s *sandbox) loopCommand() *exec.Cmd {
-	cmd := exec.Command(dispatcherBin, "loop", s.project, loopInterval)
+	return s.command("loop", s.project, loopInterval)
+}
+
+// command は clone を cwd にし、sandbox の env だけを渡して binary を撃つ command を組む。
+func (s *sandbox) command(args ...string) *exec.Cmd {
+	cmd := exec.Command(dispatcherBin, args...)
 	cmd.Dir = s.clone
 	for key, value := range s.env {
 		cmd.Env = append(cmd.Env, key+"="+value)
@@ -85,7 +96,7 @@ func (s *sandbox) loopCommand() *exec.Cmd {
 	return cmd
 }
 
-func (p *loopProcess) running() bool {
+func (p *backgroundRun) running() bool {
 	select {
 	case <-p.done:
 		return false
@@ -94,20 +105,20 @@ func (p *loopProcess) running() bool {
 	}
 }
 
-func (p *loopProcess) signal(sig syscall.Signal) {
+func (p *backgroundRun) signal(sig syscall.Signal) {
 	p.t.Helper()
 	if err := p.cmd.Process.Signal(sig); err != nil {
-		p.t.Fatalf("loop に %v を送れない: %v", sig, err)
+		p.t.Fatalf("%v に %v を送れない: %v", p.cmd.Args, sig, err)
 	}
 }
 
-// wait は loop の終了を待ち、exit code と出力を返す。
-func (p *loopProcess) wait() runResult {
+// wait は process の終了を待ち、exit code と出力を返す。
+func (p *backgroundRun) wait() runResult {
 	p.t.Helper()
 	select {
 	case <-p.done:
 	case <-time.After(runTimeout):
-		p.t.Fatalf("loop が %s で終わらない\nstdout:\n%s\nstderr:\n%s", runTimeout, p.stdout, p.stderr)
+		p.t.Fatalf("%v が %s で終わらない\nstdout:\n%s\nstderr:\n%s", p.cmd.Args, runTimeout, p.stdout, p.stderr)
 	}
 	return runResult{exit: p.cmd.ProcessState.ExitCode(), stdout: p.stdout.String(), stderr: p.stderr.String()}
 }
