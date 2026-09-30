@@ -16,7 +16,7 @@ type Condition struct {
 	Playbook string // plugin の procedure 下の playbook 名
 }
 
-// Conditions は条件カタログ (system.md §6)。条件名・述語・対応 playbook の定義元はここだけで、
+// Conditions は条件カタログ (ADR 0009 以前の system.md §6。#77 で撤去する)。条件名・述語・対応 playbook の定義元はここだけで、
 // 並びが指示の `conditions` の順になる。契約 file の「条件ごとの読み直し方法」と並びが一致することをテストが検査する。
 var Conditions = []Condition{
 	{"conflict", func(cl CL) bool { return cl.Mergeable == "CONFLICTING" }, "playbook-conflict-resolution"},

@@ -3,13 +3,13 @@
 - Status: Accepted
 - Date: 2026-09-30
 - 次の決定を置き換える
-  - ADR 0001: 状態を書くのを LLM に限る線のうち、claim を label に置く部分
+  - ADR 0001: claim を label に置く部分、orchestrator を起こす部分、「実装済み」を紐づく CL の存在で表す部分とその Alternatives での却下、tick を跨いで何も記憶しない部分 (claim・attempt・打ち切りを loop の memory に持つ)
   - ADR 0002: 全体
   - ADR 0003: orchestrator の契約を埋め込む部分と、playbook を plugin `swat-skills` から解決する部分
-  - ADR 0004: 宣言 config を XDG に置く部分と、token file の path を config に書く部分
-  - ADR 0005: worker を detach 起動する部分
-  - ADR 0006: 停止要求が worker を止めない部分と、token file を保険に残す部分 (認証は環境変数で渡す)
-  - ADR 0008: issue と CL の紐づけを CL 置き場の部品が返す部分
+  - ADR 0004: 宣言 config を XDG に置く部分、token file の path を config に書く部分、state dir の鍵を project 名にする部分 (scope key に変わる)、orchestrator が決定ファイルを書くための sandbox の許可
+  - ADR 0005: worker を detach 起動する部分、orchestrator を起動する部分、起動引数を `--permission-mode auto` に固定し permission 層を外さないとする部分 (起動引数は workflow 定義が決める)
+  - ADR 0006: 停止要求が worker を止めない部分、token file を保険に残す部分 (認証は環境変数で渡す)、`loop <project> <interval>` という起動の形、tick を跨いで状態を持ち越さない部分、project 単位の lock と単発の `tick`
+  - ADR 0008: issue と CL の紐づけを CL 置き場の部品が返す部分、CL の状態の語彙を GitHub の綴りのまま定義する部分とその Alternatives での却下 (`cl.*` の語彙に変わる)、機構の label の検査、契約 file と playbook への言及
 
 ## Context
 
@@ -73,7 +73,7 @@ SPEC と今の形は、次の 3 点で正反対の選択をしている。論点
 2. **CL 側の trigger を機械が評価する**
    - SPEC の機械は CL を見ず、手直しは人が tracker の state を `Rework` に戻すことで起きる
    - GitHub の issue には state が open / closed しかないので、CL の状態を機械が読んで trigger にする
-3. **正常に終わっても trigger に当たったままなら、失敗と同じく backoff して attempt を数える。上限に達したら打ち切る**
+3. **当たったままの正常終了は失敗と数える**: 正常に終わっても trigger に当たったままなら、失敗と同じく backoff して attempt を数え、上限に達したら打ち切る
    - SPEC は正常終了なら 1 秒後に続きを起動し、回数に上限を持たない
    - SPEC がそうするのは、Codex の worker が turn の上限で作業の途中に正常終了するため
    - `claude -p` は作業が終わるまで走るので、正常終了して当たったままなのは action の不具合とみなせる
@@ -81,13 +81,13 @@ SPEC と今の形は、次の 3 点で正反対の選択をしている。論点
    - 打ち切りは memory に持ち、tracker には書かない
 4. **二重起動は scope key の lock で防ぐ**
    - SPEC は claim を memory に持つが、複数の process が同じ tracker に向くことを定めていない
-5. **走っている worker は、作業対象が trigger から外れても止めない。作業対象が終端になったときだけ止める**
+5. **走っている worker は終端でだけ止める**: 作業対象が trigger から外れても止めず、作業対象が終端になったときだけ止める
    - SPEC は、実行中の issue が active でなくなると worker を止める
    - こちらでは、action 自身が作業の途中で作業対象を trigger から外す (label を外すなど)。外れた時点で止めると、後始末を打ち切ってしまう
-6. **空き slot を待つ間は attempt を進めない**
+6. **空きを待つ間は attempt を進めない**
    - SPEC §16.6 は、空きが無くて再起動できないときも attempt を進める
    - こちらは attempt の上限で打ち切るので、進めると空きを待つだけで打ち切りの回数を使ってしまう
-7. **workflow 定義の未知の key は名指しで失敗させる**
+7. **未知の key は失敗させる**: workflow 定義の未知の key は名指しで失敗させる
    - SPEC §5.3 は、前方互換のために未知の key を無視する
    - 綴り違いが「宣言していない」と同じ挙動になり、trigger が黙って効かなくなるのを防ぐほうを採る
 
@@ -125,6 +125,9 @@ SPEC と今の形は、次の 3 点で正反対の選択をしている。論点
 - **CL が merge されずに close されても、issue は自動では候補に戻らない**
   - 実装済みであることを、紐づく CL の有無ではなく、action が label で表すため
 - **打ち切りは loop を起動し直すと消える**。起動し直すたびに、上限までの attempt を再び使いうる
+- **作り直しの間は、外から観測できる形式の互換を保たない**
+  - log.jsonl の行と `paths --json` は公開契約だが、新しい形式が決まるまでは互換を壊してよい
+  - 利用者がまだいないため (#74 Q32)。新しい形式が決まったら、公開契約の規則を戻す
 - **prompt の途中に書いた `/skill` は Claude Code が展開しない**
   - 呼ばれるかどうかは model 次第になる
   - 事前の検査も、先頭の `/skill` にしか効かない
@@ -133,7 +136,8 @@ SPEC と今の形は、次の 3 点で正反対の選択をしている。論点
 - **この repo の運用は、利用者が守る約束に下がる**。対象は次の 2 つ
   - merge を人の最終 gate にすること
   - 人が開いた CL に worker を送らないこと
-  - どちらも、workflow 定義で `cl.approved` に action を当てないことと、CL 側の述語で head branch を絞ることで表す
+  - どちらも、workflow 定義で `cl.approved` に action を当てないことと、CL 側の述語で head branch を同じ repo の branch に絞ることで表す
+  - 破ったときの歯止めとして、`doctor` がこの 2 つに当たる宣言を警告する
 
 ## Alternatives considered
 
@@ -160,3 +164,10 @@ SPEC と今の形は、次の 3 点で正反対の選択をしている。論点
   - action が label を外した直後の再評価が古い index を読み、完了を失敗と数えうる
   - rate limit も厳しい
   - 一覧の取得結果を手元で評価する小さな文法を持つ
+
+### 述語を既製の式言語 (CEL・jq の式など) で書く
+
+- 却下理由: 書ける条件が広すぎ、誤りの名指しが弱くなる
+  - 述語は label・assignee・作者の立場など十数個の field の組み合わせで足り、式言語の表現力を要しない
+  - 未知の key を名指しで失敗させる方針 (外れるところ「未知の key は失敗させる」) を、式の中の綴り違いにまで効かせにくい
+  - 依存を 1 つ増やし、workflow 定義の公開形を式言語の版に縛る

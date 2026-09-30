@@ -41,7 +41,7 @@ Cockburn『ユースケース実践ガイド』(Writing Effective Use Cases) の
 
 - **3a.** workflow 定義が読めない、または文法に合わない (綴りの誤り・未知の key)
   - 3a1. loop は誤りを名指しで画面と log に出し、この tick では起動しない。突き合わせ (step 2) は済んでいる。次の周期へ進む
-- **3b.** ある trigger の action の先頭の skill が見つからない
+- **3b.** ある trigger の action の template の先頭の skill が見つからない
   - 3b1. loop はその trigger を名指しで画面と log に出し、その trigger だけを評価から外して step 4 へ進む
 - **4a.** 外部 store の観測に失敗した
   - 4a1. loop は「観測できなかった」を error として log に残し、候補 0 件と混同せずに tick を終える。次の周期へ進む
@@ -77,6 +77,8 @@ Cockburn『ユースケース実践ガイド』(Writing Effective Use Cases) の
   - 5a1. worker は、そのことを外部 store に残し (コメント・label)、作業対象を trigger から外して終わる。step 6 へ進む
 - **6a.** trigger に当たったまま残った、または worker が異常終了した
   - 6a1. UC-3 へ進む
+- **6b.** 作業対象の読み直しに失敗した
+  - 6b1. loop は error として log に残し、完了とも失敗とも数えずに claim を持ち続ける。次の tick で step 6 をやり直す
 
 ## UC-3 完了しなかった作業対象を retry し、上限で打ち切る
 
@@ -85,7 +87,7 @@ Cockburn『ユースケース実践ガイド』(Writing Effective Use Cases) の
 - **Level**: user-goal (sea)
 - **Trigger**: worker の attempt が失敗した (異常終了・stall・trigger に当たったまま)
 - **事前条件**: 作業対象に claim がある
-- **成功保証**: 作業対象は、完了するか、終端になるか、打ち切られて log と `status` に出ている。1 つの action の不具合が、上限を超えて起動を繰り返していない
+- **成功保証**: 作業対象は、完了するか、終端になるか、打ち切られて log と `status` に出ている。loop の 1 回の寿命の中では、1 つの action の不具合が上限を超えて起動を繰り返していない (打ち切りは loop を起動し直すと消える)
 
 **Main Success Scenario**
 
@@ -104,6 +106,8 @@ Cockburn『ユースケース実践ガイド』(Writing Effective Use Cases) の
   - 2b1. loop は完了として claim を解いて終わる
 - **2c.** 並列上限に空きが無い
   - 2c1. loop は attempt を進めずに、空きを待ち直す
+- **2d.** 作業対象の読み直しに失敗した
+  - 2d1. loop は error として log に残し、attempt を進めずに、次の tick で読み直す
 
 ## UC-4 走っている worker を外部 store と突き合わせる
 
@@ -126,7 +130,9 @@ Cockburn『ユースケース実践ガイド』(Writing Effective Use Cases) の
 - **1a.** 経過が stall の上限を超えた
   - 1a1. loop はその worker を止め、失敗として UC-3 へ渡す
 - **2a.** 読み直しに失敗した
-  - 2a1. loop は worker を止めずに走らせ続け、次の tick で読み直す (SPEC §8.5)
+  - 2a1. loop は error として log に残し、worker を止めずに走らせ続け、次の tick で読み直す (SPEC §8.5)
+- **3a.** `before_remove` が失敗した、または workspace を消せなかった
+  - 3a1. loop は error として log に残す。workspace が残っていれば、次の tick で消し直す
 - **2b.** trigger から外れていた (worker が作業の途中で label を外したなど)
   - 2b1. loop は worker を止めない。worker の終了後に UC-2 の step 6 で完了を確かめる
 

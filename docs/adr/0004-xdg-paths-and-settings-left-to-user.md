@@ -1,6 +1,6 @@
 # ADR 0004: 置き場を XDG の config と state に分け、Claude Code の settings は利用者に任せる
 
-- Status: Accepted (宣言 config を XDG に置く部分と token file の部分は ADR 0009 が置き換えた。workflow 定義は実装 repo の中に置く。state を XDG に置く部分と settings を利用者に任せる部分は残る)
+- Status: Accepted (宣言 config を XDG に置く部分・token file の部分・state dir の鍵を project 名にする部分・orchestrator のための sandbox の許可は ADR 0009 が置き換えた。workflow 定義は実装 repo の中に置き、state dir の鍵は scope key になる。state を XDG に置く部分と settings を利用者に任せる部分は残る)
 - Date: 2026-09-26
 
 ## Context

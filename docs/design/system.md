@@ -127,25 +127,28 @@ trigger は、作業対象に対する述語と action の組。workflow 定義�
 - assignee (未割当・特定の人)
 - 作者の立場 (collaborator か否か)
 - milestone
-- 未解決の blocker (依存先) が無いこと
+- blocked by (未解決の依存先があるか / 無いか)
 
-**CL 側の述語**。CL の状態の語彙と、絞り込みの条件を書く。
+**CL 側の述語**。CL の状態の語彙と、絞り込みを書く。
 
-| 語彙 | 真になる状態 |
+| 語彙 | 当たる状態 |
 |---|---|
 | `cl.conflict` | CL が merge conflict を持つ |
-| `cl.review` | collaborator が書いた未解決の review thread が 1 本以上ある |
+| `cl.review_unresolved` | collaborator が書いた未解決の review thread が 1 本以上ある |
 | `cl.ci_failed` | head commit の checks が失敗している |
 | `cl.approved` | CL が承認済みである |
 
-- 絞り込みの条件: label の all / any / none・head branch の pattern・作者の立場・draft か否か
+- 絞り込み: label の all / any / none・head branch の pattern・head が同じ repo の branch か (fork でないか)・作者の立場・draft か否か
 - **語彙の値は dispatcher の語彙で、CL host の綴りではない**。CL 置き場の adapter が host の応答をこの語彙へ写す (§13)
-- **`cl.review` は collaborator の thread だけを数える**
+- **`cl.review_unresolved` は collaborator の thread だけを数える**
   - public repo では誰でも review comment を残せる
   - 書き手を見ずに数えると、第三者の書き込みが push 権限を持つ worker を起動する
 - **作者では、人の CL と worker の CL を区別できない**
   - worker は利用者本人の認証で CL を開くため
   - 区別したい project は、head branch の pattern か label で絞る
+- **head branch の pattern で絞るときは、同じ repo の branch に限る**
+  - fork からは、誰でも同じ綴りの head branch を作れる
+  - 同じ repo に限らないと、第三者が fork から開いた CL が、push 権限を持つ worker を起動する
 - **`cl.approved` に action を当てるかは project が決める**
   - merge を人の最終 gate にする運用では、当てない
 
@@ -157,9 +160,9 @@ trigger は、作業対象に対する述語と action の組。workflow 定義�
 - **起動の順序は trigger の宣言順を先に、同じ trigger の中では作成日時の古い順**
   - 宣言の先頭に置いた trigger ほど優先される (既存の CL の手直しを新規の実装より先にする、など)
   - SPEC §8.2 の priority は使わない。GitHub の issue に priority の field は無い
-- **走っている worker の workspace で checkout されている branch を head に持つ CL には、CL 側の trigger を当てない**
-  - issue の worker が CL を開いた後も作業を続けている間に、同じ branch へ CL の worker を重ねないため
-  - 雛形の規約 (実装の action は CL を draft で開き、終わる直前に ready にする) との 2 段で防ぐ
+- **claim されている作業対象 (走っている・再起動待ち) の workspace で checkout されている branch を head に持つ CL には、CL 側の trigger を当てない**
+  - issue の worker が CL を開いた後も作業を続けている間や、その issue が再起動を待っている間に、同じ branch へ CL の worker を重ねないため
+  - 雛形の規約との 2 段で防ぐ。雛形の CL 側の trigger は draft でない CL だけに当て、実装の action は CL を draft で開いて、終わる直前に ready にする
 - **曖昧な CL (同じ head branch から複数の open CL がある) は CL 側の trigger の対象から外し、log と `status` に出す**
   - どの CL を作業対象にするか決まらないため
   - SPEC §11.3 の「正規化できない記録は外して log に出す」と同じ扱い
@@ -177,10 +180,10 @@ SPEC §7・§8・§16 の状態機械を土台にする。
    - 走っている worker ごとに、stream の最後の event からの経過を見る
    - stall の上限を超えた worker は止め、失敗として扱う
    - 走っている作業対象を外部 store で読み直し、終端になっていれば worker を止めて workspace を消す
-   - trigger から外れただけでは止めない (ADR 0009 の SPEC から外れるところ 5)
+   - trigger から外れただけでは止めない (ADR 0009「走っている worker は終端でだけ止める」)
 2. **workflow 定義の読み直しと事前検査** (§8)
    - 読めない・文法に合わないときは、この tick は何も起動しない。突き合わせは続ける
-   - action の先頭の `/名前` が見つからない trigger だけは、その trigger を起動しない。他の trigger は評価する
+   - action の template の先頭の `/名前` が見つからない trigger だけは、その trigger を起動しない。他の trigger は評価する
 3. **snapshot を作る**: open な issue と open な CL を読み、正規化する
 4. **trigger を評価し、候補を並べる** (§6)
 5. **空いている分だけ起動する**。並列上限から、走っている worker と再起動待ちの数を引いた分
@@ -190,18 +193,21 @@ SPEC §7・§8・§16 の状態機械を土台にする。
 1. workspace を用意する。無ければ作って `after_create` を撃ち、run の前に `before_run` を撃つ
 2. action と共通 prompt を描画する (§10)
 3. `claude -p` を子 process として起動し、stream を読む
-   - attempt が 2 回目以降なら、前の session を `--resume` で続ける
+   - attempt が 2 回目以降なら、前の attempt の session を `--resume` で続ける。session id は同じ作業対象の attempt を通して 1 つで、log と状態 file にも同じ id を載せる
+   - `--append-system-prompt-file` は `--resume` のときも毎回渡す
 4. 終了後に `after_run` を撃つ
 5. 作業対象を読み直し、起動した trigger から外れたかを確かめる
+   - 読み直しに失敗したら、完了とも失敗とも数えない。error として log に残し、claim を持ったまま次の tick で確かめ直す
    - 外れていれば **完了**。claim を解く
-   - 当たったままなら、worker が正常終了していても **失敗と同じに扱う** (ADR 0009 の SPEC から外れるところ 3)
+   - 当たったままなら、worker が正常終了していても **失敗と同じに扱う** (ADR 0009「当たったままの正常終了は失敗と数える」)
 
 **失敗の扱い**。
 
 - **attempt を 1 つ進め、backoff して再起動を待つ**
   - backoff の式は SPEC §8.4 のまま: `min(10s × 2^(attempt−1), 上限)`。上限の既定は 5 分
   - 再起動の前に作業対象を読み直す。終端になっていれば claim を解き、trigger から外れていれば完了として claim を解く
-  - 空きが無ければ、attempt を進めずに待ち直す。空きを待つことで打ち切りの回数を使わないため (SPEC §16.6 は進める)
+  - 空きが無ければ、attempt を進めずに待ち直す (ADR 0009「空きを待つ間は attempt を進めない」)
+  - 再起動は同じ trigger で続ける。宣言順で先の trigger に当たるようになっていても、その評価は claim が解けた後の tick で行う
 - **attempt が上限に達したら打ち切る**
   - 打ち切りは memory に持ち、log と `status` に出す。tracker には書かない
   - 作業対象が一度 trigger から外れたのを tick で観測すると解ける。人が label を外して付け直せば、再び候補になる
@@ -212,13 +218,15 @@ SPEC §7・§8・§16 の状態機械を土台にする。
 - SPEC §9 の安全条件に従う: 作業対象ごとに決まった path に置き、root の外へ出ない
 - **作業対象が終端になったら、`before_remove` を撃ってから消す**
   - loop の起動時にも、終端になった作業対象の workspace を掃除する
+  - `after_run` と `before_remove` の失敗は error として log に残し、処理は続ける (SPEC §5.3.4)
+  - workspace を消せなかったときは error として log に残し、次の tick で消し直す
 - **作り方は hooks に任せる**
   - issue なら branch を切った worktree、CL なら head を detach で checkout した worktree、など
   - 雛形は `git worktree add` の例を置く
 
 ## 8. workflow 定義
 
-実装 repo の中に置く (SPEC §5)。既定の path は、loop を起動した cwd の `WORKFLOW.md`。項目の書式は formats.md が正本。
+実装 repo の中に置く (SPEC §5)。path は loop の引数で渡せ、省けば loop を起動した cwd の `WORKFLOW.md` を読む。項目の書式は formats.md が正本。
 
 - **front matter が持つもの**
   - tracker の種類と adapter の設定
@@ -233,12 +241,12 @@ SPEC §7・§8・§16 の状態機械を土台にする。
 - **tick ごとに読み直す** (SPEC §6.2)
   - 直せば、loop を起動し直さずに効く
   - 読めない版・文法に合わない版では、新しい起動を止める。走っている worker の突き合わせは続ける
-- **未知の key は名指しで失敗させる**
-  - SPEC §5.3 は前方互換のために未知の key を無視するが、綴り違いが「宣言していない」と同じ挙動になるのを防ぐほうを採る
+- **未知の key は名指しで失敗させる** (ADR 0009「未知の key は失敗させる」)
 - **事前検査** (SPEC §6.3)
   - tracker の設定が組み立てられること
   - trigger の述語が文法に合うこと
-  - 各 trigger の action を描画した結果の**先頭の** `/名前` が、呼べる skill か command であること。見つからなければ、その trigger だけを起動しない (§7)
+  - 各 trigger の action の template の**先頭の** `/名前` が、呼べる skill か command であること。見つからなければ、その trigger だけを起動しない (§7)
+    - 作業対象に依らずに検査できるよう、描画の前の template を見る。先頭を template 変数で始める action は、先頭の `/名前` を確かめられないので、事前検査で名指しして失敗させる
 - **workflow 定義を LLM が書き換えるリスクは利用者が負う**
   - worker は repo を編集できるので、自分が次に起動される trigger を書き換えうる
   - dispatcher はこれを防がない (ADR 0009)
@@ -288,8 +296,8 @@ SPEC §7・§8・§16 の状態機械を土台にする。
   - 描画に失敗した attempt は、失敗として扱う
 - **session id は CLI が発行して渡す**。log と状態 file の 1 行から、Claude Code の transcript へ一意に辿るため
 - **dispatcher 本体は、worker の作業規約を持たない**
-  - これまでの spawn prompt の契約が持っていた規約は、この repo 自身の workflow 定義の共通 prompt に移す
-  - 対象の例: レビューの通し方・人への引き渡しの書き方・残タスクを起票するときの label・gh の撃ち方
+  - 作業規約は、各 project の workflow 定義の共通 prompt が持つ
+  - 例: レビューの通し方・人への引き渡しの書き方・残タスクを起票するときの label・gh の撃ち方
 
 ## 11. 配布と外部依存
 
@@ -301,6 +309,9 @@ SPEC §7・§8・§16 の状態機械を土台にする。
   - action が呼ぶ skill と command は、利用者が入れた plugin・repo の `.claude/`・`~/.claude/` のどれに置いてもよい
   - 事前検査 (§8) は、この 3 か所の skill と command から先頭の `/名前` を探す
 - **Claude Code の settings は CLI が書かない** (ADR 0004)。`doctor` は、worker が tracker を操作するのに要りそうな entry を表示する
+- **`doctor` は、利用者の約束に頼る宣言を警告する**
+  - `cl.approved` に action を当てている (merge を worker に任せうる)
+  - CL 側の trigger に、head branch の pattern・label・同じ repo の branch のどの絞り込みも無い (人の CL や fork の CL に worker を送りうる)
 
 ## 12. スコープ外
 
@@ -324,7 +335,7 @@ CLI の中で、呼び出し側から中身を隠す部品と、差し替えの�
 | hooks の実行 | tick | shell の撃ち方・timeout | (seam を置かない。テストは一時 dir で本物を撃つ) |
 
 - **issue 置き場の部品と CL 置き場の部品は、workflow 定義から組み立てて、正規化した作業対象と分類済みの失敗を返す** (ADR 0008)
-  - 正規化は SPEC §4.1.1 の Issue を土台にする。CL は、CL の状態の語彙と絞り込みの条件に要る field を持つ
+  - 正規化は SPEC §4.1.1 の Issue を土台にする。CL は、CL の状態の語彙と絞り込みに要る field を持つ
   - issue と CL の紐づけは返さない (ADR 0009)
   - 失敗は 認証 / 見えない / 読み切れない / rate limit に分けて返す (SPEC §11.4)
   - scope key は issue 置き場の部品が返す。tracker ごとの粒度 (GitHub は owner と repo、Jira は site と project) を部品の外に出さない

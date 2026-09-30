@@ -1,6 +1,6 @@
 # ADR 0001: 台帳を持たず、cron 駆動の tick で毎回外部 store を読み直す
 
-- Status: Accepted (定期起動を cron に頼る決定と、自作 scheduler の却下は ADR 0006 が置き換えた。claim を label に置く部分は ADR 0009 が置き換えた)
+- Status: Accepted (定期起動を cron に頼る決定と、自作 scheduler の却下は ADR 0006 が置き換えた。claim を label に置く部分・orchestrator を起こす部分・「実装済み」を紐づく CL の存在で表す部分とその却下・tick を跨いで何も記憶しない部分は ADR 0009 が置き換えた)
 - Date: 2026-09-26
 
 ## Context

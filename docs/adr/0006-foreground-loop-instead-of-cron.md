@@ -1,6 +1,6 @@
 # ADR 0006: cron をやめ、人が起こして人が止める loop で tick を回す
 
-- Status: Accepted (停止要求が worker を止めない部分と token file を保険に残す部分は ADR 0009 が置き換えた)
+- Status: Accepted (停止要求が worker を止めない部分・token file を保険に残す部分・`loop <project> <interval>` という起動の形・tick を跨いで状態を持ち越さない部分・project 単位の lock と単発の `tick` は ADR 0009 が置き換えた。人が起こして人が止める loop で回す部分は残る)
 - Date: 2026-09-27
 - ADR 0001 のうち、定期起動を cron に頼る決定と、自作 scheduler の却下を置き換える
 

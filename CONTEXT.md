@@ -63,7 +63,7 @@ _Avoid_: work item, task, job
 作業対象がもう起動の対象にならない状態。issue なら close、CL なら merge か close。
 
 **trigger**:
-workflow 定義が宣言する、作業対象に対する述語と action の組。issue 側の述語は label などで書き、CL 側の述語は dispatcher が定める CL の状態の語彙と絞り込みの条件で書く。
+workflow 定義が宣言する、作業対象に対する述語と action の組。issue 側の述語は label などで書き、CL 側の述語は dispatcher が定める CL の状態の語彙と絞り込みで書く。
 _Avoid_: event, 指示, 条件, rule
 
 **CL の状態の語彙**:

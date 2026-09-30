@@ -9,6 +9,8 @@
 - 加えて `pre-commit` (4.4.0 以上) を入れ、clone ごとに 1 回 `pre-commit install` を撃つ (commit 時と push 前の hook が両方入る)。gitleaks・actionlint・shellcheck は pre-commit が hook 環境として build するので別途の導入は要らない (初回の build に network が要る)
   - Go は手元の版が [go.mod](go.mod) の `toolchain` 行より古くても、`go` コマンドがその版を取ってきて使う (`GOTOOLCHAIN` の既定の `auto`)。hook も `go` コマンド経由で撃つので、手元と CI で同じ版の Go が動く
 
+> **作り直し中 (#74)**: この file の運用の記述は、今動いている実装 (作り直す前の形) に合わせてある。「#74 の作り直しの後は」で始まる行だけが、作り直し後の形を書いている。#83 で作り直し後の形に揃え、この注記を外す。
+
 ## 開発中の claude-dispatcher を試す
 
 `scripts/claude-dispatcher-dev.sh` は、script がある checkout の claude-dispatcher を build し直してから、渡した引数で実行する。リリースを待たずに、手元の変更を実際の project で試せる。
@@ -22,16 +24,18 @@ claude-dispatcher-dev loop myproj 5m
 
 - **Homebrew 版と区別する**: 素の `claude-dispatcher` は PATH 上の版 (Homebrew 等) を呼ぶ。build した binary は、その checkout の `dist/dev/claude-dispatcher` に置く。basename を `claude-dispatcher` のままにするのは、`status` が process の argv[0] の basename で loop / tick を見分けるため
 - **走っている dev の loop は止まらない**: build は一時 file に書いてから rename で入れ替えるので、dev の loop を回したまま別の端末で撃ち直せる。loop は起動した時点の binary で回り続けるので、変更を効かせるには loop を撃ち直す
-- **状態は Homebrew 版と共有する** (#74 の作り直しの前の形。作り直しでは workflow 定義を repo の中に置き、lock と state dir は scope key で分ける): 宣言 config と state dir ([docs/design/formats.md](docs/design/formats.md) §1) は Homebrew 版と同じものを読み書きする。同じ project の loop は 1 本しか動かせない (`loop.lock`) ので、Homebrew 版の loop を止めてから dev の loop を撃つ。分けたいときは `XDG_CONFIG_HOME` / `XDG_STATE_HOME` を上書きして撃つ
+- **状態は Homebrew 版と共有する**: 宣言 config と state dir ([docs/design/formats.md](docs/design/formats.md) §1) は Homebrew 版と同じものを読み書きする。同じ project の loop は 1 本しか動かせない (`loop.lock`) ので、Homebrew 版の loop を止めてから dev の loop を撃つ。分けたいときは `XDG_CONFIG_HOME` / `XDG_STATE_HOME` を上書きして撃つ
 - **tracker と CL host は本物**: dry-run でない tick は、実際の issue 置き場に label を付け、worker を起動する。試すなら使い捨ての issue に着手可 label を付けるか、`tick --dry-run` で止める
 
 ## branch・worktree 運用
 
 - 作業は issue 単位で行い、main から `worktree-issue-<n>` (`<n>` は issue 番号) の branch を切る
-  - この repo の workflow 定義は、CL 側の trigger をこの綴りの head branch に絞り、人が開いた CL に worker を送らない ([docs/design/system.md](docs/design/system.md) §6)。綴りを崩すと、その CL は手直しの trigger に当たらない
+  - dispatcher はこの綴りの head branch (fork でない、この repo 自身の branch) で worker 由来の CL を見分け、issue と紐づける。綴りを崩すと二重着手の防止が効かない
+  - #74 の作り直しの後は、この repo の workflow 定義が CL 側の trigger をこの綴りの、この repo 自身の head branch に絞り、人の CL と fork の CL に worker を送らない ([docs/design/system.md](docs/design/system.md) の「trigger」)
 - ファイルの変更 (コード・docs を問わない) は、main の checkout で直接行わず、worktree を作ってその中で行う。main の checkout に未 commit の変更を残すと、別の作業の差分と混ざって PR に切り出せなくなる
   - 対話で動かす Claude Code では `EnterWorktree` に name `issue-<n>` を渡す。branch 名は `worktree-` が前置されて `worktree-issue-<n>` になる
-  - dispatcher が起動した worker は、dispatcher が workflow 定義の hooks で用意した workspace の中で作業する ([docs/design/system.md](docs/design/system.md) §7)。#74 の作り直しが終わるまでは、旧来の spawn prompt の「作業ツリー」の手順 ([internal/contract/orchestrator.md](internal/contract/orchestrator.md)) に従う
+  - dispatcher が spawn した worker は、spawn prompt の「作業ツリー」の手順に従う (正本は [internal/contract/orchestrator.md](internal/contract/orchestrator.md))。cwd を clone root に置いたまま `git worktree add` で作る点が上と違う
+  - #74 の作り直しの後は、dispatcher が workflow 定義の hooks で用意した workspace の中で worker が作業する ([docs/design/system.md](docs/design/system.md) の「起動・retry・打ち切り」)
 - 実装が終わったら、worktree の branch を push して PR を作る
 - main へは PR 経由でだけ入れる (ruleset が強制する。下の「gate」の「main の保護」)
 
