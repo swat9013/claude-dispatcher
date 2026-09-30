@@ -1,57 +1,22 @@
-// Package github は gh CLI を撃って tracker と CL host を読む。書くのは setup の label 作成 (CreateLabel) だけ (system.md §1)。
+// Package github は gh CLI を撃って GitHub の issue 置き場を読む adapter (system.md §13)。tracker には書かない。
 package github
 
 import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
+	"regexp"
 	"strings"
 	"time"
 
-	"github.com/swat9013/claude-dispatcher/internal/config"
 	"github.com/swat9013/claude-dispatcher/internal/proc"
+	"github.com/swat9013/claude-dispatcher/internal/target"
 )
 
-// Runner は gh を 1 回撃ち、stdout を返す。失敗は *Error。
+// Runner は gh を 1 回撃ち、stdout を返す。失敗は *proc.Error。
 type Runner interface {
 	Run(args ...string) ([]byte, error)
 }
-
-// Error は gh の失敗 (観測不能)。Auth は認証が通らない失敗、NotFound は repo が見えない失敗で、
-// どちらも他の失敗 (起動できない・timeout・network) と取り違えないために分ける (system.md §8)。
-type Error struct {
-	Args     []string
-	Exit     int
-	Stderr   string
-	Auth     bool
-	NotFound bool
-}
-
-func (e *Error) Error() string {
-	head := strings.Join(e.Args[:min(2, len(e.Args))], " ")
-	return fmt.Sprintf("gh %s failed (exit %d): %s", head, e.Exit, strings.TrimSpace(e.Stderr))
-}
-
-// IsAuth は err が gh の認証の失敗かを返す。
-func IsAuth(err error) bool {
-	var e *Error
-	return errors.As(err, &e) && e.Auth
-}
-
-// IsNotFound は err が「repo が見えない」(綴りの誤りか、権限が無い) という gh の答えかを返す。
-func IsNotFound(err error) bool {
-	var e *Error
-	return errors.As(err, &e) && e.NotFound
-}
-
-// 認証が要るときの gh の exit code と、未認証 / token 失効のときに stderr へ出る文言 (system.md §8)
-const authExit = 4
-
-var authMarkers = []string{"HTTP 401", "gh auth login"}
-
-// repo が見えないときに stderr へ出る文言 (GraphQL 経由の `repo view` と REST 経由の呼び出し)
-var notFoundMarkers = []string{"Could not resolve to a Repository", "HTTP 404"}
 
 // Exec は gh の実物を撃つ Runner。Path は解決済みの絶対 path、Env は子プロセスの env。
 type Exec struct {
@@ -62,15 +27,177 @@ type Exec struct {
 
 func (g Exec) Run(args ...string) ([]byte, error) {
 	out, err := proc.Command{Path: g.Path, Env: g.Env, Timeout: g.Timeout}.Output(args...)
-	var failed *proc.Error
-	if errors.As(err, &failed) {
-		return nil, &Error{
-			Args: args, Exit: failed.Exit, Stderr: failed.Stderr,
-			Auth:     failed.Exit == authExit || containsAny(failed.Stderr, authMarkers),
-			NotFound: containsAny(failed.Stderr, notFoundMarkers),
+	return []byte(out), err
+}
+
+// Repo は GitHub の repo (`owner/name`)。
+type Repo struct {
+	Owner string
+	Name  string
+}
+
+func (r Repo) String() string { return r.Owner + "/" + r.Name }
+
+var repoPart = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+// ParseRepo は `owner/name` の綴りを読む。
+func ParseRepo(text string) (Repo, error) {
+	owner, name, ok := strings.Cut(text, "/")
+	if !ok || !repoPart.MatchString(owner) || !repoPart.MatchString(name) {
+		return Repo{}, errors.New("owner/name の綴りで書く")
+	}
+	return Repo{Owner: owner, Name: name}, nil
+}
+
+// ScopeKey は repo の issue 置き場を指す scope key。GitHub の owner と repo の名前は大文字と小文字を区別しないので小文字にする。
+func ScopeKey(repo Repo) string { return strings.ToLower("github.com/" + repo.String()) }
+
+// IssueStore は repo の issue 置き場を読む部品。
+type IssueStore struct {
+	gh   Runner
+	repo Repo
+}
+
+func NewIssueStore(gh Runner, repo Repo) IssueStore { return IssueStore{gh: gh, repo: repo} }
+
+func (s IssueStore) ScopeKey() string { return ScopeKey(s.repo) }
+
+// connectionSize は issue ごとに 1 往復で読む label・assignee・依存先の上限。超えたら読み切れないとして失敗させる
+const connectionSize = 100
+
+var issuesQuery = fmt.Sprintf(`
+query($owner: String!, $name: String!, $endCursor: String) {
+  repository(owner: $owner, name: $name) {
+    issues(states: OPEN, first: 100, after: $endCursor, orderBy: {field: CREATED_AT, direction: ASC}) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        number
+        title
+        url
+        createdAt
+        authorAssociation
+        labels(first: %[1]d) { totalCount nodes { name } }
+        assignees(first: %[1]d) { totalCount nodes { login } }
+        milestone { title }
+        blockedBy(first: %[1]d) { totalCount nodes { state } }
+      }
+    }
+  }
+}`, connectionSize)
+
+type connection[T any] struct {
+	TotalCount int
+	Nodes      []T
+}
+
+type issuePage struct {
+	Data struct {
+		Repository *struct {
+			Issues struct {
+				Nodes []struct {
+					Number            int
+					Title             string
+					URL               string
+					CreatedAt         time.Time
+					AuthorAssociation string
+					Labels            connection[struct{ Name string }]
+					Assignees         connection[struct{ Login string }]
+					Milestone         *struct{ Title string }
+					BlockedBy         connection[struct{ State string }]
+				}
+			}
 		}
 	}
-	return []byte(out), err
+}
+
+// OpenIssues は repo の open な issue を全件読み、正規化して返す。失敗は *target.Failure。
+func (s IssueStore) OpenIssues() ([]target.Issue, error) {
+	// -f は生文字列。-F だと数字だけの owner / name が Int に型付けされ String! 変数に入らない
+	out, err := s.gh.Run("api", "graphql", "--paginate", "--slurp",
+		"-f", "query="+issuesQuery, "-f", "owner="+s.repo.Owner, "-f", "name="+s.repo.Name)
+	if err != nil {
+		return nil, s.fail(classify(err), err)
+	}
+	var pages []issuePage
+	if err := json.Unmarshal(out, &pages); err != nil {
+		return nil, s.fail(target.Unavailable, fmt.Errorf("gh api graphql の出力を読めない: %w", err))
+	}
+	issues := []target.Issue{}
+	for _, page := range pages {
+		if page.Data.Repository == nil {
+			return nil, s.fail(target.NotVisible, errors.New("gh api graphql の出力に repository が無い"))
+		}
+		for _, n := range page.Data.Repository.Issues.Nodes {
+			for _, c := range []struct {
+				what        string
+				total, read int
+			}{
+				{"label", n.Labels.TotalCount, len(n.Labels.Nodes)},
+				{"assignee", n.Assignees.TotalCount, len(n.Assignees.Nodes)},
+				{"依存先", n.BlockedBy.TotalCount, len(n.BlockedBy.Nodes)},
+			} {
+				if c.total > c.read {
+					return nil, s.fail(target.Truncated, fmt.Errorf("issue #%d の %s が %d 件あり、1 往復で読める %d 件を超えた", n.Number, c.what, c.total, connectionSize))
+				}
+			}
+			i := target.Issue{
+				Number:               n.Number,
+				Title:                n.Title,
+				URL:                  n.URL,
+				CreatedAt:            n.CreatedAt,
+				AuthorIsCollaborator: collaboratorAssociations[n.AuthorAssociation],
+			}
+			for _, l := range n.Labels.Nodes {
+				i.Labels = append(i.Labels, l.Name)
+			}
+			for _, a := range n.Assignees.Nodes {
+				i.Assignees = append(i.Assignees, a.Login)
+			}
+			if n.Milestone != nil {
+				i.Milestone = n.Milestone.Title
+			}
+			for _, b := range n.BlockedBy.Nodes {
+				if b.State == "OPEN" {
+					i.OpenBlockers++
+				}
+			}
+			issues = append(issues, i)
+		}
+	}
+	return issues, nil
+}
+
+// collaboratorAssociations は collaborator と数える作者の立場 (GitHub の CommentAuthorAssociation)
+var collaboratorAssociations = map[string]bool{"OWNER": true, "MEMBER": true, "COLLABORATOR": true}
+
+func (s IssueStore) fail(kind target.FailureKind, err error) *target.Failure {
+	return &target.Failure{Kind: kind, Place: s.repo.String(), Err: err}
+}
+
+// 認証が要るときの gh の exit code と、未認証 / token 失効のときに stderr へ出る文言
+const authExit = 4
+
+var (
+	authMarkers       = []string{"HTTP 401", "gh auth login", "Bad credentials"}
+	notVisibleMarkers = []string{"Could not resolve to a Repository", "HTTP 404"}
+	rateLimitMarkers  = []string{"rate limit", "http 429"}
+)
+
+// classify は gh の失敗を分類する。
+func classify(err error) target.FailureKind {
+	var failed *proc.Error
+	if !errors.As(err, &failed) {
+		return target.Unavailable
+	}
+	switch {
+	case failed.Exit == authExit || containsAny(failed.Stderr, authMarkers):
+		return target.Auth
+	case containsAny(failed.Stderr, notVisibleMarkers):
+		return target.NotVisible
+	case containsAny(strings.ToLower(failed.Stderr), rateLimitMarkers):
+		return target.RateLimit
+	}
+	return target.Unavailable
 }
 
 func containsAny(text string, markers []string) bool {
@@ -80,305 +207,4 @@ func containsAny(text string, markers []string) bool {
 		}
 	}
 	return false
-}
-
-// RepoExists は repo が見えるかを確かめる。
-func RepoExists(gh Runner, repo config.Repo) error {
-	_, err := gh.Run("repo", "view", repo.String(), "--json", "nameWithOwner")
-	return err
-}
-
-// labelSearchLimit は label の検索 1 往復で読む件数の上限
-const labelSearchLimit = 100
-
-// LabelExists は repo に name の label があるかを返す。name で検索して綴りの一致を見るので、repo の label の総数に上限を持たない。
-func LabelExists(gh Runner, repo config.Repo, name string) (bool, error) {
-	out, err := gh.Run("label", "list", "-R", repo.String(), "--search", name, "--json", "name", "--limit", fmt.Sprint(labelSearchLimit))
-	if err != nil {
-		return false, err
-	}
-	var labels []struct{ Name string }
-	if err := json.Unmarshal(out, &labels); err != nil {
-		return false, fmt.Errorf("gh label list の出力を読めない: %w", err)
-	}
-	for _, l := range labels {
-		if l.Name == name {
-			return true, nil
-		}
-	}
-	if len(labels) >= labelSearchLimit {
-		// 検索は名前と説明の部分一致なので、一致する label が上限の外に居るかもしれない
-		return false, fmt.Errorf("%w: label %q の検索結果が %d 件以上ある (%s)", ErrTruncated, name, labelSearchLimit, repo)
-	}
-	return false, nil
-}
-
-// ErrTruncated は 1 往復の上限に達し、観測が全量でないこと。切り詰めた像から指示を出さない
-// (窓の外の open CL を持つ issue が候補へ戻り、二重着手になる)。
-var ErrTruncated = errors.New("取得上限に達し観測が切り詰められた")
-
-// IssueListLimit は 1 往復で読む open issue の上限
-const IssueListLimit = 500
-
-type Issue struct {
-	Number int
-	Title  string
-	URL    string
-	Body   string
-	Labels []string
-}
-
-// OpenIssues は repo の open issue を全件返す。
-func OpenIssues(gh Runner, repo config.Repo) ([]Issue, error) {
-	out, err := gh.Run("issue", "list", "-R", repo.String(), "--state", "open",
-		"--limit", fmt.Sprint(IssueListLimit), "--json", "number,title,labels,url,body")
-	if err != nil {
-		return nil, err
-	}
-	var raw []struct {
-		Number int
-		Title  string
-		URL    string
-		Body   string
-		Labels []struct{ Name string }
-	}
-	if err := json.Unmarshal(out, &raw); err != nil {
-		return nil, fmt.Errorf("gh issue list の出力を読めない: %w", err)
-	}
-	if len(raw) >= IssueListLimit {
-		return nil, fmt.Errorf("%w: open issue が %d 件以上ある (%s)", ErrTruncated, IssueListLimit, repo)
-	}
-	issues := make([]Issue, 0, len(raw))
-	for _, r := range raw {
-		labels := make([]string, 0, len(r.Labels))
-		for _, l := range r.Labels {
-			labels = append(labels, l.Name)
-		}
-		issues = append(issues, Issue{Number: r.Number, Title: r.Title, URL: r.URL, Body: r.Body, Labels: labels})
-	}
-	return issues, nil
-}
-
-const (
-	prPageSize          = 100
-	closingRefsPageSize = 20
-	reviewThreadsSize   = 100
-)
-
-// prQuery は open PR の紐づき (closing reference) と状態 (conflict / checks / 未解決 thread) を 1 往復で引く
-var prQuery = fmt.Sprintf(`
-query($owner: String!, $name: String!) {
-  repository(owner: $owner, name: $name) {
-    pullRequests(states: OPEN, first: %d, orderBy: {field: UPDATED_AT, direction: DESC}) {
-      pageInfo { hasNextPage }
-      nodes {
-        number
-        url
-        headRefName
-        isCrossRepository
-        baseRefName
-        isDraft
-        mergeable
-        closingIssuesReferences(first: %d) {
-          totalCount
-          nodes { number repository { nameWithOwner } }
-        }
-        reviewThreads(first: %d) { totalCount nodes { isResolved } }
-        commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
-      }
-    }
-  }
-}`, prPageSize, closingRefsPageSize, reviewThreadsSize)
-
-// PR は open PR 1 本の観測。
-type PR struct {
-	Number     int
-	URL        string
-	Head       string
-	HeadInFork bool // isCrossRepository
-	Base       string
-	Draft      bool
-	Mergeable  string
-	// Closes は closing reference が指す issue (issueRepo の issue だけ)
-	Closes            []int
-	Checks            *string // head commit の checks の集約。checks が無ければ nil
-	UnresolvedThreads int
-}
-
-// OpenPRs は repo の open PR を全件返す。closing reference は issueRepo を指すものだけを数える。
-func OpenPRs(gh Runner, repo, issueRepo config.Repo) ([]PR, error) {
-	// -f は生文字列。-F だと数字だけの owner / name が Int に型付けされ String! 変数に入らない
-	out, err := gh.Run("api", "graphql", "-f", "query="+prQuery, "-f", "owner="+repo.Owner, "-f", "name="+repo.Name)
-	if err != nil {
-		return nil, err
-	}
-	var payload struct {
-		Data struct {
-			Repository struct {
-				PullRequests struct {
-					PageInfo struct{ HasNextPage bool }
-					Nodes    []struct {
-						Number                  int
-						URL                     string
-						HeadRefName             string
-						IsCrossRepository       bool
-						BaseRefName             string
-						IsDraft                 bool
-						Mergeable               string
-						ClosingIssuesReferences struct {
-							TotalCount int
-							Nodes      []struct {
-								Number     int
-								Repository struct{ NameWithOwner string }
-							}
-						}
-						ReviewThreads struct {
-							TotalCount int
-							Nodes      []struct{ IsResolved bool }
-						}
-						Commits struct {
-							Nodes []struct {
-								Commit struct {
-									StatusCheckRollup *struct{ State string }
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-	if err := json.Unmarshal(out, &payload); err != nil {
-		return nil, fmt.Errorf("gh api graphql の出力を読めない: %w", err)
-	}
-	page := payload.Data.Repository.PullRequests
-	if page.PageInfo.HasNextPage {
-		return nil, fmt.Errorf("%w: open PR が %d 件を超えた (%s)", ErrTruncated, prPageSize, repo)
-	}
-	prs := make([]PR, 0, len(page.Nodes))
-	for _, n := range page.Nodes {
-		if n.ClosingIssuesReferences.TotalCount > closingRefsPageSize {
-			return nil, fmt.Errorf("%w: PR #%d の closing reference が %d 件を超えた", ErrTruncated, n.Number, closingRefsPageSize)
-		}
-		if n.ReviewThreads.TotalCount > reviewThreadsSize {
-			return nil, fmt.Errorf("%w: PR #%d の review thread が %d 件を超えた", ErrTruncated, n.Number, reviewThreadsSize)
-		}
-		pr := PR{Number: n.Number, URL: n.URL, Head: n.HeadRefName, HeadInFork: n.IsCrossRepository, Base: n.BaseRefName, Draft: n.IsDraft, Mergeable: n.Mergeable, Closes: []int{}}
-		for _, ref := range n.ClosingIssuesReferences.Nodes {
-			if ref.Repository.NameWithOwner == issueRepo.String() {
-				pr.Closes = append(pr.Closes, ref.Number)
-			}
-		}
-		for _, t := range n.ReviewThreads.Nodes {
-			if !t.IsResolved {
-				pr.UnresolvedThreads++
-			}
-		}
-		if len(n.Commits.Nodes) > 0 && n.Commits.Nodes[0].Commit.StatusCheckRollup != nil {
-			state := n.Commits.Nodes[0].Commit.StatusCheckRollup.State
-			pr.Checks = &state
-		}
-		prs = append(prs, pr)
-	}
-	return prs, nil
-}
-
-// WIPIssues は repo の open issue のうち wip label の付いた番号を返す (status が worker の wip を読む)。
-func WIPIssues(gh Runner, repo config.Repo) ([]int, error) {
-	return labeledIssues(gh, repo, config.WIPLabel)
-}
-
-// HumanIssues は repo の open issue のうち人待ち (ready-for-human) の付いた番号を返す (status が worker の結末を読む)。
-func HumanIssues(gh Runner, repo config.Repo) ([]int, error) {
-	return labeledIssues(gh, repo, config.HumanLabel)
-}
-
-// labeledIssues は repo の open issue のうち label の付いた番号を返す。
-func labeledIssues(gh Runner, repo config.Repo, label string) ([]int, error) {
-	out, err := gh.Run("issue", "list", "-R", repo.String(), "--label", label, "--state", "open",
-		"--limit", fmt.Sprint(IssueListLimit), "--json", "number")
-	if err != nil {
-		return nil, err
-	}
-	var listed []struct{ Number int }
-	if err := json.Unmarshal(out, &listed); err != nil {
-		return nil, fmt.Errorf("gh issue list の出力を読めない: %w", err)
-	}
-	if len(listed) >= IssueListLimit {
-		return nil, fmt.Errorf("%w: %s の付いた issue が %d 件以上ある (%s)", ErrTruncated, label, IssueListLimit, repo)
-	}
-	numbers := make([]int, 0, len(listed))
-	for _, i := range listed {
-		numbers = append(numbers, i.Number)
-	}
-	return numbers, nil
-}
-
-// CLState は CL の番号と state (OPEN / CLOSED / MERGED)。
-type CLState struct {
-	Number int    `json:"number"`
-	State  string `json:"state"`
-}
-
-// Settled は CL が worker の成果として残っている (open か merge 済み) か。close されただけの CL は数えない。
-func (c CLState) Settled() bool { return c.State == "OPEN" || c.State == "MERGED" }
-
-// LatestCLsWindow は LatestCLs が branch ごとに新しい順に読む CL の本数。fork の CL を読み飛ばす分の余裕。
-// 本数は formats.md §10 (status の CL 列) にも書いてあるので、変えるときは一緒に直す
-const LatestCLsWindow = 10
-
-// LatestCLs は issue ごとに、repo 自身の head branch (fork でない) が branches[issue] の最新の CL を返す。無い issue は nil。
-// headRefName の絞り込みは fork の CL も拾うので、新しい順に LatestCLsWindow 本まで読んで fork の CL を読み飛ばす。
-// 窓の中が fork だけで続きがある issue は、CL が無いと言い切れないので undetermined に返す (cls には載せない)。
-func LatestCLs(gh Runner, repo config.Repo, branches map[int]string) (cls map[int]*CLState, undetermined []int, err error) {
-	var fields strings.Builder
-	for issue, branch := range branches {
-		fmt.Fprintf(&fields, ` i%d: pullRequests(headRefName: %q, first: %d, orderBy: {field: CREATED_AT, direction: DESC}) { totalCount nodes { number state isCrossRepository } }`, issue, branch, LatestCLsWindow)
-	}
-	query := "query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) {" + fields.String() + " } }"
-	out, err := gh.Run("api", "graphql", "-f", "query="+query, "-f", "owner="+repo.Owner, "-f", "name="+repo.Name)
-	if err != nil {
-		return nil, nil, err
-	}
-	var payload struct {
-		Data struct {
-			Repository map[string]struct {
-				TotalCount int
-				Nodes      []struct {
-					CLState
-					IsCrossRepository bool
-				}
-			}
-		}
-	}
-	if err := json.Unmarshal(out, &payload); err != nil {
-		return nil, nil, fmt.Errorf("gh api graphql の出力を読めない: %w", err)
-	}
-	cls = map[int]*CLState{}
-	for issue := range branches {
-		found, ok := payload.Data.Repository[fmt.Sprintf("i%d", issue)]
-		if !ok {
-			return nil, nil, fmt.Errorf("gh api graphql の出力に issue %d の CL が無い", issue)
-		}
-		cls[issue] = nil
-		for _, n := range found.Nodes {
-			if !n.IsCrossRepository {
-				cls[issue] = &n.CLState
-				break
-			}
-		}
-		if cls[issue] == nil && found.TotalCount > len(found.Nodes) {
-			// 窓の外に repo 自身の CL が残っているかもしれない。無いと言い切らない
-			delete(cls, issue)
-			undetermined = append(undetermined, issue)
-		}
-	}
-	slices.Sort(undetermined)
-	return cls, undetermined, nil
-}
-
-// CreateLabel は repo に label を作る。tracker に書く唯一の経路で、導入者が承認した setup だけが使う (system.md §1)。
-func CreateLabel(gh Runner, repo config.Repo, name, color, description string) error {
-	_, err := gh.Run("label", "create", name, "-R", repo.String(), "--color", color, "--description", description)
-	return err
 }

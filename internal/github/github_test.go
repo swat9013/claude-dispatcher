@@ -1,14 +1,15 @@
 package github_test
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/swat9013/claude-dispatcher/internal/config"
 	"github.com/swat9013/claude-dispatcher/internal/github"
+	"github.com/swat9013/claude-dispatcher/internal/target"
 )
 
 // TestTimedOutGhIsStoppedWithTheChildrenItStarted は、stdout を握ったまま眠る孫を残す gh が timeout で
@@ -36,9 +37,12 @@ func TestRepoThatGhCannotResolveIsNotFound(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := github.RepoExists(github.Exec{Path: gh, Timeout: 5 * time.Second}, config.Repo{Owner: "acme", Name: "x"})
+	store := github.NewIssueStore(github.Exec{Path: gh, Timeout: 5 * time.Second}, github.Repo{Owner: "acme", Name: "x"})
 
-	if !github.IsNotFound(err) || github.IsAuth(err) {
+	_, err := store.OpenIssues()
+
+	var failure *target.Failure
+	if !errors.As(err, &failure) || failure.Kind != target.NotVisible {
 		t.Fatalf("err = %v", err)
 	}
 }

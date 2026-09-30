@@ -12,34 +12,22 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// `--version` と doctor の版の行 (formats.md §12 / §14)。
+// `--version` (formats.md §8)。
 
 // versionLine は `--version` の 1 行 (版と commit)。どちらも空白を含まない
 var versionLine = regexp.MustCompile(`^claude-dispatcher (\S+) \((\S+)\)\n$`)
 
-func TestVersionPrintsTheVersionAndCommitWithoutAConfig(t *testing.T) {
-	s := newBareSandbox(t)
+func TestVersionPrintsTheVersionAndCommitWithoutAWorkflowDefinition(t *testing.T) {
+	s := newSandbox(t)
+	if err := os.Remove(s.workflowFile()); err != nil {
+		t.Fatal(err)
+	}
 
 	r := s.run("--version")
 
 	assertExit(t, r, 0)
 	if !versionLine.MatchString(r.stdout) || r.stderr != "" {
 		t.Fatalf("--version: stdout = %q, stderr = %q", r.stdout, r.stderr)
-	}
-}
-
-func TestDoctorShowsTheSameVersionAsTheVersionFlagAsInformation(t *testing.T) {
-	s := newInstallSandbox(t)
-	want := versionLine.FindStringSubmatch(s.run("--version").stdout)
-	if want == nil {
-		t.Fatal("--version の出力が読めない")
-	}
-
-	r := s.doctor()
-
-	line := assertDoctorMark(t, r.stdout, "版", "--")
-	if !strings.HasSuffix(line, want[1]+" ("+want[2]+")") {
-		t.Fatalf("doctor の版の行 = %q, want 末尾 %s (%s)", line, want[1], want[2])
 	}
 }
 

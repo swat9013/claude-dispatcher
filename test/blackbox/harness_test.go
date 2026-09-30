@@ -4,22 +4,26 @@
 // binary の内部 package は import しない。観測するのは次の 3 つだけ:
 //   - exit code / stdout / stderr
 //   - state dir に書かれた file
-//   - PATH に置いた stub (gh / claude / git / ps) が受け取った argv・cwd・env
+//   - PATH に置いた stub (gh / claude / git) が受け取った argv・cwd・env
 //
 // 本 file は sandbox (1 テスト分の HOME / 置き場 / clone / stub) と binary の実行を持つ。
-// stub への応答と fixture は fixtures_test.go、観測は observe_test.go、assert は assert_test.go。
+// stub への応答と fixture は fixtures_test.go、assert は assert_test.go。
 package blackbox_test
 
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -30,34 +34,15 @@ const (
 	dispatcherPackage = "github.com/swat9013/claude-dispatcher/cmd/claude-dispatcher"
 	stubPackage       = "github.com/swat9013/claude-dispatcher/test/blackbox/stub"
 
-	defaultProject    = "widgets"
-	defaultIssueRepo  = "acme/widgets"
-	defaultReadyLabel = "ready-for-agent"
-	defaultMaxWIP     = 2
-	wipLabel          = "dispatcher:wip"
-	humanLabel        = "ready-for-human"
+	defaultIssueRepo = "acme/widgets"
+	readyLabel       = "ready-for-agent"
 
 	runTimeout = 60 * time.Second
 )
 
-// git / ps の stub は status / setup / doctor / loop の観測点。tick の契約は gh と claude の呼び出しだけで決まる
-var stubNames = []string{"gh", "claude", "git", "ps"}
-
-// selfResolutionDirs は PATH の自己解決 (internal/deps の candidates) が探す置き場のうち、sandbox の HOME の外にあるもの。
-// sandbox の PATH は stub だけで閉じているが (newBareSandbox)、自己解決はここまで探しに行くので、ここにある実物には stub で蓋ができない。
-// black-box テストは internal を import せず外から撃つので、一覧は candidates と重複させて持つ (変えるときは両方を揃える)
-var selfResolutionDirs = []string{"/opt/homebrew/bin", "/usr/local/bin", "/home/linuxbrew/.linuxbrew/bin"}
-
-// skipIfSelfResolutionReachesARealOne は、自己解決が届く置き場に name の実物があれば t を skip する。
-// 「解決できない」を確かめるテストは、実物に解決されてしまうと検査が成り立たない
-func skipIfSelfResolutionReachesARealOne(t *testing.T, name string) {
-	t.Helper()
-	for _, dir := range selfResolutionDirs {
-		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
-			t.Skipf("PATH の自己解決が届く %s に %s の実物がある", dir, name)
-		}
-	}
-}
+// stubNames は PATH に置く stub。今の binary が撃つのは gh だけだが、PATH の自己解決 (依存 CLI が揃っているか) が
+// claude と git も探すので置いておく
+var stubNames = []string{"gh", "claude", "git"}
 
 var registerSourcesOnce = sync.OnceValue(registerBinarySources)
 
@@ -113,157 +98,87 @@ func registerBinarySources() error {
 }
 
 type sandbox struct {
-	t          *testing.T
-	root       string
-	home       string
-	clone      string
-	configRoot string
-	stateRoot  string
-	stubRoot   string
-	binDir     string
-	project    string
-	env        map[string]string
-	// rules は stub の名前ごとの応答 rule。claude は orchestratorRule と組み合わせて書き出す
-	rules            map[string][]stubwire.Rule
-	orchestratorRule *stubwire.Rule
-	// workerRule は worker (spawn prompt に印を持つ claude 呼び出し) への応答
-	workerRule stubwire.Rule
-	plugins    map[string][]pluginEntry
+	t         *testing.T
+	root      string
+	home      string
+	clone     string
+	stateRoot string
+	stubRoot  string
+	binDir    string
+	env       map[string]string
+	rules     map[string][]stubwire.Rule
 }
 
-// newSandbox は XDG_CONFIG_HOME / XDG_STATE_HOME を tmp に向けた sandbox を作る。
-// config は検証済みの既定 (formats.md §2 の必須 3 項目)、gh は repo と label が実在する応答、
-// plugin swat-skills は user scope に 1 つ install 済み。state dir は setup が作った前提で置く。
+// newSandbox は XDG_STATE_HOME を tmp に向けた sandbox を作る。clone には既定の workflow 定義
+// (defaultWorkflow) を置き、gh は open な issue が 0 件の応答を返す。
 func newSandbox(t *testing.T) *sandbox {
-	s := newBareSandbox(t)
-	s.env["XDG_CONFIG_HOME"] = filepath.Join(s.root, "xdg-config")
-	s.env["XDG_STATE_HOME"] = filepath.Join(s.root, "xdg-state")
-	s.configRoot = filepath.Join(s.root, "xdg-config", "claude-dispatcher")
-	s.stateRoot = filepath.Join(s.root, "xdg-state", "claude-dispatcher")
-	s.setUp()
-	return s
-}
-
-// newSandboxWithHomeDefaults は XDG_* を渡さない sandbox (置き場は $HOME/.config と $HOME/.local/state)。
-func newSandboxWithHomeDefaults(t *testing.T) *sandbox {
-	s := newBareSandbox(t)
-	s.configRoot = filepath.Join(s.home, ".config", "claude-dispatcher")
-	s.stateRoot = filepath.Join(s.home, ".local", "state", "claude-dispatcher")
-	s.setUp()
-	return s
-}
-
-func newBareSandbox(t *testing.T) *sandbox {
 	t.Helper()
 	if err := registerSourcesOnce(); err != nil {
 		t.Fatal(err)
 	}
-	// macOS の t.TempDir() は /var/... を返すが、子 process の cwd は /private/var/... に解決される。
-	// project scope の projectPath と cwd の照合を実環境どおりに通すため、実 path に揃える
+	// macOS の t.TempDir() は /var/... を返すが、子 process の cwd は /private/var/... に解決される。実 path に揃える
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	s := &sandbox{
-		t:          t,
-		root:       root,
-		home:       filepath.Join(root, "home"),
-		clone:      filepath.Join(root, "clone"),
-		stubRoot:   filepath.Join(root, "stub"),
-		binDir:     filepath.Join(root, "stub-bin"),
-		project:    defaultProject,
-		rules:      map[string][]stubwire.Rule{},
-		workerRule: quickWorkerRule,
-		plugins:    map[string][]pluginEntry{},
+		t:         t,
+		root:      root,
+		home:      filepath.Join(root, "home"),
+		clone:     filepath.Join(root, "clone"),
+		stateRoot: filepath.Join(root, "xdg-state", "claude-dispatcher"),
+		stubRoot:  filepath.Join(root, "stub"),
+		binDir:    filepath.Join(root, "stub-bin"),
+		rules:     map[string][]stubwire.Rule{},
 	}
 	for _, dir := range []string{s.home, s.clone, s.stubRoot} {
 		mustMkdir(t, dir)
 	}
-	// TempDir の削除より先に走る (Cleanup は後に登録したものから走る)
-	t.Cleanup(s.waitForSpawnedWorkers)
 	s.installStubs()
 	s.env = map[string]string{
-		"HOME": s.home,
-		// PATH は stub だけで閉じる。CLI が撃つ外部 CLI はすべて stub にあるので、/usr/bin 等を足すと
-		// stub を消したテストで runner の実物 (/usr/bin/gh 等) に届いてしまう。PATH の自己解決が HOME の外へ
-		// 探しに行く置き場は閉じられないので、skipIfSelfResolutionReachesARealOne が受け持つ
+		"HOME":           s.home,
+		"XDG_STATE_HOME": filepath.Join(root, "xdg-state"),
+		// PATH は stub だけで閉じる。/usr/bin 等を足すと、stub を消したテストで runner の実物に届いてしまう
 		"PATH": s.binDir,
 	}
-	return s
-}
-
-func (s *sandbox) setUp() {
-	mustMkdir(s.t, s.stateDir())
-	s.writeConfig(s.defaultConfig())
-	s.setLabels(wipLabel, humanLabel, defaultReadyLabel, "needs-triage")
-	s.respond("gh", stubwire.Rule{ArgsPrefix: []string{"repo", "view"}, Stdout: `{"nameWithOwner":"` + defaultIssueRepo + `"}`})
+	s.writeWorkflow(defaultWorkflow)
 	s.setIssues()
-	s.setPRs()
-	s.writeClaudeRules()
-	// git / ps は tick が使わない。status / setup / doctor のテストが応答を足すまで、呼ばれたら成功だけを返す
-	s.respond("git", stubwire.Rule{})
-	s.respond("ps", stubwire.Rule{})
-	s.installPlugin("swat-skills@swat9013", "user", "")
+	return s
 }
 
 // installStubs は stub binary を名前ごとに PATH の置き場 (binDir) へ hard link し、stub が root を引く file を置く。
 func (s *sandbox) installStubs() {
-	dir := s.binDir
 	s.t.Helper()
-	mustMkdir(s.t, dir)
+	mustMkdir(s.t, s.binDir)
 	for _, name := range stubNames {
-		dst := filepath.Join(dir, name)
+		dst := filepath.Join(s.binDir, name)
 		// TMPDIR と t.TempDir() が別 device だと hard link を張れないので、そのときは複製する
 		if err := os.Link(stubBin, dst); err != nil {
 			copyFile(s.t, stubBin, dst, 0o755)
 		}
 	}
-	mustWrite(s.t, filepath.Join(dir, stubwire.RootFile), s.stubRoot+"\n")
+	mustWrite(s.t, filepath.Join(s.binDir, stubwire.RootFile), s.stubRoot+"\n")
 }
 
 // --- 置き場 (formats.md §1) ---
 
-func (s *sandbox) configDir() string  { return filepath.Join(s.configRoot, s.project) }
-func (s *sandbox) configFile() string { return filepath.Join(s.configDir(), "config.toml") }
-func (s *sandbox) stateDir() string   { return filepath.Join(s.stateRoot, s.project) }
-func (s *sandbox) logFile() string    { return filepath.Join(s.stateDir(), "log.jsonl") }
-func (s *sandbox) markerFile() string { return filepath.Join(s.stateDir(), "config-verified") }
-func (s *sandbox) lockFile() string   { return filepath.Join(s.stateDir(), "tick.lock") }
-func (s *sandbox) workersDir() string { return filepath.Join(s.stateDir(), "workers") }
-
-func (s *sandbox) decisionsFile(stem string) string {
-	return stubwire.DecisionsFile(s.stateDir(), stem)
+// scopeDir は scope key の state dir の名前 (無害化した scope key と、sha256 の先頭 8 文字)。
+func scopeDir(scopeKey string) string {
+	sum := sha256.Sum256([]byte(scopeKey))
+	return regexp.MustCompile(`[^a-z0-9._-]`).ReplaceAllString(strings.ToLower(scopeKey), "_") + "-" + hex.EncodeToString(sum[:])[:8]
 }
 
-func (s *sandbox) orchestratorLogFile(stem string) string {
-	return filepath.Join(s.stateDir(), "decisions", stem+".orchestrator.log")
+func (s *sandbox) stateDir(scopeKey string) string {
+	return filepath.Join(s.stateRoot, scopeDir(scopeKey))
 }
 
-func (s *sandbox) workerLogFile(issue int, stem string) string {
-	return stubwire.WorkerLogFile(s.stateDir(), issue, stem)
-}
+// --- workflow 定義 (formats.md §2) ---
 
-// --- config.toml ---
+func (s *sandbox) workflowFile() string { return filepath.Join(s.clone, "WORKFLOW.md") }
 
-// configWith は必須 3 項目の config に、[issue] へ issueExtra の行を足し、[limits] を limits にしたものを返す。
-func (s *sandbox) configWith(issueExtra, limits string) string {
-	return fmt.Sprintf("[issue]\nrepo = %q\nready_label = %q\n%s\n[limits]\n%s\n", defaultIssueRepo, defaultReadyLabel, issueExtra, limits)
-}
-
-func (s *sandbox) defaultConfig() string {
-	return s.configWith("", maxWIPLine(defaultMaxWIP))
-}
-
-func maxWIPLine(n int) string { return fmt.Sprintf("max_wip = %d", n) }
-
-func (s *sandbox) writeConfig(content string) {
+func (s *sandbox) writeWorkflow(content string) {
 	s.t.Helper()
-	mustMkdir(s.t, s.configDir())
-	mustWrite(s.t, s.configFile(), content)
-}
-
-func (s *sandbox) setMaxWIP(n int) {
-	s.writeConfig(s.configWith("", maxWIPLine(n)))
+	mustWrite(s.t, s.workflowFile(), content)
 }
 
 // --- 実行 ---
@@ -283,29 +198,12 @@ func (s *sandbox) run(args ...string) runResult {
 // runWithEnv は sandbox の env に extra を足して撃つ。
 func (s *sandbox) runWithEnv(extra map[string]string, args ...string) runResult {
 	s.t.Helper()
-	return s.runWith(extra, "", args...)
-}
-
-// runWithInput は stdin に input を流して撃つ (承認を尋ねる subcommand への答え)。
-func (s *sandbox) runWithInput(input string, args ...string) runResult {
-	s.t.Helper()
-	return s.runWith(nil, input, args...)
-}
-
-func (s *sandbox) runWith(extra map[string]string, input string, args ...string) runResult {
-	s.t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), runTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, dispatcherBin, args...)
 	cmd.Dir = s.clone
-	for key, value := range s.env {
-		cmd.Env = append(cmd.Env, key+"="+value)
-	}
-	for key, value := range extra {
-		cmd.Env = append(cmd.Env, key+"="+value)
-	}
+	cmd.Env = s.environ(extra)
 	var stdout, stderr bytes.Buffer
-	cmd.Stdin = strings.NewReader(input)
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
 	var exitErr *exec.ExitError
@@ -321,7 +219,119 @@ func (s *sandbox) runWith(extra map[string]string, input string, args ...string)
 	return runResult{exit: cmd.ProcessState.ExitCode(), stdout: stdout.String(), stderr: stderr.String()}
 }
 
-func (s *sandbox) tick(flags ...string) runResult {
+func (s *sandbox) environ(extra map[string]string) []string {
+	var env []string
+	for key, value := range s.env {
+		env = append(env, key+"="+value)
+	}
+	for key, value := range extra {
+		env = append(env, key+"="+value)
+	}
+	return env
+}
+
+// dryRun は `loop --dry-run` を撃つ (formats.md §5)。
+func (s *sandbox) dryRun(args ...string) runResult {
 	s.t.Helper()
-	return s.run(append([]string{"tick", s.project}, flags...)...)
+	return s.run(append([]string{"loop", "--dry-run"}, args...)...)
+}
+
+// --- 走らせたままの loop ---
+
+// syncBuffer は loop の出力を、走っている間にも読めるように受ける。
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// backgroundRun は走らせたままの binary。
+type backgroundRun struct {
+	t      *testing.T
+	cmd    *exec.Cmd
+	stdout *syncBuffer
+	stderr *syncBuffer
+	done   chan struct{}
+}
+
+// startLoop は clone を cwd にして `loop <args>` を起動し、待たずに返す。stdout は端末でない (pipe)。
+// 後片付けで、走っていれば kill する。
+func (s *sandbox) startLoop(args ...string) *backgroundRun {
+	s.t.Helper()
+	cmd := exec.Command(dispatcherBin, append([]string{"loop"}, args...)...)
+	cmd.Dir = s.clone
+	cmd.Env = s.environ(nil)
+	p := &backgroundRun{t: s.t, cmd: cmd, stdout: &syncBuffer{}, stderr: &syncBuffer{}, done: make(chan struct{})}
+	cmd.Stdout, cmd.Stderr = p.stdout, p.stderr
+	if err := cmd.Start(); err != nil {
+		s.t.Fatalf("%v を起動できない: %v", cmd.Args, err)
+	}
+	// 終わり方は wait が ProcessState から読むので、Wait の error は見ない
+	go func() { _ = cmd.Wait(); close(p.done) }()
+	s.t.Cleanup(func() {
+		if p.running() {
+			if err := cmd.Process.Kill(); err != nil {
+				s.t.Errorf("%v を止められない: %v", cmd.Args, err)
+			}
+			<-p.done
+		}
+	})
+	return p
+}
+
+func (p *backgroundRun) running() bool {
+	select {
+	case <-p.done:
+		return false
+	default:
+		return true
+	}
+}
+
+func (p *backgroundRun) signal(sig syscall.Signal) {
+	p.t.Helper()
+	if err := p.cmd.Process.Signal(sig); err != nil {
+		p.t.Fatalf("%v に %v を送れない: %v", p.cmd.Args, sig, err)
+	}
+}
+
+// wait は process の終了を待ち、exit code と出力を返す。
+func (p *backgroundRun) wait() runResult {
+	p.t.Helper()
+	select {
+	case <-p.done:
+	case <-time.After(runTimeout):
+		p.t.Fatalf("%v が %s で終わらない\nstdout:\n%s\nstderr:\n%s", p.cmd.Args, runTimeout, p.stdout, p.stderr)
+	}
+	return runResult{exit: p.cmd.ProcessState.ExitCode(), stdout: p.stdout.String(), stderr: p.stderr.String()}
+}
+
+// waitForOutput は stdout に pattern に当たる行が出るまで待ち、その行を返す。
+func (p *backgroundRun) waitForOutput(pattern *regexp.Regexp) string {
+	p.t.Helper()
+	deadline := time.Now().Add(runTimeout)
+	for time.Now().Before(deadline) {
+		for _, line := range strings.Split(p.stdout.String(), "\n") {
+			if pattern.MatchString(line) {
+				return line
+			}
+		}
+		if !p.running() {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	p.t.Fatalf("stdout に %s の行が出ない\nstdout:\n%s\nstderr:\n%s", pattern, p.stdout, p.stderr)
+	return ""
 }

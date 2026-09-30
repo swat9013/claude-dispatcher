@@ -11,7 +11,6 @@ package stubwire
 
 import (
 	"path/filepath"
-	"strconv"
 	"time"
 )
 
@@ -53,9 +52,7 @@ type Rule struct {
 	Stdout      string `json:"stdout,omitempty"`
 	Stderr      string `json:"stderr,omitempty"`
 	Exit        int    `json:"exit,omitempty"`
-	// Decisions は orchestrator の代役: state dir の最新の指示ファイルと同じ stem で決定ファイルを書く
-	Decisions *DecisionsWrite `json:"decisions,omitempty"`
-	// ReleaseFile が空でなければ、決定ファイルを書いた後、その file が現れるまで終わらない (長く走る orchestrator / worker の代役)。
+	// ReleaseFile が空でなければ、その file が現れるまで終わらない (長く走る worker の代役)。
 	// 現れないまま ReleaseDeadline を過ぎたら ReleaseTimeoutExit で終わる
 	ReleaseFile string `json:"release_file,omitempty"`
 }
@@ -65,24 +62,3 @@ const ReleaseDeadline = 2 * time.Minute
 
 // ReleaseTimeoutExit は ReleaseFile が現れないまま上限を過ぎた stub の exit code
 const ReleaseTimeoutExit = 96
-
-// DecisionsWrite は orchestrator の代役が書くもの。
-type DecisionsWrite struct {
-	StateDir string `json:"state_dir"`
-	Content  string `json:"content"`
-	// ObstructWorkerLogs は、決定ファイルと一緒に worker log の path を dir で塞ぐ issue 番号。
-	// CLI がその worker の log を開けずに止まる状況を、他の worker を起動させた後に作る
-	ObstructWorkerLogs []int `json:"obstruct_worker_logs,omitempty"`
-}
-
-func InstructionsGlob(stateDir string) string {
-	return filepath.Join(stateDir, "instructions", "*.json")
-}
-
-func DecisionsFile(stateDir, stem string) string {
-	return filepath.Join(stateDir, "decisions", stem+".json")
-}
-
-func WorkerLogFile(stateDir string, issue int, stem string) string {
-	return filepath.Join(stateDir, "workers", strconv.Itoa(issue)+"-"+stem+".log")
-}

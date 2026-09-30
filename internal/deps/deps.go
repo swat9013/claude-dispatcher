@@ -9,11 +9,8 @@ import (
 	"strings"
 )
 
-// Names は PATH を自己解決する依存 CLI。git は tick 自身は撃たないが、同じ PATH を継ぐ orchestrator / worker が撃つ
+// Names は PATH を自己解決する依存 CLI。git は loop 自身は撃たないが、同じ PATH を継ぐ worker と hooks が撃つ
 var Names = []string{"gh", "claude", "git"}
-
-// Invoked は tick 自身が起動する依存 CLI。試運転は起動の手前で止まるので、これらが解決できるかを代わりに検査する
-var Invoked = []string{"gh", "claude"}
 
 // candidates は PATH に無いときに足す置き場。前に居るものから探す (Homebrew は macOS の 2 つと Linux の prefix)。
 // HOME の外の置き場を変えたら、black-box テストの selfResolutionDirs も揃える

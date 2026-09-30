@@ -1,442 +1,144 @@
-package loop
+package loop_test
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"strings"
-	"sync"
 	"syscall"
 	"testing"
 	"time"
 
-	"github.com/swat9013/claude-dispatcher/internal/status"
-	"github.com/swat9013/claude-dispatcher/internal/tick"
-	"github.com/swat9013/claude-dispatcher/internal/ticklog"
+	"github.com/swat9013/claude-dispatcher/internal/loop"
+	"github.com/swat9013/claude-dispatcher/internal/target"
+	"github.com/swat9013/claude-dispatcher/internal/trigger"
+	"github.com/swat9013/claude-dispatcher/internal/workflow"
 )
 
-// loop を Run の単位で回す。周期は interval の下限 (1m) を black-box テストでは待てないので、壁時計を fake にしてここで確かめる。
-// 画面は Run が stdout へ書いたものを読む (formats.md §13)。
+// 周期を待つ振る舞い (tick ごとの読み直し・周期の選び方)。black-box テストは周期の下限 (1m) を待てないので、ここで見る。
 
-var start = time.Date(2026, 9, 26, 3, 0, 0, 0, time.UTC)
-
-type fakeClock struct {
-	mu  sync.Mutex
-	now time.Time
+// memoryIssues は in-memory の issue 置き場。
+type memoryIssues struct {
+	scopeKey string
+	issues   []target.Issue
+	reads    *int
 }
 
-func (c *fakeClock) Now() time.Time {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.now
+func (m memoryIssues) ScopeKey() string { return m.scopeKey }
+
+func (m memoryIssues) OpenIssues() ([]target.Issue, error) {
+	*m.reads++
+	return m.issues, nil
 }
 
-func (c *fakeClock) advance(d time.Duration) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.now = c.now.Add(d)
-}
-
-type lockedBuffer struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
-}
-
-func (b *lockedBuffer) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.Write(p)
-}
-
-func (b *lockedBuffer) String() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.String()
-}
-
-// tickCall は fake の tick が受けた呼び出し。
-type tickCall struct {
-	at      time.Time
-	control tick.Control
-}
-
-// harness は fake の tick・時計・status で Run を回す。tick は calls へ呼び出しを流し、outcomes から結果を受けて返す
-// (受けるまで返らない)。所要時間は tickDuration だけ時計を進めて表す。
+// harness は loads を読み切ったところで停止要求を送る loop の入力を組む。loads[i] は i 回目の tick が読む workflow 定義で、
+// scopes[i] はその版から組み立てた issue 置き場の scope key (空なら起動時と同じ)。
 type harness struct {
-	t            *testing.T
-	clock        *fakeClock
-	calls        chan tickCall
-	outcomes     chan tick.Outcome
-	tickDuration time.Duration
-	signals      chan os.Signal
-	stdout       *lockedBuffer
-	exit         chan int
-	finished     bool
+	loads   []func() (workflow.Definition, error)
+	scopes  []string
+	waits   []time.Duration
+	reads   int
+	stdout  bytes.Buffer
+	signals chan os.Signal
 }
 
-type setting func(*Options)
+const startScope = "scope-a"
 
-func onTerminal(o *Options) { o.Terminal = true }
-
-func notes(lines ...string) setting {
-	return func(o *Options) {
-		o.Status = func() status.Report { return runningReport(lines...) }
+func definition(interval time.Duration) workflow.Definition {
+	return workflow.Definition{
+		Interval: interval,
+		Triggers: []trigger.Trigger{{Name: "implement", On: "issue", Action: "/implement"}},
 	}
 }
 
-func runningReport(notes ...string) status.Report {
-	return status.Report{
-		Project: "widgets", Loop: status.Probed[bool]{Value: true, Known: true}, LastTick: status.Probed[*ticklog.Line]{Known: true},
-		RunningWorkers: status.Probed[int]{Value: 0, Known: true}, Notes: notes,
-	}
-}
-
-func startLoop(t *testing.T, settings ...setting) *harness {
+func (h *harness) run(t *testing.T) string {
 	t.Helper()
-	h := &harness{
-		t: t, clock: &fakeClock{now: start}, calls: make(chan tickCall, 10), outcomes: make(chan tick.Outcome, 10),
-		tickDuration: 10 * time.Second, signals: make(chan os.Signal, 4), stdout: &lockedBuffer{}, exit: make(chan int, 1),
-	}
-	o := Options{
-		Project: "widgets", Interval: Interval{Duration: 5 * time.Minute, Text: "5m"},
-		Stdout: h.stdout, Stderr: &bytes.Buffer{}, Signals: h.signals,
-		Tick: func(control tick.Control) tick.Outcome {
-			h.calls <- tickCall{at: h.clock.Now(), control: control}
-			out := <-h.outcomes
-			h.clock.advance(h.tickDuration)
-			out.TS = h.clock.Now().Format(time.RFC3339Nano)
-			return out
+	h.signals = make(chan os.Signal, 1)
+	tick := 0
+	exit := loop.Run(loop.Options{
+		Load: func() (workflow.Definition, error) {
+			load := h.loads[tick]
+			tick++
+			return load()
 		},
-		Status: func() status.Report { return runningReport() },
-		Fit:    func() status.Fit { return status.FitPlain() },
-		Now:    h.clock.Now, Poll: time.Millisecond,
-	}
-	for _, s := range settings {
-		s(&o)
-	}
-	go func() { h.exit <- Run(o) }()
-	t.Cleanup(func() {
-		if !h.finished {
-			h.signals <- syscall.SIGINT
-			h.signals <- syscall.SIGINT
-			h.outcomes <- tick.Outcome{Result: tick.ResultOK, Logged: true}
-			<-h.exit
-		}
-	})
-	return h
-}
-
-// loggedOK は log.jsonl に書けた ok の tick
-var loggedOK = tick.Outcome{Result: tick.ResultOK, Logged: true}
-
-// tickCalled は tick が呼ばれるのを待つ。
-func (h *harness) tickCalled() tickCall {
-	h.t.Helper()
-	select {
-	case c := <-h.calls:
-		return c
-	case <-time.After(5 * time.Second):
-		h.t.Fatal("tick が撃たれない")
-		return tickCall{}
-	}
-}
-
-// tickEnds は呼ばれている tick を out で終わらせ、loop が待機に戻って画面を描くまで待つ。待たずに時計を進めると、loop が
-// tick の終了の時刻を読む前に進んだ時計を読む。
-func (h *harness) tickEnds(out tick.Outcome) {
-	h.t.Helper()
-	drawn := strings.Count(h.stdout.String(), "  待機 · ")
-	h.outcomes <- out
-	h.waitFor(func() bool { return strings.Count(h.stdout.String(), "  待機 · ") > drawn })
-}
-
-// ticks は次の tick を out で回し、呼ばれた時刻を返す。
-func (h *harness) ticks(out tick.Outcome) time.Time {
-	h.t.Helper()
-	at := h.tickCalled().at
-	h.tickEnds(out)
-	return at
-}
-
-func (h *harness) waitFor(done func() bool) {
-	h.t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for !done() {
-		if time.Now().After(deadline) {
-			h.t.Fatalf("待った出力にならない:\n%s", h.stdout.String())
-		}
-		time.Sleep(time.Millisecond)
-	}
-}
-
-// tickReturnsAndStops は呼ばれている tick を out で終わらせ、loop が止まるのを待つ。
-func (h *harness) tickReturnsAndStops(out tick.Outcome) {
-	h.t.Helper()
-	h.outcomes <- out
-	h.stops()
-}
-
-// secondStopRequest は tick の実行中に停止要求を 2 回送り、tick へ「orchestrator を止めよ」が届くのを待つ。
-func (h *harness) secondStopRequest(call tickCall) {
-	h.t.Helper()
-	h.signals <- syscall.SIGINT
-	h.signals <- syscall.SIGINT
-	<-call.control.StopOrchestrator
-}
-
-func (h *harness) stops() int {
-	h.t.Helper()
-	select {
-	case exit := <-h.exit:
-		h.finished = true
-		return exit
-	case <-time.After(5 * time.Second):
-		h.t.Fatalf("止まらない:\n%s", h.stdout.String())
-		return -1
-	}
-}
-
-// lastScreen は端末に最後に描いた画面 (最後の消去の後)。
-func (h *harness) lastScreen() string {
-	out := h.stdout.String()
-	i := strings.LastIndex(out, clearScreen)
-	if i < 0 {
-		return ""
-	}
-	return out[i+len(clearScreen):]
-}
-
-// --- 周期 ---
-
-func TestLoopTicksRightAfterStarting(t *testing.T) {
-	h := startLoop(t)
-
-	first := h.tickCalled().at
-
-	if !first.Equal(start) {
-		t.Fatalf("1 回目の tick = %s, want 起動直後 (%s)", first, start)
-	}
-}
-
-func TestLoopTicksAgainIntervalAfterTheTickEnded(t *testing.T) {
-	h := startLoop(t)
-	h.ticks(loggedOK) // 10s 掛かって終わる
-
-	h.clock.advance(5 * time.Minute)
-
-	// 2 回目がこれより早く撃たれていれば、ここで受けるのは早い方の時刻
-	if second, want := h.tickCalled().at, start.Add(10*time.Second+5*time.Minute); !second.Equal(want) {
-		t.Fatalf("2 回目の tick = %s, want tick の終了から interval 後 (%s)", second, want)
-	}
-}
-
-func TestLoopGoesOnToTheNextPeriodWhenATickFails(t *testing.T) {
-	for _, result := range []tick.Result{tick.ResultError, tick.ResultConfigError, tick.ResultLocked, tick.ResultAuthError} {
-		t.Run(result.Name, func(t *testing.T) {
-			h := startLoop(t)
-			h.ticks(tick.Outcome{Result: result, Logged: true, Error: "落ちた"})
-
-			h.clock.advance(5 * time.Minute)
-
-			h.tickCalled()
-		})
-	}
-}
-
-func TestLoopDoesNotChaseMissedPeriods(t *testing.T) {
-	h := startLoop(t)
-	h.ticks(loggedOK)
-	// スリープ明け: 周期を 3 つ分取りこぼした
-	h.clock.advance(16 * time.Minute)
-	resumed := h.ticks(loggedOK)
-
-	h.clock.advance(5 * time.Minute)
-	next := h.tickCalled().at
-
-	// 取りこぼした周期を追い掛けていれば、ここで受けるのは追い掛けの tick の時刻
-	if want := resumed.Add(h.tickDuration + 5*time.Minute); !next.Equal(want) {
-		t.Fatalf("スリープ明けの次の tick = %s, want スリープ明けの tick の終了から interval 後 (%s)", next, want)
-	}
-}
-
-// --- 停止 ---
-
-func TestLoopStopsRightAwayOnAStopRequestBetweenTicksNamingTheSignal(t *testing.T) {
-	for _, tc := range []struct {
-		sig  syscall.Signal
-		name string
-	}{{syscall.SIGINT, "SIGINT"}, {syscall.SIGTERM, "SIGTERM"}, {syscall.SIGHUP, "SIGHUP"}} {
-		t.Run(tc.name, func(t *testing.T) {
-			h := startLoop(t)
-			h.ticks(loggedOK)
-
-			h.signals <- tc.sig
-
-			if exit := h.stops(); exit != 0 {
-				t.Fatalf("exit %d, want 0", exit)
+		Open: func(workflow.Definition) (loop.Issues, error) {
+			scope := startScope
+			if tick-1 < len(h.scopes) && h.scopes[tick-1] != "" {
+				scope = h.scopes[tick-1]
 			}
-			if !strings.HasSuffix(h.stdout.String(), " [widgets] loop を止めた (停止要求 "+tc.name+")。止めずに走っている worker: 0 本\n") {
-				t.Fatalf("終了行が無い:\n%s", h.stdout.String())
+			return memoryIssues{scopeKey: scope, issues: []target.Issue{{Number: 1}}, reads: &h.reads}, nil
+		},
+		Interval: time.Minute,
+		ScopeKey: startScope,
+		Stdout:   &h.stdout,
+		Signals:  h.signals,
+		Now:      func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) },
+		After: func(d time.Duration) <-chan time.Time {
+			h.waits = append(h.waits, d)
+			ch := make(chan time.Time, 1)
+			if tick < len(h.loads) {
+				ch <- time.Time{}
+			} else {
+				h.signals <- syscall.SIGINT
 			}
-		})
-	}
-}
-
-func TestLoopStoppedBeforeLaunchingTheOrchestratorSaysSoOnTheEndLine(t *testing.T) {
-	h := startLoop(t)
-	h.secondStopRequest(h.tickCalled())
-
-	h.tickReturnsAndStops(tick.Outcome{Result: tick.ResultError, Logged: true, Halt: tick.HaltedBeforeLaunch})
-
-	if !strings.Contains(h.stdout.String(), "loop を止めた (2 回目の停止要求で orchestrator を起動せずに止めた)。") {
-		t.Fatalf("終了行の理由が違う:\n%s", h.stdout.String())
-	}
-}
-
-func TestLoopStoppedDuringTheOrchestratorPointsToItsLogOnTheEndLine(t *testing.T) {
-	h := startLoop(t)
-	h.secondStopRequest(h.tickCalled())
-
-	h.tickReturnsAndStops(tick.Outcome{Result: tick.ResultError, Logged: true, Halt: tick.HaltedDuringRun, OrchestratorLog: "/s/o.log"})
-
-	if !strings.Contains(h.stdout.String(), "loop を止めた (2 回目の停止要求で orchestrator を止めた — 経過は /s/o.log。wip を付けたまま残った issue が無いか確かめる)。") {
-		t.Fatalf("終了行の理由が違う:\n%s", h.stdout.String())
-	}
-}
-
-func TestLoopFirstStopRequestDoesNotStopTheOrchestrator(t *testing.T) {
-	h := startLoop(t)
-	call := h.tickCalled()
-	h.signals <- syscall.SIGINT
-
-	h.tickReturnsAndStops(loggedOK)
-
-	select {
-	case <-call.control.StopOrchestrator:
-		t.Fatal("1 回目の停止要求で orchestrator を止めた")
-	default:
-	}
-}
-
-// --- 画面 ---
-
-func TestLoopOnATerminalRedrawsTheWaitingScreenWithTheGuideAfterATick(t *testing.T) {
-	h := startLoop(t, onTerminal, notes("wip を読めない"))
-
-	h.ticks(tick.Outcome{Result: tick.ResultOK, Logged: true, Instructions: map[string]int{"start": 1}, Spawned: []int{42}})
-
-	want := "widgets  loop 5m  待機 · 次の tick 2026-09-26T03:05:10Z (あと 5m)\n" +
-		"最終 tick 2026-09-26T03:00:10Z ok · 指示 start 1 · 起動 #42\n" +
-		"  ! wip を読めない\n" +
-		"\n" +
-		"Ctrl+C で停止\n"
-	if got := h.lastScreen(); got != want {
-		t.Fatalf("画面 =\n%q\nwant\n%q", got, want)
-	}
-}
-
-func TestLoopOnATerminalShowsTheOrchestratorElapsedAndTheStopPendingGuide(t *testing.T) {
-	h := startLoop(t, onTerminal)
-	call := h.tickCalled()
-	call.control.OrchestratorStarted(h.clock.Now())
-	h.clock.advance(2 * time.Minute)
-
-	h.signals <- syscall.SIGINT
-
-	h.waitFor(func() bool {
-		return strings.HasPrefix(h.lastScreen(), "widgets  loop 5m  停止待ち · orchestrator 2m (上限 15m)\n")
+			return ch
+		},
 	})
-	if screen := h.lastScreen(); !strings.HasSuffix(screen, "\n停止待ち: この tick を終えたら止まる。もう一度 Ctrl+C で orchestrator を止めて止まる (付いた wip は残りうる)\n") {
-		t.Fatalf("停止待ちの操作案内が無い:\n%s", screen)
+	if exit != 0 {
+		t.Fatalf("exit = %d", exit)
+	}
+	return h.stdout.String()
+}
+
+func TestTickWithABrokenWorkflowDefinitionObservesNothingAndKeepsTheLastGoodInterval(t *testing.T) {
+	h := &harness{loads: []func() (workflow.Definition, error){
+		func() (workflow.Definition, error) { return definition(3 * time.Minute), nil },
+		func() (workflow.Definition, error) {
+			return workflow.Definition{}, errors.New("x.md: triggers[0].on (5 行目): 未知の値\nx.md: tracker (2 行目): y")
+		},
+		func() (workflow.Definition, error) { return definition(7 * time.Minute), nil },
+	}}
+
+	out := h.run(t)
+
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if !strings.HasSuffix(lines[0], "tick ok · 候補 1: implement issue #1") ||
+		!strings.HasSuffix(lines[1], "tick error · workflow 定義の誤り: x.md: triggers[0].on (5 行目): 未知の値 / x.md: tracker (2 行目): y") ||
+		!strings.HasSuffix(lines[2], "tick ok · 候補 1: implement issue #1") ||
+		!strings.HasSuffix(lines[3], "loop を止めた (停止要求 SIGINT)") {
+		t.Fatalf("出力:\n%s", out)
+	}
+	if h.reads != 2 {
+		t.Fatalf("置き場を読んだ回数 = %d, want 2 (workflow 定義が誤っている tick は読まない)", h.reads)
+	}
+	if want := []time.Duration{3 * time.Minute, 3 * time.Minute, 7 * time.Minute}; !equal(h.waits, want) {
+		t.Fatalf("待った周期 = %v, want %v", h.waits, want)
 	}
 }
 
-func TestLoopOnATerminalShowsTheRunningTickBeforeTheFirstTickEnds(t *testing.T) {
-	h := startLoop(t, onTerminal)
-	h.tickCalled()
+func TestTickWhoseScopeKeyDiffersFromTheStartObservesNothing(t *testing.T) {
+	h := &harness{loads: []func() (workflow.Definition, error){
+		func() (workflow.Definition, error) { return definition(time.Minute), nil },
+	}, scopes: []string{"scope-b"}}
 
-	h.waitFor(func() bool { return strings.Contains(h.stdout.String(), clearScreen) })
+	out := h.run(t)
 
-	if screen := h.lastScreen(); !strings.HasPrefix(screen, "widgets  loop 5m  tick 実行中 · 0s\n最終 tick なし\n") ||
-		!strings.HasSuffix(screen, "\nCtrl+C: この tick を終えてから停止\n") {
-		t.Fatalf("tick 実行中の画面 =\n%s", screen)
+	if !strings.Contains(out, "tick error · workflow 定義の scope key scope-b が起動時の scope-a と違う") {
+		t.Fatalf("出力:\n%s", out)
+	}
+	if h.reads != 0 {
+		t.Fatalf("scope key が違うのに置き場を読んだ (%d 回)", h.reads)
 	}
 }
 
-func TestLoopOnATerminalRedrawsTheScreenEvery15Seconds(t *testing.T) {
-	h := startLoop(t, onTerminal)
-	h.ticks(loggedOK)
-	drawn := strings.Count(h.stdout.String(), clearScreen)
-
-	h.clock.advance(15 * time.Second)
-
-	h.waitFor(func() bool { return strings.Count(h.stdout.String(), clearScreen) > drawn })
-	if !strings.Contains(h.lastScreen(), "(あと 4m45s)") && !strings.Contains(h.lastScreen(), "(あと 4m)") {
-		t.Fatalf("15 秒後の画面の残りが進んでいない:\n%s", h.lastScreen())
+func equal(a, b []time.Duration) bool {
+	if len(a) != len(b) {
+		return false
 	}
-}
-
-func TestLoopLeavesAStoppedScreenWithoutTheGuide(t *testing.T) {
-	h := startLoop(t, onTerminal)
-	h.ticks(loggedOK)
-
-	h.signals <- syscall.SIGINT
-	h.stops()
-
-	screen := h.lastScreen()
-	if !strings.HasPrefix(screen, "widgets  loop 5m  停止\n") || strings.Contains(screen, "Ctrl+C") {
-		t.Fatalf("止まった後の画面 =\n%s", screen)
-	}
-}
-
-func TestLoopShowsTheErrorOfTheLastTickFirstAmongTheNotes(t *testing.T) {
-	h := startLoop(t, notes("wip を読めない"))
-
-	h.ticks(tick.Outcome{Result: tick.ResultConfigError, Logged: true, Error: "未知の key"})
-
-	if !strings.Contains(h.stdout.String(), " config_error · 指示 0\n  ! 未知の key\n  ! wip を読めない\n") {
-		t.Fatalf("画面 =\n%s", h.stdout.String())
-	}
-}
-
-func TestLoopShowsTheDecisionLinesBetweenTheLastTickAndTheNotes(t *testing.T) {
-	h := startLoop(t, func(o *Options) {
-		o.Status = func() status.Report {
-			r := runningReport("wip を読めない")
-			r.LastOrchestrator = &ticklog.OrchestratorLine{TS: "2026-09-26T03:00:00.123456Z", Decisions: []ticklog.Decision{{Issue: 51, Action: "skip", Reason: "仕様に受け入れ条件が無い"}}}
-			return r
+	for i := range a {
+		if a[i] != b[i] {
+			return false
 		}
-	})
-
-	h.ticks(tick.Outcome{Result: tick.ResultConfigError, Logged: true, Error: "未知の key"})
-
-	if !strings.Contains(h.stdout.String(), " config_error · 指示 0\n判断 2026-09-26T03:00:00Z\n  #51 skip: 仕様に受け入れ条件が無い\n  ! 未知の key\n  ! wip を読めない\n") {
-		t.Fatalf("画面 =\n%s", h.stdout.String())
 	}
-}
-
-func TestLoopOnATerminalCutsTheDecisionReasonToTheTerminalWidth(t *testing.T) {
-	h := startLoop(t, onTerminal, func(o *Options) {
-		o.Status = func() status.Report {
-			r := runningReport()
-			r.LastOrchestrator = &ticklog.OrchestratorLine{TS: "2026-09-26T03:00:00.123456Z", Decisions: []ticklog.Decision{{Issue: 51, Action: "skip", Reason: "仕様に受け入れ条件が無い"}}}
-			return r
-		}
-		o.Fit = func() status.Fit { return status.FitTerminal(20) }
-	})
-
-	h.ticks(tick.Outcome{Result: tick.ResultOK, Logged: true})
-
-	if screen := h.lastScreen(); !strings.Contains(screen, "\n  #51 skip: 仕様に受\n") {
-		t.Fatalf("画面 =\n%s", screen)
-	}
-}
-
-func TestLoopShowsATickThatCouldNotWriteItsLogLineEvenWhenItWasOK(t *testing.T) {
-	h := startLoop(t)
-
-	h.ticks(tick.Outcome{Result: tick.ResultOK, Logged: false, Error: "log.jsonl に書けない: disk full"})
-
-	if !strings.Contains(h.stdout.String(), " ok · 指示 0\n  ! log.jsonl に書けない: disk full\n") {
-		t.Fatalf("画面 =\n%s", h.stdout.String())
-	}
+	return true
 }
