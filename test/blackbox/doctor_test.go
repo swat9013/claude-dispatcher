@@ -12,7 +12,7 @@ import (
 // doctorWith は trigger の宣言だけを差し替えた workflow 定義で doctor を撃つ。
 func (s *sandbox) doctorWith(triggers string) runResult {
 	s.t.Helper()
-	s.writeWorkflow(workflowWithTriggers(triggers))
+	s.writeWorkflowWithCommands(workflowWithTriggers(triggers))
 	s.setStore(nil, nil)
 	r := s.run("doctor")
 	assertExit(s.t, r, 0)
@@ -36,7 +36,7 @@ func TestDoctorWarnsAboutACLTriggerThatDoesNotNarrowTheCLs(t *testing.T) {
 	r := s.doctorWith(`
   - {name: fix, on: cl, when: {ci_failed: true, draft: false, author: collaborator}, action: /fix}`)
 
-	if want := "警告 trigger fix: head・labels・same_repo: true のどれでも絞っていない (人の CL や fork の CL に worker を送りうる)\n"; !strings.Contains(r.stdout, want) {
+	if want := "警告 trigger fix: head・labels.all・labels.any・same_repo: true のどれでも絞っていない (人の CL や fork の CL に worker を送りうる)\n"; !strings.Contains(r.stdout, want) {
 		t.Fatalf("stdout に %q が無い:\n%s", want, r.stdout)
 	}
 }
@@ -109,7 +109,7 @@ func TestDoctorFailsWhenTheIssueStoreIsNotVisible(t *testing.T) {
 
 func TestDoctorStopsAtAnInvalidWorkflowWithoutCallingGh(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(workflowWithTriggers("\n  - {name: implement, on: pr, action: /implement}"))
+	s.writeWorkflowWithCommands(workflowWithTriggers("\n  - {name: implement, on: pr, action: /implement}"))
 
 	r := s.run("doctor")
 
@@ -122,7 +122,7 @@ func TestDoctorStopsAtAnInvalidWorkflowWithoutCallingGh(t *testing.T) {
 
 func TestDoctorFailsWhenTheClaudeCommandCannotBeResolved(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(strings.Replace(defaultWorkflow, "triggers:", "claude:\n  command: no-such-claude\ntriggers:", 1))
+	s.writeWorkflowWithCommands(strings.Replace(defaultWorkflow, "triggers:", "claude:\n  command: no-such-claude\ntriggers:", 1))
 
 	r := s.run("doctor")
 

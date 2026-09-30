@@ -105,7 +105,7 @@ func promiseWarnings(def workflow.Definition) []string {
 			warnings = append(warnings, fmt.Sprintf("trigger %s: approved: true の CL に action を当てている (merge を worker に任せうる)", t.Name))
 		}
 		if p.Head == "" && len(p.LabelsAll) == 0 && len(p.LabelsAny) == 0 && (p.SameRepo == nil || !*p.SameRepo) {
-			warnings = append(warnings, fmt.Sprintf("trigger %s: head・labels・same_repo: true のどれでも絞っていない (人の CL や fork の CL に worker を送りうる)", t.Name))
+			warnings = append(warnings, fmt.Sprintf("trigger %s: head・labels.all・labels.any・same_repo: true のどれでも絞っていない (人の CL や fork の CL に worker を送りうる)", t.Name))
 		}
 	}
 	return warnings

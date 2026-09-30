@@ -91,7 +91,7 @@ func TestEachCLStateMatchesOnlyTheCLsInThatState(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			s := newSandbox(t)
-			s.writeWorkflow(s.clWorkflow(c.when))
+			s.writeWorkflowWithCommands(s.clWorkflow(c.when))
 			s.setStore(nil, numbered(c.cls...))
 
 			r := s.dryRun()
@@ -107,7 +107,7 @@ func TestEachCLStateMatchesOnlyTheCLsInThatState(t *testing.T) {
 
 func TestDraftCLIsNotMatchedByDraftFalse(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(s.clWorkflow("{draft: false}"))
+	s.writeWorkflowWithCommands(s.clWorkflow("{draft: false}"))
 	s.setStore(nil, numbered(cl{draft: true}, cl{}))
 
 	r := s.dryRun()
@@ -117,7 +117,7 @@ func TestDraftCLIsNotMatchedByDraftFalse(t *testing.T) {
 
 func TestForkCLIsNotMatchedByAHeadPattern(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(s.clWorkflow("{head: worktree-issue-*}"))
+	s.writeWorkflowWithCommands(s.clWorkflow("{head: worktree-issue-*}"))
 	s.setStore(nil, numbered(cl{}, cl{fork: true}))
 
 	r := s.dryRun()
@@ -127,7 +127,7 @@ func TestForkCLIsNotMatchedByAHeadPattern(t *testing.T) {
 
 func TestHeadPatternLeavesOutBranchesWithOtherNames(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(s.clWorkflow("{head: worktree-issue-*}"))
+	s.writeWorkflowWithCommands(s.clWorkflow("{head: worktree-issue-*}"))
 	s.setStore(nil, numbered(cl{head: "feature/login"}, cl{}))
 
 	r := s.dryRun()
@@ -137,7 +137,7 @@ func TestHeadPatternLeavesOutBranchesWithOtherNames(t *testing.T) {
 
 func TestForkCLIsNotMatchedBySameRepoTrue(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(s.clWorkflow("{same_repo: true}"))
+	s.writeWorkflowWithCommands(s.clWorkflow("{same_repo: true}"))
 	s.setStore(nil, numbered(cl{fork: true}, cl{}))
 
 	r := s.dryRun()
@@ -147,7 +147,7 @@ func TestForkCLIsNotMatchedBySameRepoTrue(t *testing.T) {
 
 func TestAmbiguousCLsAreLeftOutOfTheCandidates(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(s.clWorkflow("{}"))
+	s.writeWorkflowWithCommands(s.clWorkflow("{}"))
 	s.setStore(nil, numbered(cl{head: "shared"}, cl{head: "shared"}, cl{}))
 
 	r := s.dryRun()
@@ -157,7 +157,7 @@ func TestAmbiguousCLsAreLeftOutOfTheCandidates(t *testing.T) {
 
 func TestForkBranchWithTheSameNameDoesNotMakeACLAmbiguous(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(s.clWorkflow("{}"))
+	s.writeWorkflowWithCommands(s.clWorkflow("{}"))
 	s.setStore(nil, numbered(cl{head: "shared"}, cl{head: "shared", fork: true}))
 
 	r := s.dryRun()
@@ -167,7 +167,7 @@ func TestForkBranchWithTheSameNameDoesNotMakeACLAmbiguous(t *testing.T) {
 
 func TestForkCLsOfDeletedForksWithTheSameBranchNameAreNotAmbiguous(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(s.clWorkflow("{}"))
+	s.writeWorkflowWithCommands(s.clWorkflow("{}"))
 	s.setStore(nil, numbered(cl{head: "patch-1", forkGone: true}, cl{head: "patch-1", forkGone: true}))
 
 	r := s.dryRun()
@@ -177,7 +177,7 @@ func TestForkCLsOfDeletedForksWithTheSameBranchNameAreNotAmbiguous(t *testing.T)
 
 func TestAmbiguousCLsAreRecordedInTheTickRow(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(s.clWorkflow("{}"))
+	s.writeWorkflowWithCommands(s.clWorkflow("{}"))
 	s.setStore(nil, numbered(cl{head: "shared"}, cl{head: "shared"}))
 
 	s.startLoop()
@@ -191,7 +191,7 @@ func TestAmbiguousCLsAreRecordedInTheTickRow(t *testing.T) {
 
 func TestCLWorkerGetsAnActionRenderedWithTheCLVariables(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(s.clWorkflow("{ci_failed: true}"))
+	s.writeWorkflowWithCommands(s.clWorkflow("{ci_failed: true}"))
 	s.setStore(nil, []cl{{number: 5, head: "worktree-issue-3", checks: "FAILURE"}})
 	s.onClaude(stubwire.Rule{ReleaseFile: s.releaseFile()})
 
@@ -206,7 +206,7 @@ func TestCLWorkerGetsAnActionRenderedWithTheCLVariables(t *testing.T) {
 
 func TestCLWorkerRunsInAWorkspaceOfItsOwnKind(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(s.clWorkflow("{}"))
+	s.writeWorkflowWithCommands(s.clWorkflow("{}"))
 	s.setStore(nil, []cl{readyCL(5)})
 	s.onClaude(stubwire.Rule{ReleaseFile: s.releaseFile()})
 
@@ -240,7 +240,7 @@ func TestCLWhoseBranchIsCheckedOutInAClaimedWorkspaceIsNotLaunched(t *testing.T)
 	// issue#7 の worker が走る workspace で worktree-issue-7 が checkout されている。その間に開いた、同じ branch の cl#20 には
 	// 当てず、別の branch の cl#21 には当てる
 	s := newSandbox(t)
-	s.writeWorkflow(s.issueAndCLWorkflow())
+	s.writeWorkflowWithCommands(s.issueAndCLWorkflow())
 	s.setIssues(readyIssue(7))
 	s.branchOf("worktree-issue-7")
 	s.onClaude(stubwire.Rule{ReleaseFile: s.releaseFile()})
@@ -258,7 +258,7 @@ func TestCLWhoseBranchIsCheckedOutInAClaimedWorkspaceIsNotLaunched(t *testing.T)
 
 func TestForkCLWithTheSameBranchNameAsAClaimedWorkspaceIsLaunched(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(s.issueAndCLWorkflow())
+	s.writeWorkflowWithCommands(s.issueAndCLWorkflow())
 	s.setIssues(readyIssue(7))
 	s.branchOf("worktree-issue-7")
 	s.onClaude(stubwire.Rule{ReleaseFile: s.releaseFile()})
@@ -273,7 +273,7 @@ func TestForkCLWithTheSameBranchNameAsAClaimedWorkspaceIsLaunched(t *testing.T) 
 func TestCLWhoseBranchIsCheckedOutInAWorkspaceWaitingToRetryIsNotLaunched(t *testing.T) {
 	// issue#7 の worker は失敗して、再起動を待つ (backoff は既定の 10s)。その間に開いた同じ branch の cl#20 には当てない
 	s := newSandbox(t)
-	s.writeWorkflow(s.issueAndCLWorkflow())
+	s.writeWorkflowWithCommands(s.issueAndCLWorkflow())
 	s.setIssues(readyIssue(7))
 	s.branchOf("worktree-issue-7")
 	s.onClaude(stubwire.Rule{})
@@ -291,7 +291,7 @@ func TestCLWhoseBranchIsCheckedOutInAWorkspaceWaitingToRetryIsNotLaunched(t *tes
 
 func TestCLsAreNotLaunchedWhileTheBranchOfAClaimedWorkspaceCannotBeRead(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(s.issueAndCLWorkflow())
+	s.writeWorkflowWithCommands(s.issueAndCLWorkflow())
 	s.setIssues(readyIssue(7))
 	s.respond("git", stubwire.Rule{ArgsPrefix: []string{"symbolic-ref"}, Stderr: "fatal: bad object HEAD", Exit: 128})
 	s.onClaude(stubwire.Rule{ReleaseFile: s.releaseFile()})
@@ -316,7 +316,7 @@ func TestCLsAreNotLaunchedWhileTheBranchOfAClaimedWorkspaceCannotBeRead(t *testi
 
 func TestWorkerOfACLThatIsMergedIsStoppedAndItsWorkspaceRemoved(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(s.clWorkflow("{}"))
+	s.writeWorkflowWithCommands(s.clWorkflow("{}"))
 	s.setStore(nil, []cl{readyCL(5)})
 	s.onClaude(stubwire.Rule{ReleaseFile: s.releaseFile()})
 	s.startLoop()
@@ -353,7 +353,7 @@ func TestCLListIsNotReadWithoutACLTrigger(t *testing.T) {
 
 func TestWaitingRetryOfACLThatBecameAmbiguousIsReleased(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(strings.Replace(s.clWorkflow("{}"), "triggers:\n", fastRetry+"triggers:\n", 1))
+	s.writeWorkflowWithCommands(strings.Replace(s.clWorkflow("{}"), "triggers:\n", fastRetry+"triggers:\n", 1))
 	s.setStore(nil, []cl{readyCL(5)})
 	s.onClaude(stubwire.Rule{})
 	s.startLoop()
@@ -370,7 +370,7 @@ func TestWaitingRetryOfACLThatBecameAmbiguousIsReleased(t *testing.T) {
 func TestEndedCLWorkerIsNotCompletedWhileItsConflictIsBeingComputed(t *testing.T) {
 	// conflict: true の CL の worker が終わったとき、GitHub が conflict を計算し直している (UNKNOWN) なら、外れたとは数えない
 	s := newSandbox(t)
-	s.writeWorkflow(s.clWorkflow("{conflict: true}"))
+	s.writeWorkflowWithCommands(s.clWorkflow("{conflict: true}"))
 	conflicting := readyCL(5)
 	conflicting.mergeable = "CONFLICTING"
 	computing := readyCL(5)
@@ -395,7 +395,7 @@ func TestEndedCLWorkerIsNotCompletedWhileItsConflictIsBeingComputed(t *testing.T
 
 func TestEndedCLWorkerOfAMergedCLIsCompletedEvenWhileItsConflictIsBeingComputed(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(s.clWorkflow("{conflict: true}"))
+	s.writeWorkflowWithCommands(s.clWorkflow("{conflict: true}"))
 	conflicting := readyCL(5)
 	conflicting.mergeable = "CONFLICTING"
 	merged := readyCL(5)

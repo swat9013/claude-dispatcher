@@ -168,7 +168,7 @@ func TestLoopReleasesTheLockWhenItStops(t *testing.T) {
 
 func TestLoopWithABrokenWorkflowDefinitionFailsToStartWithoutWritingAnything(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(strings.Replace(defaultWorkflow, "on: issue", "on: pr", 1))
+	s.writeWorkflowWithCommands(strings.Replace(defaultWorkflow, "on: issue", "on: pr", 1))
 
 	r := s.run("loop")
 

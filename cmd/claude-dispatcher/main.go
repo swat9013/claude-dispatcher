@@ -102,18 +102,18 @@ func (e environment) getenv(key string) string { return deps.Getenv(e.env, key) 
 // ghTimeout は gh の 1 回の呼び出しの上限
 const ghTimeout = 120 * time.Second
 
-// gh は workflow 定義の gh の撃ち方。tracker.token があれば gh に GH_TOKEN として渡す。
-func (e environment) gh(def workflow.Definition) github.Exec {
+// gh は gh の撃ち方。token (workflow 定義の tracker.token) があれば gh に GH_TOKEN として渡す。
+func (e environment) gh(token string) github.Exec {
 	env := e.env
-	if def.Tracker.Token != "" {
-		env = deps.WithEnv(env, map[string]string{"GH_TOKEN": def.Tracker.Token})
+	if token != "" {
+		env = deps.WithEnv(env, map[string]string{"GH_TOKEN": token})
 	}
 	return github.Exec{Env: env, Timeout: ghTimeout}
 }
 
 // store は workflow 定義から置き場の部品を組み立てる。
 func (e environment) store(def workflow.Definition) loop.Store {
-	return github.NewStore(e.gh(def), def.Tracker.Repo)
+	return github.NewStore(e.gh(def.Tracker.Token), def.Tracker.Repo)
 }
 
 // requiredCommands は loop が撃つ依存 CLI: gh と claude.command。CL 側の trigger があれば、claim の workspace の branch を
@@ -402,7 +402,7 @@ func runSetup(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 	e := newEnvironment()
-	repo, err := github.CurrentRepo(e.gh(workflow.Definition{}))
+	repo, err := github.CurrentRepo(e.gh(""))
 	if err != nil {
 		fmt.Fprintf(stderr, "tracker.repo を決められない: %v\n", err)
 		return exitFailed

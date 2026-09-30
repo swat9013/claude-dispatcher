@@ -48,7 +48,7 @@ func TestDryRunListsTheIssuesThatMatchATriggerOldestFirst(t *testing.T) {
 
 func TestDryRunListsCandidatesInTriggerDeclarationOrderBeforeCreationOrder(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(workflowWithTriggers(`
+	s.writeWorkflowWithCommands(workflowWithTriggers(`
   - name: review
     on: issue
     when: {labels: {all: [review]}}
@@ -69,7 +69,7 @@ func TestDryRunListsCandidatesInTriggerDeclarationOrderBeforeCreationOrder(t *te
 
 func TestIssueMatchingTwoTriggersIsListedOnlyUnderTheFirstDeclared(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(workflowWithTriggers(`
+	s.writeWorkflowWithCommands(workflowWithTriggers(`
   - name: first
     on: issue
     when: {labels: {all: [ready-for-agent]}}
@@ -87,7 +87,7 @@ func TestIssueMatchingTwoTriggersIsListedOnlyUnderTheFirstDeclared(t *testing.T)
 
 func TestPredicatesAreEvaluatedOnWhatGhReturns(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(workflowWithTriggers(`
+	s.writeWorkflowWithCommands(workflowWithTriggers(`
   - name: t
     on: issue
     when: {author: collaborator, unassigned: true, milestone: v1, blocked: false}
@@ -232,7 +232,7 @@ func TestIssueWithMoreThanOneReadCoversIsNotEvaluated(t *testing.T) {
 
 func TestTokenFromTheWorkflowDefinitionReachesGhAsGhToken(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(strings.Replace(defaultWorkflow, "  repo: acme/widgets\n", "  repo: acme/widgets\n  token: $WIDGETS_TOKEN\n", 1))
+	s.writeWorkflowWithCommands(strings.Replace(defaultWorkflow, "  repo: acme/widgets\n", "  repo: acme/widgets\n  token: $WIDGETS_TOKEN\n", 1))
 
 	r := s.runWithEnv(map[string]string{"WIDGETS_TOKEN": "secret-1"}, "loop", "--dry-run")
 
@@ -244,7 +244,7 @@ func TestTokenFromTheWorkflowDefinitionReachesGhAsGhToken(t *testing.T) {
 
 func TestRepoWrittenAsAVariableIsReadFromTheEnvironment(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(strings.Replace(defaultWorkflow, "repo: acme/widgets", "repo: $ISSUE_REPO", 1))
+	s.writeWorkflowWithCommands(strings.Replace(defaultWorkflow, "repo: acme/widgets", "repo: $ISSUE_REPO", 1))
 
 	r := s.runWithEnv(map[string]string{"ISSUE_REPO": "other/gadgets"}, "loop", "--dry-run")
 

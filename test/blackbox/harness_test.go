@@ -157,7 +157,7 @@ func newSandbox(t *testing.T) *sandbox {
 		// PATH は stub だけで閉じる。/usr/bin 等を足すと、stub を消したテストで runner の実物に届いてしまう
 		"PATH": s.binDir,
 	}
-	s.writeWorkflow(defaultWorkflow)
+	s.writeWorkflowWithCommands(defaultWorkflow)
 	s.setIssues()
 	return s
 }
@@ -196,9 +196,9 @@ func (s *sandbox) defaultStateDir() string {
 
 func (s *sandbox) workflowFile() string { return filepath.Join(s.clone, "WORKFLOW.md") }
 
-// writeWorkflow は workflow 定義を書き、action が先頭に書く command を ~/.claude/commands に置いて事前検査
+// writeWorkflowWithCommands は workflow 定義を書き、action が先頭に書く command を ~/.claude/commands に置いて事前検査
 // (formats.md §2.9) に通す。
-func (s *sandbox) writeWorkflow(content string) {
+func (s *sandbox) writeWorkflowWithCommands(content string) {
 	s.t.Helper()
 	for _, m := range leadingCommand.FindAllStringSubmatch(content, -1) {
 		mustWrite(s.t, s.command(m[1]), m[1]+" の command\n")
@@ -206,8 +206,8 @@ func (s *sandbox) writeWorkflow(content string) {
 	s.writeWorkflowWithoutCommands(content)
 }
 
-// leadingCommand は workflow 定義の action の先頭の `/名前` (1 行の書き方と `|` の複数行の書き方)
-var leadingCommand = regexp.MustCompile(`action:\s*(?:\||")?\s*/([\w:-]+)`)
+// leadingCommand は workflow 定義の action の先頭の `/名前` (素の書き方・引用符で囲む書き方・`|` と `>` の複数行の書き方)
+var leadingCommand = regexp.MustCompile(`action:\s*(?:[|>][-+]?|["'])?\s*/([\w:-]+)`)
 
 // writeWorkflowWithoutCommands は command を置かずに workflow 定義を書く (事前検査に落とすテスト用)。
 func (s *sandbox) writeWorkflowWithoutCommands(content string) {

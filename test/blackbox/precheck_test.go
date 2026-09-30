@@ -36,7 +36,7 @@ func TestDryRunFailsWhenTheLeadingSkillOfATriggerIsMissing(t *testing.T) {
 
 func TestActionThatStartsWithATemplateVariableFailsByName(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(workflowWithTriggers("\n  - {name: implement, on: issue, action: \"{{ .trigger.name }} を進める\"}"))
+	s.writeWorkflowWithCommands(workflowWithTriggers("\n  - {name: implement, on: issue, action: \"{{ .trigger.name }} を進める\"}"))
 
 	r := s.dryRun()
 
@@ -46,7 +46,7 @@ func TestActionThatStartsWithATemplateVariableFailsByName(t *testing.T) {
 func TestLeadingSkillOfTheRepoPassesTheCheck(t *testing.T) {
 	s := newSandbox(t)
 	mustWrite(t, s.clone+"/.claude/skills/playbook/SKILL.md", "---\nname: playbook\n---\n")
-	s.writeWorkflow(workflowWithTriggers("\n  - {name: implement, on: issue, action: /playbook}"))
+	s.writeWorkflowWithoutCommands(workflowWithTriggers("\n  - {name: implement, on: issue, action: /playbook}"))
 	s.setIssues(readyIssue(1))
 
 	r := s.dryRun()
@@ -58,7 +58,7 @@ func TestTriggerThatLosesItsLeadingSkillIsLeftOutOfTheEvaluation(t *testing.T) {
 	// 事前検査に落ちた urgent は評価から外れるので、urgent と implement の両方に当たる issue#43 は implement の候補になる
 	// (usecases.md UC-5)
 	s := newSandbox(t)
-	s.writeWorkflow(s.abandonedWorkflow())
+	s.writeWorkflowWithCommands(s.abandonedWorkflow())
 	s.onClaude(stubwire.Rule{ReleaseFile: s.releaseFile()})
 	loop := s.startLoop()
 	s.waitEvents("tick", 1)
@@ -78,7 +78,7 @@ func TestTriggerThatLosesItsLeadingSkillIsLeftOutOfTheEvaluation(t *testing.T) {
 func TestRetryOfATriggerThatLostItsSkillDoesNotHoldTheSlot(t *testing.T) {
 	// 並列上限 1。urgent で失敗して再起動を待つ issue#43 の skill が消えても、implement の issue#42 は起動する
 	s := newSandbox(t)
-	s.writeWorkflow(strings.Replace(s.workerWorkflow(fastRetry), "triggers:\n", `triggers:
+	s.writeWorkflowWithCommands(strings.Replace(s.workerWorkflow(fastRetry), "triggers:\n", `triggers:
   - name: urgent
     on: issue
     when: {labels: {all: [urgent]}}
@@ -101,4 +101,25 @@ func TestRetryOfATriggerThatLostItsSkillDoesNotHoldTheSlot(t *testing.T) {
 
 	loop.waitForOutput(regexp.MustCompile(`起動 issue#42 \(implement`))
 	s.waitStatus("issue#43\turgent\tattempt 1\t再起動待ち")
+}
+
+func TestRetryOfATriggerThatLostItsSkillIsReleasedWhenTheIssueCloses(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflowWithCommands(s.workerWorkflow(fastRetry))
+	s.setIssues(readyIssue(42))
+	s.onClaude(stubwire.Rule{})
+	loop := s.startLoop()
+	s.waitEvents("retry", 1)
+	if err := os.Remove(s.command("implement")); err != nil {
+		t.Fatal(err)
+	}
+	loop.waitForOutput(regexp.MustCompile(`起動しない trigger: implement`))
+	closed := readyIssue(42)
+	closed.closed = true
+
+	s.setIssues(closed)
+
+	if release := s.waitEvents("release", 1)[0]; release["reason"] != "終端" {
+		t.Fatalf("release の行 = %v", release)
+	}
 }

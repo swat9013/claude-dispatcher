@@ -315,7 +315,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。
   - binary は署名しないので、macOS では cask の `postflight_steps` が quarantine を外す (ADR 0007)
 - **特定の plugin には依存しない**
   - action が呼ぶ skill と command は、利用者が入れた plugin・repo の `.claude/`・`~/.claude/` のどれに置いてもよい
-  - 事前検査 (§8) は、この 3 か所の skill と command から先頭の `/名前` を探す。plugin は user scope で入れたものだけを数える (project / local scope の plugin は install した path でだけ読まれ、worker の workspace では読まれない)
+  - 事前検査 (§8) は、この 3 か所の skill と command から先頭の `/名前` を探す。plugin は、user scope で入れたものと、この repo に project scope で入れたものを数える (local scope の plugin は commit しない settings で有効になり、worker の workspace では読まれない)
 - **Claude Code の settings は CLI が書かない** (ADR 0004)。`doctor` は、worker が tracker を操作するのに要りそうな entry を表示する
 - **`doctor` は、利用者の約束に頼る宣言を警告する**
   - `cl.approved` に action を当てている (merge を worker に任せうる)

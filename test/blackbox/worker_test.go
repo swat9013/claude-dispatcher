@@ -108,7 +108,7 @@ func (s *sandbox) waitEvents(name string, n int) []map[string]any {
 
 func TestIssueMatchingATriggerGetsAWorkerInItsWorkspaceAndIsCompletedWhenItLeavesTheTrigger(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(s.workerWorkflow(""))
+	s.writeWorkflowWithCommands(s.workerWorkflow(""))
 	s.setIssues(readyIssue(42))
 	done := readyIssue(42)
 	done.labels = nil
@@ -128,7 +128,7 @@ func TestIssueMatchingATriggerGetsAWorkerInItsWorkspaceAndIsCompletedWhenItLeave
 
 func TestCompletedIssueIsNotLaunchedAgain(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(s.workerWorkflow(""))
+	s.writeWorkflowWithCommands(s.workerWorkflow(""))
 	s.setIssues(readyIssue(42))
 	done := readyIssue(42)
 	done.labels = nil
@@ -146,7 +146,7 @@ func TestCompletedIssueIsNotLaunchedAgain(t *testing.T) {
 
 func TestWorkspaceIsCreatedWithHooksBeforeTheWorkerRuns(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(s.workerWorkflow(""))
+	s.writeWorkflowWithCommands(s.workerWorkflow(""))
 	s.setIssues(readyIssue(42))
 	s.onClaude(stubwire.Rule{ReleaseFile: s.releaseFile()})
 
@@ -163,7 +163,7 @@ func TestWorkspaceIsCreatedWithHooksBeforeTheWorkerRuns(t *testing.T) {
 
 func TestWorkerGetsTheCommonPromptAsSystemPromptAndTheActionAsTheUserPrompt(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(s.workerWorkflow("claude:\n  args: [--permission-mode, auto]\n"))
+	s.writeWorkflowWithCommands(s.workerWorkflow("claude:\n  args: [--permission-mode, auto]\n"))
 	s.setIssues(readyIssue(42))
 	s.onClaude(stubwire.Rule{ReleaseFile: s.releaseFile()})
 
@@ -185,7 +185,7 @@ func TestWorkerGetsTheCommonPromptAsSystemPromptAndTheActionAsTheUserPrompt(t *t
 
 func TestSessionIDIsAUUIDAndIsLoggedWithTheStart(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(s.workerWorkflow(""))
+	s.writeWorkflowWithCommands(s.workerWorkflow(""))
 	s.setIssues(readyIssue(42))
 	s.onClaude(stubwire.Rule{ReleaseFile: s.releaseFile()})
 
@@ -199,7 +199,7 @@ func TestSessionIDIsAUUIDAndIsLoggedWithTheStart(t *testing.T) {
 
 func TestWorkerThatLeavesTheTriggerMidwayIsNotStopped(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(s.workerWorkflow(""))
+	s.writeWorkflowWithCommands(s.workerWorkflow(""))
 	s.setIssues(readyIssue(42))
 	s.onClaude(stubwire.Rule{ReleaseFile: s.releaseFile()})
 	s.startLoop()
@@ -218,7 +218,7 @@ func TestWorkerThatLeavesTheTriggerMidwayIsNotStopped(t *testing.T) {
 
 func TestWorkerOfAnIssueThatIsClosedIsStoppedAndItsWorkspaceRemoved(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(s.workerWorkflow(""))
+	s.writeWorkflowWithCommands(s.workerWorkflow(""))
 	s.setIssues(readyIssue(42))
 	s.onClaude(stubwire.Rule{ReleaseFile: s.releaseFile()})
 	s.startLoop()
@@ -244,7 +244,7 @@ func TestWorkerOfAnIssueThatIsClosedIsStoppedAndItsWorkspaceRemoved(t *testing.T
 
 func TestWorkerThatEndsStillMatchingTheTriggerFails(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(s.workerWorkflow(""))
+	s.writeWorkflowWithCommands(s.workerWorkflow(""))
 	s.setIssues(readyIssue(42))
 	s.onClaude(stubwire.Rule{})
 
@@ -258,7 +258,7 @@ func TestWorkerThatEndsStillMatchingTheTriggerFails(t *testing.T) {
 
 func TestLoopWithAnActionThatCannotBeRenderedFailsToStart(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(strings.Replace(s.workerWorkflow(""), "{{ .trigger.name }}", "{{ .issue.body }}", 1))
+	s.writeWorkflowWithCommands(strings.Replace(s.workerWorkflow(""), "{{ .trigger.name }}", "{{ .issue.body }}", 1))
 	s.setIssues(readyIssue(42))
 
 	r := s.run("loop")
@@ -272,7 +272,7 @@ func TestLoopWithAnActionThatCannotBeRenderedFailsToStart(t *testing.T) {
 func TestActionThatFailsToRenderForTheIssueFailsWithoutLaunching(t *testing.T) {
 	// 検査の見本の label では描画でき、実際の issue の label では未知の変数に当たる action
 	s := newSandbox(t)
-	s.writeWorkflow(strings.Replace(s.workerWorkflow(""), "{{ .trigger.name }}", "{{ if eq (index .issue.labels 0) `label` }}x{{ else }}{{ .issue.body }}{{ end }}", 1))
+	s.writeWorkflowWithCommands(strings.Replace(s.workerWorkflow(""), "{{ .trigger.name }}", "{{ if eq (index .issue.labels 0) `label` }}x{{ else }}{{ .issue.body }}{{ end }}", 1))
 	s.setIssues(readyIssue(42))
 	s.onClaude(stubwire.Rule{})
 
@@ -289,7 +289,7 @@ func TestActionThatFailsToRenderForTheIssueFailsWithoutLaunching(t *testing.T) {
 
 func TestFailingBeforeRunHookFailsWithoutLaunching(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(regexp.MustCompile(`(?m)^  before_run: .*$`).ReplaceAllString(s.workerWorkflow(""), "  before_run: exit 3"))
+	s.writeWorkflowWithCommands(regexp.MustCompile(`(?m)^  before_run: .*$`).ReplaceAllString(s.workerWorkflow(""), "  before_run: exit 3"))
 	s.setIssues(readyIssue(42))
 	s.onClaude(stubwire.Rule{})
 
@@ -306,7 +306,7 @@ func TestFailingBeforeRunHookFailsWithoutLaunching(t *testing.T) {
 
 func TestWorkersAreLaunchedOnlyUpToTheConcurrencyLimit(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(s.workerWorkflow("limits:\n  max_concurrent: 1\n"))
+	s.writeWorkflowWithCommands(s.workerWorkflow("limits:\n  max_concurrent: 1\n"))
 	s.setIssues(readyIssue(42), readyIssue(43))
 	s.onClaude(stubwire.Rule{ReleaseFile: s.releaseFile()})
 	s.startLoop()
@@ -322,7 +322,7 @@ func TestWorkersAreLaunchedOnlyUpToTheConcurrencyLimit(t *testing.T) {
 
 func TestFirstStopRequestWaitsForTheRunningWorker(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(s.workerWorkflow(""))
+	s.writeWorkflowWithCommands(s.workerWorkflow(""))
 	s.setIssues(readyIssue(42))
 	s.onClaude(stubwire.Rule{ReleaseFile: s.releaseFile()})
 	loop := s.startLoop()
@@ -346,7 +346,7 @@ func TestFirstStopRequestWaitsForTheRunningWorker(t *testing.T) {
 
 func TestSecondStopRequestStopsTheRunningWorker(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(s.workerWorkflow(""))
+	s.writeWorkflowWithCommands(s.workerWorkflow(""))
 	s.setIssues(readyIssue(42))
 	s.onClaude(stubwire.Rule{ReleaseFile: s.releaseFile()})
 	loop := s.startLoop()
@@ -371,7 +371,7 @@ func TestSecondStopRequestStopsTheRunningWorker(t *testing.T) {
 
 func TestIssueThatComesBackToTheTriggerAfterCompletingIsLaunchedAgain(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(s.workerWorkflow(""))
+	s.writeWorkflowWithCommands(s.workerWorkflow(""))
 	s.setIssues(readyIssue(42))
 	done := readyIssue(42)
 	done.labels = nil
@@ -386,7 +386,7 @@ func TestIssueThatComesBackToTheTriggerAfterCompletingIsLaunchedAgain(t *testing
 
 func TestWorkerThatFailsButLeavesTheTriggerIsCompleted(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(s.workerWorkflow(""))
+	s.writeWorkflowWithCommands(s.workerWorkflow(""))
 	s.setIssues(readyIssue(42))
 	done := readyIssue(42)
 	done.labels = nil
@@ -402,7 +402,7 @@ func TestWorkerThatFailsButLeavesTheTriggerIsCompleted(t *testing.T) {
 
 func TestFailingAfterCreateHookRemovesTheWorkspaceAndFails(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(regexp.MustCompile(`(?m)^  after_create: .*$`).ReplaceAllString(s.workerWorkflow(""), "  after_create: exit 4"))
+	s.writeWorkflowWithCommands(regexp.MustCompile(`(?m)^  after_create: .*$`).ReplaceAllString(s.workerWorkflow(""), "  after_create: exit 4"))
 	s.setIssues(readyIssue(42))
 	s.onClaude(stubwire.Rule{})
 
@@ -419,7 +419,7 @@ func TestFailingAfterCreateHookRemovesTheWorkspaceAndFails(t *testing.T) {
 
 func TestFailingAfterRunHookIsLoggedAndTheWorkerStillEnds(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(regexp.MustCompile(`(?m)^  after_run: .*$`).ReplaceAllString(s.workerWorkflow(""), "  after_run: exit 5"))
+	s.writeWorkflowWithCommands(regexp.MustCompile(`(?m)^  after_run: .*$`).ReplaceAllString(s.workerWorkflow(""), "  after_run: exit 5"))
 	s.setIssues(readyIssue(42))
 	done := readyIssue(42)
 	done.labels = nil
@@ -440,7 +440,7 @@ func TestFailingAfterRunHookIsLoggedAndTheWorkerStillEnds(t *testing.T) {
 func TestHookThatRunsPastItsTimeoutIsStoppedAndFails(t *testing.T) {
 	s := newSandbox(t)
 	workflow := regexp.MustCompile(`(?m)^  before_run: .*$`).ReplaceAllString(s.workerWorkflow(""), "  before_run: 'while :; do :; done'\n  timeout: 1s")
-	s.writeWorkflow(workflow)
+	s.writeWorkflowWithCommands(workflow)
 	s.setIssues(readyIssue(42))
 	s.onClaude(stubwire.Rule{})
 
@@ -454,7 +454,7 @@ func TestHookThatRunsPastItsTimeoutIsStoppedAndFails(t *testing.T) {
 
 func TestWorkerOfAnIssueClosedWhileWaitingToStopIsStopped(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(s.workerWorkflow(""))
+	s.writeWorkflowWithCommands(s.workerWorkflow(""))
 	s.setIssues(readyIssue(42))
 	s.onClaude(stubwire.Rule{ReleaseFile: s.releaseFile()})
 	loop := s.startLoop()
@@ -474,7 +474,7 @@ func TestWorkerOfAnIssueClosedWhileWaitingToStopIsStopped(t *testing.T) {
 
 func TestWorkspaceOfAnIssueClosedAfterItsWorkerCompletedIsRemoved(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(s.workerWorkflow(""))
+	s.writeWorkflowWithCommands(s.workerWorkflow(""))
 	s.setIssues(readyIssue(42))
 	done := readyIssue(42)
 	done.labels = nil
@@ -491,7 +491,7 @@ func TestWorkspaceOfAnIssueClosedAfterItsWorkerCompletedIsRemoved(t *testing.T) 
 
 func TestFailingBeforeRemoveHookIsLoggedAndTheWorkspaceIsStillRemoved(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(regexp.MustCompile(`(?m)^  before_remove: .*$`).ReplaceAllString(s.workerWorkflow(""), "  before_remove: exit 6"))
+	s.writeWorkflowWithCommands(regexp.MustCompile(`(?m)^  before_remove: .*$`).ReplaceAllString(s.workerWorkflow(""), "  before_remove: exit 6"))
 	mustMkdir(t, s.workspace(7))
 	closed := readyIssue(7)
 	closed.closed = true
@@ -508,12 +508,12 @@ func TestFailingBeforeRemoveHookIsLoggedAndTheWorkspaceIsStillRemoved(t *testing
 
 func TestWorkspaceIsRemovedUnderTheRootItWasCreatedInAfterTheRootChanges(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(s.workerWorkflow(""))
+	s.writeWorkflowWithCommands(s.workerWorkflow(""))
 	s.setIssues(readyIssue(42))
 	s.onClaude(stubwire.Rule{ReleaseFile: s.releaseFile()})
 	s.startLoop()
 	s.waitEvents("start", 1)
-	s.writeWorkflow(s.workerWorkflow("workspace:\n  root: elsewhere\n"))
+	s.writeWorkflowWithCommands(s.workerWorkflow("workspace:\n  root: elsewhere\n"))
 	ticks := len(s.events("tick"))
 	s.waitEvents("tick", ticks+1)
 	closed := readyIssue(42)
@@ -527,7 +527,7 @@ func TestWorkspaceIsRemovedUnderTheRootItWasCreatedInAfterTheRootChanges(t *test
 
 func TestLoopRemovesTheWorkspacesOfClosedIssuesWhenItStarts(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(s.workerWorkflow(""))
+	s.writeWorkflowWithCommands(s.workerWorkflow(""))
 	mustMkdir(t, s.workspace(7))
 	mustMkdir(t, s.workspace(8))
 	closed := readyIssue(7)

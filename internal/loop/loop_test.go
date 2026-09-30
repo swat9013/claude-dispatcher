@@ -476,18 +476,30 @@ func TestWorkerThatFailsAfterAStopRequestHasNoRestartInTheStatus(t *testing.T) {
 	}
 }
 
-func TestRetryWaitsWhileItsTriggerFailsThePrecheckAndRestartsWhenItPasses(t *testing.T) {
-	// 周期 5s、backoff 10s。2 回目の tick (5s) で implement が事前検査に落ち、3 回目 (10s) で直る
-	h := &harness{plans: []tickPlan{
+// blockedWhileRetryIsDue は、周期 5s・backoff 10s で、2 回目と 3 回目の tick (5s・10s) で implement が事前検査に落ち、
+// 4 回目で直る harness。再起動の予定 (10s) は落ちている間に明ける。
+func blockedWhileRetryIsDue() *harness {
+	return &harness{plans: []tickPlan{
 		{load: good(5 * time.Second)}, {load: good(5 * time.Second), blocked: []string{"implement"}},
 		{load: good(5 * time.Second), blocked: []string{"implement"}}, {load: good(5 * time.Second)},
 	}, maxConcurrent: 1, maxAttempts: 2}
+}
+
+func TestRetryOfATriggerThatFailsThePrecheckRestartsWhenItPasses(t *testing.T) {
+	h := blockedWhileRetryIsDue()
 
 	h.run(t)
 
 	if len(h.jobs) != 2 || h.jobs[1].Attempt != 2 {
 		t.Fatalf("起動 = %+v, want 直った後に attempt 2 を 1 回", h.jobs)
 	}
+}
+
+func TestRetryOfATriggerThatFailsThePrecheckIsNotScheduledWhileItFails(t *testing.T) {
+	h := blockedWhileRetryIsDue()
+
+	h.run(t)
+
 	if slices.Contains(h.waits, 0) {
 		t.Fatalf("待ち = %v, 事前検査に落ちている間に明けた予定で回り直した", h.waits)
 	}

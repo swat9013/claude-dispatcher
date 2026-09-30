@@ -28,7 +28,7 @@ func (s *sandbox) waitStatus(want string) string {
 
 func TestStatusShowsTheRunningWorker(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(s.workerWorkflow(""))
+	s.writeWorkflowWithCommands(s.workerWorkflow(""))
 	s.setIssues(readyIssue(42))
 	s.onClaude(stubwire.Rule{ReleaseFile: s.releaseFile()})
 	s.startLoop()
@@ -44,7 +44,7 @@ func TestStatusShowsTheRunningWorker(t *testing.T) {
 func TestLoopShowsTheActivityOfARunningWorker(t *testing.T) {
 	// stream の最新の完結した行を要約して、活動の行と status に出す (formats.md §6)
 	s := newSandbox(t)
-	s.writeWorkflow(s.workerWorkflow(""))
+	s.writeWorkflowWithCommands(s.workerWorkflow(""))
 	s.setIssues(readyIssue(42))
 	line := `{"type":"assistant","message":{"content":[{"type":"text","text":"テストを\t読む\n次の行"}]}}`
 	s.onClaude(stubwire.Rule{Stdout: line + "\n" + `{"type":"assist`, ReleaseFile: s.releaseFile()}) // 書きかけの行は数えない
@@ -57,7 +57,7 @@ func TestLoopShowsTheActivityOfARunningWorker(t *testing.T) {
 func TestStatusShowsARetryWaitingForItsBackoff(t *testing.T) {
 	// 既定の backoff (10s) の間に status を撃つ
 	s := newSandbox(t)
-	s.writeWorkflow(s.workerWorkflow(""))
+	s.writeWorkflowWithCommands(s.workerWorkflow(""))
 	s.setIssues(readyIssue(42))
 	s.onClaude(stubwire.Rule{})
 	s.startLoop()
@@ -68,7 +68,7 @@ func TestStatusShowsARetryWaitingForItsBackoff(t *testing.T) {
 
 func TestStatusShowsAnAbandonedIssueWithHowToClearIt(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(s.workerWorkflow("limits:\n  max_attempts: 1\n"))
+	s.writeWorkflowWithCommands(s.workerWorkflow("limits:\n  max_attempts: 1\n"))
 	s.setIssues(readyIssue(42))
 	s.onClaude(stubwire.Rule{})
 	s.startLoop()
@@ -79,7 +79,7 @@ func TestStatusShowsAnAbandonedIssueWithHowToClearIt(t *testing.T) {
 
 func TestStatusShowsTheErrorOfTheLastTick(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(s.workerWorkflow(""))
+	s.writeWorkflowWithCommands(s.workerWorkflow(""))
 	s.setIssues()
 	s.startLoop()
 	s.waitEvents("tick", 1)
@@ -96,7 +96,7 @@ func TestStatusShowsTheErrorOfTheLastTick(t *testing.T) {
 
 func TestStatusShowsAmbiguousCLs(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(s.clWorkflow("{}"))
+	s.writeWorkflowWithCommands(s.clWorkflow("{}"))
 	s.setStore(nil, numbered(cl{head: "shared"}, cl{head: "shared"}))
 	s.startLoop()
 	s.waitEvents("tick", 1)
@@ -121,7 +121,7 @@ func TestStatusWithoutALoopSaysSoWithoutWritingAnything(t *testing.T) {
 
 func TestStatusAfterTheLoopStoppedShowsNoWorkers(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(s.workerWorkflow(""))
+	s.writeWorkflowWithCommands(s.workerWorkflow(""))
 	s.setIssues(readyIssue(42))
 	s.onClaude(stubwire.Rule{ReleaseFile: s.releaseFile()})
 	loop := s.startLoop()

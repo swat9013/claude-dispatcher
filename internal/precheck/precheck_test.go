@@ -137,6 +137,16 @@ func TestSkillAtTheRootOfAPluginIsCalledWithThePluginName(t *testing.T) {
 	p.assertFound(t, "/tools:review")
 }
 
+func TestSkillAtTheRootOfAPluginWithASkillsDirectoryIsNotFound(t *testing.T) {
+	// root の SKILL.md を単一の skill として読むのは、skills/ も manifest の skills も無い plugin だけ
+	p := newPlaces(t)
+	dir := p.installed(t, "tools@market", "tools", "user", "")
+	write(t, filepath.Join(dir, "SKILL.md"), "---\nname: review\n---\n")
+	write(t, filepath.Join(dir, "skills/tdd/SKILL.md"), "---\nname: tdd\n---\n")
+
+	p.assertMissing(t, "/tools:review")
+}
+
 func TestMissingNameShowsThePlacesThatCouldNotBeRead(t *testing.T) {
 	p := newPlaces(t)
 	write(t, filepath.Join(p.home, ".claude/plugins/installed_plugins.json"), "{壊れた")
@@ -156,10 +166,27 @@ func TestCommandOfAnInstalledPluginIsCalledWithThePluginName(t *testing.T) {
 	p.assertFound(t, "/tools:ship")
 }
 
-func TestPluginInstalledForAProjectIsNotFound(t *testing.T) {
-	// project の plugin は install した path でだけ読まれ、worker の cwd (workspace) では読まれない
+func TestPluginInstalledForTheProjectOfTheCloneIsFound(t *testing.T) {
+	// project の plugin は commit された .claude/settings.json で有効になり、clone の worktree でも読まれる
 	p := newPlaces(t)
 	dir := p.installed(t, "tools@market", "tools", "project", p.clone)
+	write(t, filepath.Join(dir, "commands/ship.md"), "出す")
+
+	p.assertFound(t, "/tools:ship")
+}
+
+func TestPluginInstalledForAnotherProjectIsNotFound(t *testing.T) {
+	p := newPlaces(t)
+	dir := p.installed(t, "tools@market", "tools", "project", filepath.Join(p.home, "other"))
+	write(t, filepath.Join(dir, "commands/ship.md"), "出す")
+
+	p.assertMissing(t, "/tools:ship")
+}
+
+func TestPluginInstalledLocallyIsNotFound(t *testing.T) {
+	// local の plugin は commit しない .claude/settings.local.json で有効になり、worktree では読まれない
+	p := newPlaces(t)
+	dir := p.installed(t, "tools@market", "tools", "local", p.clone)
 	write(t, filepath.Join(dir, "commands/ship.md"), "出す")
 
 	p.assertMissing(t, "/tools:ship")
@@ -183,13 +210,43 @@ func TestPluginDirectoryGivenToClaudeIsSearched(t *testing.T) {
 	p.assertFound(t, "/local:go", "--permission-mode", "auto", "--plugin-dir", "plugins/local")
 }
 
-func TestCommandPathsOfTheManifestAreSearchedBesideTheCommandsDirectory(t *testing.T) {
-	p := newPlaces(t)
+// bundle は ~/.claude/skills/bundle に manifest を置いた plugin を作り、その dir を返す。
+func (p places) bundle(t *testing.T, manifest string) string {
+	t.Helper()
 	dir := filepath.Join(p.home, ".claude/skills/bundle")
-	write(t, filepath.Join(dir, ".claude-plugin/plugin.json"), `{"name": "bundle", "commands": ["./cmds/run.md"]}`)
+	write(t, filepath.Join(dir, ".claude-plugin/plugin.json"), manifest)
+	return dir
+}
+
+func TestCommandPathsOfTheManifestAreSearched(t *testing.T) {
+	p := newPlaces(t)
+	dir := p.bundle(t, `{"name": "bundle", "commands": ["./cmds/run.md"]}`)
 	write(t, filepath.Join(dir, "cmds/run.md"), "走る")
 
 	p.assertFound(t, "/bundle:run")
+}
+
+func TestCommandPathsOfTheManifestReplaceTheCommandsDirectory(t *testing.T) {
+	p := newPlaces(t)
+	dir := p.bundle(t, `{"name": "bundle", "commands": ["./cmds/run.md"]}`)
+	write(t, filepath.Join(dir, "commands/stop.md"), "止める")
+
+	p.assertMissing(t, "/bundle:stop")
+}
+
+func TestCommandsOfTheManifestGivenAsAMapAreCalledByTheirKeys(t *testing.T) {
+	p := newPlaces(t)
+	p.bundle(t, `{"name": "bundle", "commands": {"about": {"source": "./README.md"}}}`)
+
+	p.assertFound(t, "/bundle:about")
+}
+
+func TestEmptyCommandPathOfTheManifestIsNotThePluginRoot(t *testing.T) {
+	p := newPlaces(t)
+	dir := p.bundle(t, `{"name": "bundle", "commands": ""}`)
+	write(t, filepath.Join(dir, "README.md"), "説明")
+
+	p.assertMissing(t, "/bundle:README")
 }
 
 func TestCommandsDirectoryThatIsASymlinkIsSearched(t *testing.T) {
