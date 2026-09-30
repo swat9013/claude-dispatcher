@@ -103,10 +103,12 @@ type claim struct {
 	trigger   trigger.Trigger
 	attempt   int
 	sessionID string
-	// def は最初に起動したときの workflow 定義。再起動も workspace の削除もこの定義で行う (session は workspace の path ごとに
-	// 保存されるので、途中で workspace.root が変わっても同じ workspace で続ける)
-	def   workflow.Definition
-	phase phase
+	// workspaceRoot は最初に起動したときの workspace.root。session は workspace の path ごとに保存されるので、途中で
+	// workspace.root が変わっても、再起動と workspace の削除はこの root で行う。ほかの項目は、そのときの workflow 定義から読む
+	workspaceRoot string
+	// sessionStarted は、sessionID の session を始めた (claude を起動できた) attempt があったか
+	sessionStarted bool
+	phase          phase
 	// run は phaseRunning と phaseStopping の worker
 	run Worker
 	// stopReason は phaseStopping の理由
@@ -115,6 +117,8 @@ type claim struct {
 	ended *worker.Result
 	// retryAt は phaseWaitingRetry の backoff が明ける時刻
 	retryAt time.Time
+	// waitingSlot は、backoff が明けたが並列上限で起動できず、そのことを log に書いたか
+	waitingSlot bool
 }
 
 type loop struct {
@@ -156,6 +160,7 @@ func Run(o Options) int {
 		if next == nil {
 			next = o.After(l.def.Interval)
 		}
+		l.arm()
 		select {
 		case sig := <-o.Signals:
 			l.requestStop(sig)
@@ -171,7 +176,7 @@ func Run(o Options) int {
 		case <-l.wake:
 			l.wake = nil
 			if l.stopping == 0 {
-				l.retry(l.o.Open(l.def))
+				l.retry(l.o.Open(l.def), nil)
 			}
 		}
 	}
@@ -243,7 +248,7 @@ func (l *loop) tick() {
 	}
 	l.sweep(issues, open)
 	l.clearAbandoned(def, open)
-	l.retry(issues)
+	l.retry(issues, open)
 	candidates := trigger.Evaluate(def.Triggers, open)
 	var launched []string
 	for _, c := range candidates {
@@ -330,17 +335,26 @@ func (l *loop) launch(def workflow.Definition, c trigger.Candidate) bool {
 		l.rec.error(n, err.Error())
 		return false
 	}
-	cl := &claim{issue: c.Issue, trigger: *c.Trigger, attempt: 1, sessionID: sessionID, def: def}
+	cl := &claim{issue: c.Issue, trigger: *c.Trigger, attempt: 1, sessionID: sessionID, workspaceRoot: def.WorkspaceRoot}
 	l.claims[n] = cl
 	l.start(cl)
 	return true
 }
 
-// start は claim の今の attempt の worker を起動する。
+// start は claim の今の attempt の worker を、そのときの workflow 定義で起動する。
 func (l *loop) start(c *claim) {
+	def := l.definitionOf(c)
 	c.phase = phaseRunning
-	job := worker.Job{Issue: c.issue, Trigger: c.trigger, Attempt: c.attempt, SessionID: c.sessionID, Prompt: c.def.Prompt}
-	c.run = l.o.Launch(c.def, job, l.events)
+	job := worker.Job{Issue: c.issue, Trigger: c.trigger, Attempt: c.attempt, SessionID: c.sessionID, Resume: c.sessionStarted, Prompt: def.Prompt}
+	c.run = l.o.Launch(def, job, l.events)
+}
+
+// definitionOf は claim の worker と workspace に使う workflow 定義。そのときの定義の workspace.root だけを、最初に起動した
+// ときの root に差し替える。
+func (l *loop) definitionOf(c *claim) workflow.Definition {
+	def := l.def
+	def.WorkspaceRoot = c.workspaceRoot
+	return def
 }
 
 // handle は worker の起動か終わりを受ける。
@@ -351,6 +365,7 @@ func (l *loop) handle(ev worker.Event) {
 		if !ok {
 			return
 		}
+		c.sessionStarted = true
 		name := target.Name(ev.Number)
 		l.rec.event("start", map[string]any{
 			"target": name, "trigger": c.trigger.Name, "attempt": c.attempt,
@@ -370,7 +385,7 @@ func (l *loop) handle(ev worker.Event) {
 		}
 		if result.Stopped {
 			if c.stopReason == stoppedAtTerminal {
-				l.remove(l.o.Workspaces(c.def), ev.Number)
+				l.remove(l.o.Workspaces(l.definitionOf(c)), ev.Number)
 			}
 			l.end(ev.Number, c, stopped, string(c.stopReason), result)
 			delete(l.claims, ev.Number)
@@ -381,7 +396,7 @@ func (l *loop) handle(ev worker.Event) {
 		l.verify(issues, ev.Number, c)
 		if l.stopping == 0 {
 			// 空いた枠で、空きを待っていた再起動を試みる
-			l.retry(issues)
+			l.retry(issues, nil)
 		}
 	}
 }
@@ -405,22 +420,29 @@ func (l *loop) verify(issues Issues, n int, c *claim) {
 		return
 	}
 	result := *c.ended
-	o, reason := failed, reasonStillMatches
-	switch {
-	case issue.Closed:
-		l.remove(l.o.Workspaces(c.def), n)
-		o, reason = completed, withFailure(reasonTerminal, result)
-	case !c.trigger.When.Matches(issue):
-		o, reason = completed, withFailure(reasonLeftTrigger, result)
-	case result.Failure != "":
-		reason = result.Failure
-	}
-	l.end(n, c, o, reason, result)
-	if o == failed {
-		l.fail(n, c)
+	if settled := l.settle(n, c, issue); settled != "" {
+		l.end(n, c, completed, withFailure(settled, result), result)
+		delete(l.claims, n)
 		return
 	}
-	delete(l.claims, n)
+	reason := reasonStillMatches
+	if result.Failure != "" {
+		reason = result.Failure
+	}
+	l.end(n, c, failed, reason, result)
+	l.fail(n, c)
+}
+
+// settle は読み直した作業対象が claim を解く状態かを見て、解く理由を返す。終端なら workspace も消す。当たったままなら ""。
+func (l *loop) settle(n int, c *claim, issue target.Issue) string {
+	switch {
+	case issue.Closed:
+		l.remove(l.o.Workspaces(l.definitionOf(c)), n)
+		return reasonTerminal
+	case !c.trigger.When.Matches(issue):
+		return reasonLeftTrigger
+	}
+	return ""
 }
 
 // withFailure は完了の理由に、worker 自身の失敗を添える。

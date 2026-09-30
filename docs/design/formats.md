@@ -68,7 +68,7 @@ limits:
   max_concurrent: 1          # 任意。並列上限。既定 1
   max_attempts: 3            # 任意。作業対象 1 件の attempt の上限。既定 3
   max_retry_backoff: 5m      # 任意。backoff の上限。既定 5m
-  stall_timeout: 5m          # 任意。worker の出力が途絶えてから止めるまで。既定 5m。0 で無効
+  stall_timeout: 15m         # 任意。worker の stream が途絶えてから止めるまで。既定 15m。0 で無効
   run_timeout: 1h            # 任意。worker 1 回分の上限時間。既定 1h。0 で無効
 claude:
   command: claude            # 任意。既定 claude
@@ -106,7 +106,7 @@ triggers:                    # 必須。1 つ以上
 | `limits.max_concurrent` | 整数 | 同時に走らせる worker の上限。1 以上。既定 1 |
 | `limits.max_attempts` | 整数 | 作業対象 1 件の attempt の上限。1 以上。既定 3。上限の attempt が失敗したら打ち切る |
 | `limits.max_retry_backoff` | 文字列 | backoff の上限。Go の duration の綴りで、0 より長い。既定 5m |
-| `limits.stall_timeout` | 文字列 | worker の出力 (stdout と stderr) が途絶えてから、止めて失敗とするまでの時間。既定 5m。`0s` で無効 |
+| `limits.stall_timeout` | 文字列 | worker の stream (stdout の stream-json) が途絶えてから、止めて失敗とするまでの時間。既定 15m。`0s` で無効。claude は 1 つの tool の実行中は stream に何も書かないので、長い build や test を走らせる repo では長めにする |
 | `limits.run_timeout` | 文字列 | worker 1 回分の上限時間。起動からの経過が超えたら止めて失敗とする。既定 1h。`0s` で無効 |
 | `claude.command` | 文字列 | worker として起動する command。PATH から探す。既定 `claude` |
 | `claude.args` | 文字列の列 | command に、dispatcher の引数 (§6「worker の起動」) より前に渡す引数。既定は空 |
@@ -215,9 +215,9 @@ action と本文 (共通 prompt) は、worker を起動するたびに Go の te
 | `tick` | tick の終わり | `result` (`ok` / `error`)・`candidates` (候補の数)・`launched` (起動した作業対象の列)・`error` (`result` が `error` のとき) |
 | `start` | worker を起動した | `target`・`trigger`・`attempt`・`session_id`・`workspace`・`pid` |
 | `end` | worker 1 回分の終わり方を決めた | `target`・`trigger`・`attempt`・`session_id`・`outcome`・`reason`・`exit_code` (process が自分で終わったときだけ。signal で止まったら載せない) |
-| `retry` | `failed` の後、次の attempt を予定した | `target`・`trigger`・`attempt` (次の attempt)・`session_id`・`backoff` (秒) |
-| `release` | 再起動を待つ claim を、起動せずに解いた | `target`・`trigger`・`attempt` (最後の attempt)・`session_id`・`reason` (`終端` / `trigger から外れた`) |
-| `abandon` | attempt の上限で打ち切った | `target`・`trigger`・`attempts` (使った attempt の数)・`session_id` |
+| `retry` | `failed` の後、次の attempt を予定した | `target`・`trigger`・`attempt`・`next_attempt`・`session_id`・`backoff` (秒。小数を含む) |
+| `release` | 再起動を待つ claim を、起動せずに解いた | `target`・`trigger`・`attempt`・`session_id`・`reason` (`終端` / `trigger から外れた` / `trigger が workflow 定義から消えた`) |
+| `abandon` | attempt の上限で打ち切った | `target`・`trigger`・`attempt`・`session_id` |
 | `unabandon` | 打ち切りを解いた (打ち切ったときの trigger から外れたのを観測した) | `target`・`trigger` |
 | `error` | 処理は続けるが、運用者が知るべき失敗 | `target` (あれば)・`error` |
 
@@ -232,6 +232,7 @@ action と本文 (共通 prompt) は、worker を起動するたびに Go の te
 
 - `error` の行を書く場面: `after_run` と `before_remove` の失敗・workspace を消せない (次の tick の掃除で消し直す)・終わった worker の作業対象を読み直せない (claim を持ったまま次の tick で読み直す)・止める worker の process group に signal を送れない
 - log.jsonl に行を書けなければ、そのことを stdout に出して続ける
+- `attempt` は、その行が指す claim の最後に起動した (起動しようとした) attempt
 - `session_id` は CLI が発行して最初の attempt に `--session-id` で渡した値。同じ claim の attempt を通して 1 つ。Claude Code の transcript へ辿る鍵
 - claim を解くのは `completed` と `stopped` の `end`・`release`・`abandon` の行
 
@@ -295,10 +296,15 @@ claude-dispatcher loop [<workflow の path>]
 
 - `failed` の後、attempt が `limits.max_attempts` に達していれば打ち切る。達していなければ、`min(10s × 2^(attempt−1), limits.max_retry_backoff)` の後に再起動を予定する
 - backoff が明けたら、tick を待たずに再起動を試みる (tick の途中なら、その tick の手順 6 で試みる)
-  - 走っている worker が `limits.max_concurrent` に達していれば、attempt を進めずに待ち直す
-  - 作業対象を読み直す。終端なら `before_remove` を撃って workspace を消し、trigger から外れていれば、claim を解く (`release`)。読み直せなければ待ち直す
+  - 走っている worker が `limits.max_concurrent` に達していれば、attempt を進めずに待ち直す。worker が終わって空きが出たときに試み直す
+  - 起動した trigger が workflow 定義から消えていれば、claim を解く (`release`)
+  - 作業対象を読み直す。終端なら `before_remove` を撃って workspace を消し、trigger から外れていれば、claim を解く (`release`)。読み直せなければ次の tick で試み直す
   - 当たったままなら、attempt を 1 つ進め、同じ trigger・同じ session id・同じ workspace で起動する
+- 再起動は、そのときの workflow 定義 (trigger・本文・hooks・`claude`・`limits`) で行う。workspace の root だけは、最初に起動したときのものを使う (session は workspace の path ごとに保存されるので)
+- 前の attempt で claude を起動できていなければ (hook・描画・起動の失敗)、session はまだ無いので `--session-id` で始める
+- 停止要求を受けた後に失敗した attempt は、再起動を予定しない
 - 打ち切りは作業対象ごとに memory に持つ。打ち切った作業対象は、どの trigger に当たっても起動しない。loop を起動し直すと消える
+- 打ち切りを解くには、label を外して打ち切ったときの trigger から外し、1 周期待ってから付け直す (外してから付け直すまでが 1 周期に収まると、外れたのを観測できない)。`status` (#81) の打ち切りの表示にこの手順を書く
 
 - 作業対象の読み直しで issue が消えていたら (削除・移管。gh が `Could not resolve to an Issue` を返すか、応答に issue が無い)、終端と同じに扱う
 
@@ -306,15 +312,15 @@ claude-dispatcher loop [<workflow の path>]
 
 1. workspace が無ければ作って `after_create` を撃ち、`before_run` を撃つ
 2. action と本文を描画し、本文を `prompts/issue-<番号>.md` に書く
-3. 次の argv で起動する。cwd は workspace、stdin は空、stdout と stderr は `workers/issue-<番号>.log` に追記する
+3. 次の argv で起動する。cwd は workspace、stdin は空。stdout (stream-json) は `workers/issue-<番号>.log`、stderr は `workers/issue-<番号>.stderr.log` に追記する (claude には file をそのまま渡す)
 
    ```
    <claude.command> <claude.args…> -p --output-format stream-json --verbose <session> --append-system-prompt-file <prompts の path> -- <描画した action>
    ```
 
-   - `<session>` は、最初の attempt なら `--session-id <uuid>`、2 回目以降なら同じ id で `--resume <uuid>` (止めた session の続きから始まる)
+   - `<session>` は、前の attempt で session を始めていれば同じ id で `--resume <uuid>` (止めた session の続きから始まる)、始めていなければ `--session-id <uuid>`
    - action は `--` の後ろに置く (`-` で始まる action を option と読ませない)
-   - worker の出力が `limits.stall_timeout` のあいだ途絶えるか、起動からの経過が `limits.run_timeout` を超えたら、process group を止めて失敗とする (止め方は 2 回目の停止要求と同じ)
+   - stream の file が `limits.stall_timeout` のあいだ伸びないか、起動からの経過が `limits.run_timeout` を超えたら、process group を止めて失敗とする (止め方は 2 回目の停止要求と同じ)。止める判断と停止要求が重なったら、停止要求で止めたことにする
 
 4. 終わったら `after_run` を撃ち、作業対象を読み直す。終端か、起動した trigger から外れていれば `completed` として claim を解き、当たったままなら `failed` として再起動 (上) に回す
    - workspace を消すときは、worker を起動したときの workflow 定義の `workspace.root` と hooks を使う
@@ -329,7 +335,8 @@ claude-dispatcher loop [<workflow の path>]
 <時刻> 終了 issue#42 (implement): completed — trigger から外れた
 <時刻> 再起動を予定 issue#42 (implement, attempt 2, 10s 後)
 <時刻> 再起動せずに解いた issue#42 (implement): trigger から外れた
-<時刻> 打ち切り issue#42 (implement, attempt 3 回): trigger から外すと解ける (外してから 1 周期待つ)
+<時刻> 再起動を待つ issue#42 (implement, attempt 2): 並列上限 1 に空きが出るまで待つ
+<時刻> 打ち切り issue#42 (implement, attempt 3 回): label を外して trigger から外すと解ける (外してから 1 周期待つ)
 <時刻> 打ち切りを解いた issue#42 (implement)
 <時刻> error issue#42: <理由>
 <時刻> 停止待ち: 走っている worker 1 本の終了を待つ (もう一度で止める)

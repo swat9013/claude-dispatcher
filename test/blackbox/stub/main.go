@@ -111,8 +111,9 @@ func record(root, name string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
+	// 呼び出しを読むテストに書きかけを見せないよう、writeFile で一時 file から rename する
 	file := filepath.Join(dir, fmt.Sprintf("%020d-%d.json", time.Now().UnixNano(), os.Getpid()))
-	return os.WriteFile(file, raw, 0o644)
+	return writeFile(stubwire.FileWrite{Path: file, Content: string(raw)})
 }
 
 func matchRule(root, name string, args []string) (*stubwire.Rule, error) {

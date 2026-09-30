@@ -179,7 +179,7 @@ func TestWorkerSettingsHaveDefaults(t *testing.T) {
 	}
 	if def.WorkspaceRoot != filepath.Join(def.Dir, ".claude-dispatcher", "workspaces") || def.Hooks.Timeout != time.Minute ||
 		def.MaxConcurrent != 1 || def.Claude.Command != "claude" || len(def.Claude.Args) != 0 ||
-		def.MaxAttempts != 3 || def.MaxRetryBackoff != 5*time.Minute || def.StallTimeout != 5*time.Minute || def.RunTimeout != time.Hour {
+		def.MaxAttempts != 3 || def.MaxRetryBackoff != 5*time.Minute || def.StallTimeout != 15*time.Minute || def.RunTimeout != time.Hour {
 		t.Fatalf("既定 = %+v", def)
 	}
 }

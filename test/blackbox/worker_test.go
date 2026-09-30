@@ -69,6 +69,14 @@ func (s *sandbox) releaseFile() string { return filepath.Join(s.root, "release")
 
 func (s *sandbox) release() { mustWrite(s.t, s.releaseFile(), "") }
 
+// waitCalls は name の stub の呼び出しが n 回記録されるまで待つ。start の行は claude を起動した直後に書かれ、stub が呼び出しを
+// 記録するのはその後なので、start の行を見てから呼び出しを読むときに使う。
+func (s *sandbox) waitCalls(name string, n int) []stubwire.Call {
+	s.t.Helper()
+	waitFor(s.t, func() bool { return len(s.calls(name)) >= n }, name+" の呼び出しが "+strconv.Itoa(n)+" 回記録されない")
+	return s.calls(name)
+}
+
 // logLines は log.jsonl の完全な行を返す。
 func (s *sandbox) logLines() []map[string]any {
 	s.t.Helper()
@@ -170,7 +178,7 @@ func TestWorkerGetsTheCommonPromptAsSystemPromptAndTheActionAsTheUserPrompt(t *t
 	s.startLoop()
 
 	start := s.waitEvents("start", 1)[0]
-	argv := s.calls("claude")[0].Argv[1:]
+	argv := s.waitCalls("claude", 1)[0].Argv[1:]
 	file := argValueAfter(argv, "--append-system-prompt-file")
 	want := []string{"--permission-mode", "auto", "-p", "--output-format", "stream-json", "--verbose",
 		"--session-id", asString(start["session_id"]), "--append-system-prompt-file", file,

@@ -2,8 +2,10 @@ package blackbox_test
 
 import (
 	"os"
+	"regexp"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/swat9013/claude-dispatcher/test/blackbox/stubwire"
@@ -34,11 +36,24 @@ func TestWorkerThatEndsStillMatchingTheTriggerIsRetriedAfterABackoff(t *testing.
 	s.startLoop()
 
 	retry := s.waitEvents("retry", 1)[0]
-	if retry["target"] != "issue#42" || retry["attempt"] != float64(2) || retry["backoff"] != float64(1) {
+	if retry["target"] != "issue#42" || retry["next_attempt"] != float64(2) || retry["backoff"] != float64(1) {
 		t.Fatalf("retry の行 = %v", retry)
 	}
 	if start := s.waitEvents("start", 2)[1]; start["attempt"] != float64(2) {
 		t.Fatalf("2 本目の start の行 = %v, want attempt 2", start)
+	}
+}
+
+func TestFirstBackoffIsTenSeconds(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflow(s.workerWorkflow("limits:\n  max_retry_backoff: 30s\n"))
+	s.setIssues(readyIssue(42))
+	s.onClaude(stubwire.Rule{})
+
+	s.startLoop()
+
+	if retry := s.waitEvents("retry", 1)[0]; retry["backoff"] != float64(10) {
+		t.Fatalf("retry の行 = %v, want backoff 10 秒", retry)
 	}
 }
 
@@ -52,9 +67,41 @@ func TestRetriedAttemptResumesTheSameSession(t *testing.T) {
 
 	starts := s.waitEvents("start", 2)
 	session := asString(starts[0]["session_id"])
-	calls := s.calls("claude")
+	calls := s.waitCalls("claude", 2)
 	if starts[1]["session_id"] != session || argValueAfter(calls[1].Argv, "--resume") != session || slices.Contains(calls[1].Argv, "--session-id") {
 		t.Fatalf("2 回目の argv = %q, want --resume %s", calls[1].Argv, session)
+	}
+}
+
+func TestRetriedAttemptRunsInTheSameWorkspace(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflow(s.workerWorkflow(fastRetry))
+	s.setIssues(readyIssue(42))
+	s.onClaude(stubwire.Rule{})
+
+	s.startLoop()
+
+	s.waitEvents("start", 2)
+	if calls := s.waitCalls("claude", 2); calls[0].Cwd != calls[1].Cwd || calls[1].Cwd != s.workspace(42) {
+		t.Fatalf("cwd = %s, %s, want どちらも %s", calls[0].Cwd, calls[1].Cwd, s.workspace(42))
+	}
+}
+
+func TestRetryAfterAnAttemptThatNeverStartedClaudeStartsTheSession(t *testing.T) {
+	// before_run は 1 回目だけ失敗する (marks に印を残して 2 回目は通る)
+	s := newSandbox(t)
+	once := s.mark("before_run-failed")
+	s.writeWorkflow(regexp.MustCompile(`(?m)^  before_run: .*$`).ReplaceAllString(s.workerWorkflow(fastRetry),
+		`  before_run: '[ -e "`+once+`" ] || { : > "`+once+`"; exit 1; }'`))
+	s.setIssues(readyIssue(42))
+	s.onClaude(stubwire.Rule{})
+
+	s.startLoop()
+
+	start := s.waitEvents("start", 1)[0]
+	argv := s.waitCalls("claude", 1)[0].Argv
+	if start["attempt"] != float64(2) || argValueAfter(argv, "--session-id") != asString(start["session_id"]) || slices.Contains(argv, "--resume") {
+		t.Fatalf("attempt %v の argv = %q, want 前に始めた session が無いので --session-id", start["attempt"], argv)
 	}
 }
 
@@ -67,11 +114,22 @@ func TestIssueIsAbandonedWhenItsLastAttemptFails(t *testing.T) {
 
 	abandon := s.waitEvents("abandon", 1)[0]
 
-	if abandon["target"] != "issue#42" || abandon["attempts"] != float64(2) {
+	if abandon["target"] != "issue#42" || abandon["attempt"] != float64(2) {
 		t.Fatalf("abandon の行 = %v", abandon)
 	}
+}
+
+func TestAbandonedIssueIsNotLaunchedAgainWhileItStillMatchesTheTrigger(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflow(s.workerWorkflow(fastRetry + "  max_attempts: 2\n"))
+	s.setIssues(readyIssue(42))
+	s.onClaude(stubwire.Rule{})
+	s.startLoop()
+	s.waitEvents("abandon", 1)
+
 	ticks := len(s.events("tick"))
 	s.waitEvents("tick", ticks+2)
+
 	if starts := s.events("start"); len(starts) != 2 {
 		t.Fatalf("start の行 = %d 行, want 打ち切った後は起動しない 2 行", len(starts))
 	}
@@ -137,7 +195,6 @@ func TestStalledWorkerIsStoppedAndCountedAsAFailure(t *testing.T) {
 	if end["outcome"] != "failed" || !strings.Contains(asString(end["reason"]), "stall") {
 		t.Fatalf("end の行 = %v, want stall の失敗", end)
 	}
-	s.waitEvents("retry", 1)
 }
 
 func TestWorkerThatRunsPastItsTimeLimitIsStoppedAndCountedAsAFailure(t *testing.T) {
@@ -152,7 +209,6 @@ func TestWorkerThatRunsPastItsTimeLimitIsStoppedAndCountedAsAFailure(t *testing.
 	if end["outcome"] != "failed" || !strings.Contains(asString(end["reason"]), "上限時間") {
 		t.Fatalf("end の行 = %v, want 上限時間の失敗", end)
 	}
-	s.waitEvents("retry", 1)
 }
 
 func TestRetryWaitingForAFreeSlotDoesNotAdvanceTheAttempt(t *testing.T) {
@@ -174,6 +230,9 @@ func TestRetryWaitingForAFreeSlotDoesNotAdvanceTheAttempt(t *testing.T) {
 	s.waitEvents("retry", 1)
 	ticks = len(s.events("tick"))
 	s.waitEvents("tick", ticks+3)
+	if starts := s.startsOf("issue#42"); len(starts) != 1 {
+		t.Fatalf("issue#42 の start の行 = %v, want 空きが出るまで再起動しない", starts)
+	}
 
 	s.release()
 
@@ -188,4 +247,63 @@ func waitStart(t *testing.T, s *sandbox, target string, n int) map[string]any {
 	t.Helper()
 	waitFor(t, func() bool { return len(s.startsOf(target)) >= n }, target+" の start の行が増えない")
 	return s.startsOf(target)[n-1]
+}
+
+// slowRetry は backoff を 3s にして、再起動を待つ間に作業対象を書き換えられるようにする
+const slowRetry = "limits:\n  max_retry_backoff: 3s\n"
+
+func TestWaitingRetryIsReleasedWhenTheIssueLeavesTheTrigger(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflow(s.workerWorkflow(slowRetry))
+	s.setIssues(readyIssue(42))
+	s.onClaude(stubwire.Rule{})
+	s.startLoop()
+	s.waitEvents("retry", 1)
+	offTrigger := readyIssue(42)
+	offTrigger.labels = nil
+
+	s.setIssues(offTrigger)
+
+	if release := s.waitEvents("release", 1)[0]; release["reason"] != "trigger から外れた" {
+		t.Fatalf("release の行 = %v", release)
+	}
+	if starts := s.events("start"); len(starts) != 1 {
+		t.Fatalf("start の行 = %v, want trigger から外れた issue を再起動しない", starts)
+	}
+}
+
+func TestWaitingRetryOfAClosedIssueIsReleasedAndItsWorkspaceRemoved(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflow(s.workerWorkflow(slowRetry))
+	s.setIssues(readyIssue(42))
+	s.onClaude(stubwire.Rule{})
+	s.startLoop()
+	s.waitEvents("retry", 1)
+	closed := readyIssue(42)
+	closed.closed = true
+
+	s.setIssues(closed)
+
+	if release := s.waitEvents("release", 1)[0]; release["reason"] != "終端" {
+		t.Fatalf("release の行 = %v", release)
+	}
+	if _, err := os.Stat(s.workspace(42)); !os.IsNotExist(err) {
+		t.Fatalf("終端の issue の workspace が残っている: %v", err)
+	}
+}
+
+func TestStopRequestDropsWaitingRetriesWithAnErrorLine(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflow(s.workerWorkflow("limits:\n  max_retry_backoff: 1m\n"))
+	s.setIssues(readyIssue(42))
+	s.onClaude(stubwire.Rule{})
+	loop := s.startLoop()
+	s.waitEvents("retry", 1)
+
+	loop.signal(syscall.SIGINT)
+
+	assertExit(t, loop.wait(), 0)
+	if errs := s.events("error"); len(errs) != 1 || !strings.Contains(asString(errs[0]["error"]), "再起動を待ったまま止まる") {
+		t.Fatalf("error の行 = %v", errs)
+	}
 }

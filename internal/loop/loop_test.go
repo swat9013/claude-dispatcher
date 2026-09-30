@@ -64,22 +64,68 @@ type harness struct {
 	maxConcurrent int
 	// open は置き場の open な issue の番号 (空なら 1 だけ)
 	open []int
+	// maxAttempts は attempt の上限。0 なら 1 (1 回目の失敗で打ち切る)
+	maxAttempts int
 	// rereadFailures は、終わった worker の作業対象の読み直しを最初に何回失敗させるか
 	rereadFailures int
-	// delivered は、起動した worker の event を loop が受け取り終えると閉じる。周期はそれを待ってから進める
-	delivered chan struct{}
-	once      sync.Once
+	// inflight は、起動した worker のうち event を loop が受け取り終えていない数。周期と再起動の予定はそれを待ってから進める
+	inflight int
+	settled  *sync.Cond
+	stopOnce sync.Once
+	// clock は loop の時計。周期と再起動の予定が届くたびに、待った分だけ進める
+	mu    sync.Mutex
+	clock time.Time
 	// 観測の結果
-	reads    int
-	rereads  int
-	launches int
-	waits    []time.Duration
-	stdout   bytes.Buffer
+	reads   int
+	rereads int
+	jobs    []worker.Job
+	waits   []time.Duration
+	stdout  bytes.Buffer
 }
 
 func definition(interval time.Duration, maxConcurrent int) workflow.Definition {
-	// 再起動は black-box テストが実時間で見る。ここでは 1 回目の失敗で打ち切り、再起動の予定を立てない
-	return workflow.Definition{Interval: interval, MaxConcurrent: maxConcurrent, MaxAttempts: 1, Triggers: []trigger.Trigger{{Name: "implement", On: trigger.Issue}}}
+	return workflow.Definition{Interval: interval, MaxConcurrent: maxConcurrent, MaxAttempts: 1, MaxRetryBackoff: 5 * time.Minute,
+		Triggers: []trigger.Trigger{{Name: "implement", On: trigger.Issue}}}
+}
+
+func (h *harness) now() time.Time {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.clock
+}
+
+// begin と done は起動した worker の event の受け渡しを数え、waitSettled は受け渡しが無くなるまで待つ。
+func (h *harness) begin() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.inflight++
+}
+
+func (h *harness) done() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.inflight--
+	h.settled.Broadcast()
+}
+
+func (h *harness) waitSettled() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for h.inflight > 0 {
+		h.settled.Wait()
+	}
+}
+
+func (h *harness) advance(d time.Duration) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.clock = h.clock.Add(d)
+}
+
+// withAttempts は harness の attempt の上限を定義に写す。
+func (h *harness) withAttempts(def workflow.Definition) workflow.Definition {
+	def.MaxAttempts = max(h.maxAttempts, 1)
+	return def
 }
 
 func (h *harness) run(t *testing.T) []string {
@@ -88,17 +134,16 @@ func (h *harness) run(t *testing.T) []string {
 		h.stop = syscall.SIGINT
 	}
 	signals := make(chan os.Signal, 4)
-	h.delivered = make(chan struct{})
-	if h.maxConcurrent == 0 {
-		close(h.delivered)
-	}
+	h.clock = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	h.settled = sync.NewCond(&h.mu)
 	tick := 0
 	exit := loop.Run(loop.Options{
 		Load: func() (workflow.Definition, error) {
 			tick++
-			return h.plans[tick-1].load(h.maxConcurrent)
+			def, err := h.plans[tick-1].load(h.maxConcurrent)
+			return h.withAttempts(def), err
 		},
-		Definition: definition(time.Minute, h.maxConcurrent),
+		Definition: h.withAttempts(definition(time.Minute, h.maxConcurrent)),
 		Open: func(workflow.Definition) loop.Issues {
 			// scope key と観測は、その tick が読み直した workflow 定義の plan で答える
 			return memoryIssues{scopeKey: func() string {
@@ -134,12 +179,13 @@ func (h *harness) run(t *testing.T) []string {
 		},
 		Workspaces: func(workflow.Definition) loop.Workspaces { return noWorkspaces{} },
 		Launch: func(_ workflow.Definition, job worker.Job, events chan<- worker.Event) loop.Worker {
-			h.launches++
+			h.jobs = append(h.jobs, job)
+			h.begin()
 			go func() {
+				defer h.done()
 				events <- worker.Started{Number: job.Issue.Number, PID: 1}
 				code := 0
 				events <- worker.Ended{Number: job.Issue.Number, Result: worker.Result{ExitCode: &code}}
-				h.once.Do(func() { close(h.delivered) })
 			}()
 			return endedWorker{}
 		},
@@ -148,17 +194,18 @@ func (h *harness) run(t *testing.T) []string {
 		Log:          io.Discard,
 		Stdout:       &h.stdout,
 		Signals:      signals,
-		Now:          func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) },
+		Now:          h.now,
 		After: func(d time.Duration) <-chan time.Time {
 			h.waits = append(h.waits, d)
 			ch := make(chan time.Time, 1)
 			last := tick >= len(h.plans)
 			go func() {
-				<-h.delivered
+				h.waitSettled()
 				if last {
-					signals <- h.stop
+					h.stopOnce.Do(func() { signals <- h.stop })
 					return
 				}
+				h.advance(d)
 				ch <- time.Time{}
 			}()
 			return ch
@@ -310,8 +357,8 @@ func TestWorkerWaitingToBeCheckedDoesNotTakeASlot(t *testing.T) {
 
 	h.run(t)
 
-	if h.launches != 2 {
-		t.Fatalf("起動した数 = %d, want 2 (確かめ待ちの issue#1 が並列の枠を塞いだ)", h.launches)
+	if len(h.jobs) != 2 {
+		t.Fatalf("起動した数 = %d, want 2 (確かめ待ちの issue#1 が並列の枠を塞いだ)", len(h.jobs))
 	}
 }
 
@@ -346,20 +393,35 @@ func TestLineThatCannotBeWrittenToTheLogIsReportedOnStdout(t *testing.T) {
 	}
 }
 
-func TestBackoffDoublesFromTenSecondsUpToTheLimit(t *testing.T) {
-	var got []time.Duration
-	for attempt := 1; attempt <= 7; attempt++ {
-		got = append(got, loop.Backoff(attempt, 5*time.Minute))
-	}
+func TestFailedAttemptIsRetriedAfterTenSecondsInTheSameSession(t *testing.T) {
+	h := &harness{plans: []tickPlan{{load: good(time.Minute)}, {load: good(time.Minute)}, {load: good(time.Minute)}}, maxConcurrent: 1, maxAttempts: 2}
 
-	want := []time.Duration{10 * time.Second, 20 * time.Second, 40 * time.Second, 80 * time.Second, 160 * time.Second, 5 * time.Minute, 5 * time.Minute}
-	if !slices.Equal(got, want) {
-		t.Fatalf("backoff = %v, want %v", got, want)
+	h.run(t)
+
+	if len(h.jobs) != 2 || h.jobs[1].Attempt != 2 || !h.jobs[1].Resume || h.jobs[1].SessionID != h.jobs[0].SessionID {
+		t.Fatalf("起動 = %+v, want 同じ session を続ける attempt 2", h.jobs)
+	}
+	if !strings.Contains(h.stdout.String(), "再起動を予定 issue#1 (implement, attempt 2, 10s 後)") {
+		t.Fatalf("出力:\n%s", h.stdout.String())
 	}
 }
 
-func TestBackoffBelowTenSecondsIsTheLimit(t *testing.T) {
-	if got := loop.Backoff(1, time.Second); got != time.Second {
-		t.Fatalf("backoff = %s, want 1s", got)
+func TestAttemptThatFailsAtTheLimitIsAbandoned(t *testing.T) {
+	h := &harness{plans: []tickPlan{{load: good(time.Minute)}, {load: good(time.Minute)}, {load: good(time.Minute)}}, maxConcurrent: 1, maxAttempts: 2}
+
+	h.run(t)
+
+	if !strings.Contains(h.stdout.String(), "打ち切り issue#1 (implement, attempt 2 回)") {
+		t.Fatalf("出力:\n%s", h.stdout.String())
+	}
+}
+
+func TestWorkerThatFailsAfterAStopRequestIsNotScheduledForRetry(t *testing.T) {
+	h := &harness{plans: []tickPlan{{load: good(time.Minute), stopDuring: syscall.SIGINT}}, maxConcurrent: 1, maxAttempts: 2}
+
+	h.run(t)
+
+	if out := h.stdout.String(); strings.Contains(out, "再起動を予定") || !strings.Contains(out, "error issue#1: 再起動を待ったまま止まる") {
+		t.Fatalf("出力:\n%s", out)
 	}
 }

@@ -184,8 +184,7 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 		Open:       e.openIssues,
 		Workspaces: func(def workflow.Definition) loop.Workspaces { return e.workspaces(def) },
 		Launch: func(def workflow.Definition, job worker.Job, events chan<- worker.Event) loop.Worker {
-			return worker.Runner{Workspaces: e.workspaces(def), Command: def.Claude.Command, Args: def.Claude.Args, Env: e.env, StateDir: dir,
-				StallTimeout: def.StallTimeout, RunTimeout: def.RunTimeout}.Start(job, events)
+			return worker.Runner{Workspaces: e.workspaces(def), Definition: def, Env: e.env, StateDir: dir}.Start(job, events)
 		},
 		NewSessionID: worker.NewSessionID,
 		ScopeKey:     scopeKey,

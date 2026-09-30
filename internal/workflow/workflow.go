@@ -75,7 +75,7 @@ const (
 	DefaultClaudeCommand = "claude"
 	DefaultMaxAttempts   = 3
 	DefaultRetryBackoff  = 5 * time.Minute
-	DefaultStallTimeout  = 5 * time.Minute
+	DefaultStallTimeout  = 15 * time.Minute
 	DefaultRunTimeout    = time.Hour
 )
 
