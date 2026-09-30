@@ -20,6 +20,7 @@ macOS でも XDG に揃える (`~/Library` は使わない)。scope key ごと�
 <state root>/<scope dir>/
   loop.lock                           loop の生存期間の flock の対象 (§6)
   log.jsonl                           tick と worker の起動・終わり方の行 (§4)
+  status.json                         loop の今の状態 (状態 file、§7)。loop が書き換え、status が読む
   prompts/<作業対象>.md               描画した共通 prompt。worker に --append-system-prompt-file で渡す
   workers/<作業対象>.log              worker の stdout (stream-json)。attempt を跨いで追記する
   workers/<作業対象>.stderr.log       worker の stderr。attempt を跨いで追記する
@@ -352,7 +353,7 @@ claude-dispatcher loop [<workflow の path>]
 - 前の attempt で claude を起動できていなければ (hook・描画・起動の失敗)、session はまだ無いので `--session-id` で始める
 - 停止要求を受けた後に失敗した attempt は、再起動を予定しない
 - 打ち切りは作業対象ごとに memory に持つ。打ち切った作業対象は、どの trigger に当たっても起動しない。loop を起動し直すと消える
-- 打ち切りを解くには、label を外して打ち切ったときの trigger から外し、1 周期待ってから付け直す (外してから付け直すまでが 1 周期に収まると、外れたのを観測できない)。`status` (#81) の打ち切りの表示にこの手順を書く
+- 打ち切りを解くには、label を外して打ち切ったときの trigger から外し、1 周期待ってから付け直す (外してから付け直すまでが 1 周期に収まると、外れたのを観測できない)。`status` (§7) の打ち切りの行にこの手順を出す
 
 - 作業対象の読み直しで issue が消えていたら (削除・移管。gh が `Could not resolve to an Issue` を返すか、応答に issue が無い)、終端と同じに扱う
 
@@ -374,7 +375,10 @@ claude-dispatcher loop [<workflow の path>]
    - 当たるかをまだ決められなければ (conflict を計算中の CL)、読み直せなかったときと同じく、error の行を残して claim を持ったまま次の tick で確かめ直す
    - workspace を消すときは、worker を最初に起動したときの `workspace.root` と、消す時点の workflow 定義の hooks を使う
 
-**出力** (#81 で loop の画面に作り直す。今の形は仮): log.jsonl (§4) に書く行を、人が読む形で stdout にも 1 行ずつ追記する。
+**画面**: loop の stdout が端末かどうかで形を変える。どちらも、状態 file (§7) と同じ中身を描く。
+
+- 端末でなければ、log.jsonl (§4) に書く行と worker の活動を、人が読む形で 1 事象 1 行ずつ追記する (下の例)
+- 端末なら、周期ごと (1s) と事象ごとに画面を描き直す。上から、`status` (§7) と同じ見出しと表、空行、直近の事象の行 (最大 10 行、上の 1 事象 1 行と同じ形)
 
 ```
 <時刻> loop を始めた: scope <scope key> · state dir <path> · workflow <path>
@@ -382,6 +386,7 @@ claude-dispatcher loop [<workflow の path>]
 <時刻> tick ok · 候補 0 · 曖昧な CL: worktree-issue-7 (cl#52, cl#53)
 <時刻> tick error · <理由>
 <時刻> 起動 issue#42 (implement, attempt 1, session <uuid>)
+<時刻> 活動 issue#42: tool Bash
 <時刻> 終了 issue#42 (implement): completed — trigger から外れた
 <時刻> 再起動を予定 issue#42 (implement, attempt 2, 10s 後)
 <時刻> 再起動せずに解いた issue#42 (implement): trigger から外れた
@@ -394,6 +399,19 @@ claude-dispatcher loop [<workflow の path>]
 ```
 
 - tick の行の候補は、試運転 (§5) と同じ順。候補が無ければ `tick ok · 候補 0`
+- **活動**: worker の stream (stdout の stream-json) の最新の完結した行の要約。loop は 1s ごとに確かめ、変わったら `活動` の行を出す。log.jsonl には書かない (stream は worker log に残る)
+
+| stream の行 | 要約 |
+|---|---|
+| `type: assistant` の message の最後の content が text | その text の最初の行 |
+| `type: assistant` の message の最後の content が tool_use | `tool <tool の名前>` (tool の入力は載せない) |
+| `type: user` (tool の結果) | `tool の結果` |
+| `type: system` | `system <subtype>` |
+| `type: result` | `result <subtype>` |
+| それ以外の `type` | `<type>` |
+
+- 要約の制御文字 (タブ・改行・ESC など) は空白に置き換え、80 文字で切る (`…` を足す)
+- JSON として読めない行は活動として数えない
 
 **停止**: SIGINT / SIGTERM / SIGHUP を同じに扱う。
 
@@ -404,9 +422,89 @@ claude-dispatcher loop [<workflow の path>]
 
 exit: 0 = 停止要求で止まった / 1・2・3 = 起動時の検査 (上表)。
 
-## 7. `status` / `paths` / `setup` / `doctor`
+## 7. 状態 file / `status` / `paths`
 
-未定。`status` と `paths` は #81、`setup` と `doctor` は #82 で作り直す。今の binary はこれらの subcommand を持たない。
+### 7.1 状態 file (`status.json`)
+
+loop の今の状態を、表示のためだけに書き出す (system.md §9)。loop は読み戻さない。
+
+- loop が、tick の終わり・事象の後・1s ごとに書き換える。書くのは loop だけで、同じ dir の一時 file から rename する (読み手に書きかけを見せない)
+- 経過は書かない。時刻を書き、読む側が今の時刻から出す
+- loop が止まった後も残る。loop が生きているかは状態 file ではなく `loop.lock` (§6) で決める
+
+```json
+{
+  "scope": "github.com/acme/widgets",
+  "workflow": "/path/to/WORKFLOW.md",
+  "started_at": "2026-10-01T00:00:00Z",
+  "updated_at": "2026-10-01T00:05:00Z",
+  "stopping": false,
+  "next_tick_at": "2026-10-01T00:10:00Z",
+  "last_tick": {"at": "2026-10-01T00:05:00Z", "result": "ok", "candidates": 1},
+  "workers": [
+    {"target": "issue#42", "trigger": "implement", "attempt": 1, "session_id": "<uuid>", "phase": "running",
+     "started_at": "2026-10-01T00:05:00Z", "activity": {"at": "2026-10-01T00:05:10Z", "summary": "tool Bash"}}
+  ],
+  "abandoned": [{"target": "issue#43", "trigger": "implement"}],
+  "ambiguous": [{"head": "worktree-issue-7", "targets": ["cl#52", "cl#53"]}]
+}
+```
+
+| key | 中身 |
+|---|---|
+| `stopping` | 停止要求を受けて、worker の終了を待っている |
+| `next_tick_at` | 次の tick の予定。停止要求の後は `null` |
+| `last_tick` | 直近の tick。`result` が `error` なら `error` に理由 (事前検査の失敗 — workflow 定義の誤り・scope key の食い違い・観測の失敗 — を含む)。まだ tick が無ければ `null` |
+| `workers[].phase` | `running` (走っている) / `stopping` (止めている) / `verifying` (終わり方を確かめ待ち) / `waiting_retry` (再起動待ち) |
+| `workers[].started_at` | 今の attempt の worker を起動した時刻。起動の前 (再起動待ち) は `null` |
+| `workers[].retry_at` | `waiting_retry` の backoff が明ける時刻 |
+| `workers[].activity` | 活動 (§6 の画面)。まだ無ければ `null` |
+| `abandoned` | 打ち切った作業対象と、打ち切ったときの trigger |
+| `ambiguous` | 直近の tick の曖昧な CL (§2.4) |
+
+### 7.2 `status`
+
+```
+claude-dispatcher status [<workflow の path>]
+```
+
+別の端末から loop の今の状態を見る。workflow 定義を読んで scope key を決め、その state dir の状態 file を描く。**何も書かず、gh も撃たない**。
+
+```
+loop 稼働中 · scope github.com/acme/widgets · 次の tick 00:10:00 · 直近の tick 00:05:00 ok (候補 1)
+issue#42  implement  attempt 1  走っている  5m10s  tool Bash
+issue#44  implement  attempt 2  再起動待ち  00:06:40 に再起動
+打ち切り issue#43 (implement): label を外して trigger から外し、1 周期待ってから付け直すと解ける
+曖昧な CL worktree-issue-7: cl#52, cl#53
+```
+
+- 1 行目は見出し。loop が生きていれば `loop 稼働中` (停止要求の後は `loop 停止待ち`)、`loop.lock` を取れれば `loop なし`
+- 直近の tick が error なら、見出しの tick の欄は `直近の tick <時刻> error: <理由>`
+- worker の行は列をタブで区切る: 作業対象・trigger・`attempt <n>`・段階 (`走っている` / `止めている` / `確かめ待ち` / `再起動待ち`)・経過 (走っている worker の今の attempt の起動から) か再起動の予定・活動
+- `loop なし` のときは見出しだけを出す (状態 file が残っていても、worker と打ち切りは loop の memory と一緒に消えている)
+- 状態 file が無ければ見出しは `loop なし · scope <scope key> · 記録なし`
+- 時刻は端末の local time の `HH:MM:SS`
+
+exit: 0 = 描けた / 2 = 引数・workflow 定義の誤り / 1 = 状態 file を読めない (壊れている)。
+
+### 7.3 `paths`
+
+```
+claude-dispatcher paths --json [<workflow の path>]
+```
+
+workflow 定義から決まる置き場を JSON で stdout に出す。何も書かず、gh も撃たない。
+
+```json
+{"scope_key": "github.com/acme/widgets", "state_dir": "<state dir>", "log": "<state dir>/log.jsonl",
+ "status_file": "<state dir>/status.json", "workspace_root": "<workspace root>"}
+```
+
+exit: 0 / 2 = 引数・workflow 定義の誤り。
+
+### 7.4 `setup` / `doctor`
+
+未定。#82 で作り直す。今の binary はこの subcommand を持たない。
 
 ## 8. `--version`
 
