@@ -265,11 +265,14 @@ project を省略すると、config root の下の全 project (§9 の `projects
 
   wip は issue の今の worker にだけ掛ける (古い起動記録に掛けると、再入で起こし直した issue の前回の worker が stale に見える)。`running` と `stale` は時間と関係なく載り、終わった worker の結末 (`cl` / `human` / `silent`) は起動から 24 時間だけ載る。process の生死は起動部が見分ける。`claude -p` では pid の command 行に `session_id` が在るかで見る (pid は再利用される。system.md §13)。STATE が `stale` の行が stale wip の手掛かり (system.md §1)
 - 外部 process (gh / git / claude / ps) が失敗した列は `?` にして表は出し、何を読めなかったかを `! <理由>` の注記行に残す
+- **判断の行**: log.jsonl の最も新しい orchestrator 行 (§4.2) の `decisions` のうち、`action` が `skip` と `ready-for-human` のものを 1 件 1 行 `  #<issue> <action>: <reason>` で出し、その前に判断した時刻の行 `判断 <その行の ts (秒まで)>` を置く。`start` / `reenter` は出さない (採った issue は worker として表に出る)。その後の tick で orchestrator が起動されなくても、同じ判断を出し続ける。該当する decision が 0 件なら、時刻の行も出さない。`reason` の改行と制御文字 (ESC など) は空白にする (1 件 1 行を保ち、端末に制御文字を撃ち込ませない)。stdout が端末なら、行が端末の幅に収まるように reason を切り詰める (`#<issue> <action>:` は切らない)。端末でなければ切り詰めない。最も新しい orchestrator 行が、`actor` は読めるのに `ts` か `decisions` を読めなければ (読めない行として注記に数える)、それより古い判断は出さない。JSON として読めない行は orchestrator 行かどうかが分からないので、「最も新しい orchestrator 行」に数えない。端末が `#<issue> <action>:` より狭いと、行は端末の幅を超える
 
-表は project ごとに 1 段:
+表は project ごとに 1 段 (見出し → 判断の行 → 注記行 → 表):
 
 ```
 myproj  loop 稼働中  tick 実行中 · orchestrator 3m (上限 15m)  最終 tick 2026-09-26T03:00:00Z ok
+判断 2026-09-26T03:00:00Z
+  #43 skip: 仕様に受け入れ条件が無い
   ! <注記>
 ISSUE  KIND   STATE    ELAPSED  SESSION  BRANCH  WIP  CL        TICK                  ACTIVITY
 -      orch   running  3m       -        -       -    -         2026-09-26T03:05:00Z  4s Bash gh issue list
@@ -390,6 +393,8 @@ stdout が端末のとき、`status ps <project>` の表 (§10) の見出し行�
 ```
 myproj  loop 5m  待機 · 次の tick 2026-09-26T03:05:00Z (あと 3m)
 最終 tick 2026-09-26T03:00:00Z ok · 指示 start 1 · 起動 #42
+判断 2026-09-26T03:00:00Z
+  #43 skip: 仕様に受け入れ条件が無い
   ! <注記>
 ISSUE  KIND   STATE    ELAPSED  SESSION  BRANCH  WIP  CL        TICK                  ACTIVITY
 #42    start  running  12m      -        +3      yes  #57 OPEN  2026-09-26T02:48:00Z  12s Bash go test ./...
@@ -401,6 +406,7 @@ Ctrl+C で停止
 |---|---|
 | 1 行目 | project・`loop <interval>`・状態 (下表) |
 | `最終 tick` | loop が回した直近の tick の `ts`・`result`・指示の種別と件数 (0 件なら `指示 0`)・起動した worker の issue (無ければ省く)。まだ 1 回も終えていなければ `最終 tick なし` |
+| 判断の行 | `status` と同じ (§10)。出す判断が無ければ出さない |
 | `!` 行 | 直近の tick の `error` (`result` が `ok` 以外のとき。tick 行を log.jsonl に書けなかったときは `result` に関わらず、書けなかった理由を含めて出す)、直近の tick が `tick.now` を書けなかった・消せなかった理由 (§10)、`status` の注記 (§10) |
 | 表 | `status` と同じ (§10。ACTIVITY 列を含み、端末なら幅に収める)。orchestrator の実行中はその行も出る。載せる行が無ければ出さない |
 | 最終行 | 操作案内 (下表) |

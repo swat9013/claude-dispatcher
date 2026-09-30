@@ -82,6 +82,8 @@ type Report struct {
 	Loop Probed[bool]
 	// LastTick は log.jsonl の最後の tick 行。Value が nil なら tick 行がまだ無い
 	LastTick Probed[*ticklog.Line]
+	// LastOrchestrator は log.jsonl の最後の orchestrator 行 (判断の行の元)。無いか log.jsonl を読めなければ nil
+	LastOrchestrator *ticklog.OrchestratorLine
 	// Tick は走っている tick (tick.now)。走っていないか、確かめられなければ nil
 	Tick    *RunningTick
 	Workers []Worker
@@ -275,7 +277,7 @@ func (c *collector) fillSessions() {
 
 // collectWorkers は log.jsonl の起動記録から載せる worker を組む (SESSION 以外の列を埋める)。
 func (c *collector) collectWorkers(project paths.Project, home string, now time.Time) {
-	lines, broken, err := ticklog.Read(project.LogFile())
+	log, broken, err := ticklog.Read(project.LogFile())
 	if err != nil {
 		// 途中までの行から最終 tick や起動記録を出すと古い像を今として見せるので、log からは何も出さない
 		c.note("log.jsonl を読めない — 最終 tick と worker は出さない (%v)", err)
@@ -285,12 +287,13 @@ func (c *collector) collectWorkers(project paths.Project, home string, now time.
 		c.note("%s の読めない %d 行を飛ばした", project.LogFile(), broken)
 	}
 	var last *ticklog.Line
-	if l, ok := ticklog.Last(lines); ok {
+	if l, ok := ticklog.Last(log.Ticks); ok {
 		last = &l
 	}
 	c.report.LastTick = known(last)
+	c.report.LastOrchestrator = log.LastOrchestrator
 
-	spawns := spawnRecords(lines)
+	spawns := spawnRecords(log.Ticks)
 	if len(spawns) == 0 {
 		return
 	}

@@ -6,6 +6,7 @@ import (
 	"slices"
 
 	"github.com/swat9013/claude-dispatcher/internal/plugin"
+	"github.com/swat9013/claude-dispatcher/internal/ticklog"
 )
 
 // Condition は reenter の条件 1 つ: snapshot の CL 状態に対する述語と、worker へ渡す対応 playbook。
@@ -23,14 +24,14 @@ var Conditions = []Condition{
 	{"ci", func(cl CL) bool { return cl.Checks != nil && (*cl.Checks == "FAILURE" || *cl.Checks == "ERROR") }, "playbook-ci-fix"},
 }
 
-// Action は決定ファイルの採否の語彙 (formats.md §5.2)。起動する採否 (start / reenter) は spawn の kind と同じ綴り。
-type Action string
+// Action は決定ファイルの採否の語彙。orchestrator 行を読む側と共有するので ticklog に置く。
+type Action = ticklog.Action
 
 const (
-	ActionStart         Action = "start"
-	ActionReenter       Action = "reenter"
-	ActionSkip          Action = "skip"
-	ActionReadyForHuman Action = "ready-for-human"
+	ActionStart         = ticklog.ActionStart
+	ActionReenter       = ticklog.ActionReenter
+	ActionSkip          = ticklog.ActionSkip
+	ActionReadyForHuman = ticklog.ActionReadyForHuman
 )
 
 // AnomalyReason は機械的に分類できなかった観測の種類

@@ -445,21 +445,32 @@ func surviveClosedStdout() {
 	signal.Notify(make(chan os.Signal, 1), syscall.SIGPIPE)
 }
 
-// tableFit は w へ描く表の ACTIVITY の切り詰め方。端末なら今の幅に収め、端末でない (か幅を読めない) なら内容を切る。
+// tableFit は w へ描く表の ACTIVITY と判断の行の切り詰め方。端末なら今の幅に収め、端末でない (か幅を読めない) なら
+// FitPlain にする。端末かどうかは画面の描き方と同じ terminalFile で決め、ここでは幅だけを読む。
 func tableFit(w io.Writer) status.Fit {
-	if f, ok := w.(*os.File); ok {
-		// 端末でなければ (pipe・file・/dev/null) 幅を読めない
-		if width, _, err := term.GetSize(int(f.Fd())); err == nil && width > 0 {
-			return status.FitTerminal(width)
-		}
+	f, ok := terminalFile(w)
+	if !ok {
+		return status.FitPlain()
+	}
+	if width, _, err := term.GetSize(int(f.Fd())); err == nil && width > 0 {
+		return status.FitTerminal(width)
 	}
 	return status.FitPlain()
 }
 
-// isTerminal は w が端末か。端末でない character device (/dev/null 等) は端末に数えない。
+// isTerminal は w が端末か。
 func isTerminal(w io.Writer) bool {
+	_, ok := terminalFile(w)
+	return ok
+}
+
+// terminalFile は w が端末ならその file を返す。端末でない character device (/dev/null 等) は端末に数えない。
+func terminalFile(w io.Writer) (*os.File, bool) {
 	f, ok := w.(*os.File)
-	return ok && term.IsTerminal(int(f.Fd()))
+	if !ok || !term.IsTerminal(int(f.Fd())) {
+		return nil, false
+	}
+	return f, true
 }
 
 // --- paths ---

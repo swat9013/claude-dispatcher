@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/swat9013/claude-dispatcher/internal/github"
 	"github.com/swat9013/claude-dispatcher/internal/termtext"
@@ -19,23 +20,30 @@ var columns = []string{"ISSUE", "KIND", "STATE", "ELAPSED", "SESSION", "BRANCH",
 // activityContentLimit は stdout が端末でないときに ACTIVITY の内容を切り詰める文字数 (formats.md §10)
 const activityContentLimit = 60
 
-// Fit は ACTIVITY の切り詰め方 (formats.md §10)。FitTerminal か FitPlain で作る。
+// Fit は ACTIVITY の列と判断の行の reason の切り詰め方 (formats.md §10)。FitTerminal か FitPlain で作る。
 type Fit struct {
-	// terminalWidth は行を収める端末の幅。0 なら端末でない
+	// terminalWidth は行を収める端末の幅。0 なら端末でない (FitPlain)
 	terminalWidth int
 }
 
-// FitTerminal は行が端末の幅 width に収まるように ACTIVITY を切り詰める。
-func FitTerminal(width int) Fit { return Fit{terminalWidth: width} }
+// FitTerminal は行が端末の幅 width に収まるように ACTIVITY と判断の行の reason を切り詰める。width は 1 以上 (幅を
+// 読めない端末は FitPlain にする)。
+func FitTerminal(width int) Fit {
+	if width < 1 {
+		panic(fmt.Sprintf("status.FitTerminal: 端末の幅 %d は 1 以上でない", width))
+	}
+	return Fit{terminalWidth: width}
+}
 
-// FitPlain は stdout が端末でないときの切り詰め方: ACTIVITY の内容を 60 文字で切る。
+// FitPlain は stdout が端末でないときの切り詰め方: ACTIVITY の内容を 60 文字で切り、判断の行は切り詰めない。
 func FitPlain() Fit { return Fit{} }
 
-// RenderTable は project ごとに見出し・注記・表を並べ、project の間を空行で区切る (formats.md §10)。
+// RenderTable は project ごとに見出し・判断の行・注記・表を並べ、project の間を空行で区切る (formats.md §10)。
 func RenderTable(reports []Report, fit Fit) string {
 	blocks := make([]string, 0, len(reports))
 	for _, r := range reports {
-		lines := append([]string{r.Heading()}, r.NoteLines()...)
+		lines := append([]string{r.Heading()}, r.JudgmentLines(fit)...)
+		lines = append(lines, r.NoteLines()...)
 		blocks = append(blocks, strings.Join(append(lines, r.TableLines(fit)...), "\n"))
 	}
 	return strings.Join(blocks, "\n\n")
@@ -76,6 +84,46 @@ func (t RunningTick) Progress() string {
 		return fmt.Sprintf("orchestrator %s (上限 %s)", FormatElapsed(t.Orchestrator.Elapsed), FormatElapsed(tick.OrchestratorTimeout))
 	}
 	return FormatElapsed(t.Elapsed)
+}
+
+// JudgmentLines は直近の orchestrator 行の decisions のうち、見送り (skip) と人返し (ready-for-human) の行 (formats.md §10)。
+// 採った issue (start / reenter) は worker として表に出るので出さない。出す判断が無ければ、判断した時刻の行も出さない。
+func (r Report) JudgmentLines(fit Fit) []string {
+	if r.LastOrchestrator == nil {
+		return nil
+	}
+	var lines []string
+	for _, d := range r.LastOrchestrator.Decisions {
+		if d.Action != ticklog.ActionSkip && d.Action != ticklog.ActionReadyForHuman {
+			continue
+		}
+		prefix := fmt.Sprintf("  #%d %s: ", d.Issue, d.Action)
+		lines = append(lines, prefix+fit.cutReason(oneLine(d.Reason), termtext.Width(prefix)))
+	}
+	if len(lines) == 0 {
+		return nil
+	}
+	return append([]string{"判断 " + ticklog.ShortTS(r.LastOrchestrator.TS)}, lines...)
+}
+
+// oneLine は reason の改行と制御文字 (ESC など) を空白にする。reason は orchestrator が issue 本文を読んで書く文で、
+// それらを含みうる。1 件 1 行を保ち、端末に制御文字を撃ち込ませないため。
+func oneLine(reason string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, reason)
+}
+
+// cutReason は端末なら、前置き (表示幅 used) の後ろに残る幅で reason を切る。前置き (`#<issue> <action>:`) は切らない
+// ので、端末が前置きより狭いと行は端末の幅を超える。
+func (f Fit) cutReason(reason string, used int) string {
+	if f.terminalWidth == 0 {
+		return reason
+	}
+	return termtext.Cut(reason, max(0, f.terminalWidth-used))
 }
 
 // NoteLines は注記の行。

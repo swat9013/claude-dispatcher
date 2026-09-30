@@ -398,6 +398,39 @@ func TestLoopShowsTheErrorOfTheLastTickFirstAmongTheNotes(t *testing.T) {
 	}
 }
 
+func TestLoopShowsTheDecisionLinesBetweenTheLastTickAndTheNotes(t *testing.T) {
+	h := startLoop(t, func(o *Options) {
+		o.Status = func() status.Report {
+			r := runningReport("wip を読めない")
+			r.LastOrchestrator = &ticklog.OrchestratorLine{TS: "2026-09-26T03:00:00.123456Z", Decisions: []ticklog.Decision{{Issue: 51, Action: "skip", Reason: "仕様に受け入れ条件が無い"}}}
+			return r
+		}
+	})
+
+	h.ticks(tick.Outcome{Result: tick.ResultConfigError, Logged: true, Error: "未知の key"})
+
+	if !strings.Contains(h.stdout.String(), " config_error · 指示 0\n判断 2026-09-26T03:00:00Z\n  #51 skip: 仕様に受け入れ条件が無い\n  ! 未知の key\n  ! wip を読めない\n") {
+		t.Fatalf("画面 =\n%s", h.stdout.String())
+	}
+}
+
+func TestLoopOnATerminalCutsTheDecisionReasonToTheTerminalWidth(t *testing.T) {
+	h := startLoop(t, onTerminal, func(o *Options) {
+		o.Status = func() status.Report {
+			r := runningReport()
+			r.LastOrchestrator = &ticklog.OrchestratorLine{TS: "2026-09-26T03:00:00.123456Z", Decisions: []ticklog.Decision{{Issue: 51, Action: "skip", Reason: "仕様に受け入れ条件が無い"}}}
+			return r
+		}
+		o.Fit = func() status.Fit { return status.FitTerminal(20) }
+	})
+
+	h.ticks(tick.Outcome{Result: tick.ResultOK, Logged: true})
+
+	if screen := h.lastScreen(); !strings.Contains(screen, "\n  #51 skip: 仕様に受\n") {
+		t.Fatalf("画面 =\n%s", screen)
+	}
+}
+
 func TestLoopShowsATickThatCouldNotWriteItsLogLineEvenWhenItWasOK(t *testing.T) {
 	h := startLoop(t)
 

@@ -1,4 +1,4 @@
-// Package ticklog は log.jsonl (formats.md §4) の tick 行を読む。読むのは status と doctor で、書くのは tick だけ。
+// Package ticklog は log.jsonl (formats.md §4) の tick 行と orchestrator 行を読む。読むのは status と doctor で、書くのは tick だけ。
 package ticklog
 
 import (
@@ -26,15 +26,48 @@ type Spawned struct {
 	SessionID string `json:"session_id"`
 }
 
-// Read は file の tick 行 (orchestrator 行は除く) を順に返す。読めない行 (途中で切れた行など) は飛ばし、その件数を返す。
+// OrchestratorLine は orchestrator 行 (formats.md §4.2) のうち読み手が使う key。
+type OrchestratorLine struct {
+	TS        string     `json:"ts"`
+	Decisions []Decision `json:"decisions"`
+}
+
+// Decision は決定ファイルの decisions の 1 件 (formats.md §5.2)。orchestrator 行は決定ファイルの decisions をそのまま
+// 写すので、書き手 (tick) と読み手 (status) が同じ型を使う。
+type Decision struct {
+	Issue  int    `json:"issue"`
+	Action Action `json:"action"`
+	Reason string `json:"reason"`
+}
+
+// Action は決定ファイルの採否の語彙 (formats.md §5.2)。起動する採否 (start / reenter) は spawn の kind と同じ綴り。
+type Action string
+
+const (
+	ActionStart         Action = "start"
+	ActionReenter       Action = "reenter"
+	ActionSkip          Action = "skip"
+	ActionReadyForHuman Action = "ready-for-human"
+)
+
+// Log は log.jsonl を読んだもの。
+type Log struct {
+	// Ticks は tick 行を file の順に並べたもの
+	Ticks []Line
+	// LastOrchestrator は file の最後の orchestrator 行。無いか、最後の orchestrator 行を読めなければ nil
+	// (読めない行を飛ばして、それより古い判断を直近として見せない)
+	LastOrchestrator *OrchestratorLine
+}
+
+// Read は file の tick 行と最後の orchestrator 行を返す。読めない行 (途中で切れた行など) は飛ばし、その件数を返す。
 // file が無ければ行も無い。読み出しが途中で失敗したら行は返さない (途中までの行を全体として見せない)。
-func Read(file string) (lines []Line, broken int, err error) {
+func Read(file string) (log Log, broken int, err error) {
 	f, err := os.Open(file)
 	if os.IsNotExist(err) {
-		return nil, 0, nil
+		return Log{}, 0, nil
 	}
 	if err != nil {
-		return nil, 0, err
+		return Log{}, 0, err
 	}
 	defer f.Close()
 	// 行の長さに上限を置かない (bufio.Scanner は上限を超えた行で読むのを止め、それより後の tick が見えなくなる)
@@ -42,41 +75,63 @@ func Read(file string) (lines []Line, broken int, err error) {
 	for {
 		raw, readErr := reader.ReadBytes('\n')
 		if readErr != nil && readErr != io.EOF {
-			return nil, 0, readErr
+			return Log{}, 0, readErr
 		}
-		if line, ok, bad := parse(raw); bad {
+		line, bad := parse(raw)
+		if bad {
 			broken++
-		} else if ok {
-			lines = append(lines, line)
+		}
+		switch line := line.(type) {
+		case Line:
+			log.Ticks = append(log.Ticks, line)
+		case *OrchestratorLine:
+			log.LastOrchestrator = line
+		case unreadableOrchestratorLine:
+			log.LastOrchestrator = nil
 		}
 		if readErr == io.EOF {
-			return lines, broken, nil
+			return log, broken, nil
 		}
 	}
 }
 
-// parse は 1 行を tick 行として読む。ok は tick 行だった、bad は読めなかった (空行と orchestrator 行はどちらでもない)。
-func parse(raw []byte) (line Line, ok, bad bool) {
+// unreadableOrchestratorLine は actor の在る (orchestrator 行と分かる) のに key (ts / decisions) を読めない行。
+// 最も新しい orchestrator 行がこれなら、それより古い判断を直近として出さない。
+type unreadableOrchestratorLine struct{}
+
+// parse は 1 行を読む。line は tick 行なら Line、orchestrator 行なら *OrchestratorLine か unreadableOrchestratorLine、
+// 空行か JSON として読めない行なら nil。bad は読めなかった行。
+func parse(raw []byte) (line any, bad bool) {
 	raw = bytes.TrimSpace(raw)
 	if len(raw) == 0 {
-		return Line{}, false, false
+		return nil, false
 	}
-	var doc struct {
-		Line
+	var head struct {
 		Actor *string `json:"actor"`
 	}
-	if err := json.Unmarshal(raw, &doc); err != nil {
-		return Line{}, false, true
+	if err := json.Unmarshal(raw, &head); err != nil {
+		return nil, true
 	}
-	if doc.Actor != nil {
-		return Line{}, false, false
+	if head.Actor != nil {
+		var orchestrator OrchestratorLine
+		if err := json.Unmarshal(raw, &orchestrator); err != nil {
+			return unreadableOrchestratorLine{}, true
+		}
+		if _, err := ParseTS(orchestrator.TS); err != nil {
+			return unreadableOrchestratorLine{}, true
+		}
+		return &orchestrator, false
 	}
-	at, err := ParseTS(doc.TS)
+	var tick Line
+	if err := json.Unmarshal(raw, &tick); err != nil {
+		return nil, true
+	}
+	at, err := ParseTS(tick.TS)
 	if err != nil {
-		return Line{}, false, true
+		return nil, true
 	}
-	doc.At = at
-	return doc.Line, true, false
+	tick.At = at
+	return tick, false
 }
 
 // Last は最後の tick 行を返す。無ければ false。

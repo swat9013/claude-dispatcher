@@ -193,13 +193,14 @@ func TestReportTableLinesAreEmptyWithoutWorkers(t *testing.T) {
 	}
 }
 
-func TestRenderTablePutsHeadingNotesTableInOrderAndABlankLineBetweenProjects(t *testing.T) {
-	noted := Report{Project: "acme", Notes: []string{"wip を読めない"}}
+func TestRenderTablePutsHeadingJudgmentNotesTableInOrderAndABlankLineBetweenProjects(t *testing.T) {
+	noted := reportWithSkip("仕様に受け入れ条件が無い")
+	noted.Project, noted.Notes = "acme", []string{"wip を読めない"}
 	quiet := Report{Project: "beta"}
 
 	got := RenderTable([]Report{noted, quiet}, FitPlain())
 
-	want := "acme  loop ?  最終 tick ?\n  ! wip を読めない\n\nbeta  loop ?  最終 tick ?"
+	want := "acme  loop ?  最終 tick ?\n判断 2026-09-26T03:00:00Z\n  #51 skip: 仕様に受け入れ条件が無い\n  ! wip を読めない\n\nbeta  loop ?  最終 tick ?"
 	if got != want {
 		t.Fatalf("RenderTable = %q, want %q", got, want)
 	}
