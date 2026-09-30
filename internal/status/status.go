@@ -31,6 +31,8 @@ type Snapshot struct {
 	Workers    []Worker    `json:"workers"`
 	Abandoned  []Abandoned `json:"abandoned"`
 	Ambiguous  []Ambiguous `json:"ambiguous"`
+	// Blocked は事前検査 (formats.md §2.9) に落ちて起動しない trigger
+	Blocked []Blocked `json:"blocked"`
 }
 
 // Tick は直近の tick。
@@ -83,6 +85,12 @@ type Activity struct {
 type Abandoned struct {
 	Target  string `json:"target"`
 	Trigger string `json:"trigger"`
+}
+
+// Blocked は事前検査に落ちた trigger と、その理由。
+type Blocked struct {
+	Trigger string `json:"trigger"`
+	Error   string `json:"error"`
 }
 
 // Ambiguous は曖昧な CL の組。
@@ -189,6 +197,9 @@ func Render(s Snapshot, loop Liveness, now time.Time, loc *time.Location) string
 	}
 	for _, a := range s.Ambiguous {
 		lines = append(lines, fmt.Sprintf("曖昧な CL %s: %s", a.Head, strings.Join(a.Targets, ", ")))
+	}
+	for _, b := range s.Blocked {
+		lines = append(lines, fmt.Sprintf("起動しない trigger %s: %s", b.Trigger, b.Error))
 	}
 	return strings.Join(lines, "\n") + "\n"
 }

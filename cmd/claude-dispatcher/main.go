@@ -18,6 +18,7 @@ import (
 	"github.com/swat9013/claude-dispatcher/internal/deps"
 	"github.com/swat9013/claude-dispatcher/internal/github"
 	"github.com/swat9013/claude-dispatcher/internal/loop"
+	"github.com/swat9013/claude-dispatcher/internal/precheck"
 	"github.com/swat9013/claude-dispatcher/internal/printable"
 	"github.com/swat9013/claude-dispatcher/internal/state"
 	"github.com/swat9013/claude-dispatcher/internal/status"
@@ -108,6 +109,11 @@ func (e environment) store(def workflow.Definition) loop.Store {
 	return github.NewStore(e.gh(def), def.Tracker.Repo)
 }
 
+// precheck は workflow 定義の事前検査 (formats.md §2.9)。~/.claude は loop の環境の HOME から引く。
+func (e environment) precheck(def workflow.Definition) []precheck.Problem {
+	return precheck.Check(def, e.getenv("HOME"))
+}
+
 // stateDir は workflow 定義の scope key と、その state dir。
 func (e environment) stateDir(def workflow.Definition) (scopeKey, dir string) {
 	scopeKey = e.store(def).ScopeKey()
@@ -159,6 +165,13 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 	def, err := load()
 	if err != nil {
 		fmt.Fprintln(stderr, err)
+		return exitUsage
+	}
+	// 起動時と試運転は人が画面の前にいるので、事前検査のどれが落ちても失敗させ、全部を直させる (system.md §8)
+	if problems := e.precheck(def); len(problems) > 0 {
+		for _, p := range problems {
+			fmt.Fprintf(stderr, "trigger %s: %s\n", p.Trigger, p.Error)
+		}
 		return exitUsage
 	}
 	if dryRun {
@@ -213,6 +226,7 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 	return loop.Run(loop.Options{
 		Load:       load,
 		Definition: def,
+		Precheck:   e.precheck,
 		Store:      e.store,
 		Workspaces: func(def workflow.Definition) loop.Workspaces { return e.workspaces(def) },
 		Launch: func(def workflow.Definition, job worker.Job, events chan<- worker.Event) loop.Worker {

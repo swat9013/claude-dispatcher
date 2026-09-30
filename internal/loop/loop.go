@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/swat9013/claude-dispatcher/internal/precheck"
 	"github.com/swat9013/claude-dispatcher/internal/status"
 	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/trigger"
@@ -49,6 +50,8 @@ type Options struct {
 	Load func() (workflow.Definition, error)
 	// Definition は起動時に検査に通った workflow 定義
 	Definition workflow.Definition
+	// Precheck は workflow 定義の事前検査 (formats.md §2.9)。落ちた trigger は起動しない
+	Precheck func(workflow.Definition) []precheck.Problem
 	// Store は workflow 定義から置き場の部品を組み立てる
 	Store func(workflow.Definition) Store
 	// Workspaces は workflow 定義から workspace の掃除の口を組み立てる
@@ -154,6 +157,8 @@ type loop struct {
 	// wake は最も早い再起動の予定に届く channel、wakeAt はその時刻。予定が無ければ nil
 	wake   <-chan time.Time
 	wakeAt time.Time
+	// blocked は、採っている workflow 定義で事前検査に落ちた trigger。起動も再起動もしない
+	blocked []precheck.Problem
 	// board は状態 file にだけ使う状態。loop の判断には使わない
 	board board
 }
@@ -269,7 +274,7 @@ func (l *loop) tick() {
 		l.tickFailed(fmt.Sprintf("workflow 定義の scope key %s が起動時の %s と違う (loop を起動し直す)", key, l.o.ScopeKey))
 		return
 	}
-	l.def = def
+	l.def, l.blocked = def, l.o.Precheck(def)
 	open, err := OpenItems(store, def)
 	if err != nil {
 		l.tickFailed(oneLine(err))
@@ -296,14 +301,17 @@ func (l *loop) tick() {
 		if _, abandoned := l.abandoned[ref]; abandoned {
 			continue
 		}
+		if l.isBlocked(c.Trigger.Name) {
+			continue
+		}
 		if l.launch(def, c) {
 			launched = append(launched, ref.String())
 		}
 	}
 	l.board.lastTick = &status.Tick{At: l.o.Now(), Result: status.TickOK, Candidates: len(candidates)}
 	l.board.ambiguous = ambiguous
-	l.rec.event("tick", map[string]any{"result": status.TickOK, "candidates": len(candidates), "launched": nonNil(launched), "ambiguous": ambiguousFields(ambiguous)},
-		"tick ok · %s%s", Summary(candidates), ambiguousSummary(ambiguous))
+	l.rec.event("tick", map[string]any{"result": status.TickOK, "candidates": len(candidates), "launched": nonNil(launched), "ambiguous": ambiguousFields(ambiguous), "blocked": blockedFields(l.blocked)},
+		"tick ok · %s%s%s", Summary(candidates), ambiguousSummary(ambiguous), blockedSummary(l.blocked))
 }
 
 // view は tick が読んだ open な一覧と、そこから導いた CL の除外 (曖昧な CL と、claim している作業対象の branch)。
@@ -353,6 +361,32 @@ func (l *loop) claimedBranches() func() (map[string][]target.Ref, bool) {
 		}
 		return owners, ok
 	}
+}
+
+// isBlocked は trigger が事前検査に落ちているか。
+func (l *loop) isBlocked(name string) bool {
+	return slices.ContainsFunc(l.blocked, func(p precheck.Problem) bool { return p.Trigger == name })
+}
+
+// blockedFields は tick の行の blocked の値。
+func blockedFields(blocked []precheck.Problem) []map[string]any {
+	fields := []map[string]any{}
+	for _, p := range blocked {
+		fields = append(fields, map[string]any{"trigger": p.Trigger, "error": p.Error})
+	}
+	return fields
+}
+
+// blockedSummary は人が読む tick の行の、起動しない trigger の欄。無ければ ""。
+func blockedSummary(blocked []precheck.Problem) string {
+	if len(blocked) == 0 {
+		return ""
+	}
+	parts := make([]string, len(blocked))
+	for i, p := range blocked {
+		parts[i] = fmt.Sprintf("%s (%s)", p.Trigger, p.Error)
+	}
+	return " · 起動しない trigger: " + strings.Join(parts, ", ")
 }
 
 // ambiguousFields は tick の行の ambiguous の値。

@@ -97,6 +97,10 @@ func (l *loop) retry(store Store, v *view) {
 			l.releaseWaiting(ref, c, reasonTriggerRemoved)
 			continue
 		}
+		if l.isBlocked(current.Name) {
+			// 事前検査に落ちている trigger は、直るまで attempt を進めずに待ち直す (次の tick で確かめ直す)
+			continue
+		}
 		if ref.Kind == target.KindCL && v == outsideTick {
 			continue
 		}

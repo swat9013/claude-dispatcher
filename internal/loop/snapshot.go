@@ -50,7 +50,7 @@ func (l *loop) snapshot() status.Snapshot {
 	s := status.Snapshot{
 		Scope: l.o.ScopeKey, Workflow: l.o.Workflow, StartedAt: l.board.startedAt, UpdatedAt: l.o.Now(),
 		Stopping: l.stopping > 0, LastTick: l.board.lastTick,
-		Workers: []status.Worker{}, Abandoned: []status.Abandoned{}, Ambiguous: []status.Ambiguous{},
+		Workers: []status.Worker{}, Abandoned: []status.Abandoned{}, Ambiguous: []status.Ambiguous{}, Blocked: []status.Blocked{},
 	}
 	if l.stopping == 0 && !l.board.nextTickAt.IsZero() {
 		next := l.board.nextTickAt
@@ -76,6 +76,9 @@ func (l *loop) snapshot() status.Snapshot {
 	}
 	for _, a := range l.board.ambiguous {
 		s.Ambiguous = append(s.Ambiguous, status.Ambiguous{Head: a.Head, Targets: refNames(a.Targets)})
+	}
+	for _, p := range l.blocked {
+		s.Blocked = append(s.Blocked, status.Blocked{Trigger: p.Trigger, Error: p.Error})
 	}
 	return s
 }

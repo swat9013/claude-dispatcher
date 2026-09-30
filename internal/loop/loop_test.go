@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/swat9013/claude-dispatcher/internal/loop"
+	"github.com/swat9013/claude-dispatcher/internal/precheck"
 	"github.com/swat9013/claude-dispatcher/internal/status"
 	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/trigger"
@@ -52,6 +53,9 @@ type noWorkspaces struct{}
 func (noWorkspaces) Existing() ([]target.Ref, error)   { return nil, nil }
 func (noWorkspaces) Remove(target.Ref) error           { return nil }
 func (noWorkspaces) Branch(target.Ref) (string, error) { return "", nil }
+
+// noProblems は、どの trigger も事前検査に通す。
+func noProblems(workflow.Definition) []precheck.Problem { return nil }
 
 // endedWorker は起動するとすぐに正常に終わる worker。
 type endedWorker struct{}
@@ -150,6 +154,7 @@ func (h *harness) run(t *testing.T) []string {
 			return h.withAttempts(def), err
 		},
 		Definition: h.withAttempts(definition(time.Minute, h.maxConcurrent)),
+		Precheck:   noProblems,
 		Store: func(workflow.Definition) loop.Store {
 			// scope key と観測は、その tick が読み直した workflow 定義の plan で答える
 			return memoryStore{scopeKey: func() string {
@@ -385,6 +390,7 @@ func TestLineThatCannotBeWrittenToTheLogIsReportedOnStdout(t *testing.T) {
 	loop.Run(loop.Options{
 		Load:       func() (workflow.Definition, error) { return definition(time.Minute, 0), nil },
 		Definition: definition(time.Minute, 0),
+		Precheck:   noProblems,
 		Store: func(workflow.Definition) loop.Store {
 			return memoryStore{scopeKey: func() string { return startScope }, observe: func() ([]target.Item, error) { return nil, nil }}
 		},

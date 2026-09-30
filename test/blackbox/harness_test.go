@@ -157,9 +157,24 @@ func newSandbox(t *testing.T) *sandbox {
 		// PATH は stub だけで閉じる。/usr/bin 等を足すと、stub を消したテストで runner の実物に届いてしまう
 		"PATH": s.binDir,
 	}
+	// テストの action が先頭に書く command を ~/.claude/commands に置き、事前検査 (formats.md §2.9) に通す
+	s.installCommands("implement", "fix", "review", "first", "second", "t", "urgent", "a", "b")
 	s.writeWorkflow(defaultWorkflow)
 	s.setIssues()
 	return s
+}
+
+// installCommands は sandbox の ~/.claude/commands に command を置く。
+func (s *sandbox) installCommands(names ...string) {
+	s.t.Helper()
+	for _, name := range names {
+		mustWrite(s.t, s.command(name), name+" の command\n")
+	}
+}
+
+// command は sandbox の ~/.claude/commands の command の file。
+func (s *sandbox) command(name string) string {
+	return filepath.Join(s.home, ".claude", "commands", name+".md")
 }
 
 // installStubs は stub binary を名前ごとに PATH の置き場 (binDir) へ hard link し、stub が root を引く file を置く。
