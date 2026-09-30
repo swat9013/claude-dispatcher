@@ -33,6 +33,13 @@ func (t Trigger) Matches(item target.Item) bool {
 	return false
 }
 
+// Undecided は、作業対象が trigger に当たるかをまだ決められないか。conflict の条件を持つ CL の trigger は、CL host が
+// conflict を計算し終えるまで当たるとも外れたとも決めない。
+func (t Trigger) Undecided(item target.Item) bool {
+	cl, ok := item.(target.CL)
+	return ok && t.On == target.KindCL && t.CL.Conflict != nil && cl.Mergeable == target.MergeUnknown
+}
+
 // Author は作者の立場の条件。空なら立場を問わない。
 type Author string
 
@@ -160,17 +167,13 @@ type Candidate struct {
 }
 
 // Evaluate は作業対象ごとに trigger を宣言順に評価して最初に当たった 1 つを採り、候補を trigger の宣言順・作成日時の古い順・
-// 番号の小さい順に並べて返す。曖昧な CL には trigger を当てない。
-func Evaluate(triggers []Trigger, items []target.Item) []Candidate {
-	ambiguous := map[target.Ref]bool{}
-	for _, a := range Ambiguous(items) {
-		for _, ref := range a.Targets {
-			ambiguous[ref] = true
-		}
-	}
+// 番号の小さい順に並べて返す。曖昧な CL には trigger を当てず、候補と一緒に返す。
+func Evaluate(triggers []Trigger, items []target.Item) ([]Candidate, []AmbiguousHead) {
+	ambiguous := ambiguousHeads(items)
+	excluded := AmbiguousRefs(ambiguous)
 	candidates := []Candidate{}
 	for _, item := range items {
-		if ambiguous[item.Ref()] {
+		if excluded[item.Ref()] {
 			continue
 		}
 		for i := range triggers {
@@ -190,7 +193,7 @@ func Evaluate(triggers []Trigger, items []target.Item) []Candidate {
 		}
 		return x.Item.Ref().Number < y.Item.Ref().Number
 	})
-	return candidates
+	return candidates, ambiguous
 }
 
 // AmbiguousHead は曖昧な CL の組: 同じ repo の同じ head branch から開いた、2 本以上の open な CL。
@@ -199,15 +202,26 @@ type AmbiguousHead struct {
 	Targets []target.Ref
 }
 
-// Ambiguous は items の中の曖昧な CL を、head branch の出てきた順に返す。fork の head branch は fork ごとに別の branch
-// として数える。
-func Ambiguous(items []target.Item) []AmbiguousHead {
+// AmbiguousRefs は曖昧な CL の組を、作業対象の集合にする。
+func AmbiguousRefs(ambiguous []AmbiguousHead) map[target.Ref]bool {
+	refs := map[target.Ref]bool{}
+	for _, a := range ambiguous {
+		for _, ref := range a.Targets {
+			refs[ref] = true
+		}
+	}
+	return refs
+}
+
+// ambiguousHeads は items の中の曖昧な CL を、head branch の出てきた順に返す。fork の head branch は fork ごとに別の branch
+// として数える。head の repo が消えた fork の CL は、どの fork の branch か分からないので数えない。
+func ambiguousHeads(items []target.Item) []AmbiguousHead {
 	type key struct{ repo, head string }
 	var order []key
 	groups := map[key][]target.Ref{}
 	for _, item := range items {
 		cl, ok := item.(target.CL)
-		if !ok {
+		if !ok || cl.HeadRepo == "" {
 			continue
 		}
 		k := key{cl.HeadRepo, cl.Head}

@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -77,9 +79,9 @@ func (s Store) ScopeKey() string { return ScopeKey(s.repo) }
 func (s Store) Open(kind target.Kind) ([]target.Item, error) {
 	switch kind {
 	case target.KindIssue:
-		return items(s.OpenIssues())
+		return items(s.openIssues())
 	case target.KindCL:
-		return items(s.OpenCLs())
+		return items(s.openCLs())
 	}
 	return nil, fmt.Errorf("未知の作業対象の種類 %q", kind)
 }
@@ -88,9 +90,9 @@ func (s Store) Open(kind target.Kind) ([]target.Item, error) {
 func (s Store) Read(ref target.Ref) (target.Item, error) {
 	switch ref.Kind {
 	case target.KindIssue:
-		return s.Issue(ref.Number)
+		return s.issue(ref.Number)
 	case target.KindCL:
-		return s.CL(ref.Number)
+		return s.cl(ref.Number)
 	}
 	return nil, fmt.Errorf("未知の作業対象の種類 %q", ref.Kind)
 }
@@ -170,8 +172,8 @@ type issuePage struct {
 	}
 }
 
-// OpenIssues は repo の open な issue を全件読み、正規化して返す。失敗は *target.Failure。
-func (s Store) OpenIssues() ([]target.Issue, error) {
+// openIssues は repo の open な issue を全件読み、正規化して返す。失敗は *target.Failure。
+func (s Store) openIssues() ([]target.Issue, error) {
 	// -f は生文字列。-F だと数字だけの owner / name が Int に型付けされ String! 変数に入らない
 	out, err := s.gh.Run("api", "graphql", "--paginate", "--slurp",
 		"-f", "query="+issuesQuery, "-f", "owner="+s.repo.Owner, "-f", "name="+s.repo.Name)
@@ -201,8 +203,8 @@ func (s Store) OpenIssues() ([]target.Issue, error) {
 // issueGone は、読み直した issue が消えている (削除・移管) ときの gh の文言。消えた issue は終端と同じに扱う
 const issueGone = "Could not resolve to an Issue"
 
-// Issue は issue 1 件を読み直す。close されていれば Closed。消えた issue も Closed として返す。失敗は *target.Failure。
-func (s Store) Issue(number int) (target.Issue, error) {
+// issue は issue 1 件を読み直す。close されていれば Closed。消えた issue も Closed として返す。失敗は *target.Failure。
+func (s Store) issue(number int) (target.Issue, error) {
 	out, err := s.gh.Run("api", "graphql",
 		"-f", "query="+issueQuery, "-f", "owner="+s.repo.Owner, "-f", "name="+s.repo.Name, "-F", fmt.Sprintf("number=%d", number))
 	var failed *proc.Error
@@ -231,17 +233,12 @@ func (s Store) Issue(number int) (target.Issue, error) {
 
 // normalize は応答の issue 1 件を作業対象の形に写す。
 func (s Store) normalize(n issueNode) (target.Issue, error) {
-	for _, c := range []struct {
-		what        string
-		total, read int
-	}{
-		{"label", n.Labels.TotalCount, len(n.Labels.Nodes)},
-		{"assignee", n.Assignees.TotalCount, len(n.Assignees.Nodes)},
-		{"依存先", n.BlockedBy.TotalCount, len(n.BlockedBy.Nodes)},
-	} {
-		if c.total > c.read {
-			return target.Issue{}, s.fail(target.Truncated, fmt.Errorf("issue #%d の %s が %d 件あり、1 往復で読める %d 件を超えた", n.Number, c.what, c.total, connectionSize))
-		}
+	if err := s.readAll(fmt.Sprintf("issue #%d", n.Number), map[string]connectionCount{
+		"label":    {n.Labels.TotalCount, len(n.Labels.Nodes)},
+		"assignee": {n.Assignees.TotalCount, len(n.Assignees.Nodes)},
+		"依存先":      {n.BlockedBy.TotalCount, len(n.BlockedBy.Nodes)},
+	}); err != nil {
+		return target.Issue{}, err
 	}
 	i := target.Issue{
 		Number:               n.Number,
@@ -285,6 +282,7 @@ var clFields = fmt.Sprintf(`
         reviewDecision
         labels(first: %[1]d) { totalCount nodes { name } }
         reviewThreads(first: %[1]d) { totalCount nodes { isResolved comments(first: 1) { nodes { authorAssociation } } } }
+        latestOpinionatedReviews(first: %[1]d, writersOnly: true) { totalCount nodes { state } }
         commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }`, connectionSize)
 
 var clsQuery = `
@@ -321,7 +319,9 @@ type clNode struct {
 	Mergeable         string
 	ReviewDecision    *string
 	Labels            connection[struct{ Name string }]
-	ReviewThreads     connection[struct {
+	// LatestOpinionatedReviews は、書き込み権限を持つ reviewer ごとの最後の承認か変更要求
+	LatestOpinionatedReviews connection[struct{ State string }]
+	ReviewThreads            connection[struct {
 		IsResolved bool
 		Comments   struct {
 			Nodes []struct{ AuthorAssociation string }
@@ -346,8 +346,8 @@ type clPage struct {
 	}
 }
 
-// OpenCLs は repo の open な CL を全件読み、正規化して返す。失敗は *target.Failure。
-func (s Store) OpenCLs() ([]target.CL, error) {
+// openCLs は repo の open な CL を全件読み、正規化して返す。失敗は *target.Failure。
+func (s Store) openCLs() ([]target.CL, error) {
 	out, err := s.gh.Run("api", "graphql", "--paginate", "--slurp",
 		"-f", "query="+clsQuery, "-f", "owner="+s.repo.Owner, "-f", "name="+s.repo.Name)
 	if err != nil {
@@ -376,8 +376,8 @@ func (s Store) OpenCLs() ([]target.CL, error) {
 // clGone は、読み直した CL が消えているときの gh の文言。消えた CL は終端と同じに扱う
 const clGone = "Could not resolve to a PullRequest"
 
-// CL は CL 1 件を読み直す。merge か close されていれば Closed。消えた CL も Closed として返す。失敗は *target.Failure。
-func (s Store) CL(number int) (target.CL, error) {
+// cl は CL 1 件を読み直す。merge か close されていれば Closed。消えた CL も Closed として返す。失敗は *target.Failure。
+func (s Store) cl(number int) (target.CL, error) {
 	out, err := s.gh.Run("api", "graphql",
 		"-f", "query="+clQuery, "-f", "owner="+s.repo.Owner, "-f", "name="+s.repo.Name, "-F", fmt.Sprintf("number=%d", number))
 	var failed *proc.Error
@@ -407,18 +407,27 @@ func (s Store) CL(number int) (target.CL, error) {
 // mergeability は GitHub の mergeable の値を CL の merge conflict の有無に写す。
 var mergeability = map[string]target.Mergeability{"MERGEABLE": target.MergeClean, "CONFLICTING": target.MergeConflict}
 
+// approved は CL が承認済みか。review を必須にした repo では reviewDecision で決める。review が必須でない repo では
+// reviewDecision が null なので、書き込み権限を持つ reviewer の最後の review に承認があり、変更要求が無いことで決める。
+func approved(n clNode) bool {
+	if n.ReviewDecision != nil {
+		return *n.ReviewDecision == "APPROVED"
+	}
+	states := make([]string, len(n.LatestOpinionatedReviews.Nodes))
+	for i, r := range n.LatestOpinionatedReviews.Nodes {
+		states[i] = r.State
+	}
+	return slices.Contains(states, "APPROVED") && !slices.Contains(states, "CHANGES_REQUESTED")
+}
+
 // normalizeCL は応答の CL 1 件を作業対象の形に写す (CL の状態の語彙へ写す。system.md §6)。
 func (s Store) normalizeCL(n clNode) (target.CL, error) {
-	for _, c := range []struct {
-		what        string
-		total, read int
-	}{
-		{"label", n.Labels.TotalCount, len(n.Labels.Nodes)},
-		{"review thread", n.ReviewThreads.TotalCount, len(n.ReviewThreads.Nodes)},
-	} {
-		if c.total > c.read {
-			return target.CL{}, s.fail(target.Truncated, fmt.Errorf("CL #%d の %s が %d 件あり、1 往復で読める %d 件を超えた", n.Number, c.what, c.total, connectionSize))
-		}
+	if err := s.readAll(fmt.Sprintf("CL #%d", n.Number), map[string]connectionCount{
+		"label":         {n.Labels.TotalCount, len(n.Labels.Nodes)},
+		"review thread": {n.ReviewThreads.TotalCount, len(n.ReviewThreads.Nodes)},
+		"review":        {n.LatestOpinionatedReviews.TotalCount, len(n.LatestOpinionatedReviews.Nodes)},
+	}); err != nil {
+		return target.CL{}, err
 	}
 	cl := target.CL{
 		Number:               n.Number,
@@ -431,7 +440,7 @@ func (s Store) normalizeCL(n clNode) (target.CL, error) {
 		SameRepo:             !n.IsCrossRepository,
 		Draft:                n.IsDraft,
 		Mergeable:            mergeability[n.Mergeable],
-		Approved:             n.ReviewDecision != nil && *n.ReviewDecision == "APPROVED",
+		Approved:             approved(n),
 	}
 	if n.HeadRepository != nil {
 		cl.HeadRepo = n.HeadRepository.NameWithOwner
@@ -449,6 +458,20 @@ func (s Store) normalizeCL(n clNode) (target.CL, error) {
 		cl.CIFailed = state == "FAILURE" || state == "ERROR"
 	}
 	return cl, nil
+}
+
+// connectionCount は connection の件数 (total) と、1 往復で読めた件数 (read)。
+type connectionCount struct{ total, read int }
+
+// readAll は、作業対象 (what) の connection を 1 往復で読み切れたかを確かめる。読み切れなければ Truncated の失敗を返す。
+// 切り詰めた像から候補を出さない。
+func (s Store) readAll(what string, counts map[string]connectionCount) error {
+	for _, name := range slices.Sorted(maps.Keys(counts)) {
+		if c := counts[name]; c.total > c.read {
+			return s.fail(target.Truncated, fmt.Errorf("%s の %s が %d 件あり、1 往復で読める %d 件を超えた", what, name, c.total, connectionSize))
+		}
+	}
+	return nil
 }
 
 // collaboratorAssociations は collaborator と数える作者の立場 (GitHub の CommentAuthorAssociation)

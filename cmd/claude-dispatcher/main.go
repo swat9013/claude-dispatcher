@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -158,6 +159,13 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return exitFailed
 	}
+	// CL 側の trigger があれば、claim の workspace の branch を読むのに git を撃つ
+	if slices.Contains(def.Kinds(), target.KindCL) {
+		if _, err := deps.Lookup("git", e.env); err != nil {
+			fmt.Fprintln(stderr, err)
+			return exitFailed
+		}
+	}
 	scopeKey := e.store(def).ScopeKey()
 	dir := state.Dir(state.Root(e.getenv), scopeKey)
 	lock, err := state.Lock(dir, scopeKey)
@@ -211,7 +219,8 @@ func dryRunOnce(e environment, def workflow.Definition, stdout, stderr io.Writer
 		fmt.Fprintln(stderr, err)
 		return failureExit(err)
 	}
-	for _, c := range trigger.Evaluate(def.Triggers, open) {
+	candidates, _ := trigger.Evaluate(def.Triggers, open)
+	for _, c := range candidates {
 		fmt.Fprintf(stdout, "%s\t%s\t#%d\t%s\n", c.Trigger.Name, c.Trigger.On, c.Item.Ref().Number, withoutControls(c.Item.Heading()))
 	}
 	return 0

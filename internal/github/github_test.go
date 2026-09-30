@@ -41,7 +41,7 @@ func TestRepoThatGhCannotResolveIsNotFound(t *testing.T) {
 
 	store := github.NewStore(github.Exec{Env: []string{"PATH=" + filepath.Dir(gh)}, Timeout: 5 * time.Second}, github.Repo{Owner: "acme", Name: "x"})
 
-	_, err := store.OpenIssues()
+	_, err := store.Open(target.KindIssue)
 
 	var failure *target.Failure
 	if !errors.As(err, &failure) || failure.Kind != target.NotVisible {
@@ -67,9 +67,13 @@ func issueNode(number int, association string, blockers ...string) string {
 func openIssues(t *testing.T, nodes ...string) []target.Issue {
 	t.Helper()
 	store := github.NewStore(pages(`[{"data":{"repository":{"issues":{"nodes":[`+strings.Join(nodes, ",")+`]}}}}]`), github.Repo{Owner: "acme", Name: "widgets"})
-	issues, err := store.OpenIssues()
+	items, err := store.Open(target.KindIssue)
 	if err != nil {
 		t.Fatal(err)
+	}
+	issues := make([]target.Issue, len(items))
+	for i, item := range items {
+		issues[i] = item.(target.Issue)
 	}
 	return issues
 }
@@ -105,7 +109,11 @@ func (r response) Run(...string) ([]byte, error) { return r.out, r.err }
 
 func reread(t *testing.T, r response) (target.Issue, error) {
 	t.Helper()
-	return github.NewStore(r, github.Repo{Owner: "acme", Name: "widgets"}).Issue(42)
+	item, err := github.NewStore(r, github.Repo{Owner: "acme", Name: "widgets"}).Read(target.Ref{Kind: target.KindIssue, Number: 42})
+	if err != nil {
+		return target.Issue{}, err
+	}
+	return item.(target.Issue), nil
 }
 
 func TestRereadIssueThatIsClosedIsClosed(t *testing.T) {
@@ -174,5 +182,74 @@ func TestCLWithMoreReviewThreadsThanOneRoundTripIsTruncated(t *testing.T) {
 	var failure *target.Failure
 	if !errors.As(err, &failure) || failure.Kind != target.Truncated {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func clNode(number int, extra string) string {
+	return fmt.Sprintf(`{"number":%d,"title":"t","state":"OPEN","createdAt":"2026-01-01T00:00:00Z","authorAssociation":"OWNER","isDraft":false,
+		"isCrossRepository":false,"headRefName":"b","headRepository":{"nameWithOwner":"acme/widgets"},"mergeable":"MERGEABLE",
+		"reviewDecision":null,"labels":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":0,"nodes":[]},
+		"latestOpinionatedReviews":{"totalCount":0,"nodes":[]},"commits":{"nodes":[]}%s}`, number, extra)
+}
+
+func rereadCL(t *testing.T, r response) (target.CL, error) {
+	t.Helper()
+	item, err := github.NewStore(r, github.Repo{Owner: "acme", Name: "widgets"}).Read(target.Ref{Kind: target.KindCL, Number: 5})
+	if err != nil {
+		return target.CL{}, err
+	}
+	return item.(target.CL), nil
+}
+
+func TestRereadCLThatIsMergedIsClosed(t *testing.T) {
+	node := strings.Replace(clNode(5, ""), `"state":"OPEN"`, `"state":"MERGED"`, 1)
+
+	cl, err := rereadCL(t, response{out: []byte(`{"data":{"repository":{"pullRequest":` + node + `}}}`)})
+
+	if err != nil || !cl.Closed || cl.Number != 5 {
+		t.Fatalf("CL = %+v (%v), want 終端", cl, err)
+	}
+}
+
+func TestRereadCLThatGhCannotResolveIsClosed(t *testing.T) {
+	gone := &proc.Error{Name: "gh", Args: []string{"api", "graphql"}, Exit: 1, Stderr: "GraphQL: Could not resolve to a PullRequest with the number of 5. (repository.pullRequest)"}
+
+	cl, err := rereadCL(t, response{err: gone})
+
+	if err != nil || !cl.Closed {
+		t.Fatalf("CL = %+v (%v), want 消えた CL は終端", cl, err)
+	}
+}
+
+func TestRereadCLMissingFromTheResponseIsClosed(t *testing.T) {
+	cl, err := rereadCL(t, response{out: []byte(`{"data":{"repository":{"pullRequest":null}}}`)})
+
+	if err != nil || !cl.Closed {
+		t.Fatalf("CL = %+v (%v), want 終端", cl, err)
+	}
+}
+
+func TestRereadCLFailureOtherThanAMissingCLIsNotClosed(t *testing.T) {
+	_, err := rereadCL(t, response{err: &proc.Error{Name: "gh", Args: []string{"api", "graphql"}, Exit: 1, Stderr: "HTTP 502"}})
+
+	if err == nil {
+		t.Fatal("gh の失敗を終端として読んだ")
+	}
+}
+
+func TestCLWithoutRequiredReviewsIsApprovedByAWritersApprovalWithoutChangeRequests(t *testing.T) {
+	for reviews, want := range map[string]bool{
+		`[{"state":"APPROVED"}]`:                               true,
+		`[{"state":"APPROVED"},{"state":"CHANGES_REQUESTED"}]`: false,
+		`[]`: false,
+	} {
+		node := clNode(5, "")
+		node = strings.Replace(node, `"latestOpinionatedReviews":{"totalCount":0,"nodes":[]}`, `"latestOpinionatedReviews":{"totalCount":0,"nodes":`+reviews+`}`, 1)
+
+		cl, err := rereadCL(t, response{out: []byte(`{"data":{"repository":{"pullRequest":` + node + `}}}`)})
+
+		if err != nil || cl.Approved != want {
+			t.Errorf("%s: approved = %v (%v), want %v", reviews, cl.Approved, err, want)
+		}
 	}
 }

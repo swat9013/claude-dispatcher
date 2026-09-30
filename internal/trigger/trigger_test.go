@@ -77,6 +77,12 @@ func items(issues []target.Issue) []target.Item {
 	return out
 }
 
+// evaluate は候補だけを返す Evaluate。
+func evaluate(triggers []trigger.Trigger, items []target.Item) []trigger.Candidate {
+	candidates, _ := trigger.Evaluate(triggers, items)
+	return candidates
+}
+
 func numbers(candidates []trigger.Candidate) []int {
 	var got []int
 	for _, c := range candidates {
@@ -93,7 +99,7 @@ func TestCandidatesOfOneTriggerAreOrderedByCreationTimeNotByNumber(t *testing.T)
 		{Number: 30, CreatedAt: base.Add(time.Hour)},
 	}
 
-	got := numbers(trigger.Evaluate(triggers, items(issues)))
+	got := numbers(evaluate(triggers, items(issues)))
 
 	if want := []int{50, 30, 10}; !slices.Equal(got, want) {
 		t.Fatalf("候補 = %v, want %v", got, want)
@@ -104,7 +110,7 @@ func TestCandidatesCreatedAtTheSameTimeAreOrderedByNumber(t *testing.T) {
 	triggers := []trigger.Trigger{{Name: "t", On: target.KindIssue}}
 	issues := []target.Issue{{Number: 9, CreatedAt: base}, {Number: 4, CreatedAt: base}}
 
-	got := numbers(trigger.Evaluate(triggers, items(issues)))
+	got := numbers(evaluate(triggers, items(issues)))
 
 	if want := []int{4, 9}; !slices.Equal(got, want) {
 		t.Fatalf("候補 = %v, want %v", got, want)
@@ -152,13 +158,18 @@ func TestEachCLFilterNarrowsTheCLsItMatches(t *testing.T) {
 	}
 }
 
-func TestIssueTriggerDoesNotMatchACLAndCLTriggerDoesNotMatchAnIssue(t *testing.T) {
-	triggers := []trigger.Trigger{{Name: "i", On: target.KindIssue}, {Name: "c", On: target.KindCL}}
+func TestIssueTriggerDoesNotMatchACL(t *testing.T) {
+	issueTrigger := trigger.Trigger{Name: "i", On: target.KindIssue}
 
-	candidates := trigger.Evaluate(triggers, []target.Item{target.Issue{Number: 1}, target.CL{Number: 2}})
+	if issueTrigger.Matches(target.CL{Number: 2}) {
+		t.Fatal("issue の trigger が CL に当たった")
+	}
+}
 
-	if len(candidates) != 2 || candidates[0].Trigger.Name != "i" || candidates[0].Item.Ref() != (target.Ref{Kind: target.KindIssue, Number: 1}) ||
-		candidates[1].Trigger.Name != "c" || candidates[1].Item.Ref() != (target.Ref{Kind: target.KindCL, Number: 2}) {
-		t.Fatalf("候補 = %+v", candidates)
+func TestCLTriggerDoesNotMatchAnIssue(t *testing.T) {
+	clTrigger := trigger.Trigger{Name: "c", On: target.KindCL}
+
+	if clTrigger.Matches(target.Issue{Number: 1}) {
+		t.Fatal("CL の trigger が issue に当たった")
 	}
 }

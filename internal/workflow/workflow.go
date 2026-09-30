@@ -65,7 +65,7 @@ type Claude struct {
 func (d Definition) Kinds() []target.Kind {
 	var kinds []target.Kind
 	for _, t := range d.Triggers {
-		if !slices.Contains(kinds, t.On) {
+		if t.On != "" && !slices.Contains(kinds, t.On) {
 			kinds = append(kinds, t.On)
 		}
 	}
@@ -133,8 +133,13 @@ func Load(path string, getenv func(string) string) (Definition, error) {
 		root = resolve(doc.Content[0])
 	}
 	c.decode(root, &def)
-	// 本文はどの worker にも渡るので、trigger に現れる種類すべての見本で描画してみる
-	for _, kind := range def.Kinds() {
+	// 本文はどの worker にも渡るので、trigger に現れる種類すべての見本で描画してみる。種類が 1 つも読めなければ issue の見本で
+	// 描画し、本文の綴りの誤りだけは確かめる
+	kinds := def.Kinds()
+	if len(kinds) == 0 {
+		kinds = []target.Kind{target.KindIssue}
+	}
+	for _, kind := range kinds {
 		if err := render.Check("本文", body, kind); err != nil {
 			c.problems = append(c.problems, problem{text: fmt.Sprintf("本文 (共通 prompt): %v", err)})
 			break

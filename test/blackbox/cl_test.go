@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -15,6 +16,7 @@ import (
 // loop が CL の worker を起動・除外・停止する振る舞いは、走らせた loop で見る。
 
 // clWorkflow は周期 1s で、CL 側の trigger fix だけを持つ workflow 定義。when は trigger の when の中身 (flow style)。
+// after_create は workspace に .git を置き、loop が workspace の branch を git の stub に尋ねるようにする。
 func (s *sandbox) clWorkflow(when string) string {
 	marks := s.marksDir()
 	mustMkdir(s.t, marks)
@@ -25,7 +27,7 @@ tracker:
 polling:
   interval: 1s
 hooks:
-  after_create: echo "$CLAUDE_DISPATCHER_KIND $CLAUDE_DISPATCHER_NUMBER" > "` + marks + `/after_create-$CLAUDE_DISPATCHER_KIND-$CLAUDE_DISPATCHER_NUMBER"
+  after_create: 'echo "$CLAUDE_DISPATCHER_KIND $CLAUDE_DISPATCHER_NUMBER" > "` + marks + `/after_create-$CLAUDE_DISPATCHER_KIND-$CLAUDE_DISPATCHER_NUMBER"; : > .git'
   before_remove: ': > "` + marks + `/before_remove-$CLAUDE_DISPATCHER_KIND-$CLAUDE_DISPATCHER_NUMBER"'
 triggers:
   - name: fix
@@ -163,6 +165,16 @@ func TestForkBranchWithTheSameNameDoesNotMakeACLAmbiguous(t *testing.T) {
 	assertCandidates(t, r, clCandidate("fix", 1), clCandidate("fix", 2))
 }
 
+func TestForkCLsOfDeletedForksWithTheSameBranchNameAreNotAmbiguous(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflow(s.clWorkflow("{}"))
+	s.setStore(nil, numbered(cl{head: "patch-1", forkGone: true}, cl{head: "patch-1", forkGone: true}))
+
+	r := s.dryRun()
+
+	assertCandidates(t, r, clCandidate("fix", 1), clCandidate("fix", 2))
+}
+
 func TestAmbiguousCLsAreRecordedInTheTickRow(t *testing.T) {
 	s := newSandbox(t)
 	s.writeWorkflow(s.clWorkflow("{}"))
@@ -177,7 +189,7 @@ func TestAmbiguousCLsAreRecordedInTheTickRow(t *testing.T) {
 	}
 }
 
-func TestCLMatchingATriggerGetsAWorkerWithTheCLVariablesInItsOwnWorkspace(t *testing.T) {
+func TestCLWorkerGetsAnActionRenderedWithTheCLVariables(t *testing.T) {
 	s := newSandbox(t)
 	s.writeWorkflow(s.clWorkflow("{ci_failed: true}"))
 	s.setStore(nil, []cl{{number: 5, head: "worktree-issue-3", checks: "FAILURE"}})
@@ -185,15 +197,25 @@ func TestCLMatchingATriggerGetsAWorkerWithTheCLVariablesInItsOwnWorkspace(t *tes
 
 	s.startLoop()
 
-	start := s.waitEvents("start", 1)[0]
+	s.waitEvents("start", 1)
 	call := s.waitCalls("claude", 1)[0]
-	action := call.Argv[len(call.Argv)-1]
-	if start["target"] != "cl#5" || call.Cwd != s.clWorkspace(5) ||
-		action != "/fix CL #5 on worktree-issue-3 (cl 5, https://github.com/acme/widgets/pull/5)" {
-		t.Fatalf("start の行 = %v, cwd = %s, action = %q", start, call.Cwd, action)
+	if action := call.Argv[len(call.Argv)-1]; action != "/fix CL #5 on worktree-issue-3 (cl 5, https://github.com/acme/widgets/pull/5)" {
+		t.Fatalf("action = %q", action)
 	}
-	if got := strings.TrimSpace(string(mustRead(t, s.mark("after_create-cl-5")))); got != "cl 5" {
-		t.Fatalf("after_create の環境 = %q, want cl 5", got)
+}
+
+func TestCLWorkerRunsInAWorkspaceOfItsOwnKind(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflow(s.clWorkflow("{}"))
+	s.setStore(nil, []cl{readyCL(5)})
+	s.onClaude(stubwire.Rule{ReleaseFile: s.releaseFile()})
+
+	s.startLoop()
+
+	start := s.waitEvents("start", 1)[0]
+	hookEnv := strings.TrimSpace(string(mustRead(t, s.mark("after_create-cl-5"))))
+	if start["target"] != "cl#5" || start["workspace"] != s.clWorkspace(5) || hookEnv != "cl 5" {
+		t.Fatalf("start の行 = %v, after_create の KIND と NUMBER = %q", start, hookEnv)
 	}
 }
 
@@ -231,6 +253,39 @@ func TestCLWhoseBranchIsCheckedOutInAClaimedWorkspaceIsNotLaunched(t *testing.T)
 	s.waitEvents("tick", len(s.events("tick"))+1)
 	if starts := s.startsOf("cl#20"); len(starts) != 0 {
 		t.Fatalf("claim 中の branch の CL に worker を起動した: %v", starts)
+	}
+}
+
+func TestForkCLWithTheSameBranchNameAsAClaimedWorkspaceIsLaunched(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflow(s.issueAndCLWorkflow())
+	s.setIssues(readyIssue(7))
+	s.branchOf("worktree-issue-7")
+	s.onClaude(stubwire.Rule{ReleaseFile: s.releaseFile()})
+	s.startLoop()
+	waitStart(t, s, "issue#7", 1)
+
+	s.setStore([]issue{readyIssue(7)}, []cl{{number: 20, head: "worktree-issue-7", fork: true}})
+
+	waitStart(t, s, "cl#20", 1)
+}
+
+func TestCLWhoseBranchIsCheckedOutInAWorkspaceWaitingToRetryIsNotLaunched(t *testing.T) {
+	// issue#7 の worker は失敗して、再起動を待つ (backoff は既定の 10s)。その間に開いた同じ branch の cl#20 には当てない
+	s := newSandbox(t)
+	s.writeWorkflow(s.issueAndCLWorkflow())
+	s.setIssues(readyIssue(7))
+	s.branchOf("worktree-issue-7")
+	s.onClaude(stubwire.Rule{})
+	s.startLoop()
+	s.waitEvents("retry", 1)
+
+	s.setStore([]issue{readyIssue(7)}, []cl{{number: 20, head: "worktree-issue-7"}, {number: 21, head: "worktree-issue-8"}})
+
+	waitStart(t, s, "cl#21", 1)
+	s.waitEvents("tick", len(s.events("tick"))+1)
+	if starts := s.startsOf("cl#20"); len(starts) != 0 {
+		t.Fatalf("再起動を待つ claim の branch の CL に worker を起動した: %v", starts)
 	}
 }
 
@@ -280,5 +335,60 @@ func TestWorkerOfACLThatIsMergedIsStoppedAndItsWorkspaceRemoved(t *testing.T) {
 	}
 	if _, err := os.Stat(s.clWorkspace(5)); !os.IsNotExist(err) {
 		t.Fatalf("終端の CL の workspace が残っている: %v", err)
+	}
+}
+
+func TestCLListIsNotReadWithoutACLTrigger(t *testing.T) {
+	s := newSandbox(t)
+
+	r := s.dryRun()
+
+	assertExit(t, r, 0)
+	for _, call := range s.calls("gh") {
+		if slices.ContainsFunc(call.Argv, func(arg string) bool { return strings.Contains(arg, clListQuery) }) {
+			t.Fatalf("CL の trigger が無いのに CL の一覧を読んだ: %v", call.Argv[:2])
+		}
+	}
+}
+
+func TestWaitingRetryOfACLThatBecameAmbiguousIsReleased(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflow(strings.Replace(s.clWorkflow("{}"), "triggers:\n", fastRetry+"triggers:\n", 1))
+	s.setStore(nil, []cl{readyCL(5)})
+	s.onClaude(stubwire.Rule{})
+	s.startLoop()
+	s.waitEvents("retry", 1)
+
+	s.setStore(nil, []cl{readyCL(5), {number: 6, head: readyCL(5).head}})
+
+	release := s.waitEvents("release", 1)[0]
+	if release["target"] != "cl#5" || release["reason"] != "曖昧な CL" {
+		t.Fatalf("release の行 = %v, want cl#5 を曖昧な CL として解く", release)
+	}
+}
+
+func TestEndedCLWorkerIsNotCompletedWhileItsConflictIsBeingComputed(t *testing.T) {
+	// conflict: true の CL の worker が終わったとき、GitHub が conflict を計算し直している (UNKNOWN) なら、外れたとは数えない
+	s := newSandbox(t)
+	s.writeWorkflow(s.clWorkflow("{conflict: true}"))
+	conflicting := readyCL(5)
+	conflicting.mergeable = "CONFLICTING"
+	computing := readyCL(5)
+	computing.mergeable = "UNKNOWN"
+	s.setStore(nil, []cl{conflicting})
+	s.onClaude(stubwire.Rule{Writes: []stubwire.FileWrite{s.clResponses(computing)}})
+
+	s.startLoop()
+
+	waitFor(t, func() bool {
+		for _, e := range s.events("error") {
+			if e["target"] == "cl#5" && strings.Contains(asString(e["error"]), "conflict を計算中") {
+				return true
+			}
+		}
+		return false
+	}, "終わり方を決められないことが error の行に残らない")
+	if ends := s.events("end"); len(ends) != 0 {
+		t.Fatalf("conflict を計算中なのに終わり方を決めた: %v", ends)
 	}
 }

@@ -15,8 +15,13 @@ import (
 // baseBackoff は 1 回目の失敗の後の backoff
 const baseBackoff = 10 * time.Second
 
-// reasonTriggerRemoved は、再起動を待つ間に起動した trigger が workflow 定義から消えたときの理由
-const reasonTriggerRemoved = "trigger が workflow 定義から消えた"
+// 再起動を待つ claim を、起動せずに解く理由
+const (
+	// reasonTriggerRemoved は、再起動を待つ間に起動した trigger が workflow 定義から消えた
+	reasonTriggerRemoved = "trigger が workflow 定義から消えた"
+	// reasonAmbiguous は、再起動を待つ間に CL が曖昧になった (同じ head branch から別の CL が開いた)
+	reasonAmbiguous = "曖昧な CL"
+)
 
 // backoff は attempt 回目が失敗した後に待つ時間: min(10s × 2^(attempt−1), limit)。
 func backoff(attempt int, limit time.Duration) time.Duration {
@@ -67,11 +72,12 @@ func (l *loop) arm() {
 	l.wake, l.wakeAt = l.o.After(max(earliest.Sub(l.o.Now()), 0)), earliest
 }
 
-// retry は backoff の明けた再起動待ちの claim を起動する。open は tick が読んだ open な一覧 (tick の外からなら outsideTick)
-// で、そこに無い作業対象だけを 1 件ずつ読み直す。空きが無いか、作業対象を読み直せなければ attempt を進めずに待ち直す
-// (空きは worker が終わったとき、読み直しは次の tick で試み直す)。作業対象が終端か trigger から外れていれば、起動せずに
-// claim を解く。
-func (l *loop) retry(store Store, open []target.Item) {
+// retry は backoff の明けた再起動待ちの claim を起動する。v は tick が読んだ view (tick の外からなら outsideTick) で、
+// open な一覧に無い作業対象だけを 1 件ずつ読み直す。空きが無いか、作業対象を読み直せないか、当たるかをまだ決められない
+// か、CL の head branch を別の claim が checkout していれば、attempt を進めずに待ち直す (空きは worker が終わったとき、
+// それ以外は次の tick で試み直す)。作業対象が終端か、trigger から外れたか、曖昧な CL になっていれば、起動せずに claim を
+// 解く。CL の再起動は、曖昧さと branch を確かめられる tick の中でだけ試みる。
+func (l *loop) retry(store Store, v *view) {
 	now := l.o.Now()
 	for ref, c := range l.claims {
 		if c.phase != phaseWaitingRetry || now.Before(c.retryAt) {
@@ -90,7 +96,10 @@ func (l *loop) retry(store Store, open []target.Item) {
 			l.releaseWaiting(ref, c, reasonTriggerRemoved)
 			continue
 		}
-		item, err := reread(store, open, ref)
+		if ref.Kind == target.KindCL && v == outsideTick {
+			continue
+		}
+		item, err := reread(store, v, ref)
 		if err != nil {
 			l.rec.error(ref, "再起動を待つ作業対象を読み直せない (次の tick で読み直す): "+oneLine(err))
 			continue
@@ -100,19 +109,30 @@ func (l *loop) retry(store Store, open []target.Item) {
 			l.releaseWaiting(ref, c, settled)
 			continue
 		}
+		if cl, isCL := item.(target.CL); isCL {
+			if v.ambiguous[ref] {
+				l.releaseWaiting(ref, c, reasonAmbiguous)
+				continue
+			}
+			if v.branchHeld(cl, ref) {
+				continue
+			}
+		}
+		if current.Undecided(item) {
+			continue
+		}
 		c.item, c.waitingSlot = item, false
 		c.attempt++
 		l.start(c)
 	}
 }
 
-// outsideTick は tick の外から retry を呼ぶときの open な一覧 (無い)
-var outsideTick []target.Item
-
-// reread は作業対象を読み直す。open な一覧にあればそれを使い、無ければ置き場から 1 件読む。
-func reread(store Store, open []target.Item, ref target.Ref) (target.Item, error) {
-	if item, ok := findItem(open, ref); ok {
-		return item, nil
+// reread は作業対象を読み直す。tick の open な一覧にあればそれを使い、無ければ置き場から 1 件読む。
+func reread(store Store, v *view, ref target.Ref) (target.Item, error) {
+	if v != outsideTick {
+		if item, ok := findItem(v.open, ref); ok {
+			return item, nil
+		}
 	}
 	return store.Read(ref)
 }
@@ -157,10 +177,10 @@ func (l *loop) waitingRetry() int {
 }
 
 // clearAbandoned は、打ち切った作業対象のうち、打ち切ったときの trigger の述語に当たらなくなったものの打ち切りを解く。
-// open な一覧に無いもの (終端) と、trigger が workflow 定義から消えたものも解く。
-func (l *loop) clearAbandoned(def workflow.Definition, open []target.Item) {
+// open な一覧に無いもの (終端)・曖昧な CL になったもの・trigger が workflow 定義から消えたものも解く。
+func (l *loop) clearAbandoned(def workflow.Definition, v *view) {
 	for ref, name := range l.abandoned {
-		if stillMatches(def, open, ref, name) {
+		if stillMatches(def, v, ref, name) {
 			continue
 		}
 		delete(l.abandoned, ref)
@@ -169,11 +189,13 @@ func (l *loop) clearAbandoned(def workflow.Definition, open []target.Item) {
 	}
 }
 
-func stillMatches(def workflow.Definition, open []target.Item, ref target.Ref, triggerName string) bool {
+// stillMatches は打ち切った作業対象が、打ち切ったときの trigger に当たったままか。当たるかをまだ決められなければ、当たったまま
+// とする (外れたのを観測するまで打ち切りを解かない)。
+func stillMatches(def workflow.Definition, v *view, ref target.Ref, triggerName string) bool {
 	t, ok := triggerNamed(def, triggerName)
-	if !ok {
+	if !ok || v.ambiguous[ref] {
 		return false
 	}
-	item, ok := findItem(open, ref)
-	return ok && t.Matches(item)
+	item, ok := findItem(v.open, ref)
+	return ok && (t.Matches(item) || t.Undecided(item))
 }

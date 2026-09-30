@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -250,17 +249,17 @@ func (l *loop) tick() {
 		l.rec.tickError(oneLine(err))
 		return
 	}
+	candidates, ambiguous := trigger.Evaluate(def.Triggers, open)
+	v := &view{open: open, ambiguous: trigger.AmbiguousRefs(ambiguous), branches: l.claimedBranches()}
 	l.sweep(store, open)
-	l.clearAbandoned(def, open)
-	l.retry(store, open)
-	candidates := trigger.Evaluate(def.Triggers, open)
-	branches, branchesRead := l.claimedBranches(candidates)
+	l.clearAbandoned(def, v)
+	l.retry(store, v)
 	var launched []string
 	for _, c := range candidates {
 		if l.running()+l.waitingRetry() >= def.MaxConcurrent {
 			break
 		}
-		if cl, ok := c.Item.(target.CL); ok && (!branchesRead || (cl.SameRepo && branches[cl.Head])) {
+		if cl, ok := c.Item.(target.CL); ok && v.branchHeld(cl, target.Ref{}) {
 			// claim している作業対象の branch に、CL の worker を重ねない
 			continue
 		}
@@ -275,31 +274,58 @@ func (l *loop) tick() {
 			launched = append(launched, ref.String())
 		}
 	}
-	ambiguous := trigger.Ambiguous(open)
 	l.rec.event("tick", map[string]any{"result": "ok", "candidates": len(candidates), "launched": nonNil(launched), "ambiguous": ambiguousFields(ambiguous)},
 		"tick ok · %s%s", Summary(candidates), ambiguousSummary(ambiguous))
 }
 
-// claimedBranches は、claim している作業対象の workspace で checkout されている branch の名前を返す。候補に CL が無ければ
-// 読まない。読めない branch があれば error の行を残して false を返す (その tick は CL の worker を起動しない)。
-func (l *loop) claimedBranches(candidates []trigger.Candidate) (map[string]bool, bool) {
-	branches := map[string]bool{}
-	if !slices.ContainsFunc(candidates, func(c trigger.Candidate) bool { return c.Item.Ref().Kind == target.KindCL }) {
-		return branches, true
+// view は tick が読んだ open な一覧と、そこから導いた CL の除外 (曖昧な CL と、claim している作業対象の branch)。
+// tick の外から再起動を試みるときは outsideTick (nil) で、CL の除外を確かめられない。
+type view struct {
+	open      []target.Item
+	ambiguous map[target.Ref]bool
+	// branches は claim している作業対象の workspace の branch と、その claim の作業対象を読む。ok が false なら読めない
+	// branch があった
+	branches func() (owners map[string]target.Ref, ok bool)
+}
+
+// outsideTick は tick の外から retry を呼ぶときの view (無い)
+var outsideTick *view
+
+// branchHeld は、cl の head branch が self 以外の claim の workspace で checkout されているか。branch を読めなければ
+// checkout されているものとして扱う (同じ branch に worker を重ねないため)。
+func (v *view) branchHeld(cl target.CL, self target.Ref) bool {
+	owners, ok := v.branches()
+	if !ok {
+		return true
 	}
-	read := true
-	for ref, c := range l.claims {
-		branch, err := l.o.Workspaces(l.definitionOf(c)).Branch(ref)
-		if err != nil {
-			l.rec.error(ref, "この tick は CL の worker を起動しない: "+oneLine(err))
-			read = false
-			continue
+	owner, held := owners[cl.Head]
+	return cl.SameRepo && held && owner != self
+}
+
+// claimedBranches は、claim している作業対象の workspace で checkout されている branch を読む関数を返す。読むのは最初に
+// 呼ばれたとき (CL を起動しようとしたとき) の 1 回だけ。読めない branch があれば error の行を残し、ok を false で返す
+// (その tick は CL の worker を起動しない)。
+func (l *loop) claimedBranches() func() (map[string]target.Ref, bool) {
+	var owners map[string]target.Ref
+	var ok bool
+	return func() (map[string]target.Ref, bool) {
+		if owners != nil {
+			return owners, ok
 		}
-		if branch != "" {
-			branches[branch] = true
+		owners, ok = map[string]target.Ref{}, true
+		for ref, c := range l.claims {
+			branch, err := l.o.Workspaces(l.definitionOf(c)).Branch(ref)
+			if err != nil {
+				l.rec.error(ref, "この tick は CL の worker を起動しない: "+oneLine(err))
+				ok = false
+				continue
+			}
+			if branch != "" {
+				owners[branch] = ref
+			}
 		}
+		return owners, ok
 	}
-	return branches, read
 }
 
 // ambiguousFields は tick の行の ambiguous の値。
@@ -495,6 +521,10 @@ func (l *loop) verify(store Store, ref target.Ref, c *claim) {
 		return
 	}
 	result := *c.ended
+	if c.trigger.Undecided(item) {
+		l.rec.error(ref, "終わった worker の作業対象が trigger に当たるかをまだ決められない (CL の conflict を計算中。次の tick で確かめ直す)")
+		return
+	}
 	if settled := l.settle(ref, c, item); settled != "" {
 		l.end(ref, c, completed, withFailure(settled, result), result)
 		delete(l.claims, ref)

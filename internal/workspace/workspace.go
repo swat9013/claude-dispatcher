@@ -96,11 +96,12 @@ func (m Manager) Existing() ([]target.Ref, error) {
 // branchTimeout は workspace の branch を読む git 1 回の上限
 const branchTimeout = 10 * time.Second
 
-// Branch は作業対象の workspace で checkout されている branch の名前を返す。workspace が無い・git の作業ツリーでない・
-// detached HEAD なら "" を返す。git は Env の PATH から探す。
+// Branch は作業対象の workspace で checkout されている branch の名前を返す。workspace が無い・workspace 自身が git の
+// 作業ツリーでない (直下に .git が無い)・detached HEAD なら "" を返す。git は Env の PATH から探す。
 func (m Manager) Branch(ref target.Ref) (string, error) {
 	path := m.Path(ref)
-	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+	// .git の有無で見るのは、git に任せると、repo の中に置いた workspace が親の repo の branch を返すため
+	if _, err := os.Stat(filepath.Join(path, ".git")); errors.Is(err, os.ErrNotExist) {
 		return "", nil
 	}
 	git, err := deps.Lookup("git", m.Env)
@@ -112,8 +113,6 @@ func (m Manager) Branch(ref target.Ref) (string, error) {
 	switch {
 	case errors.As(err, &failed) && failed.Exit == 1:
 		// -q の symbolic-ref は、HEAD が branch を指していない (detached) と何も出さずに 1 で終わる
-		return "", nil
-	case errors.As(err, &failed) && strings.Contains(failed.Stderr, "not a git repository"):
 		return "", nil
 	case err != nil:
 		return "", fmt.Errorf("workspace の branch を読めない (%s): %w", path, err)

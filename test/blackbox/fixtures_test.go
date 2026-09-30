@@ -176,12 +176,7 @@ func ghRules(issues []issue, cls []cl) []stubwire.Rule {
 
 // ghResponses は ghRules を gh の応答 file の中身にしたもの。
 func (s *sandbox) ghResponses(issues ...issue) stubwire.FileWrite {
-	return s.storeResponses(issues, nil)
-}
-
-// storeResponses は ghRules を gh の応答 file の中身にしたもの。
-func (s *sandbox) storeResponses(issues []issue, cls []cl) stubwire.FileWrite {
-	raw, err := json.Marshal(ghRules(issues, cls))
+	raw, err := json.Marshal(ghRules(issues, nil))
 	if err != nil {
 		s.t.Fatal(err)
 	}
@@ -194,9 +189,11 @@ type cl struct {
 	number int
 	head   string
 	// fork なら head は fork の branch
-	fork   bool
-	draft  bool
-	labels []string
+	fork bool
+	// forkGone なら head の repo (fork) が消えている (headRepository が null)
+	forkGone bool
+	draft    bool
+	labels   []string
 	// mergeable は MERGEABLE (既定) / CONFLICTING / UNKNOWN
 	mergeable string
 	// reviewDecision は APPROVED / CHANGES_REQUESTED / REVIEW_REQUIRED。空なら null
@@ -238,15 +235,19 @@ func (c cl) node() map[string]any {
 	if c.reviewDecision != "" {
 		decision = c.reviewDecision
 	}
-	mergeable, state, headRepo := c.mergeable, c.state, defaultIssueRepo
+	mergeable, state := c.mergeable, c.state
 	if mergeable == "" {
 		mergeable = "MERGEABLE"
 	}
 	if state == "" {
 		state = "OPEN"
 	}
+	var headRepository any = map[string]any{"nameWithOwner": defaultIssueRepo}
 	if c.fork {
-		headRepo = "stranger/widgets"
+		headRepository = map[string]any{"nameWithOwner": "stranger/widgets"}
+	}
+	if c.forkGone {
+		headRepository = nil
 	}
 	return map[string]any{
 		"number":            c.number,
@@ -256,15 +257,24 @@ func (c cl) node() map[string]any {
 		"createdAt":         createdAt(c.number),
 		"authorAssociation": "OWNER",
 		"isDraft":           c.draft,
-		"isCrossRepository": c.fork,
+		"isCrossRepository": c.fork || c.forkGone,
 		"headRefName":       c.head,
-		"headRepository":    map[string]any{"nameWithOwner": headRepo},
+		"headRepository":    headRepository,
 		"mergeable":         mergeable,
 		"reviewDecision":    decision,
 		"labels":            map[string]any{"totalCount": len(labels), "nodes": labels},
 		"reviewThreads":     map[string]any{"totalCount": len(threads), "nodes": threads},
 		"commits":           map[string]any{"nodes": []map[string]any{{"commit": map[string]any{"statusCheckRollup": rollup}}}},
 	}
+}
+
+// clResponses は cls だけを返す gh の応答 file の中身。worker の代役が CL の状態を書き換えるときに使う。
+func (s *sandbox) clResponses(cls ...cl) stubwire.FileWrite {
+	raw, err := json.Marshal(ghRules(nil, cls))
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	return stubwire.FileWrite{Path: stubwire.ResponsesFile(s.stubRoot, "gh"), Content: string(raw)}
 }
 
 // failGh は gh の呼び出しを stderr と exit で失敗させる。
