@@ -177,6 +177,8 @@ func (e environment) statusProbes() status.Probes {
 		Workers: launch.ClaudePrintCensus,
 		Gh:      e.ghFor,
 		Git:     e.git,
+		// transcript の置き場 (ACTIVITY 列)。Claude Code と同じく CLAUDE_CONFIG_DIR を先に見る
+		ClaudeConfigDir: status.ClaudeConfigDir(os.Getenv, e.home),
 	}
 }
 
@@ -443,8 +445,8 @@ func surviveClosedStdout() {
 	signal.Notify(make(chan os.Signal, 1), syscall.SIGPIPE)
 }
 
-// tableFit は w へ描く判断の行の出し方。端末なら今の幅に収め、端末でない (か幅を読めない) なら切り詰めない。
-// 端末かどうかは画面の描き方と同じ terminalFile で決め、ここでは幅だけを読む。
+// tableFit は w へ描く表の ACTIVITY と判断の行の切り詰め方。端末なら今の幅に収め、端末でない (か幅を読めない) なら
+// FitPlain にする。端末かどうかは画面の描き方と同じ terminalFile で決め、ここでは幅だけを読む。
 func tableFit(w io.Writer) status.Fit {
 	f, ok := terminalFile(w)
 	if !ok {

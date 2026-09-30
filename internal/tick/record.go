@@ -16,7 +16,7 @@ import (
 
 const (
 	// logTimeLayout は log.jsonl の ts (RFC 3339 の UTC、マイクロ秒まで)
-	logTimeLayout = "2006-01-02T15:04:05.000000Z"
+	logTimeLayout = ticklog.TSLayout
 	// stemLayout は tick の開始時刻から作る file 名の幹。同じ秒に 2 tick 走っても前の file を上書きしない
 	stemLayout = "20060102T150405.000000Z"
 )

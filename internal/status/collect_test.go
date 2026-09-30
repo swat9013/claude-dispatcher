@@ -13,6 +13,8 @@ import (
 	"github.com/swat9013/claude-dispatcher/internal/github"
 	"github.com/swat9013/claude-dispatcher/internal/launch"
 	"github.com/swat9013/claude-dispatcher/internal/paths"
+	"github.com/swat9013/claude-dispatcher/internal/termtext"
+	"github.com/swat9013/claude-dispatcher/internal/ticklog"
 )
 
 // fakeMachine は ps / claude の代わりに決めた観測を返し、観測された回数を数える。
@@ -186,7 +188,7 @@ func TestReportNoteLinesMarkEachNote(t *testing.T) {
 }
 
 func TestReportTableLinesAreEmptyWithoutWorkers(t *testing.T) {
-	if got := (Report{}).TableLines(); len(got) != 0 {
+	if got := (Report{}).TableLines(FitPlain()); len(got) != 0 {
 		t.Fatalf("table lines = %q, want 載せる worker が居なければ表を出さない", got)
 	}
 }
@@ -207,9 +209,72 @@ func TestRenderTablePutsHeadingJudgmentNotesTableInOrderAndABlankLineBetweenProj
 func TestReportTableLinesStartWithTheColumnHeaderThenOneRowPerWorker(t *testing.T) {
 	r := collectOne(t, probesWith(quietMachine(), answers(4242)))
 
-	table := r.TableLines()
+	table := r.TableLines(FitPlain())
 
 	if len(table) != 2 || !strings.HasPrefix(table[0], "ISSUE") || !strings.HasPrefix(table[1], "#42") {
 		t.Fatalf("table = %q, want 列の見出し行と issue 42 の行", table)
+	}
+}
+
+// projectWithTickNow は tick.now に content を置いた project を返す (log.jsonl は置かない)。
+func projectWithTickNow(t *testing.T, content string) paths.Project {
+	t.Helper()
+	dir := t.TempDir()
+	p := paths.Project{Name: "acme", ConfigDir: filepath.Join(dir, "config"), StateDir: filepath.Join(dir, "state")}
+	if err := os.MkdirAll(p.StateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p.TickNowFile(), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func machineWith(processes map[int]string) *fakeMachine {
+	return &fakeMachine{machine: launch.Machine{Processes: processes, Agents: "[]"}}
+}
+
+func TestCollectShowsATickPastItsOrchestratorWithoutAnOrchestratorRow(t *testing.T) {
+	p := projectWithTickNow(t, `{"pid":77,"ts":"2026-09-26T03:00:00.000000Z","stage":"spawn"}`)
+	probes := probesWith(machineWith(map[int]string{77: "/usr/local/bin/claude-dispatcher tick acme"}), answers())
+
+	r := Collect([]paths.Project{p}, t.TempDir(), probes, time.Now)[0]
+
+	if r.Tick == nil || r.Tick.Orchestrator != nil || !strings.Contains(r.Heading(), "  tick 実行中 · ") {
+		t.Fatalf("tick = %+v / 見出し %q, want tick 実行中の状態欄だけ (orchestrator は終わっている)", r.Tick, r.Heading())
+	}
+	if lines := r.TableLines(FitPlain()); lines != nil {
+		t.Fatalf("orchestrator の行を出した: %v", lines)
+	}
+}
+
+func TestCollectDoesNotCallATickNowWrittenAfterTheProcessListLeftBehind(t *testing.T) {
+	// process の一覧を読んだ後に始まった tick は一覧に写っていない。異常終了の残りと取り違えない
+	p := projectWithTickNow(t, `{"pid":77,"ts":"2026-09-26T03:00:00.000000Z","stage":"observe"}`)
+	observedBeforeTheFile := func() time.Time { return time.Now().Add(-time.Minute) }
+
+	r := Collect([]paths.Project{p}, t.TempDir(), probesWith(quietMachine(), answers()), observedBeforeTheFile)[0]
+
+	if r.Tick != nil || len(r.Notes) != 0 {
+		t.Fatalf("tick = %+v / 注記 %v, want 走っている tick も注記も出さない", r.Tick, r.Notes)
+	}
+}
+
+func TestTableLinesFitEveryRowToTheTerminalWidthByCuttingTheActivity(t *testing.T) {
+	long := &Activity{Since: 12 * time.Second, Doing: "Bash " + strings.Repeat("長い command ", 20)}
+	r := Report{Project: "acme", Workers: []Worker{{
+		Spawn: ticklog.Spawned{Issue: 42, Kind: "start"}, TickTS: "2026-09-26T02:48:00.000000Z",
+		Alive: known(true), Activity: known(long),
+	}}}
+
+	lines := r.TableLines(FitTerminal(100))
+
+	for _, line := range lines {
+		if w := termtext.Width(line); w > 100 {
+			t.Fatalf("行の幅 %d が端末の幅 100 を超える: %q", w, line)
+		}
+	}
+	if !strings.Contains(lines[1], "12s Bash 長い") {
+		t.Fatalf("ACTIVITY の頭が残っていない: %q", lines[1])
 	}
 }

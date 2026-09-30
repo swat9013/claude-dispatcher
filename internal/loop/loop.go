@@ -40,7 +40,7 @@ type Options struct {
 	Tick func(control tick.Control) tick.Outcome
 	// Status は project の今 (status の現況) を組む
 	Status func() status.Report
-	// Fit は描くときに判断の行を端末の幅に収めるか (端末なら今の幅)
+	// Fit は描くときの表の ACTIVITY と判断の行の切り詰め方 (端末なら今の幅)
 	Fit func() status.Fit
 	// Now は壁時計。次の tick の時刻はこれで判定する (スリープ中に monotonic clock が進まない OS がある — system.md §9)
 	Now func() time.Time

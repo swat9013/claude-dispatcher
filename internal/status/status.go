@@ -20,6 +20,7 @@ import (
 	"github.com/swat9013/claude-dispatcher/internal/paths"
 	"github.com/swat9013/claude-dispatcher/internal/tick"
 	"github.com/swat9013/claude-dispatcher/internal/ticklog"
+	"github.com/swat9013/claude-dispatcher/internal/ticknow"
 )
 
 // Probed は外部 process から読んだ値。読めなかったら Known が false で、表では `?` になる (formats.md §10)。
@@ -40,6 +41,8 @@ type Probes struct {
 	Gh func(config.Config) (github.Runner, error)
 	// Git は cwd の clone で git を撃つ
 	Git func(args ...string) (string, error)
+	// ClaudeConfigDir は Claude Code の設定 dir。transcript をこの下の projects で探す (ClaudeConfigDir 関数が決める)
+	ClaudeConfigDir string
 }
 
 // Observer は機械の観測を読む口。本番は ps と claude を撃つ CommandObserver、テストは fake。
@@ -81,11 +84,32 @@ type Report struct {
 	LastTick Probed[*ticklog.Line]
 	// LastOrchestrator は log.jsonl の最後の orchestrator 行 (判断の行の元)。無いか log.jsonl を読めなければ nil
 	LastOrchestrator *ticklog.OrchestratorLine
-	Workers          []Worker
+	// Tick は走っている tick (tick.now)。走っていないか、確かめられなければ nil
+	Tick    *RunningTick
+	Workers []Worker
 	// RunningWorkers は起動記録の worker のうち process が生きている数 (loop の終了行 — formats.md §13.2)。
 	// 起動部が生死を答えられないか、起動記録 (log.jsonl) を読めなければ ?
 	RunningWorkers Probed[int]
 	Notes          []string
+}
+
+// RunningTick は走っている tick。
+type RunningTick struct {
+	// TS は tick の開始時刻 (tick 行の ts と同じ綴り)
+	TS      string
+	Elapsed time.Duration
+	// Orchestrator は orchestrator の実行中だけ埋まる
+	Orchestrator *RunningOrchestrator
+}
+
+// RunningOrchestrator は走っている orchestrator。表の orchestrator の行になる。
+type RunningOrchestrator struct {
+	Elapsed time.Duration
+	Session Probed[*Session]
+	// Activity は transcript から読んだ最新の活動
+	Activity Probed[*Activity]
+	// sessionID は Session と Activity を引く鍵 (tick.now の session id)
+	sessionID string
 }
 
 // Worker は表の 1 行。
@@ -98,6 +122,8 @@ type Worker struct {
 	Session Probed[*Session]
 	Branch  Probed[*Branch]
 	CL      Probed[*github.CLState]
+	// Activity は process が生きている worker だけ埋まる。それ以外は Value が nil (表では `-`)
+	Activity Probed[*Activity]
 }
 
 // Session は `claude agents --json` の行のうち表に出す分。
@@ -113,13 +139,14 @@ type Branch struct {
 // 経過の基準の時刻は観測を読んだ後に clock から取る — 観測 (ps / claude) に時間が掛かっても、経過を観測より前の
 // 時刻で測って短く見せないため。
 func Collect(projects []paths.Project, home string, probes Probes, clock func() time.Time) []Report {
+	observedAt := clock()
 	machine := probes.Machine.Observe()
 	alive, aliveErr := probes.Workers(machine)
 	reports := make([]Report, 0, len(projects))
 	for _, project := range projects {
 		c := &collector{
 			report:  Report{Project: project.Name, Workers: []Worker{}, Notes: []string{}},
-			machine: machine, isAlive: alive, isAliveErr: aliveErr, probes: probes,
+			machine: machine, observedAt: observedAt, isAlive: alive, isAliveErr: aliveErr, probes: probes,
 		}
 		report := c.collect(project, home, clock())
 		report.RunningWorkers = runningWorkers(report, aliveErr)
@@ -131,16 +158,71 @@ func Collect(projects []paths.Project, home string, probes Probes, clock func() 
 // collect は 1 project の今を組む。
 func (c *collector) collect(project paths.Project, home string, now time.Time) Report {
 	if c.machine.ProcessesErr != nil {
-		c.note("process の一覧を読めない — loop と worker の生死は ? (%v)", c.machine.ProcessesErr)
+		c.note("process の一覧を読めない — loop と worker の生死は ?、走っている tick は出さない (%v)", c.machine.ProcessesErr)
 	} else if c.isAliveErr != nil {
 		c.note("worker の生死を読めない — STATE は ? (%v)", c.isAliveErr)
 	}
 	c.report.Loop = c.loopRunning(project.Name)
+	c.report.Tick = c.runningTick(project, now)
+	c.collectWorkers(project, home, now)
+	c.fillSessions()
+	c.fillActivities(now)
+	return c.report
+}
+
+// fillActivities は orchestrator の行と running の worker の行の ACTIVITY を transcript から埋める。読めない行は ? にして
+// 注記を残し、ほかの列には影響させない (transcript の形は Claude Code の内部の仕様なので)。
+func (c *collector) fillActivities(now time.Time) {
+	if c.report.Tick != nil && c.report.Tick.Orchestrator != nil {
+		o := c.report.Tick.Orchestrator
+		o.Activity = c.activity(o.sessionID, "orchestrator", now)
+	}
+	for i := range c.report.Workers {
+		w := &c.report.Workers[i]
+		if !w.Alive.Known || !w.Alive.Value {
+			w.Activity = known[*Activity](nil)
+			continue
+		}
+		w.Activity = c.activity(w.Spawn.SessionID, fmt.Sprintf("#%d", w.Spawn.Issue), now)
+	}
+}
+
+// activity は sessionID の transcript から最新の活動を読む。row は注記で行を名指す綴り。
+func (c *collector) activity(sessionID, row string, now time.Time) Probed[*Activity] {
+	a, err := readActivity(c.probes.ClaudeConfigDir, sessionID, now)
+	if err != nil {
+		c.note("%s の transcript を読めない — ACTIVITY は ? (%v)", row, err)
+		return Probed[*Activity]{}
+	}
+	return known(a)
+}
+
+// fillSessions は orchestrator の行と worker の行の SESSION を埋める。どちらの行も無ければ claude agents を読まない。
+func (c *collector) fillSessions() {
+	var orchestrator *RunningOrchestrator
+	if c.report.Tick != nil {
+		orchestrator = c.report.Tick.Orchestrator
+	}
+	if orchestrator == nil && len(c.report.Workers) == 0 {
+		return
+	}
+	sessions := c.sessions()
+	if orchestrator != nil {
+		orchestrator.Session = lookupIn(sessions, orchestrator.sessionID)
+	}
+	for i := range c.report.Workers {
+		w := &c.report.Workers[i]
+		w.Session = lookupIn(sessions, w.Spawn.SessionID)
+	}
+}
+
+// collectWorkers は log.jsonl の起動記録から載せる worker を組む (SESSION 以外の列を埋める)。
+func (c *collector) collectWorkers(project paths.Project, home string, now time.Time) {
 	log, broken, err := ticklog.Read(project.LogFile())
 	if err != nil {
 		// 途中までの行から最終 tick や起動記録を出すと古い像を今として見せるので、log からは何も出さない
 		c.note("log.jsonl を読めない — 最終 tick と worker は出さない (%v)", err)
-		return c.report
+		return
 	}
 	if broken > 0 {
 		c.note("%s の読めない %d 行を飛ばした", project.LogFile(), broken)
@@ -154,7 +236,7 @@ func (c *collector) collect(project paths.Project, home string, now time.Time) R
 
 	spawns := spawnRecords(log.Ticks)
 	if len(spawns) == 0 {
-		return c.report
+		return
 	}
 	cfg, cfgErr := config.Load(project.ConfigFile(), home)
 	if cfgErr != nil {
@@ -170,7 +252,6 @@ func (c *collector) collect(project paths.Project, home string, now time.Time) R
 	if len(c.report.Workers) > 0 {
 		c.fillDetails(cfg, cfgErr, gh)
 	}
-	return c.report
 }
 
 type spawnRecord struct {
@@ -235,6 +316,8 @@ func runningWorkers(r Report, aliveErr error) Probed[int] {
 type collector struct {
 	report  Report
 	machine launch.Machine
+	// observedAt は machine を読み始めた時刻。それより後に書かれた tick.now の pid は machine に写っていない
+	observedAt time.Time
 	// isAlive は起動部が組んだ今生きている worker の一覧。組めなければ isAliveErr
 	isAlive    launch.Alive
 	isAliveErr error
@@ -272,7 +355,6 @@ func (c *collector) fillDetails(cfg config.Config, cfgErr error, gh github.Runne
 	for _, w := range c.report.Workers {
 		branchOf[w.Spawn.Issue] = tick.WorkerBranch(w.Spawn.Issue)
 	}
-	sessions := c.sessions()
 	var branches Probed[map[int]*Branch]
 	var cls Probed[map[int]*github.CLState]
 	if cfgErr == nil {
@@ -283,7 +365,6 @@ func (c *collector) fillDetails(cfg config.Config, cfgErr error, gh github.Runne
 	}
 	for i := range c.report.Workers {
 		w := &c.report.Workers[i]
-		w.Session = lookupIn(sessions, w.Spawn.SessionID)
 		w.Branch = lookupIn(branches, w.Spawn.Issue)
 		w.CL = lookupIn(cls, w.Spawn.Issue)
 		if _, ok := cls.Value[w.Spawn.Issue]; cls.Known && !ok {
@@ -298,6 +379,7 @@ func lookupIn[K comparable, V any](table Probed[map[K]V], key K) Probed[V] {
 	return Probed[V]{Value: table.Value[key], Known: table.Known}
 }
 
+// sessions は `claude agents --json` の表 (orchestrator の行と worker の行の SESSION)。
 func (c *collector) sessions() Probed[map[string]*Session] {
 	err := c.machine.AgentsErr
 	var rows []struct {
@@ -387,17 +469,71 @@ func (c *collector) cls(cfg config.Config, gh github.Runner, branchOf map[int]st
 	return known(cls)
 }
 
-// loopRunning は project の loop の process (`claude-dispatcher loop <project> …`) が居るか。argv の先頭で照合する —
-// worker の command 行には spawn prompt の本文が載るので、途中の綴りで照合すると prompt の中の文字列に当たる。
+// loopRunning は project の loop の process (`claude-dispatcher loop <project> …`) が居るか。
 func (c *collector) loopRunning(project string) Probed[bool] {
 	if c.machine.ProcessesErr != nil {
 		return Probed[bool]{}
 	}
 	for _, command := range c.machine.Processes {
-		fields := strings.Fields(command)
-		if len(fields) >= 3 && filepath.Base(fields[0]) == "claude-dispatcher" && fields[1] == "loop" && fields[2] == project {
+		if subcommand, of := dispatcherRun(command); subcommand == "loop" && of == project {
 			return known(true)
 		}
 	}
 	return known(false)
+}
+
+// dispatcherRun は command 行が `claude-dispatcher <subcommand> <project> …` の process なら、その subcommand と project を
+// 返す。そうでなければ空。argv の先頭で照合する — worker の command 行には spawn prompt の本文が載るので、途中の綴りで
+// 照合すると prompt の中の文字列に当たる。
+func dispatcherRun(command string) (subcommand, project string) {
+	fields := strings.Fields(command)
+	if len(fields) < 3 || filepath.Base(fields[0]) != "claude-dispatcher" {
+		return "", ""
+	}
+	return fields[1], fields[2]
+}
+
+// runningTick は tick.now から走っている tick と、orchestrator の実行中ならその session id を組む (formats.md §10)。
+// file の pid がこの project の tick か loop の process でなければ、異常終了で残った file (か、pid の再利用) として無視し、
+// 注記に残す。ただし process の一覧を読んだ後に書かれた file は、一覧に pid が写っていないだけなので黙って出さない
+// (次の描き直しで出る)。process の一覧を読めなければ確かめられないので出さない (注記は process の一覧の方で残す)。
+func (c *collector) runningTick(project paths.Project, now time.Time) *RunningTick {
+	file := project.TickNowFile()
+	state, err := ticknow.Read(file)
+	if err != nil {
+		c.note("tick.now を読めない — 走っている tick は出さない (%v)", err)
+		return nil
+	}
+	if state == nil || c.machine.ProcessesErr != nil {
+		return nil
+	}
+	if !isTickProcess(c.machine.Processes[state.PID], project.Name) {
+		if state.Written.Before(c.observedAt) {
+			c.note("%s の pid %d は %s の tick の process でない — 前の tick が異常終了で残した file として無視した", file, state.PID, project.Name)
+		}
+		return nil
+	}
+	started, err := ticklog.ParseTS(state.TS)
+	if err != nil {
+		c.note("tick.now の開始時刻を読めない — 走っている tick は出さない (%v)", err)
+		return nil
+	}
+	running := &RunningTick{TS: state.TS, Elapsed: now.Sub(started)}
+	if state.Stage != ticknow.Orchestrator || state.Orchestrator == nil {
+		return running
+	}
+	orchestratorStarted, err := ticklog.ParseTS(state.Orchestrator.Started)
+	if err != nil {
+		c.note("tick.now の orchestrator の起動時刻を読めない — orchestrator の行は出さない (%v)", err)
+		return running
+	}
+	running.Orchestrator = &RunningOrchestrator{Elapsed: now.Sub(orchestratorStarted), sessionID: state.Orchestrator.SessionID}
+	return running
+}
+
+// isTickProcess は command 行が project の tick を走らせる process (`claude-dispatcher tick <project>` か
+// `claude-dispatcher loop <project> …`) か。pid が別の process に再利用されていれば false。
+func isTickProcess(command, project string) bool {
+	subcommand, of := dispatcherRun(command)
+	return (subcommand == "tick" || subcommand == "loop") && of == project
 }
