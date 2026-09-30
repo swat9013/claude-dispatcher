@@ -70,20 +70,19 @@ func Remove(file string) error {
 
 // Read は file を読む。無ければ nil を返す。
 func Read(file string) (*State, error) {
-	f, err := os.Open(file)
+	info, err := os.Stat(file)
 	if os.IsNotExist(err) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
-	info, err := f.Stat()
+	raw, err := os.ReadFile(file)
 	if err != nil {
 		return nil, err
 	}
 	var state State
-	if err := json.NewDecoder(f).Decode(&state); err != nil {
+	if err := json.Unmarshal(raw, &state); err != nil {
 		return nil, fmt.Errorf("%s の形が読めない: %w", file, err)
 	}
 	state.Written = info.ModTime()

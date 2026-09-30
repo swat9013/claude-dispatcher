@@ -102,6 +102,8 @@ type RunningTick struct {
 type RunningOrchestrator struct {
 	Elapsed time.Duration
 	Session Probed[*Session]
+	// sessionID は Session を引く鍵 (tick.now の session id)
+	sessionID string
 }
 
 // Worker は表の 1 行。
@@ -153,20 +155,29 @@ func (c *collector) collect(project paths.Project, home string, now time.Time) R
 		c.note("worker の生死を読めない — STATE は ? (%v)", c.isAliveErr)
 	}
 	c.report.Loop = c.loopRunning(project.Name)
-	running, orchestratorSession := c.runningTick(project, now)
-	c.report.Tick = running
+	c.report.Tick = c.runningTick(project, now)
 	c.collectWorkers(project, home, now)
-	if (running != nil && running.Orchestrator != nil) || len(c.report.Workers) > 0 {
-		sessions := c.sessions()
-		if running != nil && running.Orchestrator != nil {
-			running.Orchestrator.Session = lookupIn(sessions, orchestratorSession)
-		}
-		for i := range c.report.Workers {
-			w := &c.report.Workers[i]
-			w.Session = lookupIn(sessions, w.Spawn.SessionID)
-		}
-	}
+	c.fillSessions()
 	return c.report
+}
+
+// fillSessions は orchestrator の行と worker の行の SESSION を埋める。どちらの行も無ければ claude agents を読まない。
+func (c *collector) fillSessions() {
+	var orchestrator *RunningOrchestrator
+	if c.report.Tick != nil {
+		orchestrator = c.report.Tick.Orchestrator
+	}
+	if orchestrator == nil && len(c.report.Workers) == 0 {
+		return
+	}
+	sessions := c.sessions()
+	if orchestrator != nil {
+		orchestrator.Session = lookupIn(sessions, orchestrator.sessionID)
+	}
+	for i := range c.report.Workers {
+		w := &c.report.Workers[i]
+		w.Session = lookupIn(sessions, w.Spawn.SessionID)
+	}
 }
 
 // collectWorkers は log.jsonl の起動記録から載せる worker を組む (SESSION 以外の列を埋める)。
@@ -427,66 +438,65 @@ func (c *collector) loopRunning(project string) Probed[bool] {
 		return Probed[bool]{}
 	}
 	for _, command := range c.machine.Processes {
-		args := dispatcherArgs(command)
-		if len(args) >= 2 && args[0] == "loop" && args[1] == project {
+		if subcommand, of := dispatcherRun(command); subcommand == "loop" && of == project {
 			return known(true)
 		}
 	}
 	return known(false)
 }
 
-// dispatcherArgs は command 行が claude-dispatcher の process なら、その引数 (argv[1:]) を返す。そうでなければ nil。
-// argv の先頭で照合する — worker の command 行には spawn prompt の本文が載るので、途中の綴りで照合すると prompt の中の
-// 文字列に当たる。
-func dispatcherArgs(command string) []string {
+// dispatcherRun は command 行が `claude-dispatcher <subcommand> <project> …` の process なら、その subcommand と project を
+// 返す。そうでなければ空。argv の先頭で照合する — worker の command 行には spawn prompt の本文が載るので、途中の綴りで
+// 照合すると prompt の中の文字列に当たる。
+func dispatcherRun(command string) (subcommand, project string) {
 	fields := strings.Fields(command)
-	if len(fields) == 0 || filepath.Base(fields[0]) != "claude-dispatcher" {
-		return nil
+	if len(fields) < 3 || filepath.Base(fields[0]) != "claude-dispatcher" {
+		return "", ""
 	}
-	return fields[1:]
+	return fields[1], fields[2]
 }
 
 // runningTick は tick.now から走っている tick と、orchestrator の実行中ならその session id を組む (formats.md §10)。
 // file の pid がこの project の tick か loop の process でなければ、異常終了で残った file (か、pid の再利用) として無視し、
 // 注記に残す。ただし process の一覧を読んだ後に書かれた file は、一覧に pid が写っていないだけなので黙って出さない
 // (次の描き直しで出る)。process の一覧を読めなければ確かめられないので出さない (注記は process の一覧の方で残す)。
-func (c *collector) runningTick(project paths.Project, now time.Time) (*RunningTick, string) {
+func (c *collector) runningTick(project paths.Project, now time.Time) *RunningTick {
 	file := project.TickNowFile()
 	state, err := ticknow.Read(file)
 	if err != nil {
 		c.note("tick.now を読めない — 走っている tick は出さない (%v)", err)
-		return nil, ""
+		return nil
 	}
 	if state == nil || c.machine.ProcessesErr != nil {
-		return nil, ""
+		return nil
 	}
 	if !isTickProcess(c.machine.Processes[state.PID], project.Name) {
 		if state.Written.Before(c.observedAt) {
 			c.note("%s の pid %d は %s の tick の process でない — 前の tick が異常終了で残した file として無視した", file, state.PID, project.Name)
 		}
-		return nil, ""
+		return nil
 	}
 	started, err := ticklog.ParseTS(state.TS)
 	if err != nil {
 		c.note("tick.now の開始時刻を読めない — 走っている tick は出さない (%v)", err)
-		return nil, ""
+		return nil
 	}
 	running := &RunningTick{TS: state.TS, Elapsed: now.Sub(started)}
 	if state.Stage != ticknow.Orchestrator || state.Orchestrator == nil {
-		return running, ""
+		return running
 	}
 	orchestratorStarted, err := ticklog.ParseTS(state.Orchestrator.Started)
 	if err != nil {
 		c.note("tick.now の orchestrator の起動時刻を読めない — orchestrator の行は出さない (%v)", err)
-		return running, ""
+		return running
 	}
-	running.Orchestrator = &RunningOrchestrator{Elapsed: now.Sub(orchestratorStarted)}
-	return running, state.Orchestrator.SessionID
+	running.Orchestrator = &RunningOrchestrator{Elapsed: now.Sub(orchestratorStarted), sessionID: state.Orchestrator.SessionID}
+	return running
 }
 
 // isTickProcess は command 行が project の tick を走らせる process (`claude-dispatcher tick <project>` か
 // `claude-dispatcher loop <project> …`) か。pid が別の process に再利用されていれば false。
 func isTickProcess(command, project string) bool {
-	args := dispatcherArgs(command)
-	return len(args) >= 2 && (args[0] == "tick" || args[0] == "loop") && args[1] == project
+	subcommand, of := dispatcherRun(command)
+	return (subcommand == "tick" || subcommand == "loop") && of == project
 }
