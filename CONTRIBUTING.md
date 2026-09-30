@@ -29,6 +29,7 @@ claude-dispatcher-dev loop
 
 - 作業は issue 単位で行い、main から `worktree-issue-<n>` (`<n>` は issue 番号) の branch を切る
   - この repo の workflow 定義 ([WORKFLOW.md](WORKFLOW.md)) は、CL 側の trigger (conflict・review・CI の手直し) をこの綴りの、この repo 自身の head branch に絞る。綴りを崩した CL には手直しの worker が起動しない。fork の CL にも worker を送らない ([docs/design/system.md](docs/design/system.md) §6)
+  - 人が自分で開いた CL もこの綴りなので、draft でなく `ready-for-human` の label も無ければ、手直しの worker がその head branch へ push しうる。自分で進める CL は draft にしておくか、`ready-for-human` の label を付ける
 - ファイルの変更 (コード・docs を問わない) は、main の checkout で直接行わず、worktree を作ってその中で行う。main の checkout に未 commit の変更を残すと、別の作業の差分と混ざって PR に切り出せなくなる
   - 対話で動かす Claude Code では `EnterWorktree` に name `issue-<n>` を渡す。branch 名は `worktree-` が前置されて `worktree-issue-<n>` になる
   - dispatcher が起動する worker は、WORKFLOW.md の hooks が clone から作った workspace (worktree。`.claude-dispatcher/workspaces/` の下) の中で作業する ([docs/design/system.md](docs/design/system.md) §7)

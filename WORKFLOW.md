@@ -61,11 +61,14 @@ triggers:
       blocked: false
     action: |
       /swat-skills:playbook-implementation issue #{{ .issue.number }} ({{ .issue.url }}) を実装する。
-      workspace で `git switch -c worktree-issue-{{ .issue.number }}` を撃って branch を切る (前の回で切ってあれば `git switch worktree-issue-{{ .issue.number }}`)。branch 名は必ずこの綴りにする (pull request 側の trigger はこの綴りの head branch だけに当たる)。
+      workspace で `git switch -c worktree-issue-{{ .issue.number }}` を撃って branch を切る。branch 名は必ずこの綴りにする (pull request 側の trigger はこの綴りの head branch だけに当たる)。
+      branch が既にあれば (前の起動で切った) `git switch worktree-issue-{{ .issue.number }}` で戻り、remote に同じ branch があれば `git pull --no-rebase origin worktree-issue-{{ .issue.number }}` で取り込んでから続ける (pull request 側の worker が remote へ push していることがある)。
       pull request は draft で開き、レビューの出力を投稿し終えたら ready にする。ready にしたら、issue から ready-for-agent の label を外す。
   # 承認済みの pull request に当てる trigger (approved: true) は置かない。merge は人の最終 gate
 ---
-あなたは claude-dispatcher が無人で起動した worker です。人は画面の前にいません。この起動は trigger {{ .trigger.name }} の {{ .attempt }} 回目です。2 回目以降なら、前の回の成果 (workspace・remote branch・pull request・コメント) を確かめてから続けます。
+あなたは claude-dispatcher が無人で起動した worker です。人は画面の前にいません。この起動は trigger {{ .trigger.name }} の {{ .attempt }} 回目です。
+
+作業を始める前に、前の起動の成果 (workspace の未 commit の変更・branch・remote branch・pull request・コメント) が残っていないかを確かめ、あればそこから続けます。loop を起動し直すと回数は 1 に戻るので、1 回目でも確かめます。
 
 ## 作業の場所
 
