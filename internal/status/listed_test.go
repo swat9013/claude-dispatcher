@@ -65,3 +65,15 @@ func TestListedKeepsTheLatestSpawnOfTheLastDayEvenIfItEnded(t *testing.T) {
 		t.Fatalf("listed = %+v, want 起動から 24 時間以内の #42 だけ", got)
 	}
 }
+
+func TestListedKeepsAnEndedSpawnStartedExactlyADayAgo(t *testing.T) {
+	now := time.Now()
+	dead := func(ticklog.Spawned) Probed[bool] { return known(false) }
+	noWIP := func(int) Probed[bool] { return known(false) }
+
+	got := listed([]spawnRecord{spawnAt(42, 100, now.Add(-recentlySpawned)), spawnAt(43, 200, now.Add(-recentlySpawned-time.Nanosecond))}, dead, noWIP, now)
+
+	if len(got) != 1 || got[0].Spawn.Issue != 42 {
+		t.Fatalf("listed = %+v, want ちょうど 24 時間前の #42 だけ (「以内」は境界を含む)", got)
+	}
+}

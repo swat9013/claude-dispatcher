@@ -148,11 +148,13 @@ func (w Worker) State() Probed[WorkerState] {
 	return known(StateSilent)
 }
 
-// needsHuman は STATE の判定に人待ちを読む必要があるか。判定の段を State 1 か所に置くため、人待ちを読めていない
-// (Human が ?) ときに State が ? になる行を、人待ちを読む必要のある行とする。
+// needsHuman は STATE の判定に人待ちを読む必要があるか。判定の段を State 1 か所に置くため、Human だけを「読めていない」と
+// 「読めた」に変えて State が変わる行を、人待ちを読む必要のある行とする (Human 以外の列が原因で ? になる行は、どちらでも
+// ? なので除かれる)。
 func (w Worker) needsHuman() bool {
-	w.Human = known(false)
-	return w.State() != (Worker{Alive: w.Alive, WIP: w.WIP, CL: w.CL}).State()
+	unread, read := w, w
+	unread.Human, read.Human = Probed[bool]{}, known(false)
+	return unread.State() != read.State()
 }
 
 // Session は `claude agents --json` の行のうち表に出す分。
@@ -316,7 +318,7 @@ func (c *collector) wip(cfg config.Config, cfgErr error, gh github.Runner) func(
 	}
 	numbers, err := github.WIPIssues(gh, cfg.IssueRepo)
 	if err != nil {
-		c.note("wip を読めない — WIP は ? で、process の生きている worker と起動から %s 以内の worker だけを載せた (%v)", FormatElapsed(recentlySpawned), err)
+		c.note("wip を読めない — WIP は ? で、process の生きている worker と起動から %d 時間以内の worker だけを載せた (%v)", int(recentlySpawned.Hours()), err)
 		return unknown
 	}
 	return func(issue int) Probed[bool] { return known(slices.Contains(numbers, issue)) }

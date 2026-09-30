@@ -122,8 +122,11 @@ func TestStateIsUnknownWithANoteWhenReadyForHumanCannotBeRead(t *testing.T) {
 
 	r := s.statusPS()
 
-	if got := stateOf(t, r.stdout); got != "?" || !strings.Contains(r.stdout, "  ! ready-for-human を読めない") {
-		t.Fatalf("STATE = %q, want ? と注記\n%s", got, r.stdout)
+	if got := stateOf(t, r.stdout); got != "?" {
+		t.Fatalf("STATE = %q, want ?\n%s", got, r.stdout)
+	}
+	if !strings.Contains(r.stdout, "  ! ready-for-human を読めない") {
+		t.Fatalf("ready-for-human を読めない注記が無い:\n%s", r.stdout)
 	}
 }
 
@@ -135,7 +138,10 @@ func TestStatusDoesNotReadReadyForHumanWhenNoRowNeedsIt(t *testing.T) {
 
 	r := s.statusPS()
 
-	if got := stateOf(t, r.stdout); got != "cl" || strings.Contains(r.stdout, "ready-for-human を読めない") {
-		t.Fatalf("STATE = %q, want cl のまま (人待ちを読む行が無いので読まない)\n%s", got, r.stdout)
+	if got := stateOf(t, r.stdout); got != "cl" {
+		t.Fatalf("STATE = %q, want cl のまま\n%s", got, r.stdout)
+	}
+	if strings.Contains(r.stdout, "ready-for-human を読めない") {
+		t.Fatalf("人待ちを読む行が無いのに ready-for-human を読んだ:\n%s", r.stdout)
 	}
 }

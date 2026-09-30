@@ -34,6 +34,7 @@ func (s *sandbox) writeSpawnedTickLineAt(at time.Time) {
 	s.writeSpawnedTickLineWithTS(at.UTC().Format("2006-01-02T15:04:05.000000Z"))
 }
 
+// writeSpawnedTickLineWithTS は issue 42 の worker を起動した tick 行を置く。ts は log.jsonl の綴り (2006-01-02T15:04:05.000000Z)。
 func (s *sandbox) writeSpawnedTickLineWithTS(ts string) {
 	s.t.Helper()
 	line := map[string]any{
