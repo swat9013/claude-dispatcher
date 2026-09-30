@@ -457,7 +457,7 @@ loop の今の状態を、表示のためだけに書き出す (system.md §9)�
 | `last_tick` | 直近の tick。`result` が `error` なら `error` に理由 (事前検査の失敗 — workflow 定義の誤り・scope key の食い違い・観測の失敗 — を含む)。まだ tick が無ければ `null` |
 | `workers[].phase` | `running` (走っている) / `stopping` (止めている) / `verifying` (終わり方を確かめ待ち) / `waiting_retry` (再起動待ち) |
 | `workers[].started_at` | 今の attempt の worker を起動した時刻。起動の前 (再起動待ち) は `null` |
-| `workers[].retry_at` | `waiting_retry` の backoff が明ける時刻 |
+| `workers[].retry_at` | `waiting_retry` の backoff が明ける時刻。停止要求の後に失敗した claim は再起動を予定しないので、無い |
 | `workers[].activity` | 活動 (§6 の画面)。まだ無ければ `null` |
 | `abandoned` | 打ち切った作業対象と、打ち切ったときの trigger |
 | `ambiguous` | 直近の tick の曖昧な CL (§2.4) |

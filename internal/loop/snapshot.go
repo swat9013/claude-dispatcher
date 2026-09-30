@@ -15,13 +15,19 @@ func (l *loop) tickFailed(message string) {
 }
 
 // publish は今の状態を状態 file に書き出す。書けなければ error の行を残して続ける (状態 file は表示のためだけの痕跡)。
+// 同じ失敗が続く間は、行を 1 つだけ残す。
 func (l *loop) publish() {
 	if l.o.Publish == nil {
 		return
 	}
+	message := ""
 	if err := l.o.Publish(l.snapshot()); err != nil {
-		l.rec.error(target.Ref{}, oneLine(err))
+		message = oneLine(err)
 	}
+	if message != "" && message != l.publishError {
+		l.rec.error(target.Ref{}, message)
+	}
+	l.publishError = message
 }
 
 // phases は claim の段階を状態 file の綴りに写す
@@ -47,8 +53,12 @@ func (l *loop) snapshot() status.Snapshot {
 			Phase: phases[c.phase], StartedAt: c.startedAt, Activity: c.activity,
 		}
 		if c.phase == phaseWaitingRetry {
-			retryAt := c.retryAt
-			w.RetryAt, w.StartedAt, w.Activity = &retryAt, nil, nil
+			w.StartedAt, w.Activity = nil, nil
+			// 停止要求の後に失敗した claim は再起動を予定しない
+			if !c.retryAt.IsZero() {
+				retryAt := c.retryAt
+				w.RetryAt = &retryAt
+			}
 		}
 		s.Workers = append(s.Workers, w)
 	}

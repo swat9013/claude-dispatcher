@@ -68,26 +68,28 @@ func Summarize(line []byte) (summary string, ok bool) {
 	return summary, true
 }
 
-// lastLine は file の size までのうち、最新の完結した行 (改行で終わる行) を返す。見つからなければ nil。
-func lastLine(file string, size int64) ([]byte, error) {
+// lastLine は file の size までのうち、after より後で終わる最新の完結した行 (改行で終わる行) と、その行の終わりの
+// offset (改行の次) を返す。見つからなければ line が nil。
+func lastLine(file string, size, after int64) (line []byte, end int64, err error) {
 	f, err := os.Open(file)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer f.Close()
-	start := max(size-tailLimit, 0)
+	// 行の頭の前の改行まで読めるよう、1 byte 余分に読む
+	start := max(size-tailLimit-1, 0)
 	buf := make([]byte, size-start)
 	if _, err := f.ReadAt(buf, start); err != nil && err != io.EOF {
-		return nil, err
+		return nil, 0, err
 	}
-	end := bytes.LastIndexByte(buf, '\n')
-	if end < 0 {
-		return nil, nil
+	last := bytes.LastIndexByte(buf, '\n')
+	if last < 0 || start+int64(last)+1 <= after {
+		return nil, 0, nil
 	}
-	begin := bytes.LastIndexByte(buf[:end], '\n') + 1
+	begin := bytes.LastIndexByte(buf[:last], '\n') + 1
 	if begin == 0 && start > 0 {
 		// 行の頭が読んだ範囲より前にある
-		return nil, nil
+		return nil, 0, nil
 	}
-	return buf[begin:end], nil
+	return buf[begin:last], start + int64(last) + 1, nil
 }

@@ -159,6 +159,8 @@ type loop struct {
 	nextTickAt time.Time
 	lastTick   *status.Tick
 	ambiguous  []trigger.AmbiguousHead
+	// publishError は直近の状態 file の書き出しの失敗。同じ失敗の行を周期ごとに重ねないために持つ
+	publishError string
 }
 
 // Run は停止要求で止まるまで tick を回す。起動の直後に 1 回 tick を撃ち、以後は tick の終了から周期だけ待つ。
@@ -170,6 +172,8 @@ func Run(o Options) int {
 		rec: recorder{log: o.Log, stdout: o.Stdout, now: o.Now, scope: o.ScopeKey}, startedAt: o.Now(),
 	}
 	var next <-chan time.Time
+	// 前の loop が残した状態 file を、最初の tick の前に今の loop の状態で書き換える
+	l.publish()
 	l.tick()
 	for {
 		// tick の間に届いた停止要求は、tick を終えてから受ける

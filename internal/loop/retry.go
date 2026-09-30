@@ -43,7 +43,7 @@ func (l *loop) fail(ref target.Ref, c *claim) {
 			"打ち切り %s (%s, attempt %d 回): label を外して trigger から外すと解ける (外してから 1 周期待つ)", name, c.trigger.Name, c.attempt)
 		return
 	}
-	c.phase, c.ended = phaseWaitingRetry, nil
+	c.phase, c.ended, c.retryAt = phaseWaitingRetry, nil, time.Time{}
 	if l.stopping > 0 {
 		return
 	}

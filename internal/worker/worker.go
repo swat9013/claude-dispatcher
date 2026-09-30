@@ -179,11 +179,16 @@ func (r Runner) launch(job Job, run *Run, workspacePath string, started func(pid
 	cmd := exec.Command(command, args...)
 	cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = workspacePath, r.Env, stream, stderr
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// 前の attempt が追記した行は、この attempt の活動でない
+	before, err := stream.Stat()
+	if err != nil {
+		return Result{Failure: fmt.Sprintf("stream の file を読めない: %v", err)}
+	}
 	if err := cmd.Start(); err != nil {
 		return Result{Failure: fmt.Sprintf("%s を起動できない: %v", claude.Command, err)}
 	}
 	started(cmd.Process.Pid, workspacePath)
-	return r.wait(cmd, run, stream)
+	return r.wait(cmd, run, stream, before.Size())
 }
 
 // sessionArgs は session の渡し方。前の attempt で始めた session があれば同じ id で続け、無ければ発行した id で始める。
@@ -199,6 +204,8 @@ type streamWatch struct {
 	file    *os.File
 	size    int64
 	changed time.Time
+	// summarized は要約した最新の行の終わりの offset。前の attempt の行と、要約済みの行を読み直さない
+	summarized int64
 }
 
 // observe は now の時点の file の大きさを見て、伸びていれば伸びた時刻を進め、grew を true で返す。file を読めなければ、
@@ -215,12 +222,13 @@ func (w *streamWatch) observe(now time.Time) (grew bool, err error) {
 	return true, nil
 }
 
-// activity は file の最新の完結した行を要約する。要約できる行が無ければ ok が false。
+// activity は file の最新の完結した行を、まだ要約していなければ要約する。要約する行が無ければ ok が false。
 func (w *streamWatch) activity() (summary string, ok bool, err error) {
-	line, err := lastLine(w.file.Name(), w.size)
+	line, end, err := lastLine(w.file.Name(), w.size, w.summarized)
 	if err != nil || line == nil {
 		return "", false, err
 	}
+	w.summarized = end
 	summary, ok = Summarize(line)
 	return summary, ok, nil
 }
@@ -247,10 +255,10 @@ func (r Runner) render(job Job, workspacePath string) (action, promptFile string
 }
 
 // wait は起動した claude が終わるか、止められるか、stall か上限時間で止めるまで待つ。
-func (r Runner) wait(cmd *exec.Cmd, run *Run, stream *os.File) Result {
+func (r Runner) wait(cmd *exec.Cmd, run *Run, stream *os.File, offset int64) Result {
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
-	result, ended := r.watch(done, run, stream)
+	result, ended := r.watch(done, run, stream, offset)
 	if ended {
 		return r.exited(cmd, Result{})
 	}
@@ -272,13 +280,10 @@ func (r Runner) wait(cmd *exec.Cmd, run *Run, stream *os.File) Result {
 }
 
 // watch は claude が終わるまで待つ (ended が true)。先に止める理由ができたら、その理由を持った result を返す。
-// stream の file が伸びたら活動を更新する。stall と上限時間は、どちらかが有効なときだけ確かめる。
-func (r Runner) watch(done <-chan error, run *Run, stream *os.File) (result Result, ended bool) {
+// stream の file が offset より後に伸びたら活動を更新する。stall と上限時間は、どちらかが有効なときだけ確かめる。
+func (r Runner) watch(done <-chan error, run *Run, stream *os.File, offset int64) (result Result, ended bool) {
 	started := time.Now()
-	w := &streamWatch{file: stream, changed: started}
-	if _, err := w.observe(started); err != nil {
-		return Result{Failure: err.Error()}, false
-	}
+	w := &streamWatch{file: stream, size: offset, changed: started, summarized: offset}
 	ticker := time.NewTicker(watchInterval)
 	defer ticker.Stop()
 	for {

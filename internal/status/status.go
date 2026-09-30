@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/swat9013/claude-dispatcher/internal/printable"
 )
 
 // FileName は state dir の中の状態 file の名前
@@ -136,7 +138,7 @@ func Render(s *Snapshot, scope string, alive bool, now time.Time, loc *time.Loca
 	}
 	if t := s.LastTick; t != nil {
 		if t.Result == "error" {
-			head += fmt.Sprintf(" · 直近の tick %s error: %s", clock(t.At), t.Error)
+			head += fmt.Sprintf(" · 直近の tick %s error: %s", clock(t.At), printable.Line(t.Error))
 		} else {
 			head += fmt.Sprintf(" · 直近の tick %s %s (候補 %d)", clock(t.At), t.Result, t.Candidates)
 		}
@@ -151,7 +153,7 @@ func Render(s *Snapshot, scope string, alive bool, now time.Time, loc *time.Loca
 		switch {
 		case w.Phase == WaitingRetry && w.RetryAt != nil:
 			when = clock(*w.RetryAt) + " に再起動"
-		case w.StartedAt != nil:
+		case w.Phase == Running && w.StartedAt != nil:
 			when = now.Sub(*w.StartedAt).Truncate(time.Second).String()
 		}
 		activity := ""

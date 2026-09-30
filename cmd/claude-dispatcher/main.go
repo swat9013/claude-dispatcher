@@ -262,7 +262,7 @@ func surviveClosedStdout() {
 
 // --- status / paths ---
 
-// workflowArg は subcommand の引数から workflow 定義の path を読む。flags は受け付ける flag (必須)。
+// workflowArg は subcommand の引数から workflow 定義の path を読む。required は必ず付ける flag。
 func workflowArg(args []string, required []string, stderr io.Writer) (string, bool) {
 	var path string
 	seen := map[string]bool{}
@@ -318,7 +318,7 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 	if code != 0 {
 		return code
 	}
-	scopeKey := github.ScopeKey(def.Tracker.Repo)
+	scopeKey := e.store(def).ScopeKey()
 	dir := state.Dir(state.Root(e.getenv), scopeKey)
 	alive, err := state.Alive(dir)
 	if err != nil {
@@ -349,7 +349,7 @@ func runPaths(args []string, stdout, stderr io.Writer) int {
 	if code != 0 {
 		return code
 	}
-	scopeKey := github.ScopeKey(def.Tracker.Repo)
+	scopeKey := e.store(def).ScopeKey()
 	dir := state.Dir(state.Root(e.getenv), scopeKey)
 	raw, err := json.Marshal(map[string]string{
 		"scope_key": scopeKey, "state_dir": dir, "log": filepath.Join(dir, "log.jsonl"),
