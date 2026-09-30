@@ -1,4 +1,4 @@
-// Package render は action と共通 prompt の template を描画する (system.md §10、formats.md §2.6)。
+// Package render は action と共通 prompt の template を描画する (system.md §10、formats.md §2.7)。
 // 未知の変数と未知の関数は描画の失敗にする。
 package render
 

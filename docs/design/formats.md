@@ -20,14 +20,17 @@ macOS でも XDG に揃える (`~/Library` は使わない)。scope key ごと�
 <state root>/<scope dir>/
   loop.lock                           loop の生存期間の flock の対象 (§6)
   log.jsonl                           tick と worker の起動・終わり方の行 (§4)
-  prompts/issue-<番号>.md             描画した共通 prompt。worker に --append-system-prompt-file で渡す
-  workers/issue-<番号>.log            worker の stdout と stderr。attempt を跨いで追記する
+  prompts/<作業対象>.md               描画した共通 prompt。worker に --append-system-prompt-file で渡す
+  workers/<作業対象>.log              worker の stdout (stream-json)。attempt を跨いで追記する
+  workers/<作業対象>.stderr.log       worker の stderr。attempt を跨いで追記する
 ```
+
+`<作業対象>` は、issue なら `issue-<番号>`、CL なら `cl-<番号>`。
 
 workspace は state dir の外、workflow 定義の `workspace.root` の下に作業対象ごとに置く (§2.1)。
 
 ```
-<workspace root>/issue-<番号>/        作業対象の workspace。作業対象が終端になるまで残す
+<workspace root>/<作業対象>/          作業対象の workspace。作業対象が終端になるまで残す
 ```
 
 - **scope key**: issue 置き場の部品が決める、issue 置き場の識別子 (system.md §13)
@@ -85,6 +88,14 @@ triggers:                    # 必須。1 つ以上
       blocked: false
     action: |                # 必須。worker に渡す prompt の template
       /swat-skills:playbook-implementation
+  - name: fix-ci
+    on: cl
+    when:
+      ci_failed: true
+      head: worktree-issue-*
+      draft: false
+    action: |
+      CL #{{ .cl.number }} の CI の失敗を直す
 ---
 この project の共通 prompt。
 ```
@@ -112,13 +123,9 @@ triggers:                    # 必須。1 つ以上
 | `claude.args` | 文字列の列 | command に、dispatcher の引数 (§6「worker の起動」) より前に渡す引数。既定は空 |
 | `triggers` | 列 | trigger の宣言。宣言順が起動の優先順 (system.md §6) |
 | `triggers[].name` | 文字列 | trigger の名前。`[A-Za-z0-9._-]+`。trigger の間で重複しない |
-| `triggers[].on` | 文字列 | 作業対象の種類。`issue` |
-| `triggers[].when` | 対応表 | 述語。書いた条件はすべて AND で評価する (§2.2) |
-| `triggers[].action` | 文字列 | worker に渡す prompt の template (§2.6)。空にできない |
-
-次の項目は、受け持つ slice が決めるまで書けない (書くと未知の key として失敗する)。
-
-- CL 側の trigger (`on: cl`): #80
+| `triggers[].on` | 文字列 | 作業対象の種類。`issue` か `cl` |
+| `triggers[].when` | 対応表 | 述語。書いた条件はすべて AND で評価する。書ける key は `on` で変わる (issue は §2.2、CL は §2.3) |
+| `triggers[].action` | 文字列 | worker に渡す prompt の template (§2.7)。空にできない |
 
 **YAML の読み方**: 値を書いていない key (`when:` だけの行) は、空の対応表として読む。anchor と alias は辿る。merge key (`<<: *base`) は持たない (`<<` は未知の key として失敗する)。
 
@@ -138,18 +145,45 @@ triggers:                    # 必須。1 つ以上
 - `assignee` と `unassigned` は一緒に書けない
 - label と login の綴りは、大文字と小文字を区別せずに比べる (GitHub と同じ)
 
-### 2.3 評価の規則
+### 2.3 CL 側の述語 (`on: cl` の `when`)
 
-- issue ごとに trigger を宣言順に評価し、最初に当たった 1 つだけを採る
-- 候補は、trigger の宣言順を先に、同じ trigger の中では issue の作成日時の古い順に並べる。作成日時が同じなら番号の小さい順
+CL の状態の語彙 (system.md §6) は、真偽の key で書く。`true` なら その状態の CL に、`false` なら その状態でない CL に当たる。
 
-### 2.4 `$VAR` による間接参照
+| key | 語彙 | 当たる CL (`true` のとき) |
+|---|---|---|
+| `conflict` | `cl.conflict` | merge conflict を持つ。GitHub が conflict を計算し終えていない CL (`mergeable` が `UNKNOWN`) は、`true` にも `false` にも当たらない (次の tick で見直す) |
+| `review_unresolved` | `cl.review_unresolved` | collaborator が書いた未解決の review thread が 1 本以上ある。thread の書き手は、thread の最初の comment の作者 |
+| `ci_failed` | `cl.ci_failed` | head commit の checks の集計が失敗 (`FAILURE` か `ERROR`) している。checks が無いか、走っている途中なら失敗ではない |
+| `approved` | `cl.approved` | review で承認済み (`reviewDecision` が `APPROVED`) |
+
+絞り込み:
+
+| key | 型 | 当たる CL |
+|---|---|---|
+| `labels.all` / `labels.any` / `labels.none` | 文字列の列 | issue 側 (§2.2) と同じ |
+| `head` | 文字列 | head branch の名前が pattern に当たり、かつ head が同じ repo の branch である。pattern は Go の `path.Match` の綴り (`*` は `/` 以外の文字の列、`?` は `/` 以外の 1 文字、`[...]` は文字の組) |
+| `same_repo` | 真偽 | `true` なら head が同じ repo の branch (fork でない)、`false` なら fork の branch |
+| `author` | 文字列 | issue 側 (§2.2) と同じ |
+| `draft` | 真偽 | `true` なら draft、`false` なら draft でない |
+
+- `head` を書いたら、fork の CL には当たらない。fork からは誰でも同じ綴りの head branch を作れるため (system.md §6)。`head` と `same_repo: false` は一緒に書けない
+- head branch の名前は、大文字と小文字を区別して比べる (git と同じ)
+
+### 2.4 評価の規則
+
+- 作業対象ごとに trigger を宣言順に評価し、最初に当たった 1 つだけを採る。issue には `on: issue` の trigger だけを、CL には `on: cl` の trigger だけを当てる
+- 候補は、trigger の宣言順を先に、同じ trigger の中では作業対象の作成日時の古い順に並べる。作成日時が同じなら番号の小さい順
+- **曖昧な CL** (同じ repo の同じ head branch から、open な CL が 2 本以上ある) には、CL 側の trigger を当てない。fork の head branch は、fork ごとに別の branch として数える
+- loop は、claim している作業対象 (走っている・止めている・確かめ待ち・再起動待ち) の workspace で checkout されている branch を head に持つ、同じ repo の CL にも CL 側の trigger を当てない (§6 の tick の手順)。試運転 (§5) は claim を持たないので、この除外は掛からない
+- `on: cl` の trigger が 1 つも無ければ、CL の一覧を読まない
+
+### 2.5 `$VAR` による間接参照
 
 - 「`$VAR` で書ける」とした項目は、値の全体を `$NAME` (`NAME` は `[A-Za-z_][A-Za-z0-9_]*`) にすると、loop を起動した環境の変数 `NAME` の値に置き換わる
 - 変数が未設定か空なら、項目と変数を名指しして失敗する
 - 値の一部だけを置き換える書き方 (`acme/$NAME`) は持たない。`$` を含む値は、そのままの綴りとして読む
 
-### 2.5 hooks
+### 2.6 hooks
 
 - `sh -c` で撃つ。cwd は作業対象の workspace
 - 環境変数は loop の環境に、次のものを足す
@@ -158,11 +192,11 @@ triggers:                    # 必須。1 つ以上
 |---|---|
 | `CLAUDE_DISPATCHER_WORKSPACE` | workspace の絶対 path |
 | `CLAUDE_DISPATCHER_CLONE` | workflow 定義の dir の絶対 path |
-| `CLAUDE_DISPATCHER_KIND` | 作業対象の種類 (`issue`) |
+| `CLAUDE_DISPATCHER_KIND` | 作業対象の種類 (`issue` か `cl`) |
 | `CLAUDE_DISPATCHER_NUMBER` | 作業対象の番号 |
 
 
-### 2.6 template
+### 2.7 template
 
 action と本文 (共通 prompt) は、worker を起動するたびに Go の text/template で描画する。
 
@@ -172,15 +206,21 @@ action と本文 (共通 prompt) は、worker を起動するたびに Go の te
 | `.issue.title` | 題名 |
 | `.issue.url` | URL |
 | `.issue.labels` | label の綴りの列 |
+| `.cl.number` | CL の番号 |
+| `.cl.title` | 題名 |
+| `.cl.url` | URL |
+| `.cl.labels` | label の綴りの列 |
+| `.cl.head` | head branch の名前 |
 | `.trigger.name` | 当たった trigger の名前 |
 | `.attempt` | 何回目の起動か (1 から) |
 | `.workspace` | workspace の絶対 path |
 
-- 未知の変数 (`.issue.body` など) と未知の関数は、描画の失敗にする。描画に失敗した attempt は失敗
-- workflow 定義の検査 (§2.7) で、action と本文を見本の変数 (どれも空でない値) で描画してみる。描画できなければ検査で落とすので、作業対象を読んでから描画に失敗するのは、見本では通った分岐だけになる
+- `.issue` は issue の worker にだけ、`.cl` は CL の worker にだけある
+- 未知の変数 (`.issue.body` など、CL の worker の `.issue`) と未知の関数は、描画の失敗にする。描画に失敗した attempt は失敗
+- workflow 定義の検査 (§2.8) で、action と本文を見本の変数 (どれも空でない値) で描画してみる。action はその trigger の種類の見本で、本文はどの worker にも渡るので、trigger に現れる種類すべての見本で描画する。描画できなければ検査で落とすので、作業対象を読んでから描画に失敗するのは、見本では通った分岐だけになる
 - 例: `/swat-skills:playbook-implementation issue #{{ .issue.number }} ({{ .issue.url }})`
 
-### 2.7 検査
+### 2.8 検査
 
 次の誤りは、項目の位置 (`triggers[0].when.labels.all` の形) を名指しして失敗させる。誤りが複数あれば、すべてを 1 行ずつ出す。
 
@@ -188,10 +228,10 @@ action と本文 (共通 prompt) は、worker を起動するたびに Go の te
 - 未知の key (ADR 0009「未知の key は失敗させる」)
 - 型の誤り・必須の項目の欠落・未知の値 (`tracker.kind`・`triggers[].on`・`author`)
 - 空の文字列 (空の `assignee` や label を「条件なし」と取り違えないため)
-- 上の表の各項目の制約 (`polling.interval` の範囲・trigger の名前の綴りと重複・`assignee` と `unassigned` の併記・空の `labels.any`・空の `action`)
+- 上の表の各項目の制約 (`polling.interval` の範囲・trigger の名前の綴りと重複・`assignee` と `unassigned` の併記・空の `labels.any`・`head` の pattern の綴り・`head` と `same_repo: false` の併記・空の `action`)
 - `$VAR` の未設定と、`tracker.token` に値そのものを書いたこと
 - 同じ key を 1 つの対応表に 2 回書いたこと
-- action と本文の template を描画できないこと (§2.6。綴りの誤り・未知の変数・未知の関数)
+- action と本文の template を描画できないこと (§2.7。綴りの誤り・未知の変数・未知の関数)
 
 ## 3. exit code
 
@@ -199,12 +239,12 @@ action と本文 (共通 prompt) は、worker を起動するたびに Go の te
 |---|---|
 | 0 | 成功 |
 | 1 | 観測できなかった (gh を起動できない・rate limit・読み切れない・その他の gh の失敗) / 想定外の失敗 |
-| 2 | 引数の誤り / workflow 定義の誤り (§2.7) / issue 置き場が見えない (綴りの誤りか、権限が無い) |
+| 2 | 引数の誤り / workflow 定義の誤り (§2.8) / issue 置き場が見えない (綴りの誤りか、権限が無い) |
 | 3 | 同じ scope key の loop が走っている (§6) |
 | 4 | gh の認証が通らない |
 
 - 観測の失敗は、issue 置き場の部品が 認証 / 見えない / 読み切れない / rate limit に分けて返す (system.md §13)
-  - 読み切れない: 1 往復で読む件数の上限を超えた (issue の label・assignee・依存先が 100 件を超えた)。切り詰めた像から候補を出さない
+  - 読み切れない: 1 往復で読む件数の上限を超えた (issue の label・assignee・依存先、CL の label・review thread が 100 件を超えた)。切り詰めた像から候補を出さない
 
 ## 4. log.jsonl
 
@@ -212,7 +252,7 @@ action と本文 (共通 prompt) は、worker を起動するたびに Go の te
 
 | `event` | いつ | ほかの key |
 |---|---|---|
-| `tick` | tick の終わり | `result` (`ok` / `error`)・`candidates` (候補の数)・`launched` (起動した作業対象の列)・`error` (`result` が `error` のとき) |
+| `tick` | tick の終わり | `result` (`ok` / `error`)・`candidates` (候補の数)・`launched` (起動した作業対象の列)・`ambiguous` (曖昧な CL。`{"head": <head branch>, "targets": [<作業対象>…]}` の列)・`error` (`result` が `error` のとき) |
 | `start` | worker を起動した | `target`・`trigger`・`attempt`・`session_id`・`workspace`・`pid` |
 | `end` | worker 1 回分の終わり方を決めた | `target`・`trigger`・`attempt`・`session_id`・`outcome`・`reason`・`exit_code` (process が自分で終わったときだけ。signal で止まったら載せない) |
 | `retry` | `failed` の後、次の attempt を予定した | `target`・`trigger`・`attempt`・`next_attempt`・`session_id`・`backoff` (秒。小数を含む) |
@@ -222,7 +262,7 @@ action と本文 (共通 prompt) は、worker を起動するたびに Go の te
 | `unabandon` | 打ち切りを解いた (打ち切ったときの trigger から外れたのを観測した) | `target`・`trigger` |
 | `error` | 処理は続けるが、運用者が知るべき失敗 | `target` (あれば)・`error` |
 
-- `target` は `issue#<番号>`
+- `target` は、issue なら `issue#<番号>`、CL なら `cl#<番号>`
 - `outcome`
 
 | 値 | 意味 |
@@ -245,14 +285,14 @@ claude-dispatcher loop --dry-run [<workflow の path>]
 
 workflow 定義を読んで検査し、snapshot を作って trigger を評価し、起動するはずの作業対象を示して終わる。**何も書かない** (state dir を作らず、lock も取らない)。
 
-成功したら、候補を 1 件 1 行で、評価の順 (§2.3) に stdout へ出す。候補が無ければ何も出さない。
+成功したら、候補を 1 件 1 行で、評価の順 (§2.4) に stdout へ出す。候補が無ければ何も出さない。
 
 ```
 implement	issue	#42	ログインの失敗を記録する
-implement	issue	#43	設定の読み込みを速くする
+fix-ci	cl	#51	ログインの失敗を記録する
 ```
 
-- 列はタブで区切る: trigger の名前・作業対象の種類・`#<番号>`・題名
+- 列はタブで区切る: trigger の名前・作業対象の種類 (`issue` / `cl`)・`#<番号>`・題名
 - 題名の制御文字 (タブ・改行・ESC など) は空白に置き換える
 
 失敗したら、stdout に何も出さず、stderr に理由を出して §3 の exit code で終わる。workflow 定義の誤りは 1 件 1 行で出す。
@@ -270,7 +310,7 @@ claude-dispatcher loop [<workflow の path>]
 | 検査 | exit |
 |---|---|
 | 引数の数と flag | 2 |
-| workflow 定義を読めて、検査に通る (§2.7) | 2 |
+| workflow 定義を読めて、検査に通る (§2.8) | 2 |
 | gh と `claude.command` を解決できる (PATH と、よく使われる置き場) | 1 |
 | state dir を作れる | 1 |
 | 同じ scope key の loop が走っていない (`loop.lock` を取れる) | 3 |
@@ -285,13 +325,17 @@ claude-dispatcher loop [<workflow の path>]
 
 **tick の手順** (system.md §7):
 
-1. 突き合わせ: 走っている worker の作業対象を読み直し、終端になっていれば worker を止め、`after_run` と `before_remove` を撃って workspace を消す。trigger から外れただけでは止めない
+作業対象の読み直しと open な一覧は、issue なら issue 置き場から、CL なら CL 置き場から読む。CL の一覧は `on: cl` の trigger があるときだけ読む。
+
+1. 突き合わせ: 走っている worker の作業対象を読み直し、終端 (issue の close、CL の merge か close) になっていれば worker を止め、`after_run` と `before_remove` を撃って workspace を消す。trigger から外れただけでは止めない
 2. 終わった worker のうち、作業対象を読み直せなかったものを読み直す
 3. workflow 定義を読み直して snapshot を作る
-4. 掃除: workspace root の下の `issue-<番号>` のうち、claim が無く open な issue の一覧にも無いものを読み直し、終端になっていれば `before_remove` を撃って消す。起動の直後の tick が起動時の掃除を兼ね、以後の tick が、claim を解いた後に終端になったものと消し損ねたものを拾う
+4. 掃除: workspace root の下の `issue-<番号>` と `cl-<番号>` のうち、claim が無く open な一覧にも無いものを読み直し、終端になっていれば `before_remove` を撃って消す。起動の直後の tick が起動時の掃除を兼ね、以後の tick が、claim を解いた後に終端になったものと消し損ねたものを拾う
 5. 打ち切りを解く: 打ち切った作業対象のうち、snapshot に無いか、打ち切ったときの trigger の述語に当たらなくなったもの (その trigger が workflow 定義から消えたものを含む) の打ち切りを解く
 6. 再起動: backoff の明けた再起動待ちの claim を、次の「再起動」の規則で起動する
-7. trigger を評価し、候補のうち claim も打ち切りもされていないものを、`limits.max_concurrent` から走っている worker と再起動待ちの claim を引いた数だけ起動する (確かめ待ちの claim は数えない)
+7. trigger を評価し (§2.4)、候補のうち claim も打ち切りもされていないものを、`limits.max_concurrent` から走っている worker と再起動待ちの claim を引いた数だけ起動する (確かめ待ちの claim は数えない)
+   - CL の候補は、claim している作業対象の workspace で checkout されている branch を head に持つもの (同じ repo の CL) を外す。branch は workspace を cwd にして `git symbolic-ref --short -q HEAD` で読む。workspace が無い・git の作業ツリーでない・detached HEAD なら branch は無いとする
+   - branch をそれ以外の理由で読めなければ、error の行を残し、その tick は CL の候補を起動しない (同じ branch に worker を重ねないため)
 
 **再起動** (system.md §7「失敗の扱い」):
 
@@ -312,8 +356,8 @@ claude-dispatcher loop [<workflow の path>]
 **worker の 1 回分**:
 
 1. workspace が無ければ作って `after_create` を撃ち、`before_run` を撃つ
-2. action と本文を描画し、本文を `prompts/issue-<番号>.md` に書く
-3. 次の argv で起動する。cwd は workspace、stdin は空。stdout (stream-json) は `workers/issue-<番号>.log`、stderr は `workers/issue-<番号>.stderr.log` に追記する (claude には file をそのまま渡す)
+2. action と本文を描画し、本文を `prompts/<作業対象>.md` に書く
+3. 次の argv で起動する。cwd は workspace、stdin は空。stdout (stream-json) は `workers/<作業対象>.log`、stderr は `workers/<作業対象>.stderr.log` に追記する (claude には file をそのまま渡す)
 
    ```
    <claude.command> <claude.args…> -p --output-format stream-json --verbose <session> --append-system-prompt-file <prompts の path> -- <描画した action>
@@ -330,7 +374,8 @@ claude-dispatcher loop [<workflow の path>]
 
 ```
 <時刻> loop を始めた: scope <scope key> · state dir <path> · workflow <path>
-<時刻> tick ok · 候補 2: implement issue #42, implement issue #43
+<時刻> tick ok · 候補 2: implement issue #42, fix-ci cl #51
+<時刻> tick ok · 候補 0 · 曖昧な CL: worktree-issue-7 (cl#52, cl#53)
 <時刻> tick error · <理由>
 <時刻> 起動 issue#42 (implement, attempt 1, session <uuid>)
 <時刻> 終了 issue#42 (implement): completed — trigger から外れた

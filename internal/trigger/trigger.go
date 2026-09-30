@@ -1,4 +1,4 @@
-// Package trigger は trigger の述語を正規化した作業対象に当て、候補を並べる (system.md §6、formats.md §2.2 / §2.3)。
+// Package trigger は trigger の述語を正規化した作業対象に当て、候補を並べる (system.md §6、formats.md §2.2 〜 §2.4)。
 package trigger
 
 import (

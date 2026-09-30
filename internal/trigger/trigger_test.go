@@ -9,7 +9,7 @@ import (
 	"github.com/swat9013/claude-dispatcher/internal/trigger"
 )
 
-// issue 側の述語の意味と、候補の並べ方 (formats.md §2.2 / §2.3)。
+// issue 側の述語の意味と、候補の並べ方 (formats.md §2.2 / §2.4)。
 
 func yes() *bool { b := true; return &b }
 func no() *bool  { b := false; return &b }

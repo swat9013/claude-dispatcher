@@ -1,4 +1,4 @@
-// Package workspace は作業対象ごとの workspace を作り、hooks を撃ち、消す (system.md §7、formats.md §2.5)。
+// Package workspace は作業対象ごとの workspace を作り、hooks を撃ち、消す (system.md §7、formats.md §2.6)。
 // hooks は本物の shell で撃つ (seam を置かない — system.md §13)。
 package workspace
 
