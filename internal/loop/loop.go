@@ -40,7 +40,7 @@ type Workspaces interface {
 type Worker interface {
 	Stop()
 	// Activity は最新の活動 (formats.md §6)。まだ無ければ At がゼロ値
-	Activity() worker.Activity
+	Activity() status.Activity
 }
 
 // Options は loop の入力。
@@ -63,7 +63,7 @@ type Options struct {
 	Log     io.Writer
 	Stdout  io.Writer
 	Signals <-chan os.Signal
-	// Publish は状態 file (formats.md §7.1) を書き出す。nil なら書かない
+	// Publish は状態 file (formats.md §7.1) を書き出す
 	Publish func(status.Snapshot) error
 	// Workflow は workflow 定義の path (状態 file に載せる)
 	Workflow string
@@ -154,13 +154,8 @@ type loop struct {
 	// wake は最も早い再起動の予定に届く channel、wakeAt はその時刻。予定が無ければ nil
 	wake   <-chan time.Time
 	wakeAt time.Time
-	// 状態 file にだけ使う: loop を始めた時刻・次の tick の予定・直近の tick と、その tick の曖昧な CL
-	startedAt  time.Time
-	nextTickAt time.Time
-	lastTick   *status.Tick
-	ambiguous  []trigger.AmbiguousHead
-	// publishError は直近の状態 file の書き出しの失敗。同じ失敗の行を周期ごとに重ねないために持つ
-	publishError string
+	// board は状態 file にだけ使う状態。loop の判断には使わない
+	board board
 }
 
 // Run は停止要求で止まるまで tick を回す。起動の直後に 1 回 tick を撃ち、以後は tick の終了から周期だけ待つ。
@@ -169,7 +164,7 @@ type loop struct {
 func Run(o Options) int {
 	l := &loop{
 		o: o, def: o.Definition, claims: map[target.Ref]*claim{}, abandoned: map[target.Ref]string{}, events: make(chan worker.Event),
-		rec: recorder{log: o.Log, stdout: o.Stdout, now: o.Now, scope: o.ScopeKey}, startedAt: o.Now(),
+		rec: recorder{log: o.Log, stdout: o.Stdout, now: o.Now, scope: o.ScopeKey}, board: board{startedAt: o.Now()},
 	}
 	var next <-chan time.Time
 	// 前の loop が残した状態 file を、最初の tick の前に今の loop の状態で書き換える
@@ -187,7 +182,7 @@ func Run(o Options) int {
 		}
 		if next == nil {
 			next = o.After(l.def.Interval)
-			l.nextTickAt = o.Now().Add(l.def.Interval)
+			l.board.nextTickAt = o.Now().Add(l.def.Interval)
 		}
 		l.arm()
 		l.publish()
@@ -241,6 +236,8 @@ func (l *loop) exit() int {
 		}
 		l.rec.error(ref, fmt.Sprintf("終わり方を確かめられないまま止まる (%s)", c.trigger.Name))
 	}
+	// 止まる時点の claim を状態 file に残す (loop が止まった後の status は worker を出さないが、file は読み返せる)
+	l.publish()
 	l.rec.human("loop を止めた (停止要求 %s)", SignalName(l.lastStop))
 	return 0
 }
@@ -303,8 +300,8 @@ func (l *loop) tick() {
 			launched = append(launched, ref.String())
 		}
 	}
-	l.lastTick = &status.Tick{At: l.o.Now(), Result: "ok", Candidates: len(candidates)}
-	l.ambiguous = ambiguous
+	l.board.lastTick = &status.Tick{At: l.o.Now(), Result: status.TickOK, Candidates: len(candidates)}
+	l.board.ambiguous = ambiguous
 	l.rec.event("tick", map[string]any{"result": "ok", "candidates": len(candidates), "launched": nonNil(launched), "ambiguous": ambiguousFields(ambiguous)},
 		"tick ok · %s%s", Summary(candidates), ambiguousSummary(ambiguous))
 }

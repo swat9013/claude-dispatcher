@@ -108,6 +108,12 @@ func (e environment) store(def workflow.Definition) loop.Store {
 	return github.NewStore(e.gh(def), def.Tracker.Repo)
 }
 
+// stateDir は workflow 定義の scope key と、その state dir。
+func (e environment) stateDir(def workflow.Definition) (scopeKey, dir string) {
+	scopeKey = e.store(def).ScopeKey()
+	return scopeKey, state.Dir(state.Root(e.getenv), scopeKey)
+}
+
 // failureExit は観測の失敗の exit code (formats.md §3)。
 func failureExit(err error) int {
 	var f *target.Failure
@@ -175,8 +181,7 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 			return exitFailed
 		}
 	}
-	scopeKey := e.store(def).ScopeKey()
-	dir := state.Dir(state.Root(e.getenv), scopeKey)
+	scopeKey, dir := e.stateDir(def)
 	lock, err := state.Lock(dir, scopeKey)
 	if errors.Is(err, state.ErrAlreadyRunning) {
 		fmt.Fprintln(stderr, err)
@@ -187,7 +192,7 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 		return exitFailed
 	}
 	defer lock.Close()
-	logFile, err := os.OpenFile(filepath.Join(dir, "log.jsonl"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	logFile, err := os.OpenFile(filepath.Join(dir, state.LogFile), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		fmt.Fprintf(stderr, "log.jsonl を開けない: %v\n", err)
 		return exitFailed
@@ -197,10 +202,10 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 	publish := func(snap status.Snapshot) error { return status.Write(dir, snap) }
 	// 端末なら画面を描き直し、そうでなければ事象の行を追記する (formats.md §6)
 	if f, ok := stdout.(*os.File); ok && isTerminal(f) {
-		sc := &screen{out: stdout, scope: scopeKey}
+		sc := &screen{out: stdout, now: time.Now}
 		stdout = sc
 		publish = func(snap status.Snapshot) error {
-			sc.show(snap) // 画面に書けないときは、事象の行と同じく捨てる
+			sc.show(snap)
 			return status.Write(dir, snap)
 		}
 	}
@@ -318,8 +323,7 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 	if code != 0 {
 		return code
 	}
-	scopeKey := e.store(def).ScopeKey()
-	dir := state.Dir(state.Root(e.getenv), scopeKey)
+	scopeKey, dir := e.stateDir(def)
 	alive, err := state.Alive(dir)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -330,11 +334,11 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return exitFailed
 	}
-	var shown *status.Snapshot
-	if found {
-		shown = &snap
+	if !found {
+		fmt.Fprint(stdout, status.Unrecorded(scopeKey, status.Liveness(alive)))
+		return 0
 	}
-	fmt.Fprint(stdout, status.Render(shown, scopeKey, alive, time.Now(), time.Local))
+	fmt.Fprint(stdout, status.Render(snap, status.Liveness(alive), time.Now(), time.Local))
 	return 0
 }
 
@@ -349,10 +353,9 @@ func runPaths(args []string, stdout, stderr io.Writer) int {
 	if code != 0 {
 		return code
 	}
-	scopeKey := e.store(def).ScopeKey()
-	dir := state.Dir(state.Root(e.getenv), scopeKey)
+	scopeKey, dir := e.stateDir(def)
 	raw, err := json.Marshal(map[string]string{
-		"scope_key": scopeKey, "state_dir": dir, "log": filepath.Join(dir, "log.jsonl"),
+		"scope_key": scopeKey, "state_dir": dir, "log": filepath.Join(dir, state.LogFile),
 		"status_file": filepath.Join(dir, status.FileName), "workspace_root": def.WorkspaceRoot,
 	})
 	if err != nil {

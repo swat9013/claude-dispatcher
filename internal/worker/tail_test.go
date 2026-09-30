@@ -9,40 +9,46 @@ import (
 
 // 最新の完結した行の探し方。
 
-func writeStream(t *testing.T, content string) string {
+// latest は content を書いた stream の file から、after より後で終わる最新の完結した行を読む。
+func latest(t *testing.T, content string, after int64) (line []byte, end int64) {
 	t.Helper()
 	file := filepath.Join(t.TempDir(), "stream.log")
 	if err := os.WriteFile(file, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	return file
+	line, end, err := lastLine(file, int64(len(content)), after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return line, end
 }
 
-func TestLastLineSkipsTheUnfinishedLineAndLinesAlreadySummarized(t *testing.T) {
-	content := "old\nnew\npartial"
-	file := writeStream(t, content)
-	size := int64(len(content))
+func TestLastLineSkipsTheUnfinishedLine(t *testing.T) {
+	line, _ := latest(t, "old\nnew\npartial", 0)
 
-	line, end, _ := lastLine(file, size, 0)
-	if string(line) != "new" || end != int64(len("old\nnew\n")) {
-		t.Fatalf("lastLine = %q, %d", line, end)
+	if string(line) != "new" {
+		t.Fatalf("lastLine = %q, want new", line)
 	}
-	if line, _, _ := lastLine(file, size, end); line != nil {
+}
+
+func TestLastLineDoesNotReturnALineAlreadySummarized(t *testing.T) {
+	_, end := latest(t, "old\nnew\n", 0)
+
+	if line, _ := latest(t, "old\nnew\n", end); line != nil {
 		t.Fatalf("要約済みの行を返した: %q", line)
 	}
 }
 
-func TestLastLineFindsALineThatFillsTheTail(t *testing.T) {
+func TestLastLineFindsALineThatJustFitsTheTail(t *testing.T) {
 	long := strings.Repeat("x", tailLimit-1)
-	content := "head\n" + long + "\n"
-	file := writeStream(t, content)
 
-	if line, _, _ := lastLine(file, int64(len(content)), 0); string(line) != long {
+	if line, _ := latest(t, "head\n"+long+"\n", 0); string(line) != long {
 		t.Fatalf("読んだ範囲に収まる行を返さない (長さ %d)", len(line))
 	}
-	content = "head\nx" + long + "\n"
-	file = writeStream(t, content)
-	if line, _, _ := lastLine(file, int64(len(content)), 0); line != nil {
+}
+
+func TestLastLineSkipsALineLongerThanTheTail(t *testing.T) {
+	if line, _ := latest(t, "head\n"+strings.Repeat("x", tailLimit)+"\n", 0); line != nil {
 		t.Fatalf("読んだ範囲に収まらない行を返した (長さ %d)", len(line))
 	}
 }

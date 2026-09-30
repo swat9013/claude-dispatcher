@@ -77,6 +77,18 @@ func TestStatusShowsAnAbandonedIssueWithHowToClearIt(t *testing.T) {
 	s.waitStatus("打ち切り issue#42 (implement): label を外して trigger から外し、1 周期待ってから付け直すと解ける")
 }
 
+func TestStatusShowsTheErrorOfTheLastTick(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflow(s.workerWorkflow(""))
+	s.setIssues()
+	s.startLoop()
+	s.waitEvents("tick", 1)
+
+	s.respond("gh", stubwire.Rule{Stderr: "gh の障害", Exit: 1}) // status は workflow 定義を読むので、壊すのは gh の側
+
+	s.waitStatus(" error: ")
+}
+
 func TestStatusShowsAmbiguousCLs(t *testing.T) {
 	s := newSandbox(t)
 	s.writeWorkflow(s.clWorkflow("{}"))
@@ -111,6 +123,9 @@ func TestStatusAfterTheLoopStoppedShowsNoWorkers(t *testing.T) {
 	s.waitEvents("start", 1)
 	loop.signal(syscall.SIGINT)
 	loop.waitForOutput(regexp.MustCompile(`停止待ち`)) // 続けて送ると 1 回にまとめられるので、1 回目を受けたのを待つ
+	if out := s.waitStatus("loop 停止待ち"); strings.Contains(out, "次の tick") {
+		t.Fatalf("停止待ちの status に次の tick が出る:\n%s", out)
+	}
 	loop.signal(syscall.SIGINT)
 	loop.wait()
 

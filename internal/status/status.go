@@ -35,11 +35,19 @@ type Snapshot struct {
 
 // Tick は直近の tick。
 type Tick struct {
-	At         time.Time `json:"at"`
-	Result     string    `json:"result"`
-	Candidates int       `json:"candidates"`
-	Error      string    `json:"error,omitempty"`
+	At         time.Time  `json:"at"`
+	Result     TickResult `json:"result"`
+	Candidates int        `json:"candidates"`
+	Error      string     `json:"error,omitempty"`
 }
+
+// TickResult は tick の結果。
+type TickResult string
+
+const (
+	TickOK    TickResult = "ok"
+	TickError TickResult = "error"
+)
 
 // Phase は claim の段階。
 type Phase string
@@ -118,13 +126,28 @@ func Read(dir string) (s Snapshot, ok bool, err error) {
 // phaseLabels は worker の行の段階の欄
 var phaseLabels = map[Phase]string{Running: "走っている", Stopping: "止めている", Verifying: "確かめ待ち", WaitingRetry: "再起動待ち"}
 
-// Render は状態を人が読む形に描く (formats.md §7.2)。alive は loop が生きているか。時刻は loc の HH:MM:SS で出す。
-// s が nil なら状態 file が無い。
-func Render(s *Snapshot, scope string, alive bool, now time.Time, loc *time.Location) string {
-	clock := func(t time.Time) string { return t.In(loc).Format("15:04:05") }
-	if s == nil {
-		return fmt.Sprintf("loop なし · scope %s · 記録なし\n", scope)
+// Liveness は loop が生きているか。
+type Liveness bool
+
+const (
+	LoopGone  Liveness = false
+	LoopAlive Liveness = true
+)
+
+// Unrecorded は状態 file が無いときの見出し (formats.md §7.2)。
+func Unrecorded(scope string, loop Liveness) string {
+	head := "loop なし"
+	if loop == LoopAlive {
+		// lock を取ってから最初に書き出すまでの間
+		head = "loop 稼働中"
 	}
+	return fmt.Sprintf("%s · scope %s · 記録なし\n", head, scope)
+}
+
+// Render は状態を人が読む形に描く (formats.md §7.2)。時刻は loc の HH:MM:SS で出す。
+func Render(s Snapshot, loop Liveness, now time.Time, loc *time.Location) string {
+	clock := func(t time.Time) string { return t.In(loc).Format("15:04:05") }
+	alive := loop == LoopAlive
 	head := "loop なし"
 	switch {
 	case alive && s.Stopping:
@@ -137,7 +160,7 @@ func Render(s *Snapshot, scope string, alive bool, now time.Time, loc *time.Loca
 		head += " · 次の tick " + clock(*s.NextTickAt)
 	}
 	if t := s.LastTick; t != nil {
-		if t.Result == "error" {
+		if t.Result == TickError {
 			head += fmt.Sprintf(" · 直近の tick %s error: %s", clock(t.At), printable.Line(t.Error))
 		} else {
 			head += fmt.Sprintf(" · 直近の tick %s %s (候補 %d)", clock(t.At), t.Result, t.Candidates)
@@ -153,7 +176,7 @@ func Render(s *Snapshot, scope string, alive bool, now time.Time, loc *time.Loca
 		switch {
 		case w.Phase == WaitingRetry && w.RetryAt != nil:
 			when = clock(*w.RetryAt) + " に再起動"
-		case w.Phase == Running && w.StartedAt != nil:
+		case (w.Phase == Running || w.Phase == Stopping) && w.StartedAt != nil:
 			when = now.Sub(*w.StartedAt).Truncate(time.Second).String()
 		}
 		activity := ""

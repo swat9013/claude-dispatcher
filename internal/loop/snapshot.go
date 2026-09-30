@@ -3,31 +3,41 @@ package loop
 import (
 	"cmp"
 	"slices"
+	"time"
 
 	"github.com/swat9013/claude-dispatcher/internal/status"
 	"github.com/swat9013/claude-dispatcher/internal/target"
+	"github.com/swat9013/claude-dispatcher/internal/trigger"
 )
 
-// tickFailed は tick の失敗を tick の行に書き、状態 file の直近の tick に残す。
+// board は状態 file にだけ使う状態: loop を始めた時刻・次の tick の予定・直近の tick と、その tick の曖昧な CL。
+type board struct {
+	startedAt  time.Time
+	nextTickAt time.Time
+	lastTick   *status.Tick
+	ambiguous  []trigger.AmbiguousHead
+	// publishError は直近の状態 file の書き出しの失敗。同じ失敗の行を周期ごとに重ねないために持つ
+	publishError string
+}
+
+// tickFailed は tick の失敗を tick の行に書き、状態 file の直近の tick に残す。失敗した tick は曖昧な CL を数えていない。
 func (l *loop) tickFailed(message string) {
-	l.lastTick = &status.Tick{At: l.o.Now(), Result: "error", Error: message}
+	l.board.lastTick = &status.Tick{At: l.o.Now(), Result: status.TickError, Error: message}
+	l.board.ambiguous = nil
 	l.rec.tickError(message)
 }
 
 // publish は今の状態を状態 file に書き出す。書けなければ error の行を残して続ける (状態 file は表示のためだけの痕跡)。
 // 同じ失敗が続く間は、行を 1 つだけ残す。
 func (l *loop) publish() {
-	if l.o.Publish == nil {
-		return
-	}
 	message := ""
 	if err := l.o.Publish(l.snapshot()); err != nil {
 		message = oneLine(err)
 	}
-	if message != "" && message != l.publishError {
+	if message != "" && message != l.board.publishError {
 		l.rec.error(target.Ref{}, message)
 	}
-	l.publishError = message
+	l.board.publishError = message
 }
 
 // phases は claim の段階を状態 file の綴りに写す
@@ -38,12 +48,12 @@ var phases = map[phase]status.Phase{
 // snapshot は状態 file の中身 (formats.md §7.1)。作業対象は種類と番号の順に並べる。
 func (l *loop) snapshot() status.Snapshot {
 	s := status.Snapshot{
-		Scope: l.o.ScopeKey, Workflow: l.o.Workflow, StartedAt: l.startedAt, UpdatedAt: l.o.Now(),
-		Stopping: l.stopping > 0, LastTick: l.lastTick,
+		Scope: l.o.ScopeKey, Workflow: l.o.Workflow, StartedAt: l.board.startedAt, UpdatedAt: l.o.Now(),
+		Stopping: l.stopping > 0, LastTick: l.board.lastTick,
 		Workers: []status.Worker{}, Abandoned: []status.Abandoned{}, Ambiguous: []status.Ambiguous{},
 	}
-	if l.stopping == 0 && !l.nextTickAt.IsZero() {
-		next := l.nextTickAt
+	if l.stopping == 0 && !l.board.nextTickAt.IsZero() {
+		next := l.board.nextTickAt
 		s.NextTickAt = &next
 	}
 	for _, ref := range sortedRefs(l.claims) {
@@ -53,7 +63,6 @@ func (l *loop) snapshot() status.Snapshot {
 			Phase: phases[c.phase], StartedAt: c.startedAt, Activity: c.activity,
 		}
 		if c.phase == phaseWaitingRetry {
-			w.StartedAt, w.Activity = nil, nil
 			// 停止要求の後に失敗した claim は再起動を予定しない
 			if !c.retryAt.IsZero() {
 				retryAt := c.retryAt
@@ -65,7 +74,7 @@ func (l *loop) snapshot() status.Snapshot {
 	for _, ref := range sortedRefs(l.abandoned) {
 		s.Abandoned = append(s.Abandoned, status.Abandoned{Target: ref.String(), Trigger: l.abandoned[ref]})
 	}
-	for _, a := range l.ambiguous {
+	for _, a := range l.board.ambiguous {
 		s.Ambiguous = append(s.Ambiguous, status.Ambiguous{Head: a.Head, Targets: refNames(a.Targets)})
 	}
 	return s
@@ -93,7 +102,7 @@ func (l *loop) refresh() {
 		if a.At.IsZero() || (c.activity != nil && c.activity.At.Equal(a.At)) {
 			continue
 		}
-		c.activity = &status.Activity{At: a.At, Summary: a.Summary}
+		c.activity = &a
 		l.rec.human("活動 %s: %s", ref, a.Summary)
 	}
 }

@@ -14,7 +14,9 @@ import (
 	"time"
 
 	"github.com/swat9013/claude-dispatcher/internal/deps"
+	"github.com/swat9013/claude-dispatcher/internal/printable"
 	"github.com/swat9013/claude-dispatcher/internal/render"
+	"github.com/swat9013/claude-dispatcher/internal/status"
 	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/trigger"
 	"github.com/swat9013/claude-dispatcher/internal/workflow"
@@ -87,19 +89,19 @@ const watchInterval = 250 * time.Millisecond
 type Run struct {
 	stop chan struct{}
 	once sync.Once
-	// activity は最新の活動。loop の goroutine が読むので mu で守る
+	// activity は最新の活動 (formats.md §6)。loop の goroutine が読むので mu で守る
 	mu       sync.Mutex
-	activity Activity
+	activity status.Activity
 }
 
 // Activity は最新の活動。まだ無ければ At がゼロ値。
-func (r *Run) Activity() Activity {
+func (r *Run) Activity() status.Activity {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.activity
 }
 
-func (r *Run) setActivity(a Activity) {
+func (r *Run) setActivity(a status.Activity) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.activity = a
@@ -206,6 +208,8 @@ type streamWatch struct {
 	changed time.Time
 	// summarized は要約した最新の行の終わりの offset。前の attempt の行と、要約済みの行を読み直さない
 	summarized int64
+	// readError は直近に stream の file を読めなかった理由。同じ理由を活動として出し直さない
+	readError string
 }
 
 // observe は now の時点の file の大きさを見て、伸びていれば伸びた時刻を進め、grew を true で返す。file を読めなければ、
@@ -223,14 +227,23 @@ func (w *streamWatch) observe(now time.Time) (grew bool, err error) {
 }
 
 // activity は file の最新の完結した行を、まだ要約していなければ要約する。要約する行が無ければ ok が false。
-func (w *streamWatch) activity() (summary string, ok bool, err error) {
+// file を読めなければ、その理由を活動にする (活動は表示のためだけのものなので、worker は止めない)。
+func (w *streamWatch) activity() (summary string, ok bool) {
 	line, end, err := lastLine(w.file.Name(), w.size, w.summarized)
-	if err != nil || line == nil {
-		return "", false, err
+	if err != nil {
+		message := printable.Line("stream を読めない: " + err.Error())
+		if message == w.readError {
+			return "", false
+		}
+		w.readError = message
+		return message, true
+	}
+	w.readError = ""
+	if line == nil {
+		return "", false
 	}
 	w.summarized = end
-	summary, ok = Summarize(line)
-	return summary, ok, nil
+	return Summarize(line)
 }
 
 // silentFor は stream の file が最後に伸びてから now までの時間。
@@ -280,7 +293,8 @@ func (r Runner) wait(cmd *exec.Cmd, run *Run, stream *os.File, offset int64) Res
 }
 
 // watch は claude が終わるまで待つ (ended が true)。先に止める理由ができたら、その理由を持った result を返す。
-// stream の file が offset より後に伸びたら活動を更新する。stall と上限時間は、どちらかが有効なときだけ確かめる。
+// stream の file は活動のために常に確かめ、offset より後に伸びたら活動を更新する。stall と上限時間は、どちらかが
+// 有効なときだけ当てる。
 func (r Runner) watch(done <-chan error, run *Run, stream *os.File, offset int64) (result Result, ended bool) {
 	started := time.Now()
 	w := &streamWatch{file: stream, size: offset, changed: started, summarized: offset}
@@ -297,10 +311,9 @@ func (r Runner) watch(done <-chan error, run *Run, stream *os.File, offset int64
 			if err != nil {
 				return Result{Failure: err.Error()}, false
 			}
-			// 活動は表示のためだけのものなので、読めなくても worker は止めない (stream の file は observe で見ている)
 			if grew {
-				if summary, ok, err := w.activity(); err == nil && ok {
-					run.setActivity(Activity{At: now, Summary: summary})
+				if summary, ok := w.activity(); ok {
+					run.setActivity(status.Activity{At: now, Summary: summary})
 				}
 			}
 			if reason := r.overdue(now.Sub(started), w.silentFor(now)); reason != "" {

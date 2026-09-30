@@ -6,17 +6,10 @@ import (
 	"io"
 	"os"
 	"strings"
-	"time"
 	"unicode/utf8"
 
 	"github.com/swat9013/claude-dispatcher/internal/printable"
 )
-
-// Activity は worker の stream の最新の完結した行の要約 (formats.md §6 の活動)。
-type Activity struct {
-	At      time.Time
-	Summary string
-}
 
 // summaryLimit は要約の文字数の上限
 const summaryLimit = 80

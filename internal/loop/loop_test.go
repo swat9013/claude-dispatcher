@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/swat9013/claude-dispatcher/internal/loop"
+	"github.com/swat9013/claude-dispatcher/internal/status"
 	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/trigger"
 	"github.com/swat9013/claude-dispatcher/internal/worker"
@@ -57,7 +58,7 @@ type endedWorker struct{}
 
 func (endedWorker) Stop() {}
 
-func (endedWorker) Activity() worker.Activity { return worker.Activity{} }
+func (endedWorker) Activity() status.Activity { return status.Activity{} }
 
 // harness は plans を順に 1 tick ずつ回し、読み切ったところで stop の停止要求を送る。
 type harness struct {
@@ -84,6 +85,8 @@ type harness struct {
 	jobs    []worker.Job
 	waits   []time.Duration
 	stdout  bytes.Buffer
+	// published は書き出した状態 file の中身
+	published []status.Snapshot
 }
 
 func definition(interval time.Duration, maxConcurrent int) workflow.Definition {
@@ -196,8 +199,12 @@ func (h *harness) run(t *testing.T) []string {
 		ScopeKey:     startScope,
 		Log:          io.Discard,
 		Stdout:       &h.stdout,
-		Signals:      signals,
-		Now:          h.now,
+		Publish: func(s status.Snapshot) error {
+			h.published = append(h.published, s)
+			return nil
+		},
+		Signals: signals,
+		Now:     h.now,
 		After: func(d time.Duration) <-chan time.Time {
 			h.waits = append(h.waits, d)
 			ch := make(chan time.Time, 1)
@@ -386,6 +393,7 @@ func TestLineThatCannotBeWrittenToTheLogIsReportedOnStdout(t *testing.T) {
 		ScopeKey:     startScope,
 		Log:          failingWriter{},
 		Stdout:       &stdout,
+		Publish:      func(status.Snapshot) error { return nil },
 		Signals:      signals,
 		Now:          time.Now,
 		After:        func(time.Duration) <-chan time.Time { return nil },
@@ -426,6 +434,20 @@ func TestWorkerThatFailsAfterAStopRequestIsNotScheduledForRetry(t *testing.T) {
 
 	if out := h.stdout.String(); strings.Contains(out, "再起動を予定") || !strings.Contains(out, "error issue#1: 再起動を待ったまま止まる") {
 		t.Fatalf("出力:\n%s", out)
+	}
+}
+
+func TestStatusAfterAStopRequestHasNoNextTickAndNoRestart(t *testing.T) {
+	h := &harness{plans: []tickPlan{{load: good(time.Minute), stopDuring: syscall.SIGINT}}, maxConcurrent: 1, maxAttempts: 2}
+
+	h.run(t)
+
+	last := h.published[len(h.published)-1]
+	if !last.Stopping || last.NextTickAt != nil || len(last.Workers) != 1 {
+		t.Fatalf("状態 = %+v, want 停止待ちで次の tick の無い 1 件", last)
+	}
+	if w := last.Workers[0]; w.Phase != status.WaitingRetry || w.RetryAt != nil || w.StartedAt != nil {
+		t.Fatalf("worker = %+v, want 再起動の予定も起動の時刻も無い再起動待ち", w)
 	}
 }
 
