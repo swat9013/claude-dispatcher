@@ -7,6 +7,7 @@ import (
 
 	"github.com/swat9013/claude-dispatcher/internal/github"
 	"github.com/swat9013/claude-dispatcher/internal/termtext"
+	"github.com/swat9013/claude-dispatcher/internal/tick"
 	"github.com/swat9013/claude-dispatcher/internal/ticklog"
 )
 
@@ -15,11 +16,24 @@ const unknownCell = "?"
 
 var columns = []string{"ISSUE", "KIND", "STATE", "ELAPSED", "SESSION", "BRANCH", "WIP", "CL", "TICK"}
 
-// RenderTable は project ごとに見出し・注記・表を並べ、project の間を空行で区切る (formats.md §10)。
-func RenderTable(reports []Report) string {
+// Fit は行を端末の幅に収めるか (formats.md §10)。FitTerminal か FitPlain で作る。
+type Fit struct {
+	// terminalWidth は行を収める端末の幅。0 なら端末でない
+	terminalWidth int
+}
+
+// FitTerminal は判断の行が端末の幅 width に収まるように reason を切り詰める。
+func FitTerminal(width int) Fit { return Fit{terminalWidth: width} }
+
+// FitPlain は stdout が端末でないときの出し方: 判断の行を切り詰めない。
+func FitPlain() Fit { return Fit{} }
+
+// RenderTable は project ごとに見出し・判断の行・注記・表を並べ、project の間を空行で区切る (formats.md §10)。
+func RenderTable(reports []Report, fit Fit) string {
 	blocks := make([]string, 0, len(reports))
 	for _, r := range reports {
-		lines := append([]string{r.Heading()}, r.NoteLines()...)
+		lines := append([]string{r.Heading()}, r.JudgmentLines(fit)...)
+		lines = append(lines, r.NoteLines()...)
 		blocks = append(blocks, strings.Join(append(lines, r.TableLines()...), "\n"))
 	}
 	return strings.Join(blocks, "\n\n")
@@ -46,6 +60,35 @@ func (r Report) Heading() string {
 		return ticklog.Summary(l.TS, l.Result)
 	})
 	return fmt.Sprintf("%s  %s  最終 tick %s", r.Project, loop, last)
+}
+
+// JudgmentLines は直近の orchestrator 行の decisions のうち、見送り (skip) と人返し (ready-for-human) の行 (formats.md §10)。
+// 採った issue (start / reenter) は worker として表に出るので出さない。出す判断が無ければ、判断した時刻の行も出さない。
+func (r Report) JudgmentLines(fit Fit) []string {
+	if r.LastOrchestrator == nil {
+		return nil
+	}
+	var lines []string
+	for _, d := range r.LastOrchestrator.Decisions {
+		if action := tick.Action(d.Action); action != tick.ActionSkip && action != tick.ActionReadyForHuman {
+			continue
+		}
+		// 1 件 1 行に保つ (reason は orchestrator が書く 1 文で、改行を含みうる)
+		reason := strings.Join(strings.Fields(d.Reason), " ")
+		lines = append(lines, fit.cut(fmt.Sprintf("  #%d %s: %s", d.Issue, d.Action, reason)))
+	}
+	if len(lines) == 0 {
+		return nil
+	}
+	return append([]string{"判断 " + ticklog.ShortTS(r.LastOrchestrator.TS)}, lines...)
+}
+
+// cut は端末なら line を端末の幅で切る。
+func (f Fit) cut(line string) string {
+	if f.terminalWidth == 0 {
+		return line
+	}
+	return termtext.Cut(line, f.terminalWidth)
 }
 
 // NoteLines は注記の行。

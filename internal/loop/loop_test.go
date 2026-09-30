@@ -107,6 +107,7 @@ func startLoop(t *testing.T, settings ...setting) *harness {
 			return out
 		},
 		Status: func() status.Report { return runningReport() },
+		Fit:    func() status.Fit { return status.FitPlain() },
 		Now:    h.clock.Now, Poll: time.Millisecond,
 	}
 	for _, s := range settings {
@@ -393,6 +394,22 @@ func TestLoopShowsTheErrorOfTheLastTickFirstAmongTheNotes(t *testing.T) {
 	h.ticks(tick.Outcome{Result: tick.ResultConfigError, Logged: true, Error: "未知の key"})
 
 	if !strings.Contains(h.stdout.String(), " config_error · 指示 0\n  ! 未知の key\n  ! wip を読めない\n") {
+		t.Fatalf("画面 =\n%s", h.stdout.String())
+	}
+}
+
+func TestLoopShowsTheDecisionLinesBetweenTheLastTickAndTheNotes(t *testing.T) {
+	h := startLoop(t, func(o *Options) {
+		o.Status = func() status.Report {
+			r := runningReport("wip を読めない")
+			r.LastOrchestrator = &ticklog.OrchestratorLine{TS: "2026-09-26T03:00:00.123456Z", Decisions: []ticklog.Decision{{Issue: 51, Action: "skip", Reason: "仕様に受け入れ条件が無い"}}}
+			return r
+		}
+	})
+
+	h.ticks(tick.Outcome{Result: tick.ResultConfigError, Logged: true, Error: "未知の key"})
+
+	if !strings.Contains(h.stdout.String(), " config_error · 指示 0\n判断 2026-09-26T03:00:00Z\n  #51 skip: 仕様に受け入れ条件が無い\n  ! 未知の key\n  ! wip を読めない\n") {
 		t.Fatalf("画面 =\n%s", h.stdout.String())
 	}
 }

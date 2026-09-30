@@ -40,12 +40,15 @@ type view struct {
 	// last は loop が回した直近の tick。まだ 1 回も終えていなければ nil
 	last   *tick.Outcome
 	report status.Report
+	// fit は判断の行を端末の幅に収めるか
+	fit status.Fit
 }
 
 // lines は画面の行。withGuide が false なら操作案内を除く (stdout が端末でないときと、止まった後の画面)。
 func (v view) lines(withGuide bool) []string {
 	state, guide := v.stateAndGuide()
 	lines := []string{fmt.Sprintf("%s  loop %s  %s", v.project, v.interval, state), v.lastTick()}
+	lines = append(lines, v.report.JudgmentLines(v.fit)...)
 	// log.jsonl に書けなかった tick も出す (result が ok でも status と doctor は古い log を読むことになる)
 	if v.last != nil && (v.last.Result != tick.ResultOK || !v.last.Logged) {
 		lines = append(lines, "  ! "+v.last.Error)

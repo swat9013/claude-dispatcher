@@ -214,7 +214,7 @@ func checkDryRun(r *report, o Options, cfgErr error) {
 }
 
 func checkLastTick(r *report, project paths.Project) {
-	lines, broken, err := ticklog.Read(project.LogFile())
+	log, broken, err := ticklog.Read(project.LogFile())
 	if err != nil {
 		r.line(markInfo, "最終 tick", "log.jsonl を読めない: %v", err)
 		return
@@ -223,7 +223,7 @@ func checkLastTick(r *report, project paths.Project) {
 	if broken > 0 {
 		skipped = fmt.Sprintf(" (読めない %d 行を飛ばした)", broken)
 	}
-	last, ok := ticklog.Last(lines)
+	last, ok := ticklog.Last(log.Ticks)
 	if !ok {
 		r.line(markInfo, "最終 tick", "なし%s", skipped)
 		return

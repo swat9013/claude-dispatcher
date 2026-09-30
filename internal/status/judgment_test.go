@@ -1,0 +1,36 @@
+package status
+
+import (
+	"slices"
+	"testing"
+
+	"github.com/swat9013/claude-dispatcher/internal/ticklog"
+)
+
+func reportWithSkip(reason string) Report {
+	return Report{LastOrchestrator: &ticklog.OrchestratorLine{TS: "2026-09-26T03:00:00Z", Decisions: []ticklog.Decision{{Issue: 51, Action: "skip", Reason: reason}}}}
+}
+
+func TestJudgmentLinesCutTheReasonToFitTheTerminalWidth(t *testing.T) {
+	got := reportWithSkip("仕様に受け入れ条件が無い").JudgmentLines(FitTerminal(20))
+
+	if want := []string{"判断 2026-09-26T03:00:00Z", "  #51 skip: 仕様に受"}; !slices.Equal(got, want) {
+		t.Fatalf("JudgmentLines = %q, want %q", got, want)
+	}
+}
+
+func TestJudgmentLinesKeepTheWholeReasonOffATerminal(t *testing.T) {
+	got := reportWithSkip("仕様に受け入れ条件が無い").JudgmentLines(FitPlain())
+
+	if want := []string{"判断 2026-09-26T03:00:00Z", "  #51 skip: 仕様に受け入れ条件が無い"}; !slices.Equal(got, want) {
+		t.Fatalf("JudgmentLines = %q, want %q", got, want)
+	}
+}
+
+func TestJudgmentLinesFoldAMultiLineReasonIntoOneLine(t *testing.T) {
+	got := reportWithSkip("仕様が\n無い").JudgmentLines(FitPlain())
+
+	if want := []string{"判断 2026-09-26T03:00:00Z", "  #51 skip: 仕様が 無い"}; !slices.Equal(got, want) {
+		t.Fatalf("JudgmentLines = %q, want %q", got, want)
+	}
+}

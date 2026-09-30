@@ -40,6 +40,8 @@ type Options struct {
 	Tick func(control tick.Control) tick.Outcome
 	// Status は project の今 (status の現況) を組む
 	Status func() status.Report
+	// Fit は描くときに判断の行を端末の幅に収めるか (端末なら今の幅)
+	Fit func() status.Fit
 	// Now は壁時計。次の tick の時刻はこれで判定する (スリープ中に monotonic clock が進まない OS がある — system.md §9)
 	Now func() time.Time
 	// Poll は壁時計を見直す間隔
@@ -222,7 +224,7 @@ func (l *loop) collectStatus() (report status.Report) {
 func (l *loop) view() view {
 	v := view{
 		project: l.o.Project, interval: l.o.Interval.Text, phase: l.phase, now: l.o.Now(),
-		next: l.next, tickStarted: l.tickStarted, last: l.last, report: l.report,
+		next: l.next, tickStarted: l.tickStarted, last: l.last, report: l.report, fit: l.o.Fit(),
 	}
 	if at := l.orchestratorStarted.Load(); at != nil {
 		v.orchestratorStarted = *at
