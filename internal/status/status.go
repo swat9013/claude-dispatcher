@@ -134,28 +134,27 @@ const (
 	LoopAlive Liveness = true
 )
 
-// Unrecorded は状態 file が無いときの見出し (formats.md §7.2)。
-func Unrecorded(scope string, loop Liveness) string {
-	head := "loop なし"
-	if loop == LoopAlive {
-		// lock を取ってから最初に書き出すまでの間
-		head = "loop 稼働中"
+// heading は見出しの先頭の語。
+func heading(loop Liveness, stopping bool) string {
+	switch {
+	case loop == LoopGone:
+		return "loop なし"
+	case stopping:
+		return "loop 停止待ち"
 	}
-	return fmt.Sprintf("%s · scope %s · 記録なし\n", head, scope)
+	return "loop 稼働中"
+}
+
+// Unrecorded は状態 file が無いときの見出し (formats.md §7.2)。loop が生きていれば、lock を取ってから最初に書き出すまでの間。
+func Unrecorded(scope string, loop Liveness) string {
+	return fmt.Sprintf("%s · scope %s · 記録なし\n", heading(loop, false), scope)
 }
 
 // Render は状態を人が読む形に描く (formats.md §7.2)。時刻は loc の HH:MM:SS で出す。
 func Render(s Snapshot, loop Liveness, now time.Time, loc *time.Location) string {
 	clock := func(t time.Time) string { return t.In(loc).Format("15:04:05") }
 	alive := loop == LoopAlive
-	head := "loop なし"
-	switch {
-	case alive && s.Stopping:
-		head = "loop 停止待ち"
-	case alive:
-		head = "loop 稼働中"
-	}
-	head += " · scope " + s.Scope
+	head := heading(loop, s.Stopping) + " · scope " + s.Scope
 	if alive && s.NextTickAt != nil {
 		head += " · 次の tick " + clock(*s.NextTickAt)
 	}

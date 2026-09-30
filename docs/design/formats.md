@@ -415,7 +415,7 @@ claude-dispatcher loop [<workflow の path>]
 | それ以外の `type` | `<type>` |
 
 - 要約の制御文字 (タブ・改行・ESC など) は空白に置き換え、80 文字で切る (`…` を足す)
-- JSON として読めない行と、`type` の無い行は活動として数えない。64 KiB を超える行も数えない (stream の file の末尾 64 KiB だけを読む)
+- JSON として読めない行と、`type` の無い行は活動として数えない。改行を含めて 64 KiB を超える行も数えない (stream の file の末尾だけを読む)
 - 活動は今の attempt が書いた行だけから取る (worker log は attempt を跨いで追記する)。同じ行を活動として出し直さない
 - stream の file を読めなければ、`stream を読めない: <理由>` を活動にする。worker は止めない
 

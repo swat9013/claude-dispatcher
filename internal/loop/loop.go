@@ -302,7 +302,7 @@ func (l *loop) tick() {
 	}
 	l.board.lastTick = &status.Tick{At: l.o.Now(), Result: status.TickOK, Candidates: len(candidates)}
 	l.board.ambiguous = ambiguous
-	l.rec.event("tick", map[string]any{"result": "ok", "candidates": len(candidates), "launched": nonNil(launched), "ambiguous": ambiguousFields(ambiguous)},
+	l.rec.event("tick", map[string]any{"result": status.TickOK, "candidates": len(candidates), "launched": nonNil(launched), "ambiguous": ambiguousFields(ambiguous)},
 		"tick ok · %s%s", Summary(candidates), ambiguousSummary(ambiguous))
 }
 

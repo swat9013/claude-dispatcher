@@ -52,7 +52,7 @@ func (s *screen) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// show は loop が書き出した状態で描き直す。
+// show は loop の Publish から呼ばれ、状態 file と同じ中身で表を描き直す (1s ごとの描き直しはこの呼び出しで起きる)。
 func (s *screen) show(snap status.Snapshot) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

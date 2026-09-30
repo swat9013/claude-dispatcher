@@ -24,12 +24,16 @@ func TestScreenDrawsTheStatusTableAboveTheRecentLines(t *testing.T) {
 	var out bytes.Buffer
 	sc := &screen{out: &out, now: func() time.Time { return screenNow }}
 	started := screenNow.Add(-time.Minute)
-	sc.show(status.Snapshot{Scope: "s", Workers: []status.Worker{{Target: "issue#42", Trigger: "implement", Attempt: 1, Phase: status.Running, StartedAt: &started}}})
+	snap := status.Snapshot{Scope: "s", Workers: []status.Worker{{
+		Target: "issue#42", Trigger: "implement", Attempt: 1, Phase: status.Running, StartedAt: &started,
+		Activity: &status.Activity{At: screenNow, Summary: "tool Bash"},
+	}}}
+	sc.show(snap)
 
 	fmt.Fprint(sc, "t0 起動 issue#42\n")
 
-	want := "loop 稼働中 · scope s\nissue#42\timplement\tattempt 1\t走っている\t1m0s\t\n\nt0 起動 issue#42\n"
-	if got := lastFrame(&out); got != want {
+	want := status.Render(snap, status.LoopAlive, screenNow, time.Local) + "\nt0 起動 issue#42\n"
+	if got := lastFrame(&out); got != want || !strings.Contains(got, "\ttool Bash\n") {
 		t.Fatalf("画面 = %q, want %q", got, want)
 	}
 }

@@ -437,17 +437,28 @@ func TestWorkerThatFailsAfterAStopRequestIsNotScheduledForRetry(t *testing.T) {
 	}
 }
 
-func TestStatusAfterAStopRequestHasNoNextTickAndNoRestart(t *testing.T) {
+// lastPublishedAfterAStopRequest は、tick の途中で停止要求を受け、走っていた worker が失敗して止まった loop の、
+// 最後に書き出した状態。
+func lastPublishedAfterAStopRequest(t *testing.T) status.Snapshot {
+	t.Helper()
 	h := &harness{plans: []tickPlan{{load: good(time.Minute), stopDuring: syscall.SIGINT}}, maxConcurrent: 1, maxAttempts: 2}
-
 	h.run(t)
+	return h.published[len(h.published)-1]
+}
 
-	last := h.published[len(h.published)-1]
-	if !last.Stopping || last.NextTickAt != nil || len(last.Workers) != 1 {
-		t.Fatalf("状態 = %+v, want 停止待ちで次の tick の無い 1 件", last)
+func TestStatusAfterAStopRequestHasNoNextTick(t *testing.T) {
+	last := lastPublishedAfterAStopRequest(t)
+
+	if !last.Stopping || last.NextTickAt != nil {
+		t.Fatalf("状態 = %+v, want 停止待ちで次の tick が無い", last)
 	}
-	if w := last.Workers[0]; w.Phase != status.WaitingRetry || w.RetryAt != nil || w.StartedAt != nil {
-		t.Fatalf("worker = %+v, want 再起動の予定も起動の時刻も無い再起動待ち", w)
+}
+
+func TestWorkerThatFailsAfterAStopRequestHasNoRestartInTheStatus(t *testing.T) {
+	last := lastPublishedAfterAStopRequest(t)
+
+	if len(last.Workers) != 1 || last.Workers[0].Phase != status.WaitingRetry || last.Workers[0].RetryAt != nil || last.Workers[0].StartedAt != nil {
+		t.Fatalf("worker = %+v, want 再起動の予定も起動の時刻も無い再起動待ち", last.Workers)
 	}
 }
 

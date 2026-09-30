@@ -86,7 +86,12 @@ func TestStatusShowsTheErrorOfTheLastTick(t *testing.T) {
 
 	s.respond("gh", stubwire.Rule{Stderr: "gh の障害", Exit: 1}) // status は workflow 定義を読むので、壊すのは gh の側
 
-	s.waitStatus(" error: ")
+	out := s.waitStatus("gh の障害")
+
+	if !regexp.MustCompile(`直近の tick \d\d:\d\d:\d\d error: .*gh の障害`).MatchString(out) {
+		t.Fatalf("見出しに直近の tick の error が無い:\n%s", out)
+	}
+
 }
 
 func TestStatusShowsAmbiguousCLs(t *testing.T) {
