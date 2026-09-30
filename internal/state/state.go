@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 	"syscall"
+	"time"
 )
 
 const appName = "claude-dispatcher"
@@ -47,7 +48,7 @@ func Lock(dir, scopeKey string) (*os.File, error) {
 	if err != nil {
 		return nil, fmt.Errorf("loop の lock file を開けない (%s): %w", file, err)
 	}
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	if err := lockExclusive(lock); err != nil {
 		lock.Close()
 		if errors.Is(err, syscall.EWOULDBLOCK) {
 			return nil, fmt.Errorf("%s: %w (%s)", scopeKey, ErrAlreadyRunning, file)
@@ -55,4 +56,38 @@ func Lock(dir, scopeKey string) (*os.File, error) {
 		return nil, fmt.Errorf("loop の lock を取れない (%s): %w", file, err)
 	}
 	return lock, nil
+}
+
+// lockExclusive は lock を排他で取る。status が生死を確かめる間 (共有の lock を一瞬だけ持つ) に重なっても取れるよう、
+// 短く取り直す。
+func lockExclusive(lock *os.File) error {
+	var err error
+	for range 5 {
+		if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); !errors.Is(err, syscall.EWOULDBLOCK) {
+			return err
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return err
+}
+
+// Alive は、dir の loop が生きているか (loop.lock を誰かが持っているか) を返す。lock file を作らず、持っていなければ
+// 直ちに外す。
+func Alive(dir string) (bool, error) {
+	lock, err := os.Open(filepath.Join(dir, "loop.lock"))
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("loop の lock file を開けない: %w", err)
+	}
+	defer lock.Close()
+	err = syscall.Flock(int(lock.Fd()), syscall.LOCK_SH|syscall.LOCK_NB)
+	switch {
+	case errors.Is(err, syscall.EWOULDBLOCK):
+		return true, nil
+	case err != nil:
+		return false, fmt.Errorf("loop の lock を確かめられない: %w", err)
+	}
+	return false, syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
 }

@@ -3,6 +3,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -18,6 +19,7 @@ import (
 	"github.com/swat9013/claude-dispatcher/internal/github"
 	"github.com/swat9013/claude-dispatcher/internal/loop"
 	"github.com/swat9013/claude-dispatcher/internal/state"
+	"github.com/swat9013/claude-dispatcher/internal/status"
 	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/trigger"
 	"github.com/swat9013/claude-dispatcher/internal/version"
@@ -37,6 +39,8 @@ const (
 const usage = `usage:
   claude-dispatcher loop [<workflow の path>]
   claude-dispatcher loop --dry-run [<workflow の path>]
+  claude-dispatcher status [<workflow の path>]
+  claude-dispatcher paths --json [<workflow の path>]
   claude-dispatcher --version
 `
 
@@ -55,6 +59,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 	switch args[0] {
 	case "loop":
 		return runLoop(args[1:], stdout, stderr)
+	case "status":
+		return runStatus(args[1:], stdout, stderr)
+	case "paths":
+		return runPaths(args[1:], stdout, stderr)
 	case "-h", "--help", "help":
 		fmt.Fprint(stdout, usage)
 		return 0
@@ -195,6 +203,8 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 			return worker.Runner{Workspaces: e.workspaces(def), Definition: def, Env: e.env, StateDir: dir}.Start(job, events)
 		},
 		NewSessionID: worker.NewSessionID,
+		Publish:      func(snap status.Snapshot) error { return status.Write(dir, snap) },
+		Workflow:     abs,
 		ScopeKey:     scopeKey,
 		Log:          logFile,
 		Stdout:       stdout,
@@ -246,4 +256,107 @@ func stopRequests() <-chan os.Signal {
 // surviveClosedStdout は、読み手の消えた stdout へ書いても SIGPIPE で倒れず、書き込みの失敗として返させる。
 func surviveClosedStdout() {
 	signal.Notify(make(chan os.Signal, 1), syscall.SIGPIPE)
+}
+
+// --- status / paths ---
+
+// workflowArg は subcommand の引数から workflow 定義の path を読む。flags は受け付ける flag (必須)。
+func workflowArg(args []string, required []string, stderr io.Writer) (string, bool) {
+	var path string
+	seen := map[string]bool{}
+	for _, arg := range args {
+		switch {
+		case slices.Contains(required, arg):
+			seen[arg] = true
+		case strings.HasPrefix(arg, "-"):
+			usageError(stderr, "未知の flag: %s", arg)
+			return "", false
+		case path == "":
+			path = arg
+		default:
+			usageError(stderr, "引数が多い: %s", arg)
+			return "", false
+		}
+	}
+	for _, flag := range required {
+		if !seen[flag] {
+			usageError(stderr, "%s が要る", flag)
+			return "", false
+		}
+	}
+	if path == "" {
+		path = defaultWorkflowFile
+	}
+	return path, true
+}
+
+// loadForReading は、status と paths のために workflow 定義を読む。誤りなら stderr に出して exit code を返す。
+func loadForReading(e environment, path string, stderr io.Writer) (workflow.Definition, int) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		fmt.Fprintf(stderr, "workflow 定義の path を解決できない (%s): %v\n", path, err)
+		return workflow.Definition{}, exitFailed
+	}
+	def, err := workflow.Load(abs, e.getenv)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return workflow.Definition{}, exitUsage
+	}
+	return def, 0
+}
+
+// runStatus は `status [<workflow の path>]` を撃つ (formats.md §7.2)。何も書かず、gh も撃たない。
+func runStatus(args []string, stdout, stderr io.Writer) int {
+	path, ok := workflowArg(args, nil, stderr)
+	if !ok {
+		return exitUsage
+	}
+	e := newEnvironment()
+	def, code := loadForReading(e, path, stderr)
+	if code != 0 {
+		return code
+	}
+	scopeKey := github.ScopeKey(def.Tracker.Repo)
+	dir := state.Dir(state.Root(e.getenv), scopeKey)
+	alive, err := state.Alive(dir)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return exitFailed
+	}
+	snap, found, err := status.Read(dir)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return exitFailed
+	}
+	var shown *status.Snapshot
+	if found {
+		shown = &snap
+	}
+	fmt.Fprint(stdout, status.Render(shown, scopeKey, alive, time.Now(), time.Local))
+	return 0
+}
+
+// runPaths は `paths --json [<workflow の path>]` を撃つ (formats.md §7.3)。
+func runPaths(args []string, stdout, stderr io.Writer) int {
+	path, ok := workflowArg(args, []string{"--json"}, stderr)
+	if !ok {
+		return exitUsage
+	}
+	e := newEnvironment()
+	def, code := loadForReading(e, path, stderr)
+	if code != 0 {
+		return code
+	}
+	scopeKey := github.ScopeKey(def.Tracker.Repo)
+	dir := state.Dir(state.Root(e.getenv), scopeKey)
+	raw, err := json.Marshal(map[string]string{
+		"scope_key": scopeKey, "state_dir": dir, "log": filepath.Join(dir, "log.jsonl"),
+		"status_file": filepath.Join(dir, status.FileName), "workspace_root": def.WorkspaceRoot,
+	})
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return exitFailed
+	}
+	fmt.Fprintf(stdout, "%s\n", raw)
+	return 0
 }
