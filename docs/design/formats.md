@@ -236,6 +236,41 @@ action と本文 (共通 prompt) は、worker を起動するたびに Go の te
 - 同じ key を 1 つの対応表に 2 回書いたこと
 - action と本文の template を描画できないこと (§2.7。綴りの誤り・未知の変数・未知の関数)
 
+### 2.9 事前検査
+
+trigger ごとに、action の先頭の skill か command が呼べるかを確かめる (system.md §8)。作業対象に依らずに確かめられるよう、描画の前の template を見る。
+
+- action の先頭 (前の空白を除く) が `/` なら、空白までを名前とし、次の置き場の skill と command から探す
+  - **repo の `.claude/`**: workflow 定義の dir の `.claude/skills/<dir>/SKILL.md` と `.claude/commands/<名前>.md`
+  - **`~/.claude/`**: HOME の `.claude/skills/<dir>/SKILL.md` と `.claude/commands/<名前>.md`
+  - **plugin**: 次の 3 つから見つけた plugin の skill と command
+    - `~/.claude/plugins/installed_plugins.json` が挙げる plugin (`scope` が `project` / `local` のものは、`projectPath` が workflow 定義の dir のものだけ)
+    - repo の `.claude/skills/` と `~/.claude/skills/` の直下の dir のうち、`.claude-plugin/plugin.json` を持つもの
+    - `claude.args` の `--plugin-dir <path>`
+- 名前の当て方
+  - skill の名前は、`SKILL.md` の front matter の `name`。無ければ dir の名前
+  - command の名前は、`commands/` からの相対 path の `.md` を除き、`/` を `:` にしたもの (`commands/foo/bar.md` は `foo:bar`)
+  - plugin の skill と command は `<plugin の名前>:<名前>` で呼ぶ。plugin の名前は `.claude-plugin/plugin.json` の `name`
+  - plugin の skill は、plugin の `skills/<dir>/SKILL.md` と、`plugin.json` の `skills` が挙げる path (その path の `SKILL.md`、無ければその下の `<dir>/SKILL.md`)。command は、`plugin.json` の `commands` が path を挙げればその path、無ければ `commands/`
+- action の先頭を template 変数で始める (前の空白を除いて `{{` で始まる) と、先頭の `/名前` を確かめられないので、その trigger を失敗させる
+- 先頭が `/` でも template 変数でもない action は、確かめない
+- 誤りは trigger を名指しして 1 件 1 行で出す
+
+```
+trigger implement: action の先頭の /playbook が見つからない (plugin・repo の .claude・~/.claude の skill と command)
+trigger fix-ci: action が template 変数で始まるので、先頭の skill を確かめられない
+```
+
+| いつ | 落ちたら |
+|---|---|
+| `loop` の起動時 (§6) | 起動を失敗させる (exit 2) |
+| 試運転 (§5) | 失敗させる (exit 2) |
+| tick の中 (§6) | その trigger だけを起動しない (再起動も)。他の trigger は評価して起動する |
+| `doctor` (§7.4) | `NG` の行に出す |
+
+- Claude Code に組み込みの command (`/review` など) は 3 つの置き場に無いので、見つからないと数える
+- plugin が有効か (settings の `enabledPlugins`) は見ない
+
 ## 3. exit code
 
 | exit | 意味 |
@@ -255,7 +290,7 @@ action と本文 (共通 prompt) は、worker を起動するたびに Go の te
 
 | `event` | いつ | ほかの key |
 |---|---|---|
-| `tick` | tick の終わり | `result` (`ok` / `error`)・`candidates` (候補の数)・`launched` (起動した作業対象の列)・`ambiguous` (曖昧な CL。`{"head": <head branch>, "targets": [<作業対象>…]}` の列)・`error` (`result` が `error` のとき) |
+| `tick` | tick の終わり | `result` (`ok` / `error`)・`candidates` (候補の数)・`launched` (起動した作業対象の列)・`ambiguous` (曖昧な CL。`{"head": <head branch>, "targets": [<作業対象>…]}` の列)・`blocked` (事前検査 (§2.9) に落ちて起動しない trigger。`{"trigger": <名前>, "error": <理由>}` の列)・`error` (`result` が `error` のとき) |
 | `start` | worker を起動した | `target`・`trigger`・`attempt`・`session_id`・`workspace`・`pid` |
 | `end` | worker 1 回分の終わり方を決めた | `target`・`trigger`・`attempt`・`session_id`・`outcome`・`reason`・`exit_code` (process が自分で終わったときだけ。signal で止まったら載せない) |
 | `retry` | `failed` の後、次の attempt を予定した | `target`・`trigger`・`attempt`・`next_attempt`・`session_id`・`backoff` (秒。小数を含む) |
@@ -286,7 +321,7 @@ action と本文 (共通 prompt) は、worker を起動するたびに Go の te
 claude-dispatcher loop --dry-run [<workflow の path>]
 ```
 
-workflow 定義を読んで検査し、snapshot を作って trigger を評価し、起動するはずの作業対象を示して終わる。**何も書かない** (state dir を作らず、lock も取らない)。
+workflow 定義を読んで検査し、事前検査 (§2.9) を通し、snapshot を作って trigger を評価し、起動するはずの作業対象を示して終わる。**何も書かない** (state dir を作らず、lock も取らない)。
 
 成功したら、候補を 1 件 1 行で、評価の順 (§2.4) に stdout へ出す。候補が無ければ何も出さない。
 
@@ -314,6 +349,7 @@ claude-dispatcher loop [<workflow の path>]
 |---|---|
 | 引数の数と flag | 2 |
 | workflow 定義を読めて、検査に通る (§2.8) | 2 |
+| 事前検査 (§2.9) に通る | 2 |
 | gh と `claude.command` を解決できる (PATH と、よく使われる置き場)。`on: cl` の trigger があれば git も | 1 |
 | state dir を作れる | 1 |
 | 同じ scope key の loop が走っていない (`loop.lock` を取れる) | 3 |
@@ -333,7 +369,7 @@ claude-dispatcher loop [<workflow の path>]
 
 1. 突き合わせ: 走っている worker の作業対象を読み直し、終端 (issue の close、CL の merge か close) になっていれば worker を止め、`after_run` と `before_remove` を撃って workspace を消す。trigger から外れただけでは止めない
 2. 終わった worker のうち、作業対象を読み直せなかったものを読み直す
-3. workflow 定義を読み直して snapshot を作る
+3. workflow 定義を読み直し、事前検査 (§2.9) を通して snapshot を作る。事前検査に落ちた trigger は、手順 6 と 7 で起動しない
 4. 掃除: workspace root の下の `issue-<番号>` と `cl-<番号>` のうち、claim が無く open な一覧にも無いものを読み直し、終端になっていれば `before_remove` を撃って消す。起動の直後の tick が起動時の掃除を兼ね、以後の tick が、claim を解いた後に終端になったものと消し損ねたものを拾う
 5. 打ち切りを解く: 打ち切った作業対象のうち、snapshot に無いか、打ち切ったときの trigger の述語に当たらなくなったもの (その trigger が workflow 定義から消えたもの・曖昧な CL になったものを含む) の打ち切りを解く。conflict を計算中の CL は、外れたとは数えない
 6. 再起動: backoff の明けた再起動待ちの claim を、次の「再起動」の規則で起動する
@@ -387,6 +423,7 @@ claude-dispatcher loop [<workflow の path>]
 <時刻> loop を始めた: scope <scope key> · state dir <path> · workflow <path>
 <時刻> tick ok · 候補 2: implement issue #42, fix-ci cl #51
 <時刻> tick ok · 候補 0 · 曖昧な CL: worktree-issue-7 (cl#52, cl#53)
+<時刻> tick ok · 候補 1: implement issue #42 · 起動しない trigger: implement (action の先頭の /playbook が見つからない …)
 <時刻> tick error · <理由>
 <時刻> 起動 issue#42 (implement, attempt 1, session <uuid>)
 <時刻> 活動 issue#42: tool Bash
@@ -452,7 +489,8 @@ loop の今の状態を、表示のためだけに書き出す (system.md §9)�
      "started_at": "2026-10-01T00:05:00Z", "activity": {"at": "2026-10-01T00:05:10Z", "summary": "tool Bash"}}
   ],
   "abandoned": [{"target": "issue#43", "trigger": "implement"}],
-  "ambiguous": [{"head": "worktree-issue-7", "targets": ["cl#52", "cl#53"]}]
+  "ambiguous": [{"head": "worktree-issue-7", "targets": ["cl#52", "cl#53"]}],
+  "blocked": [{"trigger": "fix-ci", "error": "action の先頭の /fix が見つからない (plugin・repo の .claude・~/.claude の skill と command)"}]
 }
 ```
 
@@ -467,6 +505,7 @@ loop の今の状態を、表示のためだけに書き出す (system.md §9)�
 | `workers[].activity` | 活動 (§6 の画面)。まだ無ければ `null` |
 | `abandoned` | 打ち切った作業対象と、打ち切ったときの trigger |
 | `ambiguous` | 直近の tick の曖昧な CL (§2.4) |
+| `blocked` | 直近の tick で事前検査 (§2.9) に落ちて、起動しない trigger |
 
 ### 7.2 `status`
 
@@ -482,6 +521,7 @@ issue#42  implement  attempt 1  走っている  5m10s  tool Bash
 issue#44  implement  attempt 2  再起動待ち  00:06:40 に再起動
 打ち切り issue#43 (implement): label を外して trigger から外し、1 周期待ってから付け直すと解ける
 曖昧な CL worktree-issue-7: cl#52, cl#53
+起動しない trigger fix-ci: action の先頭の /fix が見つからない (plugin・repo の .claude・~/.claude の skill と command)
 ```
 
 - 1 行目は見出し。loop が生きていれば `loop 稼働中` (停止要求の後は `loop 停止待ち`)、`alive.lock` を取れれば `loop なし`
@@ -511,7 +551,98 @@ exit: 0 / 2 = 引数・workflow 定義の誤り / 1 = workflow 定義の path �
 
 ### 7.4 `setup` / `doctor`
 
-未定。#82 で作り直す。今の binary はこの subcommand を持たない。
+```
+claude-dispatcher setup [<workflow の path>]
+claude-dispatcher doctor [<workflow の path>]
+```
+
+**`setup`**: 実装 repo の clone を cwd にして撃ち、workflow 定義の雛形 (下) を path (既定 `WORKFLOW.md`) に書く。
+
+- `tracker.repo` は、cwd で `gh repo view --json nameWithOwner` が返す repo で埋める
+- path に file が既にあれば書かない (上書きしない)。そのことを stdout に出して exit 0
+- 書いたら、path と、次に試運転 (§5) を撃つことを stdout に出す
+
+exit: 0 = 書いた・既にある / 2 = 引数の誤り / 1 = repo を決められない (gh の失敗)・書けない。
+
+**雛形**: 汎用の action (実装・conflict・review・CI) を置く。action は先頭に skill を書かない文で、plugin の無い環境でも事前検査 (§2.9) に通る。承認済みの CL (`approved: true`) に当てる trigger は置かない (merge を worker に任せるかは利用者が決める)。
+
+```markdown
+---
+tracker:
+  kind: github
+  repo: <setup が埋める owner/name>
+polling:
+  interval: 5m
+hooks:
+  after_create: git -C "$CLAUDE_DISPATCHER_CLONE" worktree add --detach "$CLAUDE_DISPATCHER_WORKSPACE"
+  before_remove: git -C "$CLAUDE_DISPATCHER_CLONE" worktree remove --force "$CLAUDE_DISPATCHER_WORKSPACE"
+limits:
+  max_concurrent: 1
+claude:
+  args: [--permission-mode, auto]
+triggers:
+  - name: implement
+    on: issue
+    when:
+      labels:
+        all: [ready-for-agent]
+      blocked: false
+    action: |
+      issue #{{ .issue.number }} ({{ .issue.url }}) を実装する。…
+  - name: resolve-conflict
+    on: cl
+    when:
+      conflict: true
+      head: claude-dispatcher/*
+      draft: false
+    action: |
+      CL #{{ .cl.number }} ({{ .cl.url }}) の conflict を解く。…
+  - name: address-review
+    on: cl
+    when:
+      review_unresolved: true
+      head: claude-dispatcher/*
+      draft: false
+    action: |
+      CL #{{ .cl.number }} ({{ .cl.url }}) の未解決の review に応える。…
+  - name: fix-ci
+    on: cl
+    when:
+      ci_failed: true
+      head: claude-dispatcher/*
+      draft: false
+    action: |
+      CL #{{ .cl.number }} ({{ .cl.url }}) の失敗している CI を直す。…
+  # 承認済みの CL に当てる trigger (approved: true) は置かない。merge を worker に任せるなら自分で足す
+---
+<共通 prompt: 無人の worker としての作業規約>
+```
+
+- 全文は `internal/scaffold/WORKFLOW.md`。実装の worker は `claude-dispatcher/issue-<番号>` の branch で CL を出し、CL 側の trigger は `head: claude-dispatcher/*` で自分の出した CL に絞る
+
+**`doctor`**: 導入を確かめる。何も書かない。確かめたことを 1 件 1 行で、`ok` / `NG` / `警告` を頭に付けて stdout に出す。
+
+1. workflow 定義を読めて、検査 (§2.8) に通る。落ちたら以降は確かめない
+2. gh の認証が通り、issue 置き場が見える (open な作業対象を読める)
+3. 事前検査 (§2.9)。落ちた trigger ごとに `NG` の行
+4. 利用者の約束に頼る宣言を `警告` の行に出す (system.md §11)
+   - `approved: true` の CL 側の trigger (merge を worker に任せうる)
+   - `head`・`labels`・`same_repo: true` のどれも書いていない CL 側の trigger (人の CL や fork の CL に worker を送りうる)
+5. Claude Code の settings (`permissions.allow`) に要りそうな entry を表示する。CLI は settings を書かない (ADR 0004)
+
+```
+ok   workflow 定義 /path/to/WORKFLOW.md
+ok   issue 置き場 acme/widgets
+NG   trigger fix-ci: action の先頭の /fix が見つからない (plugin・repo の .claude・~/.claude の skill と command)
+警告 trigger merge: approved: true の CL に action を当てている (merge を worker に任せうる)
+警告 trigger fix-ci: head・labels・same_repo: true のどれでも絞っていない (人の CL や fork の CL に worker を送りうる)
+settings の permissions.allow に要りそうな entry (CLI は書かない):
+  Bash(gh issue:*)
+  Bash(gh pr:*)
+  Bash(git push:*)
+```
+
+exit: 0 = `NG` が無い (`警告` は落とさない) / 1 = `NG` がある / 2 = 引数の誤り。
 
 ## 8. `--version`
 
