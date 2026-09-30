@@ -108,17 +108,17 @@ func (p *backgroundRun) running() bool {
 func (p *backgroundRun) signal(sig syscall.Signal) {
 	p.t.Helper()
 	if err := p.cmd.Process.Signal(sig); err != nil {
-		p.t.Fatalf("loop に %v を送れない: %v", sig, err)
+		p.t.Fatalf("%v に %v を送れない: %v", p.cmd.Args, sig, err)
 	}
 }
 
-// wait は loop の終了を待ち、exit code と出力を返す。
+// wait は process の終了を待ち、exit code と出力を返す。
 func (p *backgroundRun) wait() runResult {
 	p.t.Helper()
 	select {
 	case <-p.done:
 	case <-time.After(runTimeout):
-		p.t.Fatalf("loop が %s で終わらない\nstdout:\n%s\nstderr:\n%s", runTimeout, p.stdout, p.stderr)
+		p.t.Fatalf("%v が %s で終わらない\nstdout:\n%s\nstderr:\n%s", p.cmd.Args, runTimeout, p.stdout, p.stderr)
 	}
 	return runResult{exit: p.cmd.ProcessState.ExitCode(), stdout: p.stdout.String(), stderr: p.stderr.String()}
 }

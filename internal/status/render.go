@@ -48,19 +48,19 @@ func (r Report) Heading() string {
 		return ticklog.Summary(l.TS, l.Result)
 	})
 	fields := []string{r.Project, loop}
-	if t := r.Tick; t != nil {
-		progress := FormatElapsed(t.Elapsed)
-		if t.Orchestrator != nil {
-			progress = OrchestratorProgress(t.Orchestrator.Elapsed)
-		}
-		fields = append(fields, "tick 実行中 · "+progress)
+	if r.Tick != nil {
+		fields = append(fields, "tick 実行中 · "+r.Tick.Progress())
 	}
 	return strings.Join(append(fields, "最終 tick "+last), "  ")
 }
 
-// OrchestratorProgress は orchestrator を待つ間の経過と上限 (`orchestrator 3m (上限 15m)`)。status の見出しと loop の画面が使う。
-func OrchestratorProgress(elapsed time.Duration) string {
-	return fmt.Sprintf("orchestrator %s (上限 %s)", FormatElapsed(elapsed), FormatElapsed(tick.OrchestratorTimeout))
+// Progress は走っている tick の経過 (`3m`)。orchestrator の実行中はその経過と上限 (`orchestrator 3m (上限 15m)`)。
+// status の見出しと loop の画面の状態欄が使う (formats.md §10 / §13.1)。
+func (t RunningTick) Progress() string {
+	if t.Orchestrator != nil {
+		return fmt.Sprintf("orchestrator %s (上限 %s)", FormatElapsed(t.Orchestrator.Elapsed), FormatElapsed(tick.OrchestratorTimeout))
+	}
+	return FormatElapsed(t.Elapsed)
 }
 
 // NoteLines は注記の行。

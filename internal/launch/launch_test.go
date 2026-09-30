@@ -38,7 +38,7 @@ func processState(pid int) string {
 }
 
 // ignoreStart は起動の通知を受け流す
-func ignoreStart(string) {}
+func ignoreStart(string, time.Time) {}
 
 func TestRunOrchestratorStopsItOnAStopRequestAndSaysSo(t *testing.T) {
 	c := fakeClaude(t, "sleep 30")

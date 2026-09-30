@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"syscall"
 	"testing"
 
 	"github.com/swat9013/claude-dispatcher/test/blackbox/stubwire"
@@ -97,12 +96,6 @@ func TestStatusShowsTheTickAndAnOrchestratorRowWhileTheOrchestratorRuns(t *testi
 	if !want.MatchString(strings.Join(row, " ")) {
 		t.Fatalf("orchestrator の行 = %v:\n%s", row, r.stdout)
 	}
-
-	s.release("orchestrator")
-	s.waitTickLines(1)
-	waitFor(t, func() bool { return !s.tickNowExists() }, "tick が終わっても tick.now が残っている")
-	p.signal(syscall.SIGINT)
-	assertExit(t, p.wait(), 0)
 }
 
 func TestStatusShowsTheTickWithoutAnOrchestratorRowWhileTheTickObserves(t *testing.T) {
@@ -123,6 +116,49 @@ func TestStatusShowsTheTickWithoutAnOrchestratorRowWhileTheTickObserves(t *testi
 	}
 	s.release("observation")
 	assertExit(t, p.wait(), 0)
+}
+
+func TestStatusShowsNoRunningTickWhenItCannotReadTheProcessList(t *testing.T) {
+	s := newSandbox(t)
+	s.observationWaits()
+	p := s.startProcess(s.command("tick", s.project))
+	s.waitObservationCall()
+	s.respond("ps", stubwire.Rule{Exit: 1, Stderr: "ps: boom\n"})
+
+	r := s.statusPS()
+
+	s.release("observation")
+	assertExit(t, p.wait(), 0)
+	if strings.Contains(r.stdout, "tick 実行中") {
+		t.Fatalf("process の一覧を読めないのに走っている tick を出した:\n%s", r.stdout)
+	}
+	if !strings.Contains(r.stdout, "  ! process の一覧を読めない") {
+		t.Fatalf("process の一覧を読めない注記が無い:\n%s", r.stdout)
+	}
+}
+
+func TestStatusNotesATickNowItCannotRead(t *testing.T) {
+	s := newSandbox(t)
+	mustWrite(t, s.tickNowFile(), "{not json\n")
+	s.setProcesses()
+
+	r := s.statusPS()
+
+	assertExit(t, r, 0)
+	if strings.Contains(r.stdout, "tick 実行中") || !strings.Contains(r.stdout, "  ! tick.now を読めない") {
+		t.Fatalf("読めない tick.now を注記して、走っている tick を出さない:\n%s", r.stdout)
+	}
+}
+
+func TestLoopSecondSignalLeavesNoTickNow(t *testing.T) {
+	s := newSandbox(t)
+
+	r := s.secondSignalDuringTheOrchestrator()
+
+	assertExit(t, r, 0)
+	if s.tickNowExists() {
+		t.Fatal("停止要求で止めた tick が tick.now を残した")
+	}
 }
 
 func TestTickLeavesNoTickNowWhenItEnds(t *testing.T) {
@@ -159,6 +195,7 @@ func TestStatusIgnoresATickNowLeftByAProcessThatIsGone(t *testing.T) {
 	}{
 		{"pid の process が居ない", nil},
 		{"pid が別の process に再利用された", []string{"4343 /bin/sleep 100"}},
+		{"pid が別の project の loop に再利用された", []string{"4343 " + dispatcherBin + " loop otherproj 5m"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newSandbox(t)

@@ -27,8 +27,10 @@ type State struct {
 	// TS は tick の開始時刻。log.jsonl の tick 行の ts と同じ値
 	TS    string `json:"ts"`
 	Stage Stage  `json:"stage"`
-	// Orchestrator は orchestrator を起動した後だけ埋まる
+	// Orchestrator は orchestrator の実行中 (Stage が Orchestrator) だけ埋まる
 	Orchestrator *OrchestratorRun `json:"orchestrator,omitempty"`
+	// Written は file を最後に書いた時刻 (file の mtime)。読むときだけ埋まる
+	Written time.Time `json:"-"`
 }
 
 // OrchestratorRun は起動した orchestrator。
@@ -68,19 +70,22 @@ func Remove(file string) error {
 
 // Read は file を読む。無ければ nil を返す。
 func Read(file string) (*State, error) {
-	raw, err := os.ReadFile(file)
+	f, err := os.Open(file)
 	if os.IsNotExist(err) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
 	var state State
-	if err := json.Unmarshal(raw, &state); err != nil {
+	if err := json.NewDecoder(f).Decode(&state); err != nil {
 		return nil, fmt.Errorf("%s の形が読めない: %w", file, err)
 	}
+	state.Written = info.ModTime()
 	return &state, nil
 }
-
-// ParseTime は TS / Started の綴り (RFC 3339 の UTC) を読む。
-func ParseTime(s string) (time.Time, error) { return time.Parse(time.RFC3339Nano, s) }

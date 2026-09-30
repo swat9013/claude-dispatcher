@@ -25,6 +25,7 @@ import (
 	"github.com/swat9013/claude-dispatcher/internal/paths"
 	"github.com/swat9013/claude-dispatcher/internal/plugin"
 	"github.com/swat9013/claude-dispatcher/internal/proc"
+	"github.com/swat9013/claude-dispatcher/internal/ticklog"
 	"github.com/swat9013/claude-dispatcher/internal/ticknow"
 )
 
@@ -87,6 +88,9 @@ type Outcome struct {
 	Halt    Halt
 	// OrchestratorLog は orchestrator を起動した tick の orchestrator log の path
 	OrchestratorLog string
+	// TickNowErrors は tick.now を書けなかった・消せなかった理由。tick の result には影響しない (表示のための痕跡なので)。
+	// 単発の tick は stderr に、loop は画面の `!` 行に出す
+	TickNowErrors []string
 }
 
 // stop は tick を止める失敗。result と error 文を持つ。
@@ -130,6 +134,8 @@ type run struct {
 	halt    Halt
 	// orchestratorLog は orchestrator を起動したときだけ埋まる
 	orchestratorLog string
+	// tickNowErrors は tick.now を書けなかった・消せなかった理由 (Outcome.TickNowErrors)
+	tickNowErrors []string
 }
 
 func newRun(o Options) *run {
@@ -147,6 +153,9 @@ func (r *run) getenv(key string) string { return deps.Getenv(r.o.Env, key) }
 // Run は単発の tick を 1 回回して exit code を返す。失敗したら失敗行 (formats.md §6) を stderr の末尾に出す。
 func Run(o Options) int {
 	out := Once(o)
+	for _, msg := range out.TickNowErrors {
+		fmt.Fprintln(o.Stderr, msg)
+	}
 	if out.Result != ResultOK || !out.Logged {
 		loggedTS := ""
 		if out.Logged {
@@ -169,6 +178,7 @@ func Once(o Options) (out Outcome) {
 	defer func() {
 		if lock != nil {
 			r.clearStage()
+			out.TickNowErrors = r.tickNowErrors
 			lock.Close() // 閉じると flock も外れる
 		}
 	}()
@@ -185,19 +195,19 @@ func Once(o Options) (out Outcome) {
 	return r.finish(r.tick())
 }
 
-// markStage は tick.now を段階 stage で書き直す。orchestrator は起動した後だけ渡す。書けなくても tick は止めない
-// (表示のための痕跡で、指示の導出にも lock の判定にも使わない) — 理由を stderr に出す。
+// markStage は tick.now を段階 stage で書き直す。orchestrator は実行中だけ渡す。書けなくても tick は止めない
+// (表示のための痕跡で、指示の導出にも lock の判定にも使わない) — 理由を Outcome.TickNowErrors に残す。
 func (r *run) markStage(stage ticknow.Stage, orchestrator *ticknow.OrchestratorRun) {
 	state := ticknow.State{PID: os.Getpid(), TS: r.line.TS, Stage: stage, Orchestrator: orchestrator}
 	if err := ticknow.Write(r.project.TickNowFile(), state); err != nil {
-		fmt.Fprintf(r.o.Stderr, "tick.now を書けない (status に走っている tick が出ない): %v\n", err)
+		r.tickNowErrors = append(r.tickNowErrors, fmt.Sprintf("tick.now を書けない (status に走っている tick が出ない): %v", err))
 	}
 }
 
-// clearStage は tick.now を消す。消せなければ理由を stderr に出す (status は pid の照合で残った file を無視する)。
+// clearStage は tick.now を消す。消せなければ理由を Outcome.TickNowErrors に残す (status は pid の照合で残った file を無視する)。
 func (r *run) clearStage() {
 	if err := ticknow.Remove(r.project.TickNowFile()); err != nil {
-		fmt.Fprintf(r.o.Stderr, "tick.now を消せない: %v\n", err)
+		r.tickNowErrors = append(r.tickNowErrors, fmt.Sprintf("tick.now を消せない: %v", err))
 	}
 }
 
@@ -424,6 +434,8 @@ func (r *run) driveOrchestrator(obs observation, instructionFile string) error {
 	if err != nil {
 		return err
 	}
+	// orchestrator はもう居ない。正常終了でなければ、この後すぐ tick 行を書いて終わる
+	r.markStage(ticknow.Spawning, nil)
 	r.orchestratorLog = orchestratorLog
 	r.line.launchedKeys = &launchedKeys{Orchestrator: newOrchestratorRecord(run), Spawned: []spawned{}}
 	if run.End == proc.Stopped {
@@ -438,7 +450,6 @@ func (r *run) driveOrchestrator(obs observation, instructionFile string) error {
 		return fmt.Errorf("orchestrator が正常終了しなかった (exit %d, timed_out=%t)。決定ファイルは読まない。"+
 			"経過は %s。この tick で wip を付けたまま残った issue があれば、人が確かめて剥がす", run.ExitCode, run.End == proc.TimedOut, orchestratorLog)
 	}
-	r.markStage(ticknow.Spawning, nil)
 	decisions, err := ReadDecisions(decisionsFile, obs.instructions)
 	if err != nil {
 		return err
@@ -461,10 +472,10 @@ func (r *run) driveOrchestrator(obs observation, instructionFile string) error {
 	return nil
 }
 
-// orchestratorStarted は起動部が orchestrator を起動した直後に呼ぶ。tick.now と loop の画面の経過の起点を同じ時刻にする。
-func (r *run) orchestratorStarted(sessionID string) {
-	at := time.Now()
-	r.markStage(ticknow.Orchestrator, &ticknow.OrchestratorRun{Started: at.UTC().Format(logTimeLayout), SessionID: sessionID})
+// orchestratorStarted は起動部が orchestrator を起動した直後に呼ぶ。tick.now・loop の画面の経過・tick 行の orchestrator の
+// seconds の起点を、起動部が測った同じ時刻にする。
+func (r *run) orchestratorStarted(sessionID string, at time.Time) {
+	r.markStage(ticknow.Orchestrator, &ticknow.OrchestratorRun{Started: ticklog.FormatTS(at), SessionID: sessionID})
 	if r.o.Control.OrchestratorStarted != nil {
 		r.o.Control.OrchestratorStarted(at)
 	}

@@ -212,3 +212,47 @@ func TestReportTableLinesStartWithTheColumnHeaderThenOneRowPerWorker(t *testing.
 		t.Fatalf("table = %q, want 列の見出し行と issue 42 の行", table)
 	}
 }
+
+// projectWithTickNow は tick.now に content を置いた project を返す (log.jsonl は置かない)。
+func projectWithTickNow(t *testing.T, content string) paths.Project {
+	t.Helper()
+	dir := t.TempDir()
+	p := paths.Project{Name: "acme", ConfigDir: filepath.Join(dir, "config"), StateDir: filepath.Join(dir, "state")}
+	if err := os.MkdirAll(p.StateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p.TickNowFile(), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func machineWith(processes map[int]string) *fakeMachine {
+	return &fakeMachine{machine: launch.Machine{Processes: processes, Agents: "[]"}}
+}
+
+func TestCollectShowsATickPastItsOrchestratorWithoutAnOrchestratorRow(t *testing.T) {
+	p := projectWithTickNow(t, `{"pid":77,"ts":"2026-09-26T03:00:00.000000Z","stage":"spawn"}`)
+	probes := probesWith(machineWith(map[int]string{77: "/usr/local/bin/claude-dispatcher tick acme"}), answers())
+
+	r := Collect([]paths.Project{p}, t.TempDir(), probes, time.Now)[0]
+
+	if r.Tick == nil || r.Tick.Orchestrator != nil || !strings.Contains(r.Heading(), "  tick 実行中 · ") {
+		t.Fatalf("tick = %+v / 見出し %q, want tick 実行中の状態欄だけ (orchestrator は終わっている)", r.Tick, r.Heading())
+	}
+	if lines := r.TableLines(); lines != nil {
+		t.Fatalf("orchestrator の行を出した: %v", lines)
+	}
+}
+
+func TestCollectDoesNotCallATickNowWrittenAfterTheProcessListLeftBehind(t *testing.T) {
+	// process の一覧を読んだ後に始まった tick は一覧に写っていない。異常終了の残りと取り違えない
+	p := projectWithTickNow(t, `{"pid":77,"ts":"2026-09-26T03:00:00.000000Z","stage":"observe"}`)
+	observedBeforeTheFile := func() time.Time { return time.Now().Add(-time.Minute) }
+
+	r := Collect([]paths.Project{p}, t.TempDir(), probesWith(quietMachine(), answers()), observedBeforeTheFile)[0]
+
+	if r.Tick != nil || len(r.Notes) != 0 {
+		t.Fatalf("tick = %+v / 注記 %v, want 走っている tick も注記も出さない", r.Tick, r.Notes)
+	}
+}
