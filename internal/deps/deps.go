@@ -13,7 +13,7 @@ import (
 var Names = []string{"gh", "claude", "git"}
 
 // candidates は PATH に無いときに足す置き場。前に居るものから探す (Homebrew は macOS の 2 つと Linux の prefix)。
-// HOME の外の置き場を変えたら、black-box テストの selfResolutionDirs も揃える
+// HOME の外の置き場を変えたら、black-box テストの selfResolutionDirs も揃える (candidates_test.go が一致を確かめる)
 var candidates = []string{
 	"~/.local/bin", "~/.local/share/mise/shims",
 	"/opt/homebrew/bin", "/usr/local/bin", "/home/linuxbrew/.linuxbrew/bin",

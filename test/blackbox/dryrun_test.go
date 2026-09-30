@@ -7,7 +7,8 @@ import (
 	"testing"
 )
 
-// 試運転 `loop --dry-run` (formats.md §5) と、issue 側の trigger の評価 (formats.md §2.2 / §2.3)。
+// 試運転 `loop --dry-run` (formats.md §5)。述語の 1 つずつの意味は internal/trigger の単体テストが持ち、ここでは
+// gh の応答から候補の行までを通した経路を見る。
 
 // candidateLines は試運転の stdout を 1 候補 1 行の列で返す。
 func candidateLines(t *testing.T, r runResult) []string {
@@ -35,11 +36,14 @@ func TestDryRunListsTheIssuesThatMatchATriggerOldestFirst(t *testing.T) {
 	s := newSandbox(t)
 	unlabeled := readyIssue(44)
 	unlabeled.labels = nil
-	s.setIssues(readyIssue(43), unlabeled, readyIssue(42))
+	// 番号の大きい #50 のほうが古い
+	oldest := readyIssue(50)
+	oldest.createdAt = createdAt(1)
+	s.setIssues(readyIssue(43), unlabeled, oldest, readyIssue(42))
 
 	r := s.dryRun()
 
-	assertCandidates(t, r, candidate("implement", 42), candidate("implement", 43))
+	assertCandidates(t, r, candidate("implement", 50), candidate("implement", 42), candidate("implement", 43))
 }
 
 func TestDryRunListsCandidatesInTriggerDeclarationOrderBeforeCreationOrder(t *testing.T) {
@@ -81,79 +85,27 @@ func TestIssueMatchingTwoTriggersIsListedOnlyUnderTheFirstDeclared(t *testing.T)
 	assertCandidates(t, r, candidate("first", 7))
 }
 
-func TestTriggerWithoutWhenMatchesEveryOpenIssue(t *testing.T) {
+func TestPredicatesAreEvaluatedOnWhatGhReturns(t *testing.T) {
 	s := newSandbox(t)
 	s.writeWorkflow(workflowWithTriggers(`
-  - name: all
+  - name: t
     on: issue
-    action: /all`))
-	bare := readyIssue(3)
-	bare.labels = nil
-	s.setIssues(bare)
+    when: {author: collaborator, unassigned: true, milestone: v1, blocked: false}
+    action: /t`))
+	matching := readyIssue(1)
+	matching.milestone = "v1"
+	matching.blockers = []string{"CLOSED"}
+	outsider := readyIssue(2)
+	outsider.milestone, outsider.association = "v1", "CONTRIBUTOR"
+	assigned := readyIssue(3)
+	assigned.milestone, assigned.assignees = "v1", []string{"bob"}
+	blocked := readyIssue(4)
+	blocked.milestone, blocked.blockers = "v1", []string{"OPEN"}
+	s.setIssues(matching, outsider, assigned, blocked)
 
 	r := s.dryRun()
 
-	assertCandidates(t, r, candidate("all", 3))
-}
-
-func TestEachIssuePredicateNarrowsTheCandidates(t *testing.T) {
-	with := func(number int, change func(*issue)) issue {
-		i := readyIssue(number)
-		change(&i)
-		return i
-	}
-	cases := []struct {
-		name   string
-		when   string
-		issues []issue
-		want   []int
-	}{
-		{"labels.any は列のどれかを持つ issue に当たる", `{labels: {any: [bug, docs]}}`,
-			[]issue{with(1, func(i *issue) { i.labels = []string{"docs"} }), with(2, func(i *issue) { i.labels = []string{"feature"} })}, []int{1}},
-		{"labels.none は列の label を持たない issue に当たる", `{labels: {none: [needs-info]}}`,
-			[]issue{with(1, func(i *issue) { i.labels = []string{"needs-info"} }), with(2, func(*issue) {})}, []int{2}},
-		{"label は大文字と小文字を区別せずに比べる", `{labels: {all: [Ready-For-Agent]}}`,
-			[]issue{with(1, func(*issue) {})}, []int{1}},
-		{"assignee はその人が assignee に居る issue に当たる", `{assignee: alice}`,
-			[]issue{with(1, func(i *issue) { i.assignees = []string{"bob", "alice"} }), with(2, func(i *issue) { i.assignees = []string{"bob"} })}, []int{1}},
-		{"unassigned: true は assignee の居ない issue に当たる", `{unassigned: true}`,
-			[]issue{with(1, func(i *issue) { i.assignees = []string{"bob"} }), with(2, func(*issue) {})}, []int{2}},
-		{"unassigned: false は assignee の居る issue に当たる", `{unassigned: false}`,
-			[]issue{with(1, func(i *issue) { i.assignees = []string{"bob"} }), with(2, func(*issue) {})}, []int{1}},
-		{"author: collaborator は owner・member・collaborator の issue に当たる", `{author: collaborator}`,
-			[]issue{
-				with(1, func(i *issue) { i.association = "OWNER" }),
-				with(2, func(i *issue) { i.association = "MEMBER" }),
-				with(3, func(i *issue) { i.association = "COLLABORATOR" }),
-				with(4, func(i *issue) { i.association = "CONTRIBUTOR" }),
-				with(5, func(i *issue) { i.association = "NONE" }),
-			}, []int{1, 2, 3}},
-		{"author: non_collaborator はそれ以外の issue に当たる", `{author: non_collaborator}`,
-			[]issue{with(1, func(i *issue) { i.association = "OWNER" }), with(2, func(i *issue) { i.association = "FIRST_TIME_CONTRIBUTOR" })}, []int{2}},
-		{"milestone はその題名の milestone の issue に当たる", `{milestone: v1}`,
-			[]issue{with(1, func(i *issue) { i.milestone = "v1" }), with(2, func(i *issue) { i.milestone = "v2" }), with(3, func(*issue) {})}, []int{1}},
-		{"blocked: false は未解決の依存先が無い issue に当たる", `{blocked: false}`,
-			[]issue{with(1, func(i *issue) { i.blockers = []string{"OPEN"} }), with(2, func(i *issue) { i.blockers = []string{"CLOSED"} }), with(3, func(*issue) {})}, []int{2, 3}},
-		{"blocked: true は未解決の依存先がある issue に当たる", `{blocked: true}`,
-			[]issue{with(1, func(i *issue) { i.blockers = []string{"CLOSED", "OPEN"} }), with(2, func(i *issue) { i.blockers = []string{"CLOSED"} })}, []int{1}},
-		{"書いた条件はすべて AND で評価する", `{labels: {all: [ready-for-agent]}, unassigned: true}`,
-			[]issue{with(1, func(i *issue) { i.assignees = []string{"bob"} }), with(2, func(i *issue) { i.labels = nil }), with(3, func(*issue) {})}, []int{3}},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			s := newSandbox(t)
-			s.writeWorkflow(workflowWithTriggers("\n  - name: t\n    on: issue\n    when: " + c.when + "\n    action: /t"))
-			s.setIssues(c.issues...)
-
-			r := s.dryRun()
-
-			var want []string
-			for _, n := range c.want {
-				want = append(want, candidate("t", n))
-			}
-			assertCandidates(t, r, want...)
-		})
-	}
+	assertCandidates(t, r, candidate("t", 1))
 }
 
 func TestDryRunPrintsNothingWhenNoIssueMatches(t *testing.T) {
@@ -245,17 +197,36 @@ func TestGhFailuresAreClassifiedIntoExitCodes(t *testing.T) {
 	}
 }
 
-func TestIssueWithMoreLabelsThanOneReadCoversIsNotEvaluated(t *testing.T) {
+func TestDryRunFailsWhenGhCannotBeResolved(t *testing.T) {
+	skipIfSelfResolutionReachesARealOne(t, "gh")
 	s := newSandbox(t)
-	i := readyIssue(9)
-	i.labelTotal = 101
-	s.setIssues(i)
+	if err := os.Remove(s.binDir + "/gh"); err != nil {
+		t.Fatal(err)
+	}
 
 	r := s.dryRun()
 
 	assertExit(t, r, 1)
-	if r.stdout != "" || !strings.Contains(r.stderr, "#9") {
-		t.Fatalf("stdout = %q, stderr = %q, want stdout は空で stderr に #9", r.stdout, r.stderr)
+	if r.stdout != "" || !strings.Contains(r.stderr, "gh") {
+		t.Fatalf("stdout = %q, stderr = %q", r.stdout, r.stderr)
+	}
+}
+
+func TestIssueWithMoreThanOneReadCoversIsNotEvaluated(t *testing.T) {
+	for _, connection := range []string{"labels", "assignees", "blockedBy"} {
+		t.Run(connection, func(t *testing.T) {
+			s := newSandbox(t)
+			i := readyIssue(9)
+			i.overflow = connection
+			s.setIssues(i)
+
+			r := s.dryRun()
+
+			assertExit(t, r, 1)
+			if r.stdout != "" || !strings.Contains(r.stderr, "#9") {
+				t.Fatalf("stdout = %q, stderr = %q, want stdout は空で stderr に #9", r.stdout, r.stderr)
+			}
+		})
 	}
 }
 

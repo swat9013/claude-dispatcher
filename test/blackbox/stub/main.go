@@ -33,10 +33,6 @@ func main() {
 		fmt.Fprintf(os.Stderr, "stub %s: 応答 rule の無い呼び出し: %q\n", name, os.Args[1:])
 		os.Exit(stubwire.UnmatchedExit)
 	}
-	if r.ReleaseFile != "" && !waitForRelease(r.ReleaseFile) {
-		fmt.Fprintf(os.Stderr, "stub %s: %s が %s 経っても現れない\n", name, r.ReleaseFile, stubwire.ReleaseDeadline)
-		os.Exit(stubwire.ReleaseTimeoutExit)
-	}
 	fmt.Fprint(os.Stdout, r.Stdout)
 	fmt.Fprint(os.Stderr, r.Stderr)
 	os.Exit(r.Exit)
@@ -57,18 +53,6 @@ func stubRoot() (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(string(raw)), nil
-}
-
-// waitForRelease は file が現れるまで待つ。上限を過ぎたら false。
-func waitForRelease(file string) bool {
-	deadline := time.Now().Add(stubwire.ReleaseDeadline)
-	for time.Now().Before(deadline) {
-		if _, err := os.Stat(file); err == nil {
-			return true
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	return false
 }
 
 func record(root, name string) error {
@@ -119,11 +103,5 @@ func matchRule(root, name string, args []string) (*stubwire.Rule, error) {
 }
 
 func matches(r stubwire.Rule, args []string) bool {
-	if len(args) < len(r.ArgsPrefix) || !slices.Equal(args[:len(r.ArgsPrefix)], r.ArgsPrefix) {
-		return false
-	}
-	if r.ArgContains == "" {
-		return true
-	}
-	return slices.ContainsFunc(args, func(arg string) bool { return strings.Contains(arg, r.ArgContains) })
+	return len(args) >= len(r.ArgsPrefix) && slices.Equal(args[:len(r.ArgsPrefix)], r.ArgsPrefix)
 }

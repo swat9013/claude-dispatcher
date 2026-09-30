@@ -7,7 +7,7 @@
 //   - PATH に置いた stub (gh / claude / git) が受け取った argv・cwd・env
 //
 // 本 file は sandbox (1 テスト分の HOME / 置き場 / clone / stub) と binary の実行を持つ。
-// stub への応答と fixture は fixtures_test.go、assert は assert_test.go。
+// stub への応答・fixture・assert は fixtures_test.go。
 package blackbox_test
 
 import (
@@ -43,6 +43,22 @@ const (
 // stubNames は PATH に置く stub。今の binary が撃つのは gh だけだが、PATH の自己解決 (依存 CLI が揃っているか) が
 // claude と git も探すので置いておく
 var stubNames = []string{"gh", "claude", "git"}
+
+// selfResolutionDirs は PATH の自己解決 (internal/deps の candidates) が探す置き場のうち、sandbox の HOME の外にあるもの。
+// sandbox の PATH は stub だけで閉じているが、自己解決はここまで探しに行くので、ここにある実物には stub で蓋ができない。
+// black-box テストは internal を import せず外から撃つので、一覧は candidates と重複させて持つ (一致は internal/deps のテストが確かめる)
+var selfResolutionDirs = []string{"/opt/homebrew/bin", "/usr/local/bin", "/home/linuxbrew/.linuxbrew/bin"}
+
+// skipIfSelfResolutionReachesARealOne は、自己解決が届く置き場に name の実物があれば t を skip する。
+// 「解決できない」を確かめるテストは、実物に解決されてしまうと検査が成り立たない
+func skipIfSelfResolutionReachesARealOne(t *testing.T, name string) {
+	t.Helper()
+	for _, dir := range selfResolutionDirs {
+		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+			t.Skipf("PATH の自己解決が届く %s に %s の実物がある", dir, name)
+		}
+	}
+}
 
 var registerSourcesOnce = sync.OnceValue(registerBinarySources)
 
@@ -162,14 +178,13 @@ func (s *sandbox) installStubs() {
 
 // --- 置き場 (formats.md §1) ---
 
-// scopeDir は scope key の state dir の名前 (無害化した scope key と、sha256 の先頭 8 文字)。
-func scopeDir(scopeKey string) string {
-	sum := sha256.Sum256([]byte(scopeKey))
-	return regexp.MustCompile(`[^a-z0-9._-]`).ReplaceAllString(strings.ToLower(scopeKey), "_") + "-" + hex.EncodeToString(sum[:])[:8]
-}
+// defaultScopeKey は defaultIssueRepo の scope key
+const defaultScopeKey = "github.com/acme/widgets"
 
-func (s *sandbox) stateDir(scopeKey string) string {
-	return filepath.Join(s.stateRoot, scopeDir(scopeKey))
+// defaultStateDir は defaultScopeKey の state dir。名前は無害化した scope key に、scope key の sha256 の先頭 8 文字を足したもの
+func (s *sandbox) defaultStateDir() string {
+	sum := sha256.Sum256([]byte(defaultScopeKey))
+	return filepath.Join(s.stateRoot, "github.com_acme_widgets-"+hex.EncodeToString(sum[:])[:8])
 }
 
 // --- workflow 定義 (formats.md §2) ---

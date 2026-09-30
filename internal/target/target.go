@@ -11,7 +11,6 @@ import (
 type Issue struct {
 	Number    int
 	Title     string
-	URL       string
 	CreatedAt time.Time
 	Labels    []string
 	Assignees []string

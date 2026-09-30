@@ -43,8 +43,9 @@ type issue struct {
 	milestone   string
 	// blockers は依存先 (blocked by) の state の列 (OPEN / CLOSED)
 	blockers []string
-	// labelTotal が 0 でなければ、labels の totalCount をこの値にする (読み切れない応答)
-	labelTotal int
+	// overflow が空でなければ、その connection (labels / assignees / blockedBy) の totalCount を
+	// 1 往復で読める 100 件より多くする (読み切れない応答)
+	overflow string
 }
 
 // readyIssue は ready-for-agent の付いた issue。作成日時は番号の順に並ぶ。
@@ -62,10 +63,6 @@ func (i issue) node() map[string]any {
 	for _, l := range i.labels {
 		labels = append(labels, map[string]any{"name": l})
 	}
-	labelTotal := len(labels)
-	if i.labelTotal != 0 {
-		labelTotal = i.labelTotal
-	}
 	assignees := []map[string]any{}
 	for _, a := range i.assignees {
 		assignees = append(assignees, map[string]any{"login": a})
@@ -82,18 +79,21 @@ func (i issue) node() map[string]any {
 	if association == "" {
 		association = "OWNER"
 	}
-	return map[string]any{
+	node := map[string]any{
 		"number":            i.number,
 		"title":             i.title,
-		"url":               "https://github.com/" + defaultIssueRepo + "/issues/" + strconv.Itoa(i.number),
 		"createdAt":         i.createdAt,
 		"authorAssociation": association,
 		"author":            map[string]any{"login": "someone"},
-		"labels":            map[string]any{"totalCount": labelTotal, "nodes": labels},
+		"labels":            map[string]any{"totalCount": len(labels), "nodes": labels},
 		"assignees":         map[string]any{"totalCount": len(assignees), "nodes": assignees},
 		"milestone":         milestone,
 		"blockedBy":         map[string]any{"totalCount": len(blockers), "nodes": blockers},
 	}
+	if i.overflow != "" {
+		node[i.overflow].(map[string]any)["totalCount"] = 101
+	}
+	return node
 }
 
 // issuePages は `gh api graphql --paginate --slurp` の応答 (page の列) を、1 page 2 件で組む。

@@ -12,17 +12,20 @@ import (
 // Trigger は workflow 定義が宣言する、作業対象に対する述語と action の組。
 type Trigger struct {
 	Name string
-	// On は作業対象の種類。今は "issue" だけ
-	On     string
-	When   IssuePredicate
-	Action string
+	On   Kind
+	When IssuePredicate
 }
 
-// Author は作者の立場の条件。
+// Kind は作業対象の種類。
+type Kind string
+
+// Issue は issue の作業対象。CL は #80 で足す
+const Issue Kind = "issue"
+
+// Author は作者の立場の条件。空なら立場を問わない。
 type Author string
 
 const (
-	AnyAuthor       Author = ""
 	Collaborator    Author = "collaborator"
 	NonCollaborator Author = "non_collaborator"
 )
@@ -92,7 +95,7 @@ func Evaluate(triggers []Trigger, issues []target.Issue) []Candidate {
 	candidates := []Candidate{}
 	for _, issue := range issues {
 		for i := range triggers {
-			if triggers[i].On == "issue" && triggers[i].When.Matches(issue) {
+			if triggers[i].On == Issue && triggers[i].When.Matches(issue) {
 				candidates = append(candidates, Candidate{Trigger: &triggers[i], Issue: issue, order: i})
 				break
 			}

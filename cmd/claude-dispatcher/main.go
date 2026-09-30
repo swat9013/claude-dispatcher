@@ -82,17 +82,18 @@ func (e environment) getenv(key string) string { return deps.Getenv(e.env, key) 
 // ghTimeout は gh の 1 回の呼び出しの上限
 const ghTimeout = 120 * time.Second
 
-// openIssues は workflow 定義から issue 置き場の部品を組み立てる。tracker.token があれば gh に GH_TOKEN として渡す。
-func (e environment) openIssues(def workflow.Definition) (loop.Issues, error) {
+// gh は workflow 定義の gh の撃ち方。tracker.token があれば gh に GH_TOKEN として渡す。
+func (e environment) gh(def workflow.Definition) github.Exec {
 	env := e.env
 	if def.Tracker.Token != "" {
 		env = deps.WithEnv(env, map[string]string{"GH_TOKEN": def.Tracker.Token})
 	}
-	gh, err := deps.Lookup("gh", env)
-	if err != nil {
-		return nil, &target.Failure{Kind: target.Unavailable, Place: def.Tracker.Repo.String(), Err: err}
-	}
-	return github.NewIssueStore(github.Exec{Path: gh, Env: env, Timeout: ghTimeout}, def.Tracker.Repo), nil
+	return github.Exec{Env: env, Timeout: ghTimeout}
+}
+
+// openIssues は workflow 定義から issue 置き場の部品を組み立てる。
+func (e environment) openIssues(def workflow.Definition) loop.Issues {
+	return github.NewIssueStore(e.gh(def), def.Tracker.Repo)
 }
 
 // failureExit は観測の失敗の exit code (formats.md §3)。
@@ -146,7 +147,12 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 		return dryRunOnce(e, def, stdout, stderr)
 	}
 
-	scopeKey := github.ScopeKey(def.Tracker.Repo)
+	// 起動時は人が画面の前にいるので、tick で落ちる前に gh を解決できることを確かめる (system.md §8)
+	if err := e.gh(def).Ready(); err != nil {
+		fmt.Fprintln(stderr, err)
+		return exitFailed
+	}
+	scopeKey := e.openIssues(def).ScopeKey()
 	dir := state.Dir(state.Root(e.getenv), scopeKey)
 	lock, err := state.Lock(dir, scopeKey)
 	if errors.Is(err, state.ErrAlreadyRunning) {
@@ -174,18 +180,13 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 
 // dryRunOnce は試運転 (formats.md §5): snapshot を作って trigger を評価し、候補を 1 件 1 行で出す。何も書かない。
 func dryRunOnce(e environment, def workflow.Definition, stdout, stderr io.Writer) int {
-	issues, err := e.openIssues(def)
-	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return failureExit(err)
-	}
-	open, err := issues.OpenIssues()
+	open, err := e.openIssues(def).OpenIssues()
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return failureExit(err)
 	}
 	for _, c := range trigger.Evaluate(def.Triggers, open) {
-		fmt.Fprintf(stdout, "%s\tissue\t#%d\t%s\n", c.Trigger.Name, c.Issue.Number, withoutControls(c.Issue.Title))
+		fmt.Fprintf(stdout, "%s\t%s\t#%d\t%s\n", c.Trigger.Name, c.Trigger.On, c.Issue.Number, withoutControls(c.Issue.Title))
 	}
 	return 0
 }

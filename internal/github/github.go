@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/swat9013/claude-dispatcher/internal/deps"
 	"github.com/swat9013/claude-dispatcher/internal/proc"
 	"github.com/swat9013/claude-dispatcher/internal/target"
 )
@@ -18,15 +19,25 @@ type Runner interface {
 	Run(args ...string) ([]byte, error)
 }
 
-// Exec は gh の実物を撃つ Runner。Path は解決済みの絶対 path、Env は子プロセスの env。
+// Exec は gh の実物を撃つ Runner。gh は撃つたびに Env の PATH から探す。loop は何日も走るので、途中で gh を入れ替えても
+// (Homebrew の更新で置き場が変わるなど) 次の tick から追従させる。
 type Exec struct {
-	Path    string
 	Env     []string
 	Timeout time.Duration
 }
 
+// Ready は gh を解決できるかを確かめる。loop の起動時に、tick で落ち続ける前に止めるために使う。
+func (g Exec) Ready() error {
+	_, err := deps.Lookup("gh", g.Env)
+	return err
+}
+
 func (g Exec) Run(args ...string) ([]byte, error) {
-	out, err := proc.Command{Path: g.Path, Env: g.Env, Timeout: g.Timeout}.Output(args...)
+	path, err := deps.Lookup("gh", g.Env)
+	if err != nil {
+		return nil, err
+	}
+	out, err := proc.Command{Path: path, Env: g.Env, Timeout: g.Timeout}.Output(args...)
 	return []byte(out), err
 }
 
@@ -73,7 +84,6 @@ query($owner: String!, $name: String!, $endCursor: String) {
       nodes {
         number
         title
-        url
         createdAt
         authorAssociation
         labels(first: %[1]d) { totalCount nodes { name } }
@@ -97,7 +107,6 @@ type issuePage struct {
 				Nodes []struct {
 					Number            int
 					Title             string
-					URL               string
 					CreatedAt         time.Time
 					AuthorAssociation string
 					Labels            connection[struct{ Name string }]
@@ -143,7 +152,6 @@ func (s IssueStore) OpenIssues() ([]target.Issue, error) {
 			i := target.Issue{
 				Number:               n.Number,
 				Title:                n.Title,
-				URL:                  n.URL,
 				CreatedAt:            n.CreatedAt,
 				AuthorIsCollaborator: collaboratorAssociations[n.AuthorAssociation],
 			}

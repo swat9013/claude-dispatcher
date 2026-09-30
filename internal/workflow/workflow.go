@@ -19,13 +19,11 @@ import (
 
 // Definition は検査に通った workflow 定義。
 type Definition struct {
-	// Path は読んだ file の絶対 path
-	Path    string
 	Tracker Tracker
 	// Interval は tick の周期
 	Interval time.Duration
 	Triggers []trigger.Trigger
-	// Prompt は本文 (共通 prompt)
+	// Prompt は本文 (共通 prompt)。worker に渡す (#78)
 	Prompt string
 }
 
@@ -72,10 +70,10 @@ func Load(path string, getenv func(string) string) (Definition, error) {
 		return Definition{}, &Errors{Path: path, Problems: []string{fmt.Sprintf("front matter を YAML として読めない: %v", err)}}
 	}
 	c := &checker{getenv: getenv}
-	def := Definition{Path: path, Interval: DefaultInterval, Prompt: body}
+	def := Definition{Interval: DefaultInterval, Prompt: body}
 	root := &yaml.Node{Kind: yaml.MappingNode}
 	if len(doc.Content) == 1 {
-		root = doc.Content[0]
+		root = resolve(doc.Content[0])
 	}
 	c.decode(root, &def)
 	if len(c.problems) > 0 {
@@ -84,16 +82,17 @@ func Load(path string, getenv func(string) string) (Definition, error) {
 	return def, nil
 }
 
-// split は file を front matter と本文に分ける。1 行目が `---` の行で、次の `---` の行までが front matter。
+// split は file を front matter と本文に分ける。1 行目が `---` の行で、次の `---` の行までが front matter。その後ろが本文。
+// front matter は 1 行目の `---` を空行に置き換えた形で返す。YAML の行番号が、そのまま file の行番号になる。
 func split(raw []byte) (front []byte, body string, err error) {
 	const fence = "---"
 	lines := strings.SplitAfter(string(raw), "\n")
-	if len(lines) == 0 || strings.TrimRight(lines[0], "\r\n") != fence {
+	if strings.TrimRight(lines[0], "\r\n") != fence {
 		return nil, "", errors.New("front matter が無い (1 行目を --- にする)")
 	}
 	for i := 1; i < len(lines); i++ {
 		if strings.TrimRight(lines[i], "\r\n") == fence {
-			return []byte(strings.Join(lines[1:i], "")), strings.Join(lines[i+1:], ""), nil
+			return []byte("\n" + strings.Join(lines[1:i], "")), strings.Join(lines[i+1:], ""), nil
 		}
 	}
 	return nil, "", errors.New("front matter が閉じていない (--- の行で閉じる)")
@@ -111,14 +110,10 @@ type problem struct {
 	text string
 }
 
-// frontMatterLine は front matter の 1 行目が file の何行目か (1 行目の `---` の次)
-const frontMatterLine = 1
-
 func (c *checker) fail(n *yaml.Node, path, format string, a ...any) {
-	p := problem{text: path + ": " + fmt.Sprintf(format, a...)}
+	p := problem{line: n.Line, text: path + ": " + fmt.Sprintf(format, a...)}
 	if n.Line > 0 {
-		p.line = n.Line + frontMatterLine
-		p.text = fmt.Sprintf("%s (%d 行目): %s", path, p.line, fmt.Sprintf(format, a...))
+		p.text = fmt.Sprintf("%s (%d 行目): %s", path, n.Line, fmt.Sprintf(format, a...))
 	}
 	c.problems = append(c.problems, p)
 }
@@ -133,14 +128,28 @@ func (c *checker) lines() []string {
 	return lines
 }
 
-// field は対応表の 1 項目の読み方。required なら欠落を誤りにする。
+// field は対応表の 1 項目の読み方。required なら欠落を誤りにする。read は項目の key と、alias を辿った値を受ける。
 type field struct {
 	required bool
-	read     func(n *yaml.Node, path string)
+	read     func(key, value *yaml.Node, path string)
 }
 
+// resolve は alias を辿って、anchor を付けた node を返す。
+func resolve(n *yaml.Node) *yaml.Node {
+	for n.Kind == yaml.AliasNode {
+		n = n.Alias
+	}
+	return n
+}
+
+func isNull(n *yaml.Node) bool { return n.Kind == yaml.ScalarNode && n.Tag == "!!null" }
+
 // mapping は n を対応表として読み、fields にある key を読む。未知の key・同じ key の 2 回目・必須の欠落を誤りにする。
-func (c *checker) mapping(n *yaml.Node, path string, fields map[string]field) {
+// 値を書いていない key (null) は、空の対応表として読む。必須の欠落は、この対応表を持つ key (owner) の行で名指しする。
+func (c *checker) mapping(owner, n *yaml.Node, path string, fields map[string]field) {
+	if isNull(n) {
+		n = &yaml.Node{Kind: yaml.MappingNode}
+	}
 	if n.Kind != yaml.MappingNode {
 		c.fail(n, path, "対応表 (key: value) で書く")
 		return
@@ -157,12 +166,17 @@ func (c *checker) mapping(n *yaml.Node, path string, fields map[string]field) {
 			c.fail(key, child, "同じ key を 2 回書いている")
 		default:
 			seen[key.Value] = true
-			f.read(value, child)
+			f.read(key, resolve(value), child)
 		}
 	}
-	for name, f := range fields {
-		if f.required && !seen[name] {
-			c.fail(n, join(path, name), "必須の項目が無い")
+	names := make([]string, 0, len(fields))
+	for name := range fields {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if fields[name].required && !seen[name] {
+			c.fail(owner, join(path, name), "必須の項目が無い")
 		}
 	}
 }
@@ -175,23 +189,24 @@ func join(path, key string) string {
 }
 
 func (c *checker) decode(root *yaml.Node, def *Definition) {
-	c.mapping(root, "", map[string]field{
-		"tracker":  {required: true, read: func(n *yaml.Node, path string) { c.tracker(n, path, &def.Tracker) }},
-		"polling":  {read: func(n *yaml.Node, path string) { c.polling(n, path, &def.Interval) }},
-		"triggers": {required: true, read: func(n *yaml.Node, path string) { def.Triggers = c.triggers(n, path) }},
+	// top level は key を持たないので、欠落を行なしで名指しする
+	c.mapping(&yaml.Node{}, root, "", map[string]field{
+		"tracker":  {required: true, read: func(key, n *yaml.Node, path string) { c.tracker(key, n, path, &def.Tracker) }},
+		"polling":  {read: func(key, n *yaml.Node, path string) { c.polling(key, n, path, &def.Interval) }},
+		"triggers": {required: true, read: func(_, n *yaml.Node, path string) { def.Triggers = c.triggers(n, path) }},
 	})
 }
 
-func (c *checker) tracker(n *yaml.Node, path string, t *Tracker) {
-	c.mapping(n, path, map[string]field{
-		"kind": {required: true, read: func(n *yaml.Node, path string) {
+func (c *checker) tracker(owner, n *yaml.Node, path string, t *Tracker) {
+	c.mapping(owner, n, path, map[string]field{
+		"kind": {required: true, read: func(_, n *yaml.Node, path string) {
 			if s, ok := c.str(n, path); ok {
 				if s != "github" {
 					c.fail(n, path, "未知の値 %q (github)", s)
 				}
 			}
 		}},
-		"repo": {required: true, read: func(n *yaml.Node, path string) {
+		"repo": {required: true, read: func(_, n *yaml.Node, path string) {
 			s, ok := c.variableOrLiteral(n, path)
 			if !ok {
 				return
@@ -208,7 +223,7 @@ func (c *checker) tracker(n *yaml.Node, path string, t *Tracker) {
 			}
 			t.Repo = parsed
 		}},
-		"token": {read: func(n *yaml.Node, path string) {
+		"token": {read: func(_, n *yaml.Node, path string) {
 			if s, ok := c.variableOnly(n, path); ok {
 				t.Token = s
 			}
@@ -216,9 +231,9 @@ func (c *checker) tracker(n *yaml.Node, path string, t *Tracker) {
 	})
 }
 
-func (c *checker) polling(n *yaml.Node, path string, interval *time.Duration) {
-	c.mapping(n, path, map[string]field{
-		"interval": {read: func(n *yaml.Node, path string) {
+func (c *checker) polling(owner, n *yaml.Node, path string, interval *time.Duration) {
+	c.mapping(owner, n, path, map[string]field{
+		"interval": {read: func(_, n *yaml.Node, path string) {
 			s, ok := c.str(n, path)
 			if !ok {
 				return
@@ -239,7 +254,7 @@ func (c *checker) polling(n *yaml.Node, path string, interval *time.Duration) {
 var triggerName = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
 func (c *checker) triggers(n *yaml.Node, path string) []trigger.Trigger {
-	if n.Kind != yaml.SequenceNode {
+	if n.Kind != yaml.SequenceNode && !isNull(n) {
 		c.fail(n, path, "列で書く")
 		return nil
 	}
@@ -252,8 +267,9 @@ func (c *checker) triggers(n *yaml.Node, path string) []trigger.Trigger {
 	for i, item := range n.Content {
 		at := fmt.Sprintf("%s[%d]", path, i)
 		t := &triggers[i]
-		c.mapping(item, at, map[string]field{
-			"name": {required: true, read: func(n *yaml.Node, path string) {
+		item = resolve(item)
+		c.mapping(item, item, at, map[string]field{
+			"name": {required: true, read: func(_, n *yaml.Node, path string) {
 				s, ok := c.str(n, path)
 				switch {
 				case !ok:
@@ -266,21 +282,19 @@ func (c *checker) triggers(n *yaml.Node, path string) []trigger.Trigger {
 					t.Name = s
 				}
 			}},
-			"on": {required: true, read: func(n *yaml.Node, path string) {
+			"on": {required: true, read: func(_, n *yaml.Node, path string) {
 				if s, ok := c.str(n, path); ok {
-					if s != "issue" {
-						c.fail(n, path, "未知の値 %q (issue)", s)
+					if trigger.Kind(s) != trigger.Issue {
+						c.fail(n, path, "未知の値 %q (%s)", s, trigger.Issue)
 					}
-					t.On = s
+					t.On = trigger.Kind(s)
 				}
 			}},
-			"when": {read: func(n *yaml.Node, path string) { c.issuePredicate(n, path, &t.When) }},
-			"action": {required: true, read: func(n *yaml.Node, path string) {
-				if s, ok := c.str(n, path); ok {
-					if strings.TrimSpace(s) == "" {
-						c.fail(n, path, "空にできない")
-					}
-					t.Action = s
+			"when": {read: func(key, n *yaml.Node, path string) { c.issuePredicate(key, n, path, &t.When) }},
+			// action の値は worker を起動するときに使う (#78)。ここでは書かれていることだけを確かめる
+			"action": {required: true, read: func(_, n *yaml.Node, path string) {
+				if s, ok := c.str(n, path); ok && strings.TrimSpace(s) == "" {
+					c.fail(n, path, "空白だけにできない")
 				}
 			}},
 		})
@@ -288,14 +302,14 @@ func (c *checker) triggers(n *yaml.Node, path string) []trigger.Trigger {
 	return triggers
 }
 
-func (c *checker) issuePredicate(n *yaml.Node, path string, p *trigger.IssuePredicate) {
+func (c *checker) issuePredicate(owner, n *yaml.Node, path string, p *trigger.IssuePredicate) {
 	var assignee, unassigned *yaml.Node
-	c.mapping(n, path, map[string]field{
-		"labels": {read: func(n *yaml.Node, path string) {
-			c.mapping(n, path, map[string]field{
-				"all":  {read: func(n *yaml.Node, path string) { p.LabelsAll, _ = c.strList(n, path) }},
-				"none": {read: func(n *yaml.Node, path string) { p.LabelsNone, _ = c.strList(n, path) }},
-				"any": {read: func(n *yaml.Node, path string) {
+	c.mapping(owner, n, path, map[string]field{
+		"labels": {read: func(key, n *yaml.Node, path string) {
+			c.mapping(key, n, path, map[string]field{
+				"all":  {read: func(_, n *yaml.Node, path string) { p.LabelsAll, _ = c.strList(n, path) }},
+				"none": {read: func(_, n *yaml.Node, path string) { p.LabelsNone, _ = c.strList(n, path) }},
+				"any": {read: func(_, n *yaml.Node, path string) {
 					if l, ok := c.strList(n, path); ok {
 						if len(l) == 0 {
 							c.fail(n, path, "空の列は書けない (どの issue にも当たらない)")
@@ -305,17 +319,17 @@ func (c *checker) issuePredicate(n *yaml.Node, path string, p *trigger.IssuePred
 				}},
 			})
 		}},
-		"assignee": {read: func(n *yaml.Node, path string) {
+		"assignee": {read: func(_, n *yaml.Node, path string) {
 			assignee = n
 			p.Assignee, _ = c.str(n, path)
 		}},
-		"unassigned": {read: func(n *yaml.Node, path string) {
+		"unassigned": {read: func(_, n *yaml.Node, path string) {
 			unassigned = n
 			if b, ok := c.boolean(n, path); ok {
 				p.Unassigned = &b
 			}
 		}},
-		"author": {read: func(n *yaml.Node, path string) {
+		"author": {read: func(_, n *yaml.Node, path string) {
 			if s, ok := c.str(n, path); ok {
 				switch a := trigger.Author(s); a {
 				case trigger.Collaborator, trigger.NonCollaborator:
@@ -325,8 +339,8 @@ func (c *checker) issuePredicate(n *yaml.Node, path string, p *trigger.IssuePred
 				}
 			}
 		}},
-		"milestone": {read: func(n *yaml.Node, path string) { p.Milestone, _ = c.str(n, path) }},
-		"blocked": {read: func(n *yaml.Node, path string) {
+		"milestone": {read: func(_, n *yaml.Node, path string) { p.Milestone, _ = c.str(n, path) }},
+		"blocked": {read: func(_, n *yaml.Node, path string) {
 			if b, ok := c.boolean(n, path); ok {
 				p.Blocked = &b
 			}
@@ -337,10 +351,14 @@ func (c *checker) issuePredicate(n *yaml.Node, path string, p *trigger.IssuePred
 	}
 }
 
-// str は n を空でない文字列として読む。
+// str は n を空でない文字列として読む。空の文字列は、条件を書かなかったのと取り違えるので拒む。
 func (c *checker) str(n *yaml.Node, path string) (string, bool) {
 	if n.Kind != yaml.ScalarNode || n.Tag != "!!str" {
 		c.fail(n, path, "文字列で書く")
+		return "", false
+	}
+	if n.Value == "" {
+		c.fail(n, path, "空にできない")
 		return "", false
 	}
 	return n.Value, true
@@ -363,7 +381,7 @@ func (c *checker) strList(n *yaml.Node, path string) ([]string, bool) {
 	list := []string{}
 	ok := true
 	for i, item := range n.Content {
-		s, itemOK := c.str(item, fmt.Sprintf("%s[%d]", path, i))
+		s, itemOK := c.str(resolve(item), fmt.Sprintf("%s[%d]", path, i))
 		ok = ok && itemOK
 		list = append(list, s)
 	}
@@ -378,16 +396,10 @@ func (c *checker) variableOrLiteral(n *yaml.Node, path string) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	m := variable.FindStringSubmatch(s)
-	if m == nil {
-		return s, true
+	if m := variable.FindStringSubmatch(s); m != nil {
+		return c.lookup(n, path, m[1])
 	}
-	value := c.getenv(m[1])
-	if value == "" {
-		c.fail(n, path, "環境変数 %s が未設定か空", m[1])
-		return "", false
-	}
-	return value, true
+	return s, true
 }
 
 // variableOnly は `$VAR` でだけ書ける項目 (秘密) を読む。値そのものは書かせない。
@@ -396,9 +408,20 @@ func (c *checker) variableOnly(n *yaml.Node, path string) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	if !variable.MatchString(s) {
+	m := variable.FindStringSubmatch(s)
+	if m == nil {
 		c.fail(n, path, "$VAR で書く (値そのものを workflow 定義に書かない)")
 		return "", false
 	}
-	return c.variableOrLiteral(n, path)
+	return c.lookup(n, path, m[1])
+}
+
+// lookup は環境変数 name の値を引く。未設定か空なら誤り。
+func (c *checker) lookup(n *yaml.Node, path, name string) (string, bool) {
+	value := c.getenv(name)
+	if value == "" {
+		c.fail(n, path, "環境変数 %s が未設定か空", name)
+		return "", false
+	}
+	return value, true
 }

@@ -9,10 +9,7 @@
 //	responses/<name>.json               応答の rule 列 ([]Rule)。先頭から見て最初に当たった rule で応答する
 package stubwire
 
-import (
-	"path/filepath"
-	"time"
-)
+import "path/filepath"
 
 // RootFile は stub binary の隣に置き、stub root の path を 1 行で持つ file の名前。
 // root を env ではなく file で渡すので、テスト対象の binary が子へ渡す env (観測対象) に配線の値を混ぜずに済む。
@@ -43,22 +40,11 @@ var RecordedEnv = []string{
 	"HOME", "PATH", "XDG_CONFIG_HOME", "XDG_STATE_HOME",
 }
 
-// Rule は応答 1 つ。ArgsPrefix と ArgContains の両方に当たった呼び出しに応答する。
+// Rule は応答 1 つ。ArgsPrefix に当たった呼び出しに応答する。
 type Rule struct {
 	// ArgsPrefix は argv[1:] の先頭一致。空なら何にでも当たる
 	ArgsPrefix []string `json:"args_prefix,omitempty"`
-	// ArgContains は argv[1:] のどれかが含む部分文字列。空なら条件にしない
-	ArgContains string `json:"arg_contains,omitempty"`
-	Stdout      string `json:"stdout,omitempty"`
-	Stderr      string `json:"stderr,omitempty"`
-	Exit        int    `json:"exit,omitempty"`
-	// ReleaseFile が空でなければ、その file が現れるまで終わらない (長く走る worker の代役)。
-	// 現れないまま ReleaseDeadline を過ぎたら ReleaseTimeoutExit で終わる
-	ReleaseFile string `json:"release_file,omitempty"`
+	Stdout     string   `json:"stdout,omitempty"`
+	Stderr     string   `json:"stderr,omitempty"`
+	Exit       int      `json:"exit,omitempty"`
 }
-
-// ReleaseDeadline は ReleaseFile を待つ上限。テストが release し忘れても stub が居残らないようにする
-const ReleaseDeadline = 2 * time.Minute
-
-// ReleaseTimeoutExit は ReleaseFile が現れないまま上限を過ぎた stub の exit code
-const ReleaseTimeoutExit = 96

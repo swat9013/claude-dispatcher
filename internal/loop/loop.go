@@ -27,7 +27,7 @@ type Options struct {
 	// Load は workflow 定義を読み直す
 	Load func() (workflow.Definition, error)
 	// Open は workflow 定義から issue 置き場の部品を組み立てる
-	Open func(workflow.Definition) (Issues, error)
+	Open func(workflow.Definition) Issues
 	// Interval は起動時に検査に通った workflow 定義の周期。読み直しが検査に落ちている間はこれか、最後に通った版の周期を使う
 	Interval time.Duration
 	// ScopeKey は起動時の scope key (lock を取った鍵)
@@ -69,11 +69,7 @@ func (o Options) tick() (time.Duration, bool) {
 		o.line("tick error · workflow 定義の誤り: %s", oneLine(err))
 		return 0, false
 	}
-	issues, err := o.Open(def)
-	if err != nil {
-		o.line("tick error · %s", oneLine(err))
-		return def.Interval, true
-	}
+	issues := o.Open(def)
 	if key := issues.ScopeKey(); key != o.ScopeKey {
 		o.line("tick error · workflow 定義の scope key %s が起動時の %s と違う (loop を起動し直す)", key, o.ScopeKey)
 		return def.Interval, true
@@ -94,7 +90,7 @@ func Summary(candidates []trigger.Candidate) string {
 	}
 	names := make([]string, len(candidates))
 	for i, c := range candidates {
-		names[i] = fmt.Sprintf("%s issue #%d", c.Trigger.Name, c.Issue.Number)
+		names[i] = fmt.Sprintf("%s %s #%d", c.Trigger.Name, c.Trigger.On, c.Issue.Number)
 	}
 	return fmt.Sprintf("候補 %d: %s", len(candidates), strings.Join(names, ", "))
 }

@@ -2,6 +2,7 @@ package github_test
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,7 +22,7 @@ func TestTimedOutGhIsStoppedWithTheChildrenItStarted(t *testing.T) {
 	}
 	started := time.Now()
 
-	_, err := github.Exec{Path: gh, Timeout: 200 * time.Millisecond}.Run("repo", "view")
+	_, err := github.Exec{Env: []string{"PATH=" + filepath.Dir(gh) + ":/bin:/usr/bin"}, Timeout: 200 * time.Millisecond}.Run("repo", "view")
 
 	if err == nil || !strings.Contains(err.Error(), "を超えても終わらない") {
 		t.Fatalf("err = %v", err)
@@ -37,12 +38,58 @@ func TestRepoThatGhCannotResolveIsNotFound(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	store := github.NewIssueStore(github.Exec{Path: gh, Timeout: 5 * time.Second}, github.Repo{Owner: "acme", Name: "x"})
+	store := github.NewIssueStore(github.Exec{Env: []string{"PATH=" + filepath.Dir(gh)}, Timeout: 5 * time.Second}, github.Repo{Owner: "acme", Name: "x"})
 
 	_, err := store.OpenIssues()
 
 	var failure *target.Failure
 	if !errors.As(err, &failure) || failure.Kind != target.NotVisible {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// pages は gh api graphql --paginate --slurp の応答を返す Runner (gh の代役)。
+type pages string
+
+func (p pages) Run(...string) ([]byte, error) { return []byte(p), nil }
+
+func issueNode(number int, association string, blockers ...string) string {
+	nodes := make([]string, len(blockers))
+	for i, b := range blockers {
+		nodes[i] = `{"state":"` + b + `"}`
+	}
+	return fmt.Sprintf(`{"number":%d,"title":"t","createdAt":"2026-01-01T00:00:00Z","authorAssociation":%q,
+		"labels":{"totalCount":0,"nodes":[]},"assignees":{"totalCount":0,"nodes":[]},"milestone":null,
+		"blockedBy":{"totalCount":%d,"nodes":[%s]}}`, number, association, len(blockers), strings.Join(nodes, ","))
+}
+
+func openIssues(t *testing.T, nodes ...string) []target.Issue {
+	t.Helper()
+	store := github.NewIssueStore(pages(`[{"data":{"repository":{"issues":{"nodes":[`+strings.Join(nodes, ",")+`]}}}}]`), github.Repo{Owner: "acme", Name: "widgets"})
+	issues, err := store.OpenIssues()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return issues
+}
+
+func TestAuthorAssociationIsCollaboratorOnlyForOwnerMemberAndCollaborator(t *testing.T) {
+	for association, want := range map[string]bool{
+		"OWNER": true, "MEMBER": true, "COLLABORATOR": true,
+		"CONTRIBUTOR": false, "FIRST_TIME_CONTRIBUTOR": false, "FIRST_TIMER": false, "NONE": false, "MANNEQUIN": false,
+	} {
+		issues := openIssues(t, issueNode(1, association))
+
+		if issues[0].AuthorIsCollaborator != want {
+			t.Errorf("%s: collaborator = %v, want %v", association, issues[0].AuthorIsCollaborator, want)
+		}
+	}
+}
+
+func TestOnlyOpenBlockersAreCountedAsUnresolved(t *testing.T) {
+	issues := openIssues(t, issueNode(1, "OWNER", "CLOSED", "OPEN", "CLOSED", "OPEN"))
+
+	if issues[0].OpenBlockers != 2 {
+		t.Fatalf("未解決の依存先 = %d, want 2", issues[0].OpenBlockers)
 	}
 }

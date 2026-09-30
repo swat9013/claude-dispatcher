@@ -2,11 +2,13 @@ package blackbox_test
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 // `loop` の起動時の検査・scope key の lock・停止 (formats.md §6)。
@@ -15,7 +17,6 @@ import (
 var (
 	loopStartedLine = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z loop を始めた: `)
 	firstTickLine   = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z tick `)
-	loopStoppedLine = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z loop を止めた \(停止要求 SIGINT\)$`)
 )
 
 func TestLoopTicksRightAfterStartingAndShowsTheCandidates(t *testing.T) {
@@ -36,11 +37,11 @@ func TestLoopNamesItsScopeKeyAndStateDirWhenItStarts(t *testing.T) {
 	loop := s.startLoop()
 
 	line := loop.waitForOutput(loopStartedLine)
-	want := "scope github.com/acme/widgets · state dir " + s.stateDir("github.com/acme/widgets") + " · workflow " + s.workflowFile()
+	want := "scope github.com/acme/widgets · state dir " + s.defaultStateDir() + " · workflow " + s.workflowFile()
 	if !strings.HasSuffix(line, want) {
 		t.Fatalf("起動の行 = %q, want 末尾 %q", line, want)
 	}
-	if info, err := os.Stat(s.stateDir("github.com/acme/widgets")); err != nil || !info.IsDir() {
+	if info, err := os.Stat(s.defaultStateDir()); err != nil || !info.IsDir() {
 		t.Fatalf("loop が state dir を作っていない: %v", err)
 	}
 }
@@ -76,18 +77,80 @@ func TestLoopOnAnotherIssueRepoRunsAlongside(t *testing.T) {
 	second.waitForOutput(firstTickLine)
 }
 
-func TestLoopStopsOnAStopRequest(t *testing.T) {
+func TestLoopStopsOnEachStopRequest(t *testing.T) {
+	for _, c := range []struct {
+		signal syscall.Signal
+		name   string
+	}{{syscall.SIGINT, "SIGINT"}, {syscall.SIGTERM, "SIGTERM"}, {syscall.SIGHUP, "SIGHUP"}} {
+		t.Run(c.name, func(t *testing.T) {
+			s := newSandbox(t)
+			loop := s.startLoop()
+			loop.waitForOutput(firstTickLine)
+
+			loop.signal(c.signal)
+
+			r := loop.wait()
+			assertExit(t, r, 0)
+			lines := strings.Split(strings.TrimSuffix(r.stdout, "\n"), "\n")
+			if !strings.HasSuffix(lines[len(lines)-1], " loop を止めた (停止要求 "+c.name+")") {
+				t.Fatalf("最後の行 = %q, want 停止の行", lines[len(lines)-1])
+			}
+		})
+	}
+}
+
+func TestLoopKeepsRunningWhenNobodyReadsItsOutput(t *testing.T) {
 	s := newSandbox(t)
-	loop := s.startLoop()
-	loop.waitForOutput(firstTickLine)
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader.Close()
+	cmd := exec.Command(dispatcherBin, "loop")
+	cmd.Dir, cmd.Env, cmd.Stdout = s.clone, s.environ(nil), writer
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	writer.Close()
+	t.Cleanup(func() { _ = cmd.Process.Kill() })
+	waitFor(t, func() bool { return len(s.calls("gh")) > 0 }, "読み手の消えた stdout の loop が tick を撃たない")
 
-	loop.signal(syscall.SIGINT)
+	if err := cmd.Process.Signal(syscall.SIGINT); err != nil {
+		t.Fatal(err)
+	}
 
-	r := loop.wait()
-	assertExit(t, r, 0)
-	lines := strings.Split(strings.TrimSuffix(r.stdout, "\n"), "\n")
-	if !loopStoppedLine.MatchString(lines[len(lines)-1]) {
-		t.Fatalf("最後の行 = %q, want 停止の行", lines[len(lines)-1])
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("読み手の消えた stdout の loop が停止要求で exit 0 にならない: %v", err)
+	}
+}
+
+func TestLoopFailsToStartWhenGhCannotBeResolved(t *testing.T) {
+	skipIfSelfResolutionReachesARealOne(t, "gh")
+	s := newSandbox(t)
+	if err := os.Remove(filepath.Join(s.binDir, "gh")); err != nil {
+		t.Fatal(err)
+	}
+
+	r := s.run("loop")
+
+	assertExit(t, r, 1)
+	if !strings.Contains(r.stderr, "gh") {
+		t.Fatalf("stderr が gh を名指ししていない: %q", r.stderr)
+	}
+	if _, err := os.Stat(s.stateRoot); !os.IsNotExist(err) {
+		t.Fatalf("起動に失敗した loop が state root を作った: %v", err)
+	}
+}
+
+// waitFor は cond が真になるまで待つ。runTimeout を過ぎたら msg で落とす。
+func waitFor(t *testing.T, cond func() bool, msg string) {
+	t.Helper()
+	deadline := time.Now().Add(runTimeout)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatal(msg)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 
