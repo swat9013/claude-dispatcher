@@ -78,6 +78,14 @@ triggers:                    # 必須。1 つ以上
 | `triggers[].when` | 対応表 | 述語。書いた条件はすべて AND で評価する (§2.2) |
 | `triggers[].action` | 文字列 | worker に渡す prompt の template。空にできない |
 
+次の項目は、受け持つ slice が決めるまで書けない (書くと未知の key として失敗する)。
+
+- hooks・並列上限・`claude` の起動 command と引数: #78
+- attempt の上限・backoff の上限・stall の上限・worker 1 回分の上限時間: #79
+- CL 側の trigger (`on: cl`): #80
+
+**YAML の読み方**: 値を書いていない key (`when:` だけの行) は、空の対応表として読む。anchor と alias は辿る。merge key (`<<: *base`) は持たない (`<<` は未知の key として失敗する)。
+
 ### 2.2 issue 側の述語 (`on: issue` の `when`)
 
 | key | 型 | 当たる issue |
@@ -109,9 +117,10 @@ triggers:                    # 必須。1 つ以上
 
 次の誤りは、項目の位置 (`triggers[0].when.labels.all` の形) を名指しして失敗させる。誤りが複数あれば、すべてを 1 行ずつ出す。
 
-- file が無い・読めない・front matter が無い・YAML として読めない
+- file が無い・読めない・front matter が無い・YAML として読めない (YAML の誤りの行番号も file の行番号で出す)
 - 未知の key (ADR 0009「未知の key は失敗させる」)
 - 型の誤り・必須の項目の欠落・未知の値 (`tracker.kind`・`triggers[].on`・`author`)
+- 空の文字列 (空の `assignee` や label を「条件なし」と取り違えないため)
 - 上の表の各項目の制約 (`polling.interval` の範囲・trigger の名前の綴りと重複・`assignee` と `unassigned` の併記・空の `labels.any`・空の `action`)
 - `$VAR` の未設定と、`tracker.token` に値そのものを書いたこと
 - 同じ key を 1 つの対応表に 2 回書いたこと
@@ -167,6 +176,7 @@ claude-dispatcher loop [<workflow の path>]
 |---|---|
 | 引数の数と flag | 2 |
 | workflow 定義を読めて、検査に通る (§2.5) | 2 |
+| gh を解決できる (PATH と、よく使われる置き場) | 1 |
 | state dir を作れる | 1 |
 | 同じ scope key の loop が走っていない (`loop.lock` を取れる) | 3 |
 
@@ -178,7 +188,7 @@ claude-dispatcher loop [<workflow の path>]
 - 読み直した workflow 定義が検査に落ちたら、その tick は何も起動しない (#74 Q38)。周期は、最後に検査に通った版のものを使う
 - 読み直した workflow 定義の scope key が起動時と違えば、その tick は何も起動しない (lock は起動時の scope key で取っている)
 
-**出力** (#81 で loop の画面に作り直す。今の形は仮): stdout に 1 行ずつ追記する。
+**出力** (#81 で loop の画面に作り直す。今の形は仮): stdout に 1 行ずつ追記する。log.jsonl (§4) を #78 で入れるまでは、これが唯一の出力で、stdout の読み手が消えた後の tick は事後に読めない。
 
 ```
 <時刻> loop を始めた: scope <scope key> · state dir <path> · workflow <path>
