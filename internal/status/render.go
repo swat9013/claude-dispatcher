@@ -66,7 +66,7 @@ func (r Report) TableLines() []string {
 	rows := [][]string{columns}
 	for _, w := range r.Workers {
 		rows = append(rows, []string{
-			fmt.Sprintf("#%d", w.Spawn.Issue), w.Spawn.Kind, cell(w.Alive, stateCell), FormatElapsed(w.Elapsed),
+			fmt.Sprintf("#%d", w.Spawn.Issue), w.Spawn.Kind, cell(w.State(), stateCell), FormatElapsed(w.Elapsed),
 			cell(w.Session, sessionCell), cell(w.Branch, branchCell), cell(w.WIP, wipCell), cell(w.CL, clCell), ticklog.ShortTS(w.TickTS),
 		})
 	}
@@ -100,12 +100,7 @@ func FormatElapsed(d time.Duration) string {
 	return fmt.Sprintf("%dd%02dh", seconds/86400, seconds%86400/3600)
 }
 
-func stateCell(alive bool) string {
-	if alive {
-		return "running"
-	}
-	return "exited"
-}
+func stateCell(s WorkerState) string { return string(s) }
 
 func wipCell(v bool) string {
 	if v {

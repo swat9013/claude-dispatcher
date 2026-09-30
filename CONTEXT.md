@@ -66,6 +66,10 @@ _Avoid_: blocked, escalated
 **stale wip**:
 付けた LLM が剥がさずに止まって残った wip。worker の異常死のほか、wip を付けた後に orchestrator が止まったとき (timeout・loop への 2 回目の停止要求) にも残る。snapshot からは着手中と区別できず、回収は人が行う。
 
+**無言の終了**:
+worker が CL にも人待ちにも至らずに、wip を剥がして終わった状態。worker 契約が失敗扱いにする終わり方で、`status` の STATE の `silent` に当たる。wip が残っていれば stale wip と呼び、無言の終了とは区別する。
+_Avoid_: silent exit, 空振り
+
 ## 役とやり取り
 
 **orchestrator**:

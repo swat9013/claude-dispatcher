@@ -210,14 +210,14 @@ func TestStatusCLColumnIsUnknownOnlyForAnIssueWhoseWindowHoldsOnlyForkCLs(t *tes
 	}
 }
 
-func TestStatusShowsAWorkerWhoseProcessIsGoneButWipRemainsAsExited(t *testing.T) {
+func TestStatusShowsAWorkerWhoseProcessIsGoneButWipRemainsAsStale(t *testing.T) {
 	s := newSandbox(t)
 	s.statusScenario()
 	s.setWip(42)
 
 	r := s.statusPS()
 
-	if row := workerRow(r.stdout, 42); len(row) == 0 || row[2] != "exited" || !strings.Contains(strings.Join(row, " "), "yes") {
+	if row := workerRow(r.stdout, 42); len(row) == 0 || row[2] != "stale" || !strings.Contains(strings.Join(row, " "), "yes") {
 		t.Fatalf("stale wip の行 = %v\n%s", row, r.stdout)
 	}
 }
@@ -230,7 +230,7 @@ func TestStatusDoesNotMistakeAReusedPidForTheWorker(t *testing.T) {
 
 	r := s.statusPS()
 
-	if row := workerRow(r.stdout, 42); len(row) < 3 || row[2] != "exited" {
+	if row := workerRow(r.stdout, 42); len(row) < 3 || row[2] != "stale" {
 		t.Fatalf("pid を再利用した別 process を worker と見た: %v\n%s", row, r.stdout)
 	}
 }

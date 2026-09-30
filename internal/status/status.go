@@ -96,6 +96,66 @@ type Worker struct {
 	Session Probed[*Session]
 	Branch  Probed[*Branch]
 	CL      Probed[*github.CLState]
+	// Human は issue に人待ち (ready-for-human) が付いているか。STATE の判定で要る行だけ読む
+	Human Probed[bool]
+}
+
+// WorkerState は STATE 列の値 (formats.md §10)。
+type WorkerState string
+
+const (
+	// StateRunning は process が生きている
+	StateRunning WorkerState = "running"
+	// StateStale は process が死んでいて issue に wip が残っている (stale wip)
+	StateStale WorkerState = "stale"
+	// StateCL は worker の branch の最新の CL が open か merge 済み
+	StateCL WorkerState = "cl"
+	// StateHuman は issue に人待ちが付いている
+	StateHuman WorkerState = "human"
+	// StateSilent は上のどれでもない (無言の終了 — CONTEXT.md)
+	StateSilent WorkerState = "silent"
+)
+
+// recentlySpawned は、終わった worker も載せる起動からの期間 (formats.md §10)。起動記録に終了時刻は無いので起動から数える
+const recentlySpawned = 24 * time.Hour
+
+// State は STATE を上から順に判定する。判定に要る値を読めていなければ ? (それより後の値は読まない)。
+func (w Worker) State() Probed[WorkerState] {
+	if !w.Alive.Known {
+		return Probed[WorkerState]{}
+	}
+	if w.Alive.Value {
+		return known(StateRunning)
+	}
+	if !w.WIP.Known {
+		return Probed[WorkerState]{}
+	}
+	if w.WIP.Value {
+		return known(StateStale)
+	}
+	if !w.CL.Known {
+		return Probed[WorkerState]{}
+	}
+	if cl := w.CL.Value; cl != nil && (cl.State == "OPEN" || cl.State == "MERGED") {
+		return known(StateCL)
+	}
+	if !w.Human.Known {
+		return Probed[WorkerState]{}
+	}
+	if w.Human.Value {
+		return known(StateHuman)
+	}
+	return known(StateSilent)
+}
+
+// needsHuman は STATE の判定に人待ちを読む必要がある (process が死んでいて、wip も open / merge 済みの CL も無い) か。
+func (w Worker) needsHuman() bool {
+	endedWithoutWIP := w.Alive.Known && !w.Alive.Value && w.WIP.Known && !w.WIP.Value
+	if !endedWithoutWIP || !w.CL.Known {
+		return false
+	}
+	cl := w.CL.Value
+	return cl == nil || (cl.State != "OPEN" && cl.State != "MERGED")
 }
 
 // Session は `claude agents --json` の行のうち表に出す分。
@@ -192,9 +252,9 @@ func spawnRecords(lines []ticklog.Line) []spawnRecord {
 	return spawns
 }
 
-// listed は載せる起動記録を選ぶ (formats.md §10)。issue ごとの最新の起動記録は wip が付いているか process が生きていれば、
-// それより古い起動記録は process が生きているときだけ載せる — wip は issue の今の worker にだけ掛け、再入で起こし直した
-// issue の前回の worker を「exited + wip」(stale wip の手掛かり) に見せない。確かめられなかった (?) だけでは載せない
+// listed は載せる起動記録を選ぶ (formats.md §10)。issue ごとの最新の起動記録は、wip が付いているか、process が生きているか、
+// 起動から recentlySpawned 以内なら載せる。それより古い起動記録は process が生きているときだけ載せる — wip は issue の今の
+// worker にだけ掛け、再入で起こし直した issue の前回の worker を stale に見せない。確かめられなかった (?) だけでは載せない
 // (載せると log に残る過去の起動が全部並ぶ)。spawns は spawnRecords の順に並んでいること。
 func listed(spawns []spawnRecord, alive func(ticklog.Spawned) Probed[bool], wip func(issue int) Probed[bool], now time.Time) []Worker {
 	workers := []Worker{}
@@ -203,7 +263,8 @@ func listed(spawns []spawnRecord, alive func(ticklog.Spawned) Probed[bool], wip 
 		a, w := alive(s.Spawned), wip(s.Issue)
 		running := a.Known && a.Value
 		stale := latest && w.Known && w.Value
-		if !running && !stale {
+		recent := latest && now.Sub(s.tick.At) < recentlySpawned
+		if !running && !stale && !recent {
 			continue
 		}
 		workers = append(workers, Worker{Spawn: s.Spawned, TickTS: s.tick.TS, Elapsed: now.Sub(s.tick.At), Alive: a, WIP: w})
@@ -258,7 +319,7 @@ func (c *collector) wip(cfg config.Config, cfgErr error, gh github.Runner) func(
 	}
 	numbers, err := github.WIPIssues(gh, cfg.IssueRepo)
 	if err != nil {
-		c.note("wip を読めない — WIP は ? で、process の生きている worker だけを載せた (%v)", err)
+		c.note("wip を読めない — WIP は ? で、process の生きている worker と起動から 24 時間以内の worker だけを載せた (%v)", err)
 		return unknown
 	}
 	return func(issue int) Probed[bool] { return known(slices.Contains(numbers, issue)) }
@@ -288,6 +349,30 @@ func (c *collector) fillDetails(cfg config.Config, cfgErr error, gh github.Runne
 			w.CL = Probed[*github.CLState]{}
 		}
 	}
+	if slices.ContainsFunc(c.report.Workers, Worker.needsHuman) {
+		human := c.human(cfg, cfgErr, gh)
+		for i := range c.report.Workers {
+			w := &c.report.Workers[i]
+			w.Human = lookupIn(human, w.Spawn.Issue)
+		}
+	}
+}
+
+// human は issue → 人待ちが付いているか。読めなければ ? (STATE の判定に使う行が ? になる)。
+func (c *collector) human(cfg config.Config, cfgErr error, gh github.Runner) Probed[map[int]bool] {
+	if cfgErr != nil || gh == nil {
+		return Probed[map[int]bool]{}
+	}
+	numbers, err := github.HumanIssues(gh, cfg.IssueRepo)
+	if err != nil {
+		c.note("%s を読めない — STATE の判定に使う行は ? (%v)", config.HumanLabel, err)
+		return Probed[map[int]bool]{}
+	}
+	human := map[int]bool{}
+	for _, n := range numbers {
+		human[n] = true
+	}
+	return known(human)
 }
 
 // lookupIn は読めた表なら key の値 (無ければ零値) を、読めなかった表なら ? を返す。
