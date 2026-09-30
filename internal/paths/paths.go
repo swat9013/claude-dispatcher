@@ -76,6 +76,9 @@ func (p Project) ConfigFile() string { return filepath.Join(p.ConfigDir, "config
 func (p Project) LogFile() string    { return filepath.Join(p.StateDir, "log.jsonl") }
 func (p Project) LockFile() string   { return filepath.Join(p.StateDir, "tick.lock") }
 
+// TickNowFile は tick が走っている間だけ置く、表示のための状態 file
+func (p Project) TickNowFile() string { return filepath.Join(p.StateDir, "tick.now") }
+
 // LoopLockFile は loop が生きている間持つ lock の対象 (同じ project の 2 本目の loop を拒む)
 func (p Project) LoopLockFile() string { return filepath.Join(p.StateDir, "loop.lock") }
 func (p Project) MarkerFile() string   { return filepath.Join(p.StateDir, "config-verified") }

@@ -52,9 +52,10 @@ type fakeLauncher struct {
 	workers []string
 }
 
-func (f *fakeLauncher) RunOrchestrator(prompt, logFile string, timeout time.Duration, stop <-chan struct{}) (launch.OrchestratorRun, error) {
+func (f *fakeLauncher) RunOrchestrator(prompt, logFile string, timeout time.Duration, stop <-chan struct{}, onStart func(string)) (launch.OrchestratorRun, error) {
 	f.prompts = append(f.prompts, prompt)
 	f.stop = stop
+	onStart("fake-orchestrator-session")
 	return f.orchestrate(prompt), nil
 }
 

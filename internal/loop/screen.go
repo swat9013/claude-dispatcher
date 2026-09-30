@@ -76,7 +76,7 @@ func (v view) stateAndGuide() (state, guide string) {
 // progress は実行中の tick の経過。orchestrator を待つ間はその経過と上限を出す。
 func (v view) progress() string {
 	if !v.orchestratorStarted.IsZero() {
-		return fmt.Sprintf("orchestrator %s (上限 %s)", status.FormatElapsed(v.now.Sub(v.orchestratorStarted)), status.FormatElapsed(tick.OrchestratorTimeout))
+		return status.OrchestratorProgress(v.now.Sub(v.orchestratorStarted))
 	}
 	return status.FormatElapsed(v.now.Sub(v.tickStarted))
 }

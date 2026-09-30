@@ -7,6 +7,7 @@ import (
 
 	"github.com/swat9013/claude-dispatcher/internal/github"
 	"github.com/swat9013/claude-dispatcher/internal/termtext"
+	"github.com/swat9013/claude-dispatcher/internal/tick"
 	"github.com/swat9013/claude-dispatcher/internal/ticklog"
 )
 
@@ -33,7 +34,8 @@ func cell[T any](p Probed[T], format func(T) string) string {
 	return format(p.Value)
 }
 
-// Heading は project の見出し行 (project 名・loop の生死・最終 tick)。
+// Heading は project の見出し行 (project 名・loop の生死・走っている tick・最終 tick)。走っている tick の欄は loop の画面の
+// 1 行目の状態欄と同じ綴り (formats.md §10 / §13.1)。
 func (r Report) Heading() string {
 	loop := "loop " + unknownCell
 	if r.Loop.Known {
@@ -45,7 +47,20 @@ func (r Report) Heading() string {
 		}
 		return ticklog.Summary(l.TS, l.Result)
 	})
-	return fmt.Sprintf("%s  %s  最終 tick %s", r.Project, loop, last)
+	fields := []string{r.Project, loop}
+	if t := r.Tick; t != nil {
+		progress := FormatElapsed(t.Elapsed)
+		if t.Orchestrator != nil {
+			progress = OrchestratorProgress(t.Orchestrator.Elapsed)
+		}
+		fields = append(fields, "tick 実行中 · "+progress)
+	}
+	return strings.Join(append(fields, "最終 tick "+last), "  ")
+}
+
+// OrchestratorProgress は orchestrator を待つ間の経過と上限 (`orchestrator 3m (上限 15m)`)。status の見出しと loop の画面が使う。
+func OrchestratorProgress(elapsed time.Duration) string {
+	return fmt.Sprintf("orchestrator %s (上限 %s)", FormatElapsed(elapsed), FormatElapsed(tick.OrchestratorTimeout))
 }
 
 // NoteLines は注記の行。
@@ -57,13 +72,22 @@ func (r Report) NoteLines() []string {
 	return lines
 }
 
-// TableLines は worker の表の行 (列の見出し行を含む)。載せる worker が居なければ空。
+// TableLines は表の行 (列の見出し行を含む)。orchestrator の実行中はその行を先頭に置く。載せる行が無ければ空。
 func (r Report) TableLines() []string {
-	if len(r.Workers) == 0 {
+	var orchestrator *RunningOrchestrator
+	if r.Tick != nil {
+		orchestrator = r.Tick.Orchestrator
+	}
+	if len(r.Workers) == 0 && orchestrator == nil {
 		return nil
 	}
 	var lines []string
 	rows := [][]string{columns}
+	if orchestrator != nil {
+		rows = append(rows, []string{
+			"-", "orch", "running", FormatElapsed(orchestrator.Elapsed), cell(orchestrator.Session, sessionCell), "-", "-", "-", ticklog.ShortTS(r.Tick.TS),
+		})
+	}
 	for _, w := range r.Workers {
 		rows = append(rows, []string{
 			fmt.Sprintf("#%d", w.Spawn.Issue), w.Spawn.Kind, cell(w.Alive, stateCell), FormatElapsed(w.Elapsed),
