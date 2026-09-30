@@ -19,6 +19,15 @@ macOS でも XDG に揃える (`~/Library` は使わない)。scope key ごと�
 ```
 <state root>/<scope dir>/
   loop.lock                           loop の生存期間の flock の対象 (§6)
+  log.jsonl                           tick と worker の起動・終わり方の行 (§4)
+  prompts/issue-<番号>.md             描画した共通 prompt。worker に --append-system-prompt-file で渡す
+  workers/issue-<番号>.log            worker の stdout と stderr。attempt を跨いで追記する
+```
+
+workspace は state dir の外、workflow 定義の `workspace.root` の下に作業対象ごとに置く (§2.1)。
+
+```
+<workspace root>/issue-<番号>/        作業対象の workspace。作業対象が終端になるまで残す
 ```
 
 - **scope key**: issue 置き場の部品が決める、issue 置き場の識別子 (system.md §13)
@@ -48,6 +57,19 @@ tracker:
   token: $WIDGETS_GH_TOKEN   # 任意。gh に GH_TOKEN として渡す。$VAR でだけ書ける
 polling:
   interval: 5m               # 任意。周期。既定 5m
+workspace:
+  root: .claude-dispatcher/workspaces   # 任意。既定はこの値 (workflow 定義の dir からの相対)
+hooks:                       # 任意。どれも省ける
+  after_create: git -C "$CLAUDE_DISPATCHER_CLONE" worktree add "$CLAUDE_DISPATCHER_WORKSPACE"
+  before_run: git fetch
+  after_run: ""
+  before_remove: git -C "$CLAUDE_DISPATCHER_CLONE" worktree remove --force "$CLAUDE_DISPATCHER_WORKSPACE"
+  timeout: 60s
+limits:
+  max_concurrent: 1          # 任意。並列上限。既定 1
+claude:
+  command: claude            # 任意。既定 claude
+  args: [--permission-mode, auto]   # 任意。既定は空
 triggers:                    # 必須。1 つ以上
   - name: implement          # 必須
     on: issue                # 必須
@@ -72,15 +94,23 @@ triggers:                    # 必須。1 つ以上
 | `tracker.repo` | 文字列 | issue 置き場。`<owner>/<name>` |
 | `tracker.token` | 文字列 | gh に環境変数 `GH_TOKEN` として渡す token。`$VAR` でだけ書ける (値そのものを書かない)。省くと、loop を起動した環境の認証を gh がそのまま使う |
 | `polling.interval` | 文字列 | 周期。Go の duration の綴り (`90s` / `5m` / `1h30m`) で、1s 以上 24h 以下。短い周期は tracker の rate limit を食う |
+| `workspace.root` | 文字列 | workspace を置く dir。相対 path は workflow 定義の dir から、`~/` は HOME から。`$VAR` で書ける |
+| `hooks.after_create` | 文字列 | workspace を作った直後に撃つ shell script。失敗したら workspace を消し、その attempt は失敗 |
+| `hooks.before_run` | 文字列 | worker を起動する前に毎回撃つ。失敗したら、その attempt は失敗 |
+| `hooks.after_run` | 文字列 | worker が終わった後 (止めたときも) に毎回撃つ。失敗は log に残して続ける |
+| `hooks.before_remove` | 文字列 | workspace を消す前に撃つ。失敗は log に残して続ける |
+| `hooks.timeout` | 文字列 | hook 1 回の上限時間。既定 60s。超えたら process group ごと止め、失敗として扱う |
+| `limits.max_concurrent` | 整数 | 同時に走らせる worker の上限。1 以上。既定 1 |
+| `claude.command` | 文字列 | worker として起動する command。PATH から探す。既定 `claude` |
+| `claude.args` | 文字列の列 | command に、dispatcher の引数 (§6「worker の起動」) より前に渡す引数。既定は空 |
 | `triggers` | 列 | trigger の宣言。宣言順が起動の優先順 (system.md §6) |
 | `triggers[].name` | 文字列 | trigger の名前。`[A-Za-z0-9._-]+`。trigger の間で重複しない |
 | `triggers[].on` | 文字列 | 作業対象の種類。`issue` |
 | `triggers[].when` | 対応表 | 述語。書いた条件はすべて AND で評価する (§2.2) |
-| `triggers[].action` | 文字列 | worker に渡す prompt の template。空にできない |
+| `triggers[].action` | 文字列 | worker に渡す prompt の template (§2.6)。空にできない |
 
 次の項目は、受け持つ slice が決めるまで書けない (書くと未知の key として失敗する)。
 
-- hooks・並列上限・`claude` の起動 command と引数: #78
 - attempt の上限・backoff の上限・stall の上限・worker 1 回分の上限時間: #79
 - CL 側の trigger (`on: cl`): #80
 
@@ -113,7 +143,38 @@ triggers:                    # 必須。1 つ以上
 - 変数が未設定か空なら、項目と変数を名指しして失敗する
 - 値の一部だけを置き換える書き方 (`acme/$NAME`) は持たない。`$` を含む値は、そのままの綴りとして読む
 
-### 2.5 検査
+### 2.5 hooks
+
+- `sh -c` で撃つ。cwd は作業対象の workspace
+- 環境変数は loop の環境に、次のものを足す
+
+| 変数 | 中身 |
+|---|---|
+| `CLAUDE_DISPATCHER_WORKSPACE` | workspace の絶対 path |
+| `CLAUDE_DISPATCHER_CLONE` | workflow 定義の dir の絶対 path |
+| `CLAUDE_DISPATCHER_KIND` | 作業対象の種類 (`issue`) |
+| `CLAUDE_DISPATCHER_NUMBER` | 作業対象の番号 |
+
+- 空の script は撃たない
+
+### 2.6 template
+
+action と本文 (共通 prompt) は、worker を起動するたびに Go の text/template で描画する。
+
+| 変数 | 中身 |
+|---|---|
+| `.issue.number` | issue の番号 |
+| `.issue.title` | 題名 |
+| `.issue.url` | URL |
+| `.issue.labels` | label の綴りの列 |
+| `.trigger.name` | 当たった trigger の名前 |
+| `.attempt` | 何回目の起動か (1 から) |
+| `.workspace` | workspace の絶対 path |
+
+- 未知の変数 (`.issue.body` など) と未知の関数は、描画の失敗にする。描画に失敗した attempt は失敗
+- 例: `/swat-skills:playbook-implementation issue #{{ .issue.number }} ({{ .issue.url }})`
+
+### 2.7 検査
 
 次の誤りは、項目の位置 (`triggers[0].when.labels.all` の形) を名指しして失敗させる。誤りが複数あれば、すべてを 1 行ずつ出す。
 
@@ -131,7 +192,7 @@ triggers:                    # 必須。1 つ以上
 |---|---|
 | 0 | 成功 |
 | 1 | 観測できなかった (gh を起動できない・rate limit・読み切れない・その他の gh の失敗) / 想定外の失敗 |
-| 2 | 引数の誤り / workflow 定義の誤り (§2.5) / issue 置き場が見えない (綴りの誤りか、権限が無い) |
+| 2 | 引数の誤り / workflow 定義の誤り (§2.7) / issue 置き場が見えない (綴りの誤りか、権限が無い) |
 | 3 | 同じ scope key の loop が走っている (§6) |
 | 4 | gh の認証が通らない |
 
@@ -140,7 +201,26 @@ triggers:                    # 必須。1 つ以上
 
 ## 4. log.jsonl
 
-未定 (#78 で決める)。今の loop は log を書かない。
+1 行 1 JSON object。append-only。どの行も `ts` (RFC 3339 の UTC、秒まで)・`scope` (scope key)・`event` を持つ。
+
+| `event` | いつ | ほかの key |
+|---|---|---|
+| `tick` | tick の終わり | `result` (`ok` / `error`)・`candidates` (候補の数)・`launched` (起動した作業対象の列)・`error` (`result` が `error` のとき) |
+| `start` | worker を起動した | `target`・`trigger`・`attempt`・`session_id`・`workspace`・`pid` |
+| `end` | claim を解いた | `target`・`trigger`・`attempt`・`session_id`・`outcome`・`reason`・`exit_code` (process が終わったときだけ) |
+| `error` | 処理は続けるが、運用者が知るべき失敗 | `target` (あれば)・`error` |
+
+- `target` は `issue#<番号>`
+- `outcome`
+
+| 値 | 意味 |
+|---|---|
+| `completed` | worker が終わった後、作業対象が起動した trigger から外れていた。または終端になっていた |
+| `failed` | worker が失敗した (異常終了・hook の失敗・描画の失敗・起動できない)、または trigger に当たったまま終わった |
+| `stopped` | loop が止めた (作業対象が終端になった・2 回目の停止要求) |
+
+- `error` の行を書く場面: `after_run` と `before_remove` の失敗・workspace を消せない・終わった worker の作業対象を読み直せない (claim を持ったまま次の tick で読み直す)
+- `session_id` は CLI が発行して `--session-id` で渡した値。Claude Code の transcript へ辿る鍵
 
 ## 5. 試運転 (`loop --dry-run`)
 
@@ -175,8 +255,8 @@ claude-dispatcher loop [<workflow の path>]
 | 検査 | exit |
 |---|---|
 | 引数の数と flag | 2 |
-| workflow 定義を読めて、検査に通る (§2.5) | 2 |
-| gh を解決できる (PATH と、よく使われる置き場) | 1 |
+| workflow 定義を読めて、検査に通る (§2.7) | 2 |
+| gh と `claude.command` を解決できる (PATH と、よく使われる置き場) | 1 |
 | state dir を作れる | 1 |
 | 同じ scope key の loop が走っていない (`loop.lock` を取れる) | 3 |
 
@@ -188,19 +268,49 @@ claude-dispatcher loop [<workflow の path>]
 - 読み直した workflow 定義が検査に落ちたら、その tick は何も起動しない (#74 Q38)。周期は、最後に検査に通った版のものを使う
 - 読み直した workflow 定義の scope key が起動時と違えば、その tick は何も起動しない (lock は起動時の scope key で取っている)
 
-**出力** (#81 で loop の画面に作り直す。今の形は仮): stdout に 1 行ずつ追記する。log.jsonl (§4) を #78 で入れるまでは、これが唯一の出力で、stdout の読み手が消えた後の tick は事後に読めない。
+**tick の手順** (system.md §7):
+
+1. 突き合わせ: 走っている worker の作業対象を読み直し、終端になっていれば worker を止め、`after_run` と `before_remove` を撃って workspace を消す。trigger から外れただけでは止めない
+2. 終わった worker のうち、作業対象を読み直せなかったものを読み直す
+3. workflow 定義を読み直して snapshot を作り、trigger を評価する
+4. 候補のうち claim されていないものを、`limits.max_concurrent` から走っている worker を引いた数だけ起動する
+
+**worker の 1 回分**:
+
+1. workspace が無ければ作って `after_create` を撃ち、`before_run` を撃つ
+2. action と本文を描画し、本文を `prompts/issue-<番号>.md` に書く
+3. 次の argv で起動する。cwd は workspace、stdin は空、stdout と stderr は `workers/issue-<番号>.log` に追記する
+
+   ```
+   <claude.command> <claude.args…> -p --output-format stream-json --verbose --session-id <uuid> --append-system-prompt-file <prompts の path> <描画した action>
+   ```
+
+4. 終わったら `after_run` を撃ち、作業対象を読み直す。終端か、起動した trigger から外れていれば `completed`、当たったままなら `failed` として claim を解く
+   - 失敗した作業対象は、次の tick で改めて候補になる (retry と打ち切りは #79)
+
+**起動時の掃除**: loop は起動時に workspace root の下の `issue-<番号>` を読み、作業対象が終端になっていれば `before_remove` を撃って消す。
+
+**出力** (#81 で loop の画面に作り直す。今の形は仮): log.jsonl (§4) に書く行を、人が読む形で stdout にも 1 行ずつ追記する。
 
 ```
 <時刻> loop を始めた: scope <scope key> · state dir <path> · workflow <path>
 <時刻> tick ok · 候補 2: implement issue #42, implement issue #43
 <時刻> tick error · <理由>
+<時刻> 起動 issue#42 (implement, attempt 1, session <uuid>)
+<時刻> 終了 issue#42 (implement): completed — trigger から外れた
+<時刻> error issue#42: <理由>
+<時刻> 停止待ち: 走っている worker 1 本の終了を待つ (もう一度で止める)
 <時刻> loop を止めた (停止要求 SIGINT)
 ```
 
 - tick の行の候補は、試運転 (§5) と同じ順。候補が無ければ `tick ok · 候補 0`
-- 今の loop は、候補に worker を起動しない (#78 で入れる)
 
-**停止**: SIGINT / SIGTERM / SIGHUP を同じに扱う。tick の合間なら直ちに、tick の実行中ならその tick を終えてから止まる。
+**停止**: SIGINT / SIGTERM / SIGHUP を同じに扱う。
+
+| 受けたとき | 振る舞い |
+|---|---|
+| 1 回目 | 新しい tick と起動をやめ、走っている worker の終了を待って (終わり方の処理を済ませて) 止まる。走っていなければ直ちに止まる |
+| 2 回目 | 走っている worker の process group を止め、`after_run` を撃ち、`stopped` の `end` 行を書いて止まる |
 
 exit: 0 = 停止要求で止まった / 1・2・3 = 起動時の検査 (上表)。
 
