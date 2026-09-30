@@ -8,7 +8,7 @@
 |---|---|
 | [`system.md`](system.md) | システム境界 / 全体図 / 解く問題 / 状態の表現 / 機械と LLM の線 / trigger / 起動・retry・打ち切り / workflow 定義 / 駆動 / worker に渡すもの / 配布と外部依存 / スコープ外 / CLI の seam |
 | [`usecases.md`](usecases.md) | Cockburn 縮約テンプレートによるユースケース。冒頭に記述規約 |
-| [`formats.md`](formats.md) | 外から観測できる形式。black-box テストの参照先。ADR 0009 による移行中で、節ごとに新しい形式へ書き換える |
+| [`formats.md`](formats.md) | 外から観測できる形式。black-box テストの参照先 |
 
 用語は [`CONTEXT.md`](../../CONTEXT.md)。
 
