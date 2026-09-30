@@ -80,13 +80,29 @@ type Runner struct {
 // stopGrace は停止のときに SIGTERM から SIGKILL までに待つ時間
 const stopGrace = 5 * time.Second
 
-// watchInterval は stall と上限時間を確かめる間隔
+// watchInterval は stream の file の伸び (活動・stall) と上限時間を確かめる間隔
 const watchInterval = 250 * time.Millisecond
 
 // Run は走っている worker 1 回分。
 type Run struct {
 	stop chan struct{}
 	once sync.Once
+	// activity は最新の活動。loop の goroutine が読むので mu で守る
+	mu       sync.Mutex
+	activity Activity
+}
+
+// Activity は最新の活動。まだ無ければ At がゼロ値。
+func (r *Run) Activity() Activity {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.activity
+}
+
+func (r *Run) setActivity(a Activity) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.activity = a
 }
 
 // Stop は worker を止める。起動の前なら起動せず、走っていれば process group を止める。何度呼んでもよい。
@@ -185,16 +201,28 @@ type streamWatch struct {
 	changed time.Time
 }
 
-// observe は now の時点の file の大きさを見て、伸びていれば伸びた時刻を進める。file を読めなければ、その失敗を返す。
-func (w *streamWatch) observe(now time.Time) error {
+// observe は now の時点の file の大きさを見て、伸びていれば伸びた時刻を進め、grew を true で返す。file を読めなければ、
+// その失敗を返す。
+func (w *streamWatch) observe(now time.Time) (grew bool, err error) {
 	info, err := w.file.Stat()
 	if err != nil {
-		return fmt.Errorf("stream の file を読めない: %w", err)
+		return false, fmt.Errorf("stream の file を読めない: %w", err)
 	}
-	if info.Size() != w.size {
-		w.size, w.changed = info.Size(), now
+	if info.Size() == w.size {
+		return false, nil
 	}
-	return nil
+	w.size, w.changed = info.Size(), now
+	return true, nil
+}
+
+// activity は file の最新の完結した行を要約する。要約できる行が無ければ ok が false。
+func (w *streamWatch) activity() (summary string, ok bool, err error) {
+	line, err := lastLine(w.file.Name(), w.size)
+	if err != nil || line == nil {
+		return "", false, err
+	}
+	summary, ok = Summarize(line)
+	return summary, ok, nil
 }
 
 // silentFor は stream の file が最後に伸びてから now までの時間。
@@ -244,28 +272,31 @@ func (r Runner) wait(cmd *exec.Cmd, run *Run, stream *os.File) Result {
 }
 
 // watch は claude が終わるまで待つ (ended が true)。先に止める理由ができたら、その理由を持った result を返す。
-// stall と上限時間は、どちらかが有効なときだけ確かめる。
+// stream の file が伸びたら活動を更新する。stall と上限時間は、どちらかが有効なときだけ確かめる。
 func (r Runner) watch(done <-chan error, run *Run, stream *os.File) (result Result, ended bool) {
 	started := time.Now()
 	w := &streamWatch{file: stream, changed: started}
-	if err := w.observe(started); err != nil {
+	if _, err := w.observe(started); err != nil {
 		return Result{Failure: err.Error()}, false
 	}
-	var tick <-chan time.Time
-	if r.Definition.StallTimeout > 0 || r.Definition.RunTimeout > 0 {
-		ticker := time.NewTicker(watchInterval)
-		defer ticker.Stop()
-		tick = ticker.C
-	}
+	ticker := time.NewTicker(watchInterval)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-done:
 			return Result{}, true
 		case <-run.stop:
 			return Result{Stopped: true}, false
-		case now := <-tick:
-			if err := w.observe(now); err != nil {
+		case now := <-ticker.C:
+			grew, err := w.observe(now)
+			if err != nil {
 				return Result{Failure: err.Error()}, false
+			}
+			// 活動は表示のためだけのものなので、読めなくても worker は止めない (stream の file は observe で見ている)
+			if grew {
+				if summary, ok, err := w.activity(); err == nil && ok {
+					run.setActivity(Activity{At: now, Summary: summary})
+				}
 			}
 			if reason := r.overdue(now.Sub(started), w.silentFor(now)); reason != "" {
 				return Result{Failure: reason}, false

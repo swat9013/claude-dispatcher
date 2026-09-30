@@ -41,6 +41,19 @@ func TestStatusShowsTheRunningWorker(t *testing.T) {
 	}
 }
 
+func TestLoopShowsTheActivityOfARunningWorker(t *testing.T) {
+	// stream の最新の完結した行を要約して、活動の行と status に出す (formats.md §6)
+	s := newSandbox(t)
+	s.writeWorkflow(s.workerWorkflow(""))
+	s.setIssues(readyIssue(42))
+	line := `{"type":"assistant","message":{"content":[{"type":"text","text":"テストを\t読む\n次の行"}]}}`
+	s.onClaude(stubwire.Rule{Stdout: line + "\n" + `{"type":"assist`, ReleaseFile: s.releaseFile()}) // 書きかけの行は数えない
+	loop := s.startLoop()
+
+	loop.waitForOutput(regexp.MustCompile(`活動 issue#42: テストを 読む$`))
+	s.waitStatus("\tテストを 読む\n")
+}
+
 func TestStatusShowsARetryWaitingForItsBackoff(t *testing.T) {
 	// 既定の backoff (10s) の間に status を撃つ
 	s := newSandbox(t)

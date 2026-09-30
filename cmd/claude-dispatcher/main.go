@@ -18,6 +18,7 @@ import (
 	"github.com/swat9013/claude-dispatcher/internal/deps"
 	"github.com/swat9013/claude-dispatcher/internal/github"
 	"github.com/swat9013/claude-dispatcher/internal/loop"
+	"github.com/swat9013/claude-dispatcher/internal/printable"
 	"github.com/swat9013/claude-dispatcher/internal/state"
 	"github.com/swat9013/claude-dispatcher/internal/status"
 	"github.com/swat9013/claude-dispatcher/internal/target"
@@ -193,6 +194,16 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 	}
 	defer logFile.Close()
 	surviveClosedStdout()
+	publish := func(snap status.Snapshot) error { return status.Write(dir, snap) }
+	// 端末なら画面を描き直し、そうでなければ事象の行を追記する (formats.md §6)
+	if f, ok := stdout.(*os.File); ok && isTerminal(f) {
+		sc := &screen{out: stdout, scope: scopeKey}
+		stdout = sc
+		publish = func(snap status.Snapshot) error {
+			sc.show(snap) // 画面に書けないときは、事象の行と同じく捨てる
+			return status.Write(dir, snap)
+		}
+	}
 	fmt.Fprintf(stdout, "%s loop を始めた: scope %s · state dir %s · workflow %s\n", time.Now().UTC().Format(time.RFC3339), scopeKey, dir, abs)
 	return loop.Run(loop.Options{
 		Load:       load,
@@ -203,7 +214,7 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 			return worker.Runner{Workspaces: e.workspaces(def), Definition: def, Env: e.env, StateDir: dir}.Start(job, events)
 		},
 		NewSessionID: worker.NewSessionID,
-		Publish:      func(snap status.Snapshot) error { return status.Write(dir, snap) },
+		Publish:      publish,
 		Workflow:     abs,
 		ScopeKey:     scopeKey,
 		Log:          logFile,
@@ -211,6 +222,7 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 		Signals:      stopRequests(),
 		Now:          time.Now,
 		After:        time.After,
+		Refresh:      time.Tick(time.Second),
 	})
 }
 
@@ -231,19 +243,9 @@ func dryRunOnce(e environment, def workflow.Definition, stdout, stderr io.Writer
 	}
 	candidates, _ := trigger.Evaluate(def.Triggers, open)
 	for _, c := range candidates {
-		fmt.Fprintf(stdout, "%s\t%s\t#%d\t%s\n", c.Trigger.Name, c.Trigger.On, c.Item.Ref().Number, withoutControls(c.Item.Heading()))
+		fmt.Fprintf(stdout, "%s\t%s\t#%d\t%s\n", c.Trigger.Name, c.Trigger.On, c.Item.Ref().Number, printable.Line(c.Item.Heading()))
 	}
 	return 0
-}
-
-// withoutControls は制御文字 (タブ・改行・ESC など) を空白に置き換える。端末と、タブ区切りの列を守る。
-func withoutControls(s string) string {
-	return strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f || (r >= 0x80 && r < 0xa0) {
-			return ' '
-		}
-		return r
-	}, s)
 }
 
 // stopRequests は loop の停止要求 (SIGINT / SIGTERM / SIGHUP) を受ける channel を返す。

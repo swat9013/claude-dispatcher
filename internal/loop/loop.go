@@ -37,7 +37,11 @@ type Workspaces interface {
 }
 
 // Worker は走っている worker 1 回分。
-type Worker interface{ Stop() }
+type Worker interface {
+	Stop()
+	// Activity は最新の活動 (formats.md §6)。まだ無ければ At がゼロ値
+	Activity() worker.Activity
+}
 
 // Options は loop の入力。
 type Options struct {
@@ -66,6 +70,8 @@ type Options struct {
 	Now      func() time.Time
 	// After は d 後に届く channel を返す (time.After。テストは差し替える)
 	After func(d time.Duration) <-chan time.Time
+	// Refresh は走っている worker の活動を確かめる周期 (1s) に届く。nil なら確かめない
+	Refresh <-chan time.Time
 }
 
 // phase は claim の段階。
@@ -130,6 +136,8 @@ type claim struct {
 	waitingSlot bool
 	// startedAt は今の attempt の claude を起動した時刻 (状態 file の経過に使う)。起動の前は nil
 	startedAt *time.Time
+	// activity は今の attempt の worker の最新の活動。まだ無ければ nil
+	activity *status.Activity
 }
 
 type loop struct {
@@ -196,6 +204,8 @@ func Run(o Options) int {
 			if l.stopping == 0 {
 				l.retry(l.o.Store(l.def), outsideTick)
 			}
+		case <-o.Refresh:
+			l.refresh()
 		}
 	}
 }
@@ -461,7 +471,7 @@ func (l *loop) launch(def workflow.Definition, c trigger.Candidate) bool {
 // start は claim の今の attempt の worker を、そのときの workflow 定義で起動する。
 func (l *loop) start(c *claim) {
 	def := l.definitionOf(c)
-	c.phase, c.startedAt = phaseRunning, nil
+	c.phase, c.startedAt, c.activity = phaseRunning, nil, nil
 	job := worker.Job{Item: c.item, Trigger: c.trigger, Attempt: c.attempt, SessionID: c.sessionID, Resume: c.sessionStarted, Prompt: def.Prompt}
 	c.run = l.o.Launch(def, job, l.events)
 }

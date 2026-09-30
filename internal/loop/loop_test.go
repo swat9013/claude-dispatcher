@@ -57,6 +57,8 @@ type endedWorker struct{}
 
 func (endedWorker) Stop() {}
 
+func (endedWorker) Activity() worker.Activity { return worker.Activity{} }
+
 // harness は plans を順に 1 tick ずつ回し、読み切ったところで stop の停止要求を送る。
 type harness struct {
 	plans []tickPlan

@@ -44,11 +44,11 @@ func (l *loop) snapshot() status.Snapshot {
 		c := l.claims[ref]
 		w := status.Worker{
 			Target: ref.String(), Trigger: c.trigger.Name, Attempt: c.attempt, SessionID: c.sessionID,
-			Phase: phases[c.phase], StartedAt: c.startedAt,
+			Phase: phases[c.phase], StartedAt: c.startedAt, Activity: c.activity,
 		}
 		if c.phase == phaseWaitingRetry {
 			retryAt := c.retryAt
-			w.RetryAt, w.StartedAt = &retryAt, nil
+			w.RetryAt, w.StartedAt, w.Activity = &retryAt, nil, nil
 		}
 		s.Workers = append(s.Workers, w)
 	}
@@ -70,4 +70,20 @@ func sortedRefs[V any](m map[target.Ref]V) []target.Ref {
 		return cmp.Or(cmp.Compare(a.Kind, b.Kind), cmp.Compare(a.Number, b.Number))
 	})
 	return refs
+}
+
+// refresh は走っている worker の活動を読み、変わっていれば活動の行を出す。終わった worker (run が nil) は読まない。
+func (l *loop) refresh() {
+	for _, ref := range sortedRefs(l.claims) {
+		c := l.claims[ref]
+		if c.run == nil {
+			continue
+		}
+		a := c.run.Activity()
+		if a.At.IsZero() || (c.activity != nil && c.activity.At.Equal(a.At)) {
+			continue
+		}
+		c.activity = &status.Activity{At: a.At, Summary: a.Summary}
+		l.rec.human("活動 %s: %s", ref, a.Summary)
+	}
 }
