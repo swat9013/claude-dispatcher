@@ -447,12 +447,13 @@ func surviveClosedStdout() {
 
 // tableFit は w へ描く表の ACTIVITY の切り詰め方。端末なら今の幅に収め、端末でない (か幅を読めない) なら内容を切る。
 func tableFit(w io.Writer) status.Fit {
-	if f, ok := w.(*os.File); ok && isTerminal(w) {
+	if f, ok := w.(*os.File); ok {
+		// 端末でなければ (pipe・file・/dev/null) 幅を読めない
 		if width, _, err := term.GetSize(int(f.Fd())); err == nil && width > 0 {
 			return status.FitTerminal(width)
 		}
 	}
-	return status.FitPlain
+	return status.FitPlain()
 }
 
 // isTerminal は w が端末か。端末でない character device (/dev/null 等) は端末に数えない。

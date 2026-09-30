@@ -11,13 +11,15 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // Claude Code の transcript (`<設定 dir>/projects/*/<session_id>.jsonl`) から、走っているセッションの最新の活動を読む
 // (formats.md §10 の ACTIVITY)。transcript の中身の形は Claude Code の内部の仕様で、それへの依存はこの file に閉じる。
 
-// transcriptTail は transcript の末尾から読む量。transcript は大きくなるので全体は読まない
-const transcriptTail = 256 << 10
+// transcriptTails は transcript の末尾から読む量。transcript は大きくなるので全体は読まない。末尾の行が大きく (画像の
+// tool_result 等) 最初の量に時刻を持つ行が入らなければ、次の量で読み直す
+var transcriptTails = []int64{256 << 10, 4 << 20}
 
 // Activity は最新の活動。
 type Activity struct {
@@ -38,39 +40,65 @@ func ClaudeConfigDir(getenv func(string) string, home string) string {
 // readActivity は sessionID の transcript の末尾から最新の活動を読む。cwd から dir 名を作る Claude Code の規則は
 // 文書化されていないので再現せず、projects の下を glob で探す。
 func readActivity(configDir, sessionID string, now time.Time) (*Activity, error) {
-	matches, err := filepath.Glob(filepath.Join(configDir, "projects", "*", sessionID+".jsonl"))
+	switch {
+	case configDir == "":
+		return nil, errors.New("transcript を探す設定 dir (Claude Code) が決まっていない")
+	case sessionID == "":
+		return nil, errors.New("起動記録に session id が無い")
+	}
+	file, err := newestTranscript(configDir, sessionID)
 	if err != nil {
 		return nil, err
 	}
-	if len(matches) == 0 {
-		return nil, fmt.Errorf("%s の下に %s.jsonl が無い", filepath.Join(configDir, "projects"), sessionID)
+	for _, tail := range transcriptTails {
+		raw, whole, err := tailLines(file, tail)
+		if err != nil {
+			return nil, err
+		}
+		lines := decodeLines(raw)
+		if last, ok := lastEventTime(lines); ok {
+			return &Activity{Since: now.Sub(last), Doing: lastDoing(lines)}, nil
+		}
+		if whole {
+			break
+		}
 	}
-	lines, err := tailLines(matches[0])
-	if err != nil {
-		return nil, err
-	}
-	last, ok := lastEventTime(lines)
-	if !ok {
-		return nil, fmt.Errorf("%s の末尾に時刻を持つ行が無い (形が読めない)", matches[0])
-	}
-	return &Activity{Since: now.Sub(last), Doing: lastDoing(lines)}, nil
+	return nil, fmt.Errorf("%s の末尾に時刻を持つ行が無い (形が読めない)", file)
 }
 
-// tailLines は file の末尾 transcriptTail 分のうち、完全な行を返す (先頭の切れた行は捨てる)。
-func tailLines(file string) ([][]byte, error) {
+// newestTranscript は projects の下で sessionID の transcript を探す。複数あれば最後に書かれたもの。
+func newestTranscript(configDir, sessionID string) (string, error) {
+	matches, err := filepath.Glob(filepath.Join(configDir, "projects", "*", sessionID+".jsonl"))
+	if err != nil {
+		return "", err
+	}
+	newest, newestAt := "", time.Time{}
+	for _, m := range matches {
+		if info, err := os.Stat(m); err == nil && (newest == "" || info.ModTime().After(newestAt)) {
+			newest, newestAt = m, info.ModTime()
+		}
+	}
+	if newest == "" {
+		return "", fmt.Errorf("%s の下に %s.jsonl が無い", filepath.Join(configDir, "projects"), sessionID)
+	}
+	return newest, nil
+}
+
+// tailLines は file の末尾 tail 分のうち、完全な行を返す (先頭の切れた行は捨てる)。whole は file 全体を読んだか。
+func tailLines(file string, tail int64) (lines [][]byte, whole bool, err error) {
 	f, err := os.Open(file)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer f.Close()
 	info, err := f.Stat()
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	offset := max(info.Size()-transcriptTail, 0)
+	offset := max(info.Size()-tail, 0)
 	buf := make([]byte, info.Size()-offset)
 	if _, err := f.ReadAt(buf, offset); err != nil && !errors.Is(err, io.EOF) {
-		return nil, err
+		return nil, false, err
 	}
 	if offset > 0 {
 		if i := bytes.IndexByte(buf, '\n'); i >= 0 {
@@ -82,7 +110,7 @@ func tailLines(file string) ([][]byte, error) {
 	} else {
 		buf = nil
 	}
-	return bytes.Split(buf, []byte("\n")), nil
+	return bytes.Split(buf, []byte("\n")), offset == 0, nil
 }
 
 // transcriptLine は transcript の 1 行のうち読む分。
@@ -101,13 +129,21 @@ type contentItem struct {
 	Input json.RawMessage `json:"input"`
 }
 
-// lastEventTime は後ろから見て最初に時刻を読めた行の時刻 (メタデータの行は時刻を持たない)。
-func lastEventTime(lines [][]byte) (time.Time, bool) {
-	for _, raw := range slices.Backward(lines) {
+// decodeLines は読めた行だけを返す (形の読めない行は飛ばす — 読めた行から時刻を拾えなければ readActivity が失敗にする)。
+func decodeLines(raw [][]byte) []transcriptLine {
+	lines := make([]transcriptLine, 0, len(raw))
+	for _, r := range raw {
 		var line transcriptLine
-		if json.Unmarshal(raw, &line) != nil || line.Timestamp == "" {
-			continue
+		if json.Unmarshal(r, &line) == nil {
+			lines = append(lines, line)
 		}
+	}
+	return lines
+}
+
+// lastEventTime は後ろから見て最初に時刻を読めた行の時刻 (メタデータの行は時刻を持たない)。
+func lastEventTime(lines []transcriptLine) (time.Time, bool) {
+	for _, line := range slices.Backward(lines) {
 		if at, err := time.Parse(time.RFC3339Nano, line.Timestamp); err == nil {
 			return at, true
 		}
@@ -116,10 +152,9 @@ func lastEventTime(lines [][]byte) (time.Time, bool) {
 }
 
 // lastDoing は後ろから見て最初の assistant の発話か tool 呼び出しを 1 行にする。発話が tool 呼び出しより後なら発話の頭。
-func lastDoing(lines [][]byte) string {
-	for _, raw := range slices.Backward(lines) {
-		var line transcriptLine
-		if json.Unmarshal(raw, &line) != nil || line.Type != "assistant" {
+func lastDoing(lines []transcriptLine) string {
+	for _, line := range slices.Backward(lines) {
+		if line.Type != "assistant" {
 			continue
 		}
 		var items []contentItem
@@ -157,7 +192,13 @@ func describeToolUse(item contentItem) string {
 	return strings.TrimSpace(item.Name + " " + arg)
 }
 
+// firstLine は s の 1 行目。端末へ出すので、制御文字 (ESC・tab・CR 等) は空白に置き換える — transcript の中身は model が書く。
 func firstLine(s string) string {
 	head, _, _ := strings.Cut(strings.TrimSpace(s), "\n")
-	return strings.TrimSpace(head)
+	return strings.TrimSpace(strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, head))
 }

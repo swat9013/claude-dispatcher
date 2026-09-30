@@ -106,7 +106,7 @@ claude_token_file = "~/.config/claude-dispatcher/<project>/claude-token"
 | `spawned` | `orchestrator` があるとき。`result: error` でも起動済みの worker は載る |
 
 - 想定外の失敗 (panic 等) で止まった tick も `result: error` の行を残し、**それまでに確定した key (`instruction_file` / `orchestrator` / 起動済みの `spawned`) を載せる**。tick は段階ごとに行の中身を積み、最後に 1 行で書き出すので、どこで止まっても claude と worker を起動済みかが行から読める
-- `session_id` は CLI が起動ごとに発行して `--session-id` で渡した値。Claude Code の transcript `~/.claude/projects/<cwd から Claude Code が決める dir 名>/<session_id>.jsonl` へ辿る鍵で、`cwd` と組で引く
+- `session_id` は CLI が起動ごとに発行して `--session-id` で渡した値。Claude Code の transcript `<Claude Code の設定 dir>/projects/*/<session_id>.jsonl` へ辿る鍵 (dir 名は Claude Code が cwd から決めるが、その規則は文書化されていないので glob で探す — §10 の ACTIVITY)
 
 ### 4.2 orchestrator 行
 
@@ -290,11 +290,12 @@ orchestrator の実行中は、表の先頭に orchestrator の行を 1 行置�
 **ACTIVITY**: Claude Code の transcript から読む。worker log は `claude -p` の text 出力で終了まで 0 byte のことがあるが、transcript は走っている間も書き足される。
 
 - 探し方: `<Claude Code の設定 dir>/projects/*/<session_id>.jsonl` を glob で探す。設定 dir は `CLAUDE_CONFIG_DIR` があればそれ、無ければ `~/.claude`。cwd から dir 名を作る Claude Code の規則 (文書化されていない) は再現しない。`session_id` は起動記録 (tick 行の `spawned[].session_id`)、orchestrator の行は `tick.now` の `orchestrator.session_id`
-- file の末尾 (256KiB) だけを読み、最後の完全な行から後ろ向きに読む (transcript は大きくなるため)
+- 当たった file が複数あれば、最後に書かれたもの (mtime が最新) を読む
+- file の末尾 (256KiB) だけを読み、最後の完全な行から後ろ向きに読む (transcript は大きくなるため)。末尾の行が大きく (画像の tool_result 等) その範囲に時刻を持つ行が無ければ、4MiB で読み直す
 - 経過は、時刻 (`timestamp`) を持つ最後の行からの経過。綴りは ELAPSED と同じ
-- 内容は、最後の tool 呼び出し (tool 名と主な引数: `Bash` は command の 1 行目、`Edit` / `Write` / `Read` は file の path、それ以外は tool 名だけ)。最後の tool 呼び出しの後に assistant の発話があれば、発話の 1 行目。読んだ範囲にどちらも無ければ経過だけ
+- 内容は、最後の tool 呼び出し (tool 名と主な引数: `Bash` は command の 1 行目、`Edit` / `Write` / `Read` は file の path、それ以外は tool 名だけ)。最後の tool 呼び出しの後に assistant の発話があれば、発話の 1 行目。読んだ範囲にどちらも無ければ経過だけ (tool の引数を読めなければ tool 名だけ)。端末へ出すので、制御文字 (ESC・tab・CR 等) は空白に置き換える
 - stdout が端末なら、行が端末の幅に収まるように切り詰める。端末でなければ、内容を 60 文字で切り詰める
-- transcript の中身の形は Claude Code の内部の仕様で、それへの依存はこの列 1 つに閉じる。file が見つからないか、形が読めなければ、その行の ACTIVITY を `?` にして注記を残す。ほかの列には影響させない
+- transcript の中身の形は Claude Code の内部の仕様で、それへの依存はこの列 1 つに閉じる。file が見つからないか、形が読めない (時刻を持つ行が 1 つも読めない) か、起動記録に session id が無ければ、その行の ACTIVITY を `?` にして注記を残す。ほかの列には影響させない
 
 `tick.now` は JSON 1 行 (key は下表)。tick の 1 回分が lock を取った直後に書き、段階が変わるたびに書き直し (同じ dir の一時 file から rename する。読み手に書きかけを見せない)、tick 行を書いた後、lock を外す前に消す。error・panic・loop の停止要求で終わる経路でも消す。単発の `tick` を signal で止めたときと、process が kill されたときは残る — status は pid の照合でそれを無視する。`tick --dry-run` と、`setup` / `doctor` の試運転は書かない (state dir に何も書かない — §7 / §12)。tick は読まない — 指示の導出にも lock の判定にも使わない、表示のための痕跡。書けないか消せなければ、tick は止めずに (result も変えずに) 理由を 1 行ずつ残す。単発の `tick` は stderr に、loop は画面の `!` 行 (§13.1) に出す。
 

@@ -17,8 +17,11 @@ func Width(s string) int {
 	return width
 }
 
-// Cut は s を表示幅 width に収まるところまでで切る。
+// Cut は s を表示幅 width に収まるところまでで切る。width が負なら切らない。
 func Cut(s string, width int) string {
+	if width < 0 {
+		return s
+	}
 	used := 0
 	for i, r := range s {
 		w := Width(string(r))

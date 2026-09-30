@@ -216,7 +216,7 @@ CLI の中で呼び出し側から中身を隠す部品と、差し替えの口 
 | 起動部 | tick の 1 回分 / status の現況 | セッションの起動の形 (argv・process session・pid・生死の見分け方) | `claude -p` / テストの fake。`claude --bg` はここに足す |
 | issue 置き場の部品 | tick の 1 回分 / status の現況 / `setup` / `doctor` | tracker の呼び方・応答の綴り・失敗の見分け方 | gh / テストの in-memory |
 | CL 置き場の部品 | tick の 1 回分 / status の現況 / `doctor` | CL host の呼び方・応答の綴り・失敗の見分け方 | gh / テストの in-memory |
-| status の現況 | `status` / loop の画面 | 機械の観測 (process 一覧・claude のセッション一覧・tick が置く `tick.now`・Claude Code の transcript の末尾) と、載せる worker の選び方 | 機械の観測: `ps` と `claude` / テストの fake |
+| status の現況 | `status` / loop の画面 | 機械の観測 (process 一覧・claude のセッション一覧・tick が置く `tick.now`・Claude Code の transcript の末尾) と、載せる worker の選び方 | 機械の観測: `ps` と `claude` / テストの fake。transcript は本物の読み取りだけ (テストは HOME の下に fake の file を置く) |
 
 - **tick の 1 回分は停止要求を 1 つだけ受け、段階を自分で解釈する**。呼び出し側が渡せるのは「orchestrator を止めよ」だけで、orchestrator の起動前に届けば起動せず、起動中なら起動部に止めさせて決定ファイルを読まず、正常終了の後なら無視して決定どおりの worker の起動を終える (§9 の 2 回目の停止要求)。1 回目の停止要求は次の tick を始めないことなので loop だけが扱う。観測の途中に届いた要求で観測は打ち切らない — 観測は gh の上限時間で終わり、打ち切っても orchestrator の前で止まる結果は変わらない
 - **tick の 1 回分は確定した tick 行を返す**。返すのは呼び出し側が使う key (ts・result・error・指示の件数・起動した issue と、停止要求が orchestrator に何をしたか) で、値は log.jsonl に書いたものと同じ。書けなかったときはその理由を含む。exit code と失敗行 (formats.md §6) を stderr に出すかは呼び出し側が行から決める — 単発の `tick` は出し、loop は出さずに見出しへ載せる。loop の見出しの最終 tick はこの行から描き、log.jsonl を読み直さない

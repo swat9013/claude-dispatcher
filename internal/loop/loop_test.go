@@ -107,7 +107,7 @@ func startLoop(t *testing.T, settings ...setting) *harness {
 			return out
 		},
 		Status: func() status.Report { return runningReport() },
-		Fit:    func() status.Fit { return status.FitPlain },
+		Fit:    func() status.Fit { return status.FitPlain() },
 		Now:    h.clock.Now, Poll: time.Millisecond,
 	}
 	for _, s := range settings {

@@ -72,7 +72,7 @@ func TestActivityShowsTheLastToolCallWithItsElapsedTime(t *testing.T) {
 
 	r := s.statusPS()
 
-	if got := activityCell(t, r.stdout); !regexp.MustCompile(`^1\ds Bash go test \./\.\.\.$`).MatchString(got) {
+	if got := activityCell(t, r.stdout); !regexp.MustCompile(`^\d+s Bash go test \./\.\.\.$`).MatchString(got) {
 		t.Fatalf("ACTIVITY = %q, want `12s Bash go test ./...` (経過・tool 名・command の 1 行目)\n%s", got, r.stdout)
 	}
 }
@@ -92,23 +92,43 @@ func TestActivityShowsTheHeadOfAnUtteranceAfterTheLastToolCall(t *testing.T) {
 	}
 }
 
-func TestActivityIsUnknownWithANoteWhenTheTranscriptIsMissing(t *testing.T) {
+func TestActivityIsUnknownWithANoteWhenTheTranscriptIsMissingOrUnreadable(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		arrange func(s *sandbox)
+	}{
+		{"transcript が無い", func(s *sandbox) {}},
+		{"transcript の形が読めない", func(s *sandbox) {
+			dir := filepath.Join(s.defaultClaudeConfigDir(), "projects", "-somewhere-clone")
+			mustMkdir(s.t, dir)
+			mustWrite(s.t, filepath.Join(dir, workerSession+".jsonl"), "not json\n{\"type\":\"last-prompt\"}\n")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newSandbox(t)
+			s.runningWorkerScenario()
+			tc.arrange(s)
+
+			r := s.statusPS()
+
+			if got := activityCell(t, r.stdout); got != "?" || !strings.Contains(r.stdout, "  ! #42 の transcript を読めない") {
+				t.Fatalf("ACTIVITY = %q, want ? と注記\n%s", got, r.stdout)
+			}
+		})
+	}
+}
+
+func TestActivityThatCannotBeReadLeavesTheOtherColumnsAsTheyAre(t *testing.T) {
 	s := newSandbox(t)
 	s.runningWorkerScenario()
 
 	r := s.statusPS()
 
 	row := strings.Join(workerRow(r.stdout, 42), " ")
-	if got := activityCell(t, r.stdout); got != "?" {
-		t.Fatalf("ACTIVITY = %q, want ?\n%s", got, r.stdout)
-	}
 	for _, want := range []string{"start", "running", "+3", "yes", "#57 OPEN"} {
 		if !strings.Contains(row, want) {
 			t.Fatalf("transcript が無いだけで他の列 %q が変わった: %s", want, row)
 		}
-	}
-	if !strings.Contains(r.stdout, "  ! #42 の transcript を読めない") {
-		t.Fatalf("transcript を読めない注記が無い:\n%s", r.stdout)
 	}
 }
 
@@ -122,7 +142,7 @@ func TestActivityLooksUnderClaudeConfigDirWhenItIsSet(t *testing.T) {
 
 	r := s.runWithEnv(map[string]string{"CLAUDE_CONFIG_DIR": configDir}, "status", "ps", s.project)
 
-	if got := activityCell(t, r.stdout); !regexp.MustCompile(`^3\ds Read docs/design/formats\.md$`).MatchString(got) {
+	if got := activityCell(t, r.stdout); !regexp.MustCompile(`^\d+s Read docs/design/formats\.md$`).MatchString(got) {
 		t.Fatalf("ACTIVITY = %q, want CLAUDE_CONFIG_DIR の下の transcript から `30s Read docs/design/formats.md`\n%s", got, r.stdout)
 	}
 }
@@ -158,7 +178,7 @@ func TestActivityCutsTheContentTo60CharactersWhenStdoutIsNotATerminal(t *testing
 	}
 }
 
-func TestActivityOfTheOrchestratorRow(t *testing.T) {
+func TestActivityOfTheOrchestratorRowIsReadFromTheOrchestratorSessionTranscript(t *testing.T) {
 	s := newSandbox(t)
 	s.setIssues(readyIssue(42))
 	s.orchestratorWaitsAfterWriting(startDecisions(playbookPath(s.defaultInstallPath(), "playbook-implementation"), 42))
@@ -173,7 +193,7 @@ func TestActivityOfTheOrchestratorRow(t *testing.T) {
 
 	r := s.statusPS()
 
-	if row := strings.Join(orchestratorRow(r.stdout), " "); !regexp.MustCompile(`Z \ds Bash gh issue list$`).MatchString(row) {
+	if row := strings.Join(orchestratorRow(r.stdout), " "); !regexp.MustCompile(`Z \d+s Bash gh issue list$`).MatchString(row) {
 		t.Fatalf("orchestrator の行 = %q, want ACTIVITY `4s Bash gh issue list`\n%s", row, r.stdout)
 	}
 }

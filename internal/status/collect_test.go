@@ -188,7 +188,7 @@ func TestReportNoteLinesMarkEachNote(t *testing.T) {
 }
 
 func TestReportTableLinesAreEmptyWithoutWorkers(t *testing.T) {
-	if got := (Report{}).TableLines(FitPlain); len(got) != 0 {
+	if got := (Report{}).TableLines(FitPlain()); len(got) != 0 {
 		t.Fatalf("table lines = %q, want 載せる worker が居なければ表を出さない", got)
 	}
 }
@@ -197,7 +197,7 @@ func TestRenderTablePutsHeadingNotesTableInOrderAndABlankLineBetweenProjects(t *
 	noted := Report{Project: "acme", Notes: []string{"wip を読めない"}}
 	quiet := Report{Project: "beta"}
 
-	got := RenderTable([]Report{noted, quiet}, FitPlain)
+	got := RenderTable([]Report{noted, quiet}, FitPlain())
 
 	want := "acme  loop ?  最終 tick ?\n  ! wip を読めない\n\nbeta  loop ?  最終 tick ?"
 	if got != want {
@@ -208,7 +208,7 @@ func TestRenderTablePutsHeadingNotesTableInOrderAndABlankLineBetweenProjects(t *
 func TestReportTableLinesStartWithTheColumnHeaderThenOneRowPerWorker(t *testing.T) {
 	r := collectOne(t, probesWith(quietMachine(), answers(4242)))
 
-	table := r.TableLines(FitPlain)
+	table := r.TableLines(FitPlain())
 
 	if len(table) != 2 || !strings.HasPrefix(table[0], "ISSUE") || !strings.HasPrefix(table[1], "#42") {
 		t.Fatalf("table = %q, want 列の見出し行と issue 42 の行", table)
@@ -242,7 +242,7 @@ func TestCollectShowsATickPastItsOrchestratorWithoutAnOrchestratorRow(t *testing
 	if r.Tick == nil || r.Tick.Orchestrator != nil || !strings.Contains(r.Heading(), "  tick 実行中 · ") {
 		t.Fatalf("tick = %+v / 見出し %q, want tick 実行中の状態欄だけ (orchestrator は終わっている)", r.Tick, r.Heading())
 	}
-	if lines := r.TableLines(FitPlain); lines != nil {
+	if lines := r.TableLines(FitPlain()); lines != nil {
 		t.Fatalf("orchestrator の行を出した: %v", lines)
 	}
 }
