@@ -400,40 +400,6 @@ func TestWorkerThatFailsButLeavesTheTriggerIsCompleted(t *testing.T) {
 	}
 }
 
-func TestFailedIssueIsNotLaunchedAgainWhileItStillMatchesTheTrigger(t *testing.T) {
-	s := newSandbox(t)
-	s.writeWorkflow(s.workerWorkflow(""))
-	s.setIssues(readyIssue(42))
-	s.onClaude(stubwire.Rule{})
-	s.startLoop()
-	s.waitEvents("end", 1)
-
-	ticks := len(s.events("tick"))
-	s.waitEvents("tick", ticks+2)
-
-	if calls := s.calls("claude"); len(calls) != 1 {
-		t.Fatalf("claude の呼び出し = %d 回, want 1 (失敗した issue を起動し直した)", len(calls))
-	}
-}
-
-func TestFailedIssueIsLaunchedAgainAfterLeavingTheTriggerOnce(t *testing.T) {
-	s := newSandbox(t)
-	s.writeWorkflow(s.workerWorkflow(""))
-	s.setIssues(readyIssue(42))
-	s.onClaude(stubwire.Rule{})
-	s.startLoop()
-	s.waitEvents("end", 1)
-	offTrigger := readyIssue(42)
-	offTrigger.labels = nil
-	s.setIssues(offTrigger)
-	ticks := len(s.events("tick"))
-	s.waitEvents("tick", ticks+2)
-
-	s.setIssues(readyIssue(42))
-
-	s.waitEvents("start", 2)
-}
-
 func TestFailingAfterCreateHookRemovesTheWorkspaceAndFails(t *testing.T) {
 	s := newSandbox(t)
 	s.writeWorkflow(regexp.MustCompile(`(?m)^  after_create: .*$`).ReplaceAllString(s.workerWorkflow(""), "  after_create: exit 4"))

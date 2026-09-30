@@ -6,10 +6,12 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -73,10 +75,16 @@ type Runner struct {
 	Env []string
 	// StateDir は描画した共通 prompt と worker log を置く state dir
 	StateDir string
+	// StallTimeout は出力が途絶えてから止めるまで、RunTimeout は起動から止めるまで。0 なら見ない
+	StallTimeout time.Duration
+	RunTimeout   time.Duration
 }
 
 // stopGrace は停止のときに SIGTERM から SIGKILL までに待つ時間
 const stopGrace = 5 * time.Second
+
+// watchInterval は stall と上限時間を確かめる間隔
+const watchInterval = 250 * time.Millisecond
 
 // Run は走っている worker 1 回分。
 type Run struct {
@@ -143,17 +151,45 @@ func (r Runner) launch(job Job, run *Run, workspacePath string, started func(pid
 	defer log.Close()
 
 	// action は `--` の後ろに置く (`-` で始まる action を claude が option と読まないように)
-	args := append(append([]string{}, r.Args...), "-p", "--output-format", "stream-json", "--verbose",
-		"--session-id", job.SessionID, "--append-system-prompt-file", promptFile, "--", action)
+	args := append(append([]string{}, r.Args...), "-p", "--output-format", "stream-json", "--verbose")
+	args = append(args, sessionArgs(job)...)
+	args = append(args, "--append-system-prompt-file", promptFile, "--", action)
 	cmd := exec.Command(command, args...)
-	cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = workspacePath, r.Env, log, log
+	output := &activity{w: log}
+	output.touch()
+	cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = workspacePath, r.Env, output, output
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// process group の外へ逃げた孫が出力の pipe を握ったままでも、Wait が戻るようにする
+	cmd.WaitDelay = stopGrace
 	if err := cmd.Start(); err != nil {
 		return Result{Failure: fmt.Sprintf("%s を起動できない: %v", r.Command, err)}
 	}
 	started(cmd.Process.Pid, workspacePath)
-	return wait(cmd, run)
+	return r.wait(cmd, run, output)
 }
+
+// sessionArgs は session の渡し方。最初の attempt は発行した id で session を始め、2 回目以降は同じ id の session を続ける。
+func sessionArgs(job Job) []string {
+	if job.Attempt > 1 {
+		return []string{"--resume", job.SessionID}
+	}
+	return []string{"--session-id", job.SessionID}
+}
+
+// activity は worker の出力を log へ流し、最後に出力した時刻を覚える (stall の検知に使う)。
+type activity struct {
+	w    io.Writer
+	last atomic.Int64
+}
+
+func (a *activity) Write(p []byte) (int, error) {
+	a.touch()
+	return a.w.Write(p)
+}
+
+func (a *activity) touch() { a.last.Store(time.Now().UnixNano()) }
+
+func (a *activity) silentFor() time.Duration { return time.Since(time.Unix(0, a.last.Load())) }
 
 // render は action を描画し、共通 prompt を描画して state dir の file に書く。
 func (r Runner) render(job Job, workspacePath string) (action, promptFile string, err error) {
@@ -173,30 +209,64 @@ func (r Runner) render(job Job, workspacePath string) (action, promptFile string
 	return action, promptFile, nil
 }
 
-// wait は起動した claude が終わるか、止められるまで待つ。
-func wait(cmd *exec.Cmd, run *Run) Result {
+// wait は起動した claude が終わるか、止められるか、stall か上限時間で止めるまで待つ。
+func (r Runner) wait(cmd *exec.Cmd, run *Run, output *activity) Result {
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
-	var result Result
+	result, ended := r.watch(done, run, output)
+	if ended {
+		return r.exited(cmd, Result{})
+	}
+	// 子の終了と同時に止める理由ができたら終了を優先する (select はどちらも選びうる)。自分で終わった worker を
+	// 止めたことにすると、終わり方を確かめないまま claim を解いてしまう
 	select {
 	case <-done:
-	case <-run.stop:
-		// 子の終了と同時に届いたら終了を優先する (select はどちらも選びうる)。自分で終わった worker を止めたことにすると、
-		// 終わり方を確かめないまま claim を解いてしまう
+		return r.exited(cmd, Result{})
+	default:
+	}
+	if err := stopGroup(cmd.Process.Pid, done); err != nil {
+		result.StopError = err.Error()
+	}
+	return r.exited(cmd, result)
+}
+
+// watch は claude が終わるまで待つ (ended が true)。先に止める理由ができたら、その理由を持った result を返す。
+func (r Runner) watch(done <-chan error, run *Run, output *activity) (result Result, ended bool) {
+	started := time.Now()
+	ticker := time.NewTicker(watchInterval)
+	defer ticker.Stop()
+	for {
 		select {
 		case <-done:
-		default:
-			result.Stopped = true
-			if err := stopGroup(cmd.Process.Pid, done); err != nil {
-				result.StopError = err.Error()
+			return Result{}, true
+		case <-run.stop:
+			return Result{Stopped: true}, false
+		case <-ticker.C:
+			if reason := r.overdue(started, output); reason != "" {
+				return Result{Failure: reason}, false
 			}
 		}
 	}
+}
+
+// overdue は stall か上限時間に当たったら、その理由を返す。当たらなければ ""。
+func (r Runner) overdue(started time.Time, output *activity) string {
+	switch {
+	case r.StallTimeout > 0 && output.silentFor() > r.StallTimeout:
+		return fmt.Sprintf("stall (出力が %s 途絶えた)", r.StallTimeout)
+	case r.RunTimeout > 0 && time.Since(started) > r.RunTimeout:
+		return fmt.Sprintf("上限時間 %s を超えた", r.RunTimeout)
+	}
+	return ""
+}
+
+// exited は終わった claude の終わり方を result に足す。
+func (r Runner) exited(cmd *exec.Cmd, result Result) Result {
 	if status, ok := cmd.ProcessState.Sys().(syscall.WaitStatus); ok && status.Exited() {
 		code := status.ExitStatus()
 		result.ExitCode = &code
 	}
-	if !result.Stopped && (result.ExitCode == nil || *result.ExitCode != 0) {
+	if !result.Stopped && result.Failure == "" && (result.ExitCode == nil || *result.ExitCode != 0) {
 		result.Failure = "異常終了 (" + cmd.ProcessState.String() + ")"
 	}
 	return result

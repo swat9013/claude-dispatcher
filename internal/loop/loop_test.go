@@ -78,7 +78,8 @@ type harness struct {
 }
 
 func definition(interval time.Duration, maxConcurrent int) workflow.Definition {
-	return workflow.Definition{Interval: interval, MaxConcurrent: maxConcurrent, Triggers: []trigger.Trigger{{Name: "implement", On: trigger.Issue}}}
+	// 再起動は black-box テストが実時間で見る。ここでは 1 回目の失敗で打ち切り、再起動の予定を立てない
+	return workflow.Definition{Interval: interval, MaxConcurrent: maxConcurrent, MaxAttempts: 1, Triggers: []trigger.Trigger{{Name: "implement", On: trigger.Issue}}}
 }
 
 func (h *harness) run(t *testing.T) []string {
@@ -342,5 +343,23 @@ func TestLineThatCannotBeWrittenToTheLogIsReportedOnStdout(t *testing.T) {
 
 	if !strings.Contains(stdout.String(), "log.jsonl に tick の行を書けない: disk full") {
 		t.Fatalf("出力:\n%s", stdout.String())
+	}
+}
+
+func TestBackoffDoublesFromTenSecondsUpToTheLimit(t *testing.T) {
+	var got []time.Duration
+	for attempt := 1; attempt <= 7; attempt++ {
+		got = append(got, loop.Backoff(attempt, 5*time.Minute))
+	}
+
+	want := []time.Duration{10 * time.Second, 20 * time.Second, 40 * time.Second, 80 * time.Second, 160 * time.Second, 5 * time.Minute, 5 * time.Minute}
+	if !slices.Equal(got, want) {
+		t.Fatalf("backoff = %v, want %v", got, want)
+	}
+}
+
+func TestBackoffBelowTenSecondsIsTheLimit(t *testing.T) {
+	if got := loop.Backoff(1, time.Second); got != time.Second {
+		t.Fatalf("backoff = %s, want 1s", got)
 	}
 }
