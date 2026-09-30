@@ -33,9 +33,42 @@ func main() {
 		fmt.Fprintf(os.Stderr, "stub %s: 応答 rule の無い呼び出し: %q\n", name, os.Args[1:])
 		os.Exit(stubwire.UnmatchedExit)
 	}
+	for _, w := range r.Writes {
+		if err := writeFile(w); err != nil {
+			fail(name, err)
+		}
+	}
 	fmt.Fprint(os.Stdout, r.Stdout)
 	fmt.Fprint(os.Stderr, r.Stderr)
+	if r.ReleaseFile != "" && !waitForRelease(r.ReleaseFile) {
+		fmt.Fprintf(os.Stderr, "stub %s: %s が %s 経っても現れない\n", name, r.ReleaseFile, stubwire.ReleaseDeadline)
+		os.Exit(stubwire.ReleaseTimeoutExit)
+	}
 	os.Exit(r.Exit)
+}
+
+// writeFile は w を書く。読み手に書きかけを見せないよう、同じ dir の一時 file から rename する。
+func writeFile(w stubwire.FileWrite) error {
+	if err := os.MkdirAll(filepath.Dir(w.Path), 0o755); err != nil {
+		return err
+	}
+	tmp := fmt.Sprintf("%s.%d.tmp", w.Path, os.Getpid())
+	if err := os.WriteFile(tmp, []byte(w.Content), 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, w.Path)
+}
+
+// waitForRelease は file が現れるまで待つ。上限を過ぎたら false。
+func waitForRelease(file string) bool {
+	deadline := time.Now().Add(stubwire.ReleaseDeadline)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(file); err == nil {
+			return true
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return false
 }
 
 func fail(name string, err error) {
@@ -103,5 +136,8 @@ func matchRule(root, name string, args []string) (*stubwire.Rule, error) {
 }
 
 func matches(r stubwire.Rule, args []string) bool {
-	return len(args) >= len(r.ArgsPrefix) && slices.Equal(args[:len(r.ArgsPrefix)], r.ArgsPrefix)
+	if len(args) < len(r.ArgsPrefix) || !slices.Equal(args[:len(r.ArgsPrefix)], r.ArgsPrefix) {
+		return false
+	}
+	return r.ArgContains == "" || slices.ContainsFunc(args, func(arg string) bool { return strings.Contains(arg, r.ArgContains) })
 }

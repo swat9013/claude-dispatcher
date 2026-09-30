@@ -9,6 +9,7 @@ import (
 
 	"github.com/swat9013/claude-dispatcher/internal/trigger"
 	"github.com/swat9013/claude-dispatcher/internal/workflow"
+	"github.com/swat9013/claude-dispatcher/internal/workspace"
 )
 
 // workflow 定義の読み込みと検査 (formats.md §2)。
@@ -93,6 +94,10 @@ func TestErrorsNameTheItem(t *testing.T) {
 		{"周期の下限の外", strings.Replace(valid, "triggers:", "polling:\n  interval: 999ms\ntriggers:", 1), []string{"polling.interval"}},
 		{"周期の上限の外", strings.Replace(valid, "triggers:", "polling:\n  interval: 24h1s\ntriggers:", 1), []string{"polling.interval"}},
 		{"周期の綴り", strings.Replace(valid, "triggers:", "polling:\n  interval: soon\ntriggers:", 1), []string{"polling.interval"}},
+		{"並列上限が 0", strings.Replace(valid, "triggers:", "limits:\n  max_concurrent: 0\ntriggers:", 1), []string{"limits.max_concurrent"}},
+		{"hooks の未知の key", strings.Replace(valid, "triggers:", "hooks:\n  after_start: x\ntriggers:", 1), []string{"hooks.after_start"}},
+		{"hooks の timeout の綴り", strings.Replace(valid, "triggers:", "hooks:\n  timeout: soon\ntriggers:", 1), []string{"hooks.timeout"}},
+		{"claude の args の型", strings.Replace(valid, "triggers:", "claude:\n  args: --verbose\ntriggers:", 1), []string{"claude.args"}},
 		{"同じ key の 2 回目", strings.Replace(valid, "  kind: github\n", "  kind: github\n  kind: github\n", 1), []string{"tracker.kind"}},
 		{"token に値そのもの", strings.Replace(valid, "  repo: acme/widgets\n", "  repo: acme/widgets\n  token: ghp_abc\n", 1), []string{"tracker.token"}},
 		{"$VAR の未設定", strings.Replace(valid, "repo: acme/widgets", "repo: $ISSUE_REPO", 1), []string{"tracker.repo", "ISSUE_REPO"}},
@@ -122,6 +127,55 @@ func TestIntervalAtTheBoundsIsAccepted(t *testing.T) {
 		if want, _ := time.ParseDuration(interval); def.Interval != want {
 			t.Fatalf("周期 = %s, want %s", def.Interval, want)
 		}
+	}
+}
+
+func TestWorkerSettingsAreRead(t *testing.T) {
+	content := strings.Replace(valid, "triggers:", `workspace:
+  root: work
+hooks:
+  after_create: echo created
+  before_run: echo run
+  after_run: echo ran
+  before_remove: echo remove
+  timeout: 5s
+limits:
+  max_concurrent: 3
+claude:
+  command: my-claude
+  args: [--permission-mode, auto]
+triggers:`, 1)
+
+	def, err := load(t, content, nil)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := workspace.Hooks{AfterCreate: "echo created", BeforeRun: "echo run", AfterRun: "echo ran", BeforeRemove: "echo remove", Timeout: 5 * time.Second}
+	if def.WorkspaceRoot != filepath.Join(def.Dir, "work") || def.Hooks != want || def.MaxConcurrent != 3 ||
+		def.Claude.Command != "my-claude" || strings.Join(def.Claude.Args, " ") != "--permission-mode auto" ||
+		def.Triggers[0].Action != "/implement\n" {
+		t.Fatalf("読んだ定義 = %+v", def)
+	}
+}
+
+func TestWorkerSettingsHaveDefaults(t *testing.T) {
+	def, err := load(t, valid, nil)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if def.WorkspaceRoot != filepath.Join(def.Dir, ".claude-dispatcher", "workspaces") || def.Hooks.Timeout != time.Minute ||
+		def.MaxConcurrent != 1 || def.Claude.Command != "claude" || len(def.Claude.Args) != 0 {
+		t.Fatalf("既定 = %+v", def)
+	}
+}
+
+func TestWorkspaceRootUnderHomeIsExpanded(t *testing.T) {
+	def, err := load(t, strings.Replace(valid, "triggers:", "workspace:\n  root: ~/ws\ntriggers:", 1), map[string]string{"HOME": "/home/me"})
+
+	if err != nil || def.WorkspaceRoot != "/home/me/ws" {
+		t.Fatalf("root = %q (%v)", def.WorkspaceRoot, err)
 	}
 }
 

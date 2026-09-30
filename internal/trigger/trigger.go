@@ -14,6 +14,8 @@ type Trigger struct {
 	Name string
 	On   Kind
 	When IssuePredicate
+	// Action は worker に渡す prompt の template
+	Action string
 }
 
 // Kind は作業対象の種類。

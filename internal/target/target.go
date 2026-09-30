@@ -9,8 +9,11 @@ import (
 
 // Issue は open な issue 1 件。tracker の綴りは adapter が写し終えている。
 type Issue struct {
-	Number    int
-	Title     string
+	Number int
+	Title  string
+	URL    string
+	// Closed は issue が終端 (close) か。open な issue の一覧からは常に false
+	Closed    bool
 	CreatedAt time.Time
 	Labels    []string
 	Assignees []string

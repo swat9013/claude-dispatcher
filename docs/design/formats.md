@@ -62,7 +62,6 @@ workspace:
 hooks:                       # 任意。どれも省ける
   after_create: git -C "$CLAUDE_DISPATCHER_CLONE" worktree add "$CLAUDE_DISPATCHER_WORKSPACE"
   before_run: git fetch
-  after_run: ""
   before_remove: git -C "$CLAUDE_DISPATCHER_CLONE" worktree remove --force "$CLAUDE_DISPATCHER_WORKSPACE"
   timeout: 60s
 limits:
@@ -155,7 +154,6 @@ triggers:                    # 必須。1 つ以上
 | `CLAUDE_DISPATCHER_KIND` | 作業対象の種類 (`issue`) |
 | `CLAUDE_DISPATCHER_NUMBER` | 作業対象の番号 |
 
-- 空の script は撃たない
 
 ### 2.6 template
 
