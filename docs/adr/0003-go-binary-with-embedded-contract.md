@@ -1,6 +1,6 @@
 # ADR 0003: Go の単一 binary に orchestrator の契約を埋め込み、playbook は plugin `swat-skills` から実行時に解決する
 
-- Status: Accepted (配布経路に Homebrew tap の cask を足すのは ADR 0007)
+- Status: Accepted (配布経路に Homebrew tap の cask を足すのは ADR 0007。契約の埋め込みと plugin `swat-skills` からの playbook の解決は ADR 0009 が置き換えた)
 - Date: 2026-09-26
 
 ## Context

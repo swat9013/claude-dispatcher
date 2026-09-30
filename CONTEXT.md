@@ -1,27 +1,31 @@
 # claude-dispatcher
 
-issue tracker の着手可 issue を Claude Code のセッションに実装させ、CL まで運ぶ自律オーケストレーションの文脈。専用の永続 store を持たず、状態は tracker と CL host の上の成果物に置く。
+tracker 上の issue と CL を見張り、project が宣言した trigger に当たったものへ Claude Code のセッションを無人で起動する仕組みの文脈。機械は tracker を読むだけで、状態を書くのは起動されたセッションと人である。
 
 ## 機構と実行単位
 
 **dispatcher**:
-issue から CL までを無人で進める機構の総称。実体は CLI `claude-dispatcher` と、それが起動する LLM セッション群。
-_Avoid_: dispatch, agent runner
+trigger に当たった作業対象へ無人で worker を起動する機構の総称。実体は CLI と、それが起動する LLM セッション群。
+_Avoid_: agent runner, orchestrator
 
 **project**:
-dispatcher を回す単位。issue 置き場・CL 置き場・着手可 label・並列上限を 1 つの宣言 config で固定し、実装 repo の clone 1 つに対応する。
+dispatcher を回す単位。1 つの issue 置き場と、1 つの workflow 定義、1 つの実装 repo の clone に対応する。
 _Avoid_: workspace, repo (実装 repo と置き場を指す語と紛れる)
 
-**tick**:
-CLI の 1 回分の仕事。外部 store を読み直し、指示を導出し、指示があるときだけ LLM を起こす。loop が周期ごとに回すほか、単発でも撃てる。
-_Avoid_: run, cycle, poll
+**workflow 定義**:
+project の trigger・共通 prompt・並列上限・起動の仕方をまとめた宣言。実装 repo の中に置き、repo と一緒に版を管理する。
+_Avoid_: config, 宣言 config
 
 **loop**:
-人が起動してから人が止めるまで、1 つの project の tick を周期ごとに回し続ける CLI の process。落ちても自分では起き直さない。
+人が起動してから人が止めるまで、1 つの project の tick を周期ごとに回し続ける CLI の process。claim を持ち、worker の親になる。落ちても自分では起き直さない。
 _Avoid_: daemon, scheduler (監督を持つ常駐物と紛れる)
 
+**tick**:
+loop の 1 周期分の仕事。走っている worker を外部 store と突き合わせ、作業対象を読み直し、trigger を評価して、空いている分だけ worker を起動する。
+_Avoid_: run, cycle, poll
+
 **停止要求**:
-人が loop に送る停止の合図。1 回目は走っている tick を終えてから loop を止め、2 回目は orchestrator を止めて (起動前なら起動せずに) loop を止める。
+人が loop に送る停止の合図。1 回目は走っている worker の終了を待ってから loop を止め、2 回目は worker も止めてから loop を止める。
 _Avoid_: kill, shutdown
 
 **snapshot**:
@@ -35,87 +39,74 @@ _Avoid_: 台帳, database
 ## 置き場
 
 **issue 置き場**:
-dispatcher が候補を探し、claim と人返しの label を付ける tracker 上の場所。
+dispatcher が issue を読む tracker 上の場所。
 _Avoid_: issue repo (tracker が GitHub 以外でも通る語にする)
 
 **CL 置き場**:
-worker が CL を開く CL host 上の場所。省略すると issue 置き場と同じ。
+dispatcher が CL を読む CL host 上の場所。
+
+**scope key**:
+issue 置き場を tracker の種類を問わずに一意に指す識別子。どの粒度で指すかは tracker ごとに決まり、Jira では site と project の組になる。同じマシンの中では、同じ scope key の loop は 1 本しか立たない。
+_Avoid_: project 名, repo 名
 
 **CL**:
-PR / MR の中立語。紐づく open CL の存在そのものが「実装済み」を表す。
+PR / MR の中立語。
 _Avoid_: PR, MR (特定 host の語)
 
-## 状態
+## 作業対象と trigger
 
-**着手可**:
-triage を経て、AI に委ねてよい仕様が揃ったことを示す label の状態。綴りは project ごとに宣言する。
-_Avoid_: ready, todo
+**作業対象**:
+worker を起動する単位。open な issue か open な CL のどちらか。claim・workspace・attempt はこの単位で数える。
+_Avoid_: work item, task, job
+
+**終端**:
+作業対象がもう起動の対象にならない状態。issue なら close、CL なら merge か close。
+
+**trigger**:
+workflow 定義が宣言する、作業対象に対する述語と action の組。issue 側の述語は label などで書き、CL 側の述語は dispatcher が定める CL の状態の語彙と絞り込みの条件で書く。
+_Avoid_: event, 指示, 条件, rule
+
+**CL の状態の語彙**:
+CL 側の trigger が参照できる、dispatcher が定めた CL の状態。conflict・未解決の review・CI の失敗・承認済みの 4 つ。
+_Avoid_: CL event
+
+**action**:
+trigger に当たった作業対象について、worker に渡す prompt。先頭に skill の呼び出しを書ける。
+_Avoid_: playbook, command, spawn prompt
+
+**共通 prompt**:
+workflow 定義の本文。どの action にも添えて worker に渡す、project 共通の文面。
+_Avoid_: 契約, system prompt
 
 **候補**:
-着手可で、wip も人待ちも付かず、紐づく open CL が無い issue。
+いずれかの trigger に当たり、claim も打ち切りもされていない作業対象。
 _Avoid_: queue, backlog
 
-**wip (`dispatcher:wip`)**:
-着手中を示す claim の label。枚数がそのまま並列実行数になる。人が手で付けて claim してもよい。
-_Avoid_: in-progress, assignee (assignee は人の担当専用)
+**曖昧な CL**:
+同じ head branch から複数の open CL が開いている状態。CL 側の trigger の対象から外し、観測できる形で残す。
+_Avoid_: anomaly, error
 
-**人待ち (`ready-for-human`)**:
-LLM が続行不能として人へ返した印の label。人が外すまで候補に戻らない。
-_Avoid_: blocked, escalated
-
-**stale wip**:
-付けた LLM が剥がさずに止まって残った wip。worker の異常死のほか、wip を付けた後に orchestrator が止まったとき (timeout・loop への 2 回目の停止要求) にも残る。snapshot からは着手中と区別できず、回収は人が行う。
-
-**無言の終了**:
-worker が CL にも人待ちにも至らずに、wip を剥がして終わった状態。worker 契約が失敗扱いにする終わり方で、`status` の STATE の `silent` に当たる。wip が残っていれば stale wip と呼び、無言の終了とは区別する。
-
-## 役とやり取り
-
-**orchestrator**:
-指示があるときだけ起動される使い切りの LLM セッション。指示ごとの採否を判断し、wip を付け、起動する worker を決定ファイルに書く。
-_Avoid_: scheduler, manager
+## 起動と終わり方
 
 **worker**:
-決定ファイルどおりに CLI が detach 起動する使い切りの LLM セッション。担当 issue を実装して CL に到達するか、人へ返して終わる。orchestrator との往復チャネルを持たない。
+loop が 1 つの作業対象について子 process として起動する、使い切りの LLM セッション。action を実行し、trigger の述語を偽にして終わる。
 _Avoid_: agent, runner
 
-**指示 (instruction)**:
-snapshot から機械的に確定する行動候補。CLI が導出し、実行するかは orchestrator が決める。
-_Avoid_: task, job, command
+**claim**:
+loop が作業対象に worker を起動中または再起動待ちであることを記憶に持つこと。tracker には書かず、loop が止まれば消える。
+_Avoid_: wip, lock, assignee
 
-**kind**:
-指示・採否・worker 起動が取る着手形態。`start` = 新規実装、`reenter` = 既存 CL への再入。
+**workspace**:
+作業対象ごとに機械が用意する作業場所。attempt を跨いで残し、作業対象が終端になったら消す。
+_Avoid_: worktree (作り方の 1 つにすぎない), sandbox
 
-**再入 (reenter)**:
-worker 由来の open CL に条件 (conflict / 未解決 review / CI 失敗) が立ったとき、その CL の branch へ worker を戻すこと。
-_Avoid_: retry, resume
+**完了**:
+worker が終わった後に、起動した trigger の述語が偽になっていること。述語を偽にするのは action の責務である。
+_Avoid_: done, success
 
-**anomaly**:
-指示カタログのどれにも分類できない観測。指示 0 件の沈黙と区別して orchestrator へ上げる。
-_Avoid_: error, alert
+**attempt**:
+同じ作業対象について、完了するまでに worker を起動した回数。worker が失敗するか、終わっても述語が真のままなら 1 つ進む。
 
-**指示ファイル**:
-指示があった tick で CLI が書く、snapshot と指示の列。orchestrator の唯一の入力。
-
-**決定ファイル**:
-orchestrator が書く唯一の出力。指示ごとの採否と、起動する worker の spawn prompt を持つ。
-
-**spawn prompt**:
-worker に渡す prompt の全文。worker が自走して CL に着くまでに要る情報をすべて文面に持つ。
-
-**起動記録**:
-CLI が worker を起動したときに tick の log に残す 1 件の記録。worker の生死と stale wip を突き合わせる起点。
-_Avoid_: spawn log
-
-**引き渡し**:
-LLM が人へ返すときに issue へ書くコメント。停止理由・ここまでの成果・人が次にやることの 3 節からなる。
-_Avoid_: escalation
-
-## 外部の資材
-
-**playbook**:
-worker が作業の手順として Read する手順書。plugin `swat-skills` が提供し、dispatcher は同梱しない。
-_Avoid_: recipe, workflow
-
-**原則索引**:
-worker が作業に当たる設計原則を引くための索引。plugin `swat-skills` が提供する。
+**打ち切り**:
+attempt が上限に達した作業対象を、loop がそれ以上起動しないこと。述語が一度偽になったのを観測すると解ける。
+_Avoid_: give up, dead letter

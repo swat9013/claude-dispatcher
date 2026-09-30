@@ -1,6 +1,6 @@
 # ADR 0005: LLM セッションは `claude -p` で起動し、起動部を差し替え可能な部品に閉じる
 
-- Status: Accepted
+- Status: Accepted (worker を detach 起動する部分は ADR 0009 が置き換えた。worker は loop の子 process になる)
 - Date: 2026-09-26
 
 ## Context

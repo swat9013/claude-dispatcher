@@ -1,5 +1,7 @@
 # claude-dispatcher
 
+> **作り直し中 (#74)**: [openai/symphony の SPEC](https://github.com/openai/symphony/blob/main/SPEC.md) を土台に、project が宣言した trigger で worker を起動する汎用の形へ作り直している ([ADR 0009](docs/adr/0009-rebuild-on-symphony-spec.md)、新しい設計は [`docs/design/system.md`](docs/design/system.md))。以下は作り直す前の使い方で、作り直しの間は動かないことがある。
+
 issue tracker の「着手可」の issue を Claude Code に無人で実装させ、CL (PR) まで運ぶ CLI。CL に conflict・未解決の review・CI 失敗が立てば、同じ branch へ手直しに戻す。
 
 ## 仕組み

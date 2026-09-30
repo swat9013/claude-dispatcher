@@ -22,16 +22,16 @@ claude-dispatcher-dev loop myproj 5m
 
 - **Homebrew 版と区別する**: 素の `claude-dispatcher` は PATH 上の版 (Homebrew 等) を呼ぶ。build した binary は、その checkout の `dist/dev/claude-dispatcher` に置く。basename を `claude-dispatcher` のままにするのは、`status` が process の argv[0] の basename で loop / tick を見分けるため
 - **走っている dev の loop は止まらない**: build は一時 file に書いてから rename で入れ替えるので、dev の loop を回したまま別の端末で撃ち直せる。loop は起動した時点の binary で回り続けるので、変更を効かせるには loop を撃ち直す
-- **状態は Homebrew 版と共有する**: 宣言 config と state dir ([docs/design/formats.md](docs/design/formats.md) §1) は Homebrew 版と同じものを読み書きする。同じ project の loop は 1 本しか動かせない (`loop.lock`) ので、Homebrew 版の loop を止めてから dev の loop を撃つ。分けたいときは `XDG_CONFIG_HOME` / `XDG_STATE_HOME` を上書きして撃つ
+- **状態は Homebrew 版と共有する** (#74 の作り直しの前の形。作り直しでは workflow 定義を repo の中に置き、lock と state dir は scope key で分ける): 宣言 config と state dir ([docs/design/formats.md](docs/design/formats.md) §1) は Homebrew 版と同じものを読み書きする。同じ project の loop は 1 本しか動かせない (`loop.lock`) ので、Homebrew 版の loop を止めてから dev の loop を撃つ。分けたいときは `XDG_CONFIG_HOME` / `XDG_STATE_HOME` を上書きして撃つ
 - **tracker と CL host は本物**: dry-run でない tick は、実際の issue 置き場に label を付け、worker を起動する。試すなら使い捨ての issue に着手可 label を付けるか、`tick --dry-run` で止める
 
 ## branch・worktree 運用
 
 - 作業は issue 単位で行い、main から `worktree-issue-<n>` (`<n>` は issue 番号) の branch を切る
-  - dispatcher はこの綴りの head branch (fork でない、この repo 自身の branch) で worker 由来の CL を見分け、issue と紐づける ([docs/design/system.md](docs/design/system.md) §4)。綴りを崩すと二重着手の防止が効かない
+  - この repo の workflow 定義は、CL 側の trigger をこの綴りの head branch に絞り、人が開いた CL に worker を送らない ([docs/design/system.md](docs/design/system.md) §6)。綴りを崩すと、その CL は手直しの trigger に当たらない
 - ファイルの変更 (コード・docs を問わない) は、main の checkout で直接行わず、worktree を作ってその中で行う。main の checkout に未 commit の変更を残すと、別の作業の差分と混ざって PR に切り出せなくなる
   - 対話で動かす Claude Code では `EnterWorktree` に name `issue-<n>` を渡す。branch 名は `worktree-` が前置されて `worktree-issue-<n>` になる
-  - dispatcher が spawn した worker は、spawn prompt の「作業ツリー」の手順に従う (正本は [internal/contract/orchestrator.md](internal/contract/orchestrator.md))。cwd を clone root に置いたまま `git worktree add` で作る点が上と違う
+  - dispatcher が起動した worker は、dispatcher が workflow 定義の hooks で用意した workspace の中で作業する ([docs/design/system.md](docs/design/system.md) §7)。#74 の作り直しが終わるまでは、旧来の spawn prompt の「作業ツリー」の手順 ([internal/contract/orchestrator.md](internal/contract/orchestrator.md)) に従う
 - 実装が終わったら、worktree の branch を push して PR を作る
 - main へは PR 経由でだけ入れる (ruleset が強制する。下の「gate」の「main の保護」)
 
@@ -39,8 +39,8 @@ claude-dispatcher-dev loop myproj 5m
 
 検査の置き場は次の 2 点で決めている。
 
-- **CI に置く検査は、同じものを手元 (pre-commit) でも撃てるようにする**。dispatcher は CL の CI が落ちると worker を再入させ、worker は手元で再現できない失敗を推測で直さず人へ返す ([docs/design/system.md](docs/design/system.md) §6 の `ci` 条件と §10)。CI にしか無い検査が落ちると、worker は毎回人へ返すことになる
-- **CL の変更と無関係に赤くなりうる検査は、PR の gate にしない**。network 上の脆弱性 DB を引く govulncheck がこれに当たる。gate にすると、新しい脆弱性が公開されたときに、開いている worker の CL が一斉に `ci` 再入を起こす
+- **CI に置く検査は、同じものを手元 (pre-commit) でも撃てるようにする**。dispatcher は CL の CI が落ちると `cl.ci_failed` の trigger で worker を起動し、worker は手元で再現できない失敗を推測で直さず人へ返す ([docs/design/system.md](docs/design/system.md) §6)。CI にしか無い検査が落ちると、worker は毎回人へ返すことになる
+- **CL の変更と無関係に赤くなりうる検査は、PR の gate にしない**。network 上の脆弱性 DB を引く govulncheck がこれに当たる。gate にすると、新しい脆弱性が公開されたときに、開いている worker の CL に一斉に `cl.ci_failed` の trigger が当たる
 
 検査と撃たれる場所:
 
@@ -62,7 +62,7 @@ claude-dispatcher-dev loop myproj 5m
 - main の保護: repo の ruleset `main` (対象は既定 branch) が、「main へは PR 経由でだけ入れる」と「CI が通った PR だけを merge する」を機械で強制する。設定は repo の管理権限が要るので、worker は変えられない
   - PR を必須にする。review の承認は必須にしない (一人運用で、自分の PR を merge できなくなるため)
   - required status checks は上の 5 つの check 名。報告元を GitHub Actions に限る (同じ名前の check を別の app が報告しても通らない)。govulncheck は PR で走らないので含めない
-  - 「merge 前に branch を最新にする」(strict) は無効にする。有効にすると main が進むたびに開いている全 PR の branch 更新が要り、worker の CL ではそれが再入・人返しを招く。main への push で走る CI が事後に検知する
+  - 「merge 前に branch を最新にする」(strict) は無効にする。有効にすると main が進むたびに開いている全 PR の branch 更新が要り、worker の CL ではそれが手直しの trigger の起動や人への返却を招く。main への push で走る CI が事後に検知する
   - bypass は置かない (管理者も main へ直接 push できない)
 - 定期: [.github/workflows/govulncheck.yml](.github/workflows/govulncheck.yml) が、週 1 回 (月曜 0:00 UTC)・main への push・手動 (`workflow_dispatch`) で、依存と標準ライブラリの脆弱性を `go tool govulncheck ./...` で検査する。検出したら `needs-triage` の issue を 1 件起こし (同じ題名の open な issue があれば起こさない)、run を落とす。run を落とすのは、issue を起こせなかったとき (権限・API の失敗) にも検出を見落とさないため。手元での再現は同じコマンド (版は go.mod の `tool` 行で固定している)
 - 版の更新: [.github/dependabot.yml](.github/dependabot.yml) が週 1 回、GitHub Actions・Go の依存 (indirect と、govulncheck を含む)・pre-commit の hook の `rev` を、それぞれ 1 本の PR で上げる。auto-merge はしない。Dependabot の対象外で、手で上げるもの (Dependabot の週次の PR を merge するときに、あわせて新しい版が出ていないかを見る):

@@ -1,6 +1,6 @@
 # ADR 0008: CLI の外部 store の読み書きを issue 置き場と CL 置き場の部品に閉じる
 
-- Status: Accepted
+- Status: Accepted (issue と CL の紐づけを CL 置き場の部品が返す部分は ADR 0009 が置き換えた)
 - Date: 2026-09-27
 
 ## Context
