@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -75,9 +74,6 @@ func (m Manager) Remove(number int) error {
 	return hookErr
 }
 
-// issueDir は target.FileName の綴りの dir
-var issueDir = regexp.MustCompile(`^issue-([0-9]+)$`)
-
 // Existing は root の下にある issue の workspace の番号を返す。root が無ければ空。番号として読めない dir は飛ばす。
 func (m Manager) Existing() ([]int, error) {
 	entries, err := os.ReadDir(m.Root)
@@ -89,11 +85,7 @@ func (m Manager) Existing() ([]int, error) {
 	}
 	var numbers []int
 	for _, e := range entries {
-		m := issueDir.FindStringSubmatch(e.Name())
-		if m == nil || !e.IsDir() {
-			continue
-		}
-		if n, err := strconv.Atoi(m[1]); err == nil && target.FileName(n) == e.Name() {
+		if n, ok := target.NumberOf(e.Name()); ok && e.IsDir() {
 			numbers = append(numbers, n)
 		}
 	}

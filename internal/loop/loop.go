@@ -81,6 +81,7 @@ const (
 
 // 終わった worker の作業対象を読み直したときの理由
 const (
+	reasonTerminal     = "終端"
 	reasonLeftTrigger  = "trigger から外れた"
 	reasonStillMatches = "trigger に当たったまま"
 )
@@ -213,7 +214,7 @@ func (l *loop) tick() {
 	}
 	issues := l.o.Open(def)
 	if key := issues.ScopeKey(); key != l.o.ScopeKey {
-		// 別の置き場を指す版は採らない。走っている worker の読み直しと掃除は、起動時の置き場のまま続ける
+		// 別の置き場を指す版は採らない。この tick は掃除も起動もせず、次の tick の突き合わせは採っていた版の置き場を読む
 		l.rec.tickError(fmt.Sprintf("workflow 定義の scope key %s が起動時の %s と違う (loop を起動し直す)", key, l.o.ScopeKey))
 		return
 	}
@@ -388,19 +389,20 @@ func (l *loop) verify(issues Issues, n int, c *claim) {
 		return
 	}
 	result := *c.ended
+	o, reason := failed, reasonStillMatches
 	switch {
 	case issue.Closed:
 		l.remove(c.workspaces, n)
-		l.end(n, c, completed, withFailure(string(stoppedAtTerminal), result), result)
+		o, reason = completed, withFailure(reasonTerminal, result)
 	case !c.trigger.When.Matches(issue):
-		l.end(n, c, completed, withFailure(reasonLeftTrigger, result), result)
+		o, reason = completed, withFailure(reasonLeftTrigger, result)
 	case result.Failure != "":
-		l.held[n] = c.trigger.Name
-		l.end(n, c, failed, result.Failure, result)
-	default:
-		l.held[n] = c.trigger.Name
-		l.end(n, c, failed, reasonStillMatches, result)
+		reason = result.Failure
 	}
+	if o == failed {
+		l.held[n] = c.trigger.Name
+	}
+	l.end(n, c, o, reason, result)
 }
 
 // withFailure は完了の理由に、worker 自身の失敗を添える。

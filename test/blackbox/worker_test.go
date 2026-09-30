@@ -269,6 +269,24 @@ func TestLoopWithAnActionThatCannotBeRenderedFailsToStart(t *testing.T) {
 	}
 }
 
+func TestActionThatFailsToRenderForTheIssueFailsWithoutLaunching(t *testing.T) {
+	// 検査の見本の label では描画でき、実際の issue の label では未知の変数に当たる action
+	s := newSandbox(t)
+	s.writeWorkflow(strings.Replace(s.workerWorkflow(""), "{{ .trigger.name }}", "{{ if eq (index .issue.labels 0) `label` }}x{{ else }}{{ .issue.body }}{{ end }}", 1))
+	s.setIssues(readyIssue(42))
+	s.onClaude(stubwire.Rule{})
+
+	s.startLoop()
+
+	end := s.waitEvents("end", 1)[0]
+	if end["outcome"] != "failed" || !strings.Contains(asString(end["reason"]), "描画") {
+		t.Fatalf("end の行 = %v, want 描画の失敗", end)
+	}
+	if calls := s.calls("claude"); len(calls) != 0 {
+		t.Fatalf("描画に失敗したのに claude を起動した: %v", calls[0].Argv)
+	}
+}
+
 func TestFailingBeforeRunHookFailsWithoutLaunching(t *testing.T) {
 	s := newSandbox(t)
 	s.writeWorkflow(regexp.MustCompile(`(?m)^  before_run: .*$`).ReplaceAllString(s.workerWorkflow(""), "  before_run: exit 3"))
@@ -503,6 +521,42 @@ func TestWorkspaceOfAnIssueClosedAfterItsWorkerCompletedIsRemoved(t *testing.T) 
 	s.setIssues(closed)
 
 	waitFor(t, func() bool { _, err := os.Stat(s.workspace(42)); return os.IsNotExist(err) }, "claim を解いた後に終端になった issue の workspace が消えない")
+}
+
+func TestFailingBeforeRemoveHookIsLoggedAndTheWorkspaceIsStillRemoved(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflow(regexp.MustCompile(`(?m)^  before_remove: .*$`).ReplaceAllString(s.workerWorkflow(""), "  before_remove: exit 6"))
+	mustMkdir(t, s.workspace(7))
+	closed := readyIssue(7)
+	closed.closed = true
+	s.setIssues(closed)
+
+	s.startLoop()
+
+	errs := s.waitEvents("error", 1)
+	if !strings.Contains(asString(errs[0]["error"]), "before_remove") {
+		t.Fatalf("error の行 = %v", errs)
+	}
+	waitFor(t, func() bool { _, err := os.Stat(s.workspace(7)); return os.IsNotExist(err) }, "before_remove が失敗した workspace が消えない")
+}
+
+func TestWorkspaceIsRemovedUnderTheRootItWasCreatedInAfterTheRootChanges(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflow(s.workerWorkflow(""))
+	s.setIssues(readyIssue(42))
+	s.onClaude(stubwire.Rule{ReleaseFile: s.releaseFile()})
+	s.startLoop()
+	s.waitEvents("start", 1)
+	s.writeWorkflow(s.workerWorkflow("workspace:\n  root: elsewhere\n"))
+	ticks := len(s.events("tick"))
+	s.waitEvents("tick", ticks+1)
+	closed := readyIssue(42)
+	closed.closed = true
+
+	s.setIssues(closed)
+
+	s.waitEvents("end", 1)
+	waitFor(t, func() bool { _, err := os.Stat(s.workspace(42)); return os.IsNotExist(err) }, "起動したときの root の workspace が消えない")
 }
 
 func TestLoopRemovesTheWorkspacesOfClosedIssuesWhenItStarts(t *testing.T) {

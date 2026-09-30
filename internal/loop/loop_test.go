@@ -301,12 +301,46 @@ func TestEndedWorkerWhoseIssueCannotBeReadIsCheckedAgainOnTheNextTick(t *testing
 	}
 }
 
+// rereadAlwaysFails は、読み直しを毎回失敗させる rereadFailures
+const rereadAlwaysFails = 1 << 30
+
 func TestWorkerWaitingToBeCheckedDoesNotTakeASlot(t *testing.T) {
-	h := &harness{plans: []tickPlan{{load: good(time.Minute)}, {load: good(time.Minute)}}, maxConcurrent: 1, open: []int{1, 2}, rereadFailures: 99}
+	h := &harness{plans: []tickPlan{{load: good(time.Minute)}, {load: good(time.Minute)}}, maxConcurrent: 1, open: []int{1, 2}, rereadFailures: rereadAlwaysFails}
 
 	h.run(t)
 
 	if h.launches != 2 {
 		t.Fatalf("起動した数 = %d, want 2 (確かめ待ちの issue#1 が並列の枠を塞いだ)", h.launches)
+	}
+}
+
+// failingWriter は書き込みを必ず失敗させる log.jsonl の代役。
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("disk full") }
+
+func TestLineThatCannotBeWrittenToTheLogIsReportedOnStdout(t *testing.T) {
+	var stdout bytes.Buffer
+	signals := make(chan os.Signal, 1)
+	signals <- syscall.SIGINT
+
+	loop.Run(loop.Options{
+		Load:       func() (workflow.Definition, error) { return definition(time.Minute, 0), nil },
+		Definition: definition(time.Minute, 0),
+		Open: func(workflow.Definition) loop.Issues {
+			return memoryIssues{scopeKey: func() string { return startScope }, observe: func() ([]target.Issue, error) { return nil, nil }}
+		},
+		Workspaces:   func(workflow.Definition) loop.Workspaces { return noWorkspaces{} },
+		NewSessionID: func() (string, error) { return "", nil },
+		ScopeKey:     startScope,
+		Log:          failingWriter{},
+		Stdout:       &stdout,
+		Signals:      signals,
+		Now:          time.Now,
+		After:        func(time.Duration) <-chan time.Time { return nil },
+	})
+
+	if !strings.Contains(stdout.String(), "log.jsonl に tick の行を書けない: disk full") {
+		t.Fatalf("出力:\n%s", stdout.String())
 	}
 }

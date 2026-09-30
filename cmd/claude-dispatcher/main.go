@@ -198,7 +198,10 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 
 // workspaces は workflow 定義の workspace の置き場と hooks。hooks には loop の環境を渡す。
 func (e environment) workspaces(def workflow.Definition) workspace.Manager {
-	return workspace.Manager{Root: def.WorkspaceRoot, Clone: def.Dir, Env: e.env, Hooks: workspace.Hooks(def.Hooks)}
+	h := def.Hooks
+	return workspace.Manager{Root: def.WorkspaceRoot, Clone: def.Dir, Env: e.env, Hooks: workspace.Hooks{
+		AfterCreate: h.AfterCreate, BeforeRun: h.BeforeRun, AfterRun: h.AfterRun, BeforeRemove: h.BeforeRemove, Timeout: h.Timeout,
+	}}
 }
 
 // dryRunOnce は試運転 (formats.md §5): snapshot を作って trigger を評価し、候補を 1 件 1 行で出す。何も書かない。
