@@ -16,7 +16,7 @@ import (
 	"github.com/swat9013/claude-dispatcher/internal/workflow"
 )
 
-// 周期を待つ振る舞い (tick ごとの読み直し・周期の選び方・停止)。black-box テストは周期の下限 (1m) を待てないので、ここで見る。
+// 周期を待つ振る舞い (tick ごとの読み直し・周期の選び方・停止)。周期を分の単位で選ぶ振る舞いは black-box テストが待てないので、ここで見る。
 
 const startScope = "scope-a"
 

@@ -90,7 +90,7 @@ func TestErrorsNameTheItem(t *testing.T) {
 		{"trigger の名前の重複", withTriggers("\n  - {name: t, on: issue, action: /a}\n  - {name: t, on: issue, action: /b}"), []string{"triggers[1].name", "t"}},
 		{"trigger の名前の綴り", withTriggers("\n  - {name: \"a b\", on: issue, action: /a}"), []string{"triggers[0].name"}},
 		{"trigger が 1 つも無い", withTriggers(" []"), []string{"triggers"}},
-		{"周期の下限の外", strings.Replace(valid, "triggers:", "polling:\n  interval: 59s\ntriggers:", 1), []string{"polling.interval"}},
+		{"周期の下限の外", strings.Replace(valid, "triggers:", "polling:\n  interval: 999ms\ntriggers:", 1), []string{"polling.interval"}},
 		{"周期の上限の外", strings.Replace(valid, "triggers:", "polling:\n  interval: 24h1s\ntriggers:", 1), []string{"polling.interval"}},
 		{"周期の綴り", strings.Replace(valid, "triggers:", "polling:\n  interval: soon\ntriggers:", 1), []string{"polling.interval"}},
 		{"同じ key の 2 回目", strings.Replace(valid, "  kind: github\n", "  kind: github\n  kind: github\n", 1), []string{"tracker.kind"}},
@@ -114,7 +114,7 @@ func TestErrorsNameTheItem(t *testing.T) {
 }
 
 func TestIntervalAtTheBoundsIsAccepted(t *testing.T) {
-	for _, interval := range []string{"1m", "24h"} {
+	for _, interval := range []string{"1s", "24h"} {
 		def, err := load(t, strings.Replace(valid, "triggers:", "polling:\n  interval: "+interval+"\ntriggers:", 1), nil)
 		if err != nil {
 			t.Fatalf("%s: %v", interval, err)

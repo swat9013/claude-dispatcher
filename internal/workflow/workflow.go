@@ -37,7 +37,7 @@ type Tracker struct {
 // 周期の既定と範囲 (formats.md §2.1)
 const (
 	DefaultInterval = 5 * time.Minute
-	MinInterval     = time.Minute
+	MinInterval     = time.Second
 	MaxInterval     = 24 * time.Hour
 )
 
@@ -243,7 +243,7 @@ func (c *checker) polling(owner, n *yaml.Node, path string, interval *time.Durat
 			case err != nil:
 				c.fail(n, path, "%q は Go の duration の綴り (90s / 5m / 1h30m) で書く", s)
 			case d < MinInterval || d > MaxInterval:
-				c.fail(n, path, "%q は 1m 以上 24h 以下にする", s)
+				c.fail(n, path, "%q は 1s 以上 24h 以下にする", s)
 			default:
 				*interval = d
 			}
