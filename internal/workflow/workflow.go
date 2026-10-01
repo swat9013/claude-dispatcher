@@ -31,8 +31,14 @@ type Definition struct {
 	Hooks         Hooks
 	// MaxConcurrent は同時に走らせる worker の上限
 	MaxConcurrent int
-	Claude        Claude
-	Triggers      []trigger.Trigger
+	// MaxAttempts は作業対象 1 件の attempt の上限、MaxRetryBackoff は backoff の上限
+	MaxAttempts     int
+	MaxRetryBackoff time.Duration
+	// StallTimeout は worker の出力が途絶えてから止めるまで、RunTimeout は worker 1 回分の上限時間。0 なら見ない
+	StallTimeout time.Duration
+	RunTimeout   time.Duration
+	Claude       Claude
+	Triggers     []trigger.Trigger
 	// Prompt は本文 (共通 prompt) の template
 	Prompt string
 }
@@ -67,6 +73,10 @@ const (
 	DefaultWorkspaceRoot = ".claude-dispatcher/workspaces"
 	DefaultHookTimeout   = 60 * time.Second
 	DefaultClaudeCommand = "claude"
+	DefaultMaxAttempts   = 3
+	DefaultRetryBackoff  = 5 * time.Minute
+	DefaultStallTimeout  = 15 * time.Minute
+	DefaultRunTimeout    = time.Hour
 )
 
 // Errors は workflow 定義の誤りの列。1 件 1 行で出す。
@@ -101,7 +111,8 @@ func Load(path string, getenv func(string) string) (Definition, error) {
 	dir := filepath.Dir(path)
 	def := Definition{
 		Dir: dir, Interval: DefaultInterval, WorkspaceRoot: filepath.Join(dir, DefaultWorkspaceRoot),
-		Hooks: Hooks{Timeout: DefaultHookTimeout}, MaxConcurrent: 1, Claude: Claude{Command: DefaultClaudeCommand}, Prompt: body,
+		Hooks: Hooks{Timeout: DefaultHookTimeout}, MaxConcurrent: 1, MaxAttempts: DefaultMaxAttempts,
+		MaxRetryBackoff: DefaultRetryBackoff, StallTimeout: DefaultStallTimeout, RunTimeout: DefaultRunTimeout, Claude: Claude{Command: DefaultClaudeCommand}, Prompt: body,
 	}
 	root := &yaml.Node{Kind: yaml.MappingNode}
 	if len(doc.Content) == 1 {
@@ -245,6 +256,22 @@ func (c *checker) decode(root *yaml.Node, def *Definition) {
 						def.MaxConcurrent = v
 					}
 				}},
+				"max_attempts": {read: func(_, n *yaml.Node, path string) {
+					if v, ok := c.positive(n, path); ok {
+						def.MaxAttempts = v
+					}
+				}},
+				"max_retry_backoff": {read: func(_, n *yaml.Node, path string) {
+					if d, ok := c.duration(n, path); ok {
+						if d <= 0 {
+							c.fail(n, path, "0 より長くする")
+							return
+						}
+						def.MaxRetryBackoff = d
+					}
+				}},
+				"stall_timeout": {read: func(_, n *yaml.Node, path string) { c.timeout(n, path, &def.StallTimeout) }},
+				"run_timeout":   {read: func(_, n *yaml.Node, path string) { c.timeout(n, path, &def.RunTimeout) }},
 			})
 		}},
 		"claude": {read: func(key, n *yaml.Node, path string) {
@@ -310,6 +337,17 @@ func (c *checker) duration(n *yaml.Node, path string) (time.Duration, bool) {
 		return 0, false
 	}
 	return d, true
+}
+
+// timeout は 0 (見ない) 以上の duration を読む。
+func (c *checker) timeout(n *yaml.Node, path string, target *time.Duration) {
+	if d, ok := c.duration(n, path); ok {
+		if d < 0 {
+			c.fail(n, path, "負にできない (0s で無効)")
+			return
+		}
+		*target = d
+	}
 }
 
 // positive は 1 以上の整数を読む。

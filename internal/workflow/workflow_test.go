@@ -80,6 +80,10 @@ func TestErrorsNameTheItem(t *testing.T) {
 		{"未知の作業対象の種類", strings.Replace(valid, "on: issue", "on: pr", 1), []string{"triggers[0].on", "pr"}},
 		{"空白だけの action", strings.Replace(valid, "    action: |\n      /implement\n", "    action: \" \"\n", 1), []string{"triggers[0].action"}},
 		{"action の欠落", strings.Replace(valid, "    action: |\n      /implement\n", "", 1), []string{"triggers[0].action"}},
+		{"attempt の上限が 0", strings.Replace(valid, "triggers:", "limits:\n  max_attempts: 0\ntriggers:", 1), []string{"limits.max_attempts"}},
+		{"backoff の上限が 0", strings.Replace(valid, "triggers:", "limits:\n  max_retry_backoff: 0s\ntriggers:", 1), []string{"limits.max_retry_backoff"}},
+		{"負の stall の上限", strings.Replace(valid, "triggers:", "limits:\n  stall_timeout: -1s\ntriggers:", 1), []string{"limits.stall_timeout"}},
+		{"上限時間の綴り", strings.Replace(valid, "triggers:", "limits:\n  run_timeout: soon\ntriggers:", 1), []string{"limits.run_timeout"}},
 		{"action の未知の変数", strings.Replace(valid, "      /implement\n", "      /implement {{ .issue.body }}\n", 1), []string{"triggers[0].action", "body"}},
 		{"action の未知の関数", strings.Replace(valid, "      /implement\n", "      /implement {{ upper .issue.title }}\n", 1), []string{"triggers[0].action", "upper"}},
 		{"本文の未知の変数", valid + "{{ .issue.body }}\n", []string{"本文", "body"}},
@@ -144,6 +148,10 @@ hooks:
   timeout: 5s
 limits:
   max_concurrent: 3
+  max_attempts: 5
+  max_retry_backoff: 30s
+  stall_timeout: 0s
+  run_timeout: 2h
 claude:
   command: my-claude
   args: [--permission-mode, auto]
@@ -156,6 +164,7 @@ triggers:`, 1)
 	}
 	want := workflow.Hooks{AfterCreate: "echo created", BeforeRun: "echo run", AfterRun: "echo ran", BeforeRemove: "echo remove", Timeout: 5 * time.Second}
 	if def.WorkspaceRoot != filepath.Join(def.Dir, "work") || def.Hooks != want || def.MaxConcurrent != 3 ||
+		def.MaxAttempts != 5 || def.MaxRetryBackoff != 30*time.Second || def.StallTimeout != 0 || def.RunTimeout != 2*time.Hour ||
 		def.Claude.Command != "my-claude" || strings.Join(def.Claude.Args, " ") != "--permission-mode auto" ||
 		def.Triggers[0].Action != "/implement\n" {
 		t.Fatalf("読んだ定義 = %+v", def)
@@ -169,7 +178,8 @@ func TestWorkerSettingsHaveDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	if def.WorkspaceRoot != filepath.Join(def.Dir, ".claude-dispatcher", "workspaces") || def.Hooks.Timeout != time.Minute ||
-		def.MaxConcurrent != 1 || def.Claude.Command != "claude" || len(def.Claude.Args) != 0 {
+		def.MaxConcurrent != 1 || def.Claude.Command != "claude" || len(def.Claude.Args) != 0 ||
+		def.MaxAttempts != 3 || def.MaxRetryBackoff != 5*time.Minute || def.StallTimeout != 15*time.Minute || def.RunTimeout != time.Hour {
 		t.Fatalf("既定 = %+v", def)
 	}
 }

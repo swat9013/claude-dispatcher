@@ -17,6 +17,7 @@ import (
 	"github.com/swat9013/claude-dispatcher/internal/render"
 	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/trigger"
+	"github.com/swat9013/claude-dispatcher/internal/workflow"
 	"github.com/swat9013/claude-dispatcher/internal/workspace"
 )
 
@@ -26,6 +27,8 @@ type Job struct {
 	Trigger   trigger.Trigger
 	Attempt   int
 	SessionID string
+	// Resume は、前の attempt で SessionID の session を始めていて、その続きから起動するか
+	Resume bool
 	// Prompt は共通 prompt の template (workflow 定義の本文)
 	Prompt string
 }
@@ -66,9 +69,8 @@ type Result struct {
 // Runner は worker を起動する。
 type Runner struct {
 	Workspaces workspace.Manager
-	// Command は claude の起動 command (PATH から探す)、Args はその後ろに dispatcher の引数より前に渡す引数
-	Command string
-	Args    []string
+	// Definition は起動の仕方 (claude.command / args) と、stall と上限時間の上限を持つ workflow 定義
+	Definition workflow.Definition
 	// Env は worker に渡す環境 (loop の環境)
 	Env []string
 	// StateDir は描画した共通 prompt と worker log を置く state dir
@@ -77,6 +79,9 @@ type Runner struct {
 
 // stopGrace は停止のときに SIGTERM から SIGKILL までに待つ時間
 const stopGrace = 5 * time.Second
+
+// watchInterval は stall と上限時間を確かめる間隔
+const watchInterval = 250 * time.Millisecond
 
 // Run は走っている worker 1 回分。
 type Run struct {
@@ -131,29 +136,69 @@ func (r Runner) launch(job Job, run *Run, workspacePath string, started func(pid
 	if err != nil {
 		return Result{Failure: err.Error()}
 	}
+	claude := r.Definition.Claude
 	// command は attempt ごとに PATH から引き直す (loop を止めずに claude を入れ替えても、次の attempt から追従する)
-	command, err := deps.Lookup(r.Command, r.Env)
+	command, err := deps.Lookup(claude.Command, r.Env)
 	if err != nil {
 		return Result{Failure: err.Error()}
 	}
-	log, err := openAppend(filepath.Join(r.StateDir, "workers", target.FileName(job.Issue.Number)+".log"))
+	// stdout (stream-json) と stderr を別の file に追記する。stall は stdout の file が伸びなくなったことで見る。
+	// claude に file をそのまま渡すので、loop が死んでも claude の出力は途切れない
+	name := filepath.Join(r.StateDir, "workers", target.FileName(job.Issue.Number))
+	stream, err := openAppend(name + ".log")
 	if err != nil {
 		return Result{Failure: fmt.Sprintf("worker log を開けない: %v", err)}
 	}
-	defer log.Close()
+	defer stream.Close()
+	stderr, err := openAppend(name + ".stderr.log")
+	if err != nil {
+		return Result{Failure: fmt.Sprintf("worker log を開けない: %v", err)}
+	}
+	defer stderr.Close()
 
 	// action は `--` の後ろに置く (`-` で始まる action を claude が option と読まないように)
-	args := append(append([]string{}, r.Args...), "-p", "--output-format", "stream-json", "--verbose",
-		"--session-id", job.SessionID, "--append-system-prompt-file", promptFile, "--", action)
+	args := append(append([]string{}, claude.Args...), "-p", "--output-format", "stream-json", "--verbose")
+	args = append(args, sessionArgs(job)...)
+	args = append(args, "--append-system-prompt-file", promptFile, "--", action)
 	cmd := exec.Command(command, args...)
-	cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = workspacePath, r.Env, log, log
+	cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = workspacePath, r.Env, stream, stderr
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
-		return Result{Failure: fmt.Sprintf("%s を起動できない: %v", r.Command, err)}
+		return Result{Failure: fmt.Sprintf("%s を起動できない: %v", claude.Command, err)}
 	}
 	started(cmd.Process.Pid, workspacePath)
-	return wait(cmd, run)
+	return r.wait(cmd, run, stream)
 }
+
+// sessionArgs は session の渡し方。前の attempt で始めた session があれば同じ id で続け、無ければ発行した id で始める。
+func sessionArgs(job Job) []string {
+	if job.Resume {
+		return []string{"--resume", job.SessionID}
+	}
+	return []string{"--session-id", job.SessionID}
+}
+
+// streamWatch は stream の file が最後に伸びた時刻を追う (stall の検知に使う)。
+type streamWatch struct {
+	file    *os.File
+	size    int64
+	changed time.Time
+}
+
+// observe は now の時点の file の大きさを見て、伸びていれば伸びた時刻を進める。file を読めなければ、その失敗を返す。
+func (w *streamWatch) observe(now time.Time) error {
+	info, err := w.file.Stat()
+	if err != nil {
+		return fmt.Errorf("stream の file を読めない: %w", err)
+	}
+	if info.Size() != w.size {
+		w.size, w.changed = info.Size(), now
+	}
+	return nil
+}
+
+// silentFor は stream の file が最後に伸びてから now までの時間。
+func (w *streamWatch) silentFor(now time.Time) time.Duration { return now.Sub(w.changed) }
 
 // render は action を描画し、共通 prompt を描画して state dir の file に書く。
 func (r Runner) render(job Job, workspacePath string) (action, promptFile string, err error) {
@@ -173,30 +218,81 @@ func (r Runner) render(job Job, workspacePath string) (action, promptFile string
 	return action, promptFile, nil
 }
 
-// wait は起動した claude が終わるか、止められるまで待つ。
-func wait(cmd *exec.Cmd, run *Run) Result {
+// wait は起動した claude が終わるか、止められるか、stall か上限時間で止めるまで待つ。
+func (r Runner) wait(cmd *exec.Cmd, run *Run, stream *os.File) Result {
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
-	var result Result
+	result, ended := r.watch(done, run, stream)
+	if ended {
+		return r.exited(cmd, Result{})
+	}
+	// 子の終了と同時に止める理由ができたら終了を優先する (select はどちらも選びうる)。自分で終わった worker を
+	// 止めたことにすると、終わり方を確かめないまま claim を解いてしまう
 	select {
 	case <-done:
-	case <-run.stop:
-		// 子の終了と同時に届いたら終了を優先する (select はどちらも選びうる)。自分で終わった worker を止めたことにすると、
-		// 終わり方を確かめないまま claim を解いてしまう
+		return r.exited(cmd, Result{})
+	default:
+	}
+	if run.stopped() {
+		// stall や上限時間と停止要求が重なったら、loop が止めたことを優先する
+		result = Result{Stopped: true}
+	}
+	if err := stopGroup(cmd.Process.Pid, done); err != nil {
+		result.StopError = err.Error()
+	}
+	return r.exited(cmd, result)
+}
+
+// watch は claude が終わるまで待つ (ended が true)。先に止める理由ができたら、その理由を持った result を返す。
+// stall と上限時間は、どちらかが有効なときだけ確かめる。
+func (r Runner) watch(done <-chan error, run *Run, stream *os.File) (result Result, ended bool) {
+	started := time.Now()
+	w := &streamWatch{file: stream, changed: started}
+	if err := w.observe(started); err != nil {
+		return Result{Failure: err.Error()}, false
+	}
+	var tick <-chan time.Time
+	if r.Definition.StallTimeout > 0 || r.Definition.RunTimeout > 0 {
+		ticker := time.NewTicker(watchInterval)
+		defer ticker.Stop()
+		tick = ticker.C
+	}
+	for {
 		select {
 		case <-done:
-		default:
-			result.Stopped = true
-			if err := stopGroup(cmd.Process.Pid, done); err != nil {
-				result.StopError = err.Error()
+			return Result{}, true
+		case <-run.stop:
+			return Result{Stopped: true}, false
+		case now := <-tick:
+			if err := w.observe(now); err != nil {
+				return Result{Failure: err.Error()}, false
+			}
+			if reason := r.overdue(now.Sub(started), w.silentFor(now)); reason != "" {
+				return Result{Failure: reason}, false
 			}
 		}
 	}
+}
+
+// overdue は stall か上限時間に当たったら、その理由を返す。当たらなければ ""。
+func (r Runner) overdue(running, silent time.Duration) string {
+	stall, limit := r.Definition.StallTimeout, r.Definition.RunTimeout
+	switch {
+	case stall > 0 && silent > stall:
+		return fmt.Sprintf("stall (stream が %s 途絶えた)", stall)
+	case limit > 0 && running > limit:
+		return fmt.Sprintf("上限時間 %s を超えた", limit)
+	}
+	return ""
+}
+
+// exited は終わった claude の終わり方を result に足す。
+func (r Runner) exited(cmd *exec.Cmd, result Result) Result {
 	if status, ok := cmd.ProcessState.Sys().(syscall.WaitStatus); ok && status.Exited() {
 		code := status.ExitStatus()
 		result.ExitCode = &code
 	}
-	if !result.Stopped && (result.ExitCode == nil || *result.ExitCode != 0) {
+	if !result.Stopped && result.Failure == "" && (result.ExitCode == nil || *result.ExitCode != 0) {
 		result.Failure = "異常終了 (" + cmd.ProcessState.String() + ")"
 	}
 	return result

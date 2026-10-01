@@ -47,7 +47,7 @@ func main() {
 	os.Exit(r.Exit)
 }
 
-// writeAtomically は path に data を書く。読み手に書きかけを見せないよう、同じ dir の一時 file から rename する。
+// writeAtomically は読み手に書きかけを見せないよう、同じ dir の一時 file に書いてから path へ rename する。
 // 一時 file の名前は末尾が .tmp で、path の拡張子で glob する読み手には当たらない。
 func writeAtomically(path string, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

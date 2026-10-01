@@ -170,7 +170,6 @@ func TestWorkerGetsTheCommonPromptAsSystemPromptAndTheActionAsTheUserPrompt(t *t
 	s.startLoop()
 
 	start := s.waitEvents("start", 1)[0]
-	// start の行は claude を起動した直後に書かれ、stub が呼び出しを記録するより先になりうる。
 	argv := s.waitCalls("claude", 1, "claude の呼び出しが記録されない")[0].Argv[1:]
 	file := argValueAfter(argv, "--append-system-prompt-file")
 	want := []string{"--permission-mode", "auto", "-p", "--output-format", "stream-json", "--verbose",
@@ -399,40 +398,6 @@ func TestWorkerThatFailsButLeavesTheTriggerIsCompleted(t *testing.T) {
 	if end["outcome"] != "completed" || !strings.Contains(asString(end["reason"]), "worker は") {
 		t.Fatalf("end の行 = %v, want 失敗を添えた completed", end)
 	}
-}
-
-func TestFailedIssueIsNotLaunchedAgainWhileItStillMatchesTheTrigger(t *testing.T) {
-	s := newSandbox(t)
-	s.writeWorkflow(s.workerWorkflow(""))
-	s.setIssues(readyIssue(42))
-	s.onClaude(stubwire.Rule{})
-	s.startLoop()
-	s.waitEvents("end", 1)
-
-	ticks := len(s.events("tick"))
-	s.waitEvents("tick", ticks+2)
-
-	if calls := s.calls("claude"); len(calls) != 1 {
-		t.Fatalf("claude の呼び出し = %d 回, want 1 (失敗した issue を起動し直した)", len(calls))
-	}
-}
-
-func TestFailedIssueIsLaunchedAgainAfterLeavingTheTriggerOnce(t *testing.T) {
-	s := newSandbox(t)
-	s.writeWorkflow(s.workerWorkflow(""))
-	s.setIssues(readyIssue(42))
-	s.onClaude(stubwire.Rule{})
-	s.startLoop()
-	s.waitEvents("end", 1)
-	offTrigger := readyIssue(42)
-	offTrigger.labels = nil
-	s.setIssues(offTrigger)
-	ticks := len(s.events("tick"))
-	s.waitEvents("tick", ticks+2)
-
-	s.setIssues(readyIssue(42))
-
-	s.waitEvents("start", 2)
 }
 
 func TestFailingAfterCreateHookRemovesTheWorkspaceAndFails(t *testing.T) {

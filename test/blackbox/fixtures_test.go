@@ -196,6 +196,8 @@ func (s *sandbox) calls(name string) []stubwire.Call {
 }
 
 // waitCalls は name の stub が受けた呼び出しが n 件になるまで待ち、受けた順に返す。待ちきれなければ msg で落ちる。
+// start の行は claude を起動した直後に書かれ、stub が呼び出しを記録するより先になりうるので、start の行を見てから
+// 呼び出しを読むときもこれで待つ。
 func (s *sandbox) waitCalls(name string, n int, msg string) []stubwire.Call {
 	s.t.Helper()
 	waitFor(s.t, func() bool { return len(s.calls(name)) >= n }, msg)
