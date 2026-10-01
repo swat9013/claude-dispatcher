@@ -111,8 +111,13 @@ func record(root, name string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
+	// harness は呼び出しを待つ間 *.json を読み続けるので、書きかけを見せないよう .tmp から rename する。
 	file := filepath.Join(dir, fmt.Sprintf("%020d-%d.json", time.Now().UnixNano(), os.Getpid()))
-	return os.WriteFile(file, raw, 0o644)
+	tmp := file + ".tmp"
+	if err := os.WriteFile(tmp, raw, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, file)
 }
 
 func matchRule(root, name string, args []string) (*stubwire.Rule, error) {
