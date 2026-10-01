@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -93,9 +94,9 @@ func (e environment) gh(def workflow.Definition) github.Exec {
 	return github.Exec{Env: env, Timeout: ghTimeout}
 }
 
-// openIssues は workflow 定義から issue 置き場の部品を組み立てる。
-func (e environment) openIssues(def workflow.Definition) loop.Issues {
-	return github.NewIssueStore(e.gh(def), def.Tracker.Repo)
+// store は workflow 定義から置き場の部品を組み立てる。
+func (e environment) store(def workflow.Definition) loop.Store {
+	return github.NewStore(e.gh(def), def.Tracker.Repo)
 }
 
 // failureExit は観測の失敗の exit code (formats.md §3)。
@@ -158,7 +159,14 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return exitFailed
 	}
-	scopeKey := e.openIssues(def).ScopeKey()
+	// CL 側の trigger があれば、claim の workspace の branch を読むのに git を撃つ
+	if slices.Contains(def.Kinds(), target.KindCL) {
+		if _, err := deps.Lookup("git", e.env); err != nil {
+			fmt.Fprintln(stderr, err)
+			return exitFailed
+		}
+	}
+	scopeKey := e.store(def).ScopeKey()
 	dir := state.Dir(state.Root(e.getenv), scopeKey)
 	lock, err := state.Lock(dir, scopeKey)
 	if errors.Is(err, state.ErrAlreadyRunning) {
@@ -181,7 +189,7 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 	return loop.Run(loop.Options{
 		Load:       load,
 		Definition: def,
-		Open:       e.openIssues,
+		Store:      e.store,
 		Workspaces: func(def workflow.Definition) loop.Workspaces { return e.workspaces(def) },
 		Launch: func(def workflow.Definition, job worker.Job, events chan<- worker.Event) loop.Worker {
 			return worker.Runner{Workspaces: e.workspaces(def), Definition: def, Env: e.env, StateDir: dir}.Start(job, events)
@@ -206,13 +214,14 @@ func (e environment) workspaces(def workflow.Definition) workspace.Manager {
 
 // dryRunOnce は試運転 (formats.md §5): snapshot を作って trigger を評価し、候補を 1 件 1 行で出す。何も書かない。
 func dryRunOnce(e environment, def workflow.Definition, stdout, stderr io.Writer) int {
-	open, err := e.openIssues(def).OpenIssues()
+	open, err := loop.OpenItems(e.store(def), def)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return failureExit(err)
 	}
-	for _, c := range trigger.Evaluate(def.Triggers, open) {
-		fmt.Fprintf(stdout, "%s\t%s\t#%d\t%s\n", c.Trigger.Name, c.Trigger.On, c.Issue.Number, withoutControls(c.Issue.Title))
+	candidates, _ := trigger.Evaluate(def.Triggers, open)
+	for _, c := range candidates {
+		fmt.Fprintf(stdout, "%s\t%s\t#%d\t%s\n", c.Trigger.Name, c.Trigger.On, c.Item.Ref().Number, withoutControls(c.Item.Heading()))
 	}
 	return 0
 }

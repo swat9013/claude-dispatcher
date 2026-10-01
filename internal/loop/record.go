@@ -37,15 +37,15 @@ func (r recorder) tickError(message string) {
 	r.event("tick", map[string]any{"result": "error", "error": message}, "tick error · %s", message)
 }
 
-// error は処理を続けるが運用者が知るべき失敗を残す。n が 0 なら作業対象を持たない。
-func (r recorder) error(n int, message string) {
+// error は処理を続けるが運用者が知るべき失敗を残す。ref がゼロ値なら作業対象を持たない。
+func (r recorder) error(ref target.Ref, message string) {
 	fields := map[string]any{"error": message}
-	if n == 0 {
+	if ref == (target.Ref{}) {
 		r.event("error", fields, "error: %s", message)
 		return
 	}
-	fields["target"] = target.Name(n)
-	r.event("error", fields, "error %s: %s", target.Name(n), message)
+	fields["target"] = ref.String()
+	r.event("error", fields, "error %s: %s", ref, message)
 }
 
 // human は時刻を前置した 1 行を stdout に出す。読み手の消えた pipe への書き込みの失敗では止まらない。

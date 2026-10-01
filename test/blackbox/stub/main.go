@@ -137,5 +137,10 @@ func matches(r stubwire.Rule, args []string) bool {
 	if len(args) < len(r.ArgsPrefix) || !slices.Equal(args[:len(r.ArgsPrefix)], r.ArgsPrefix) {
 		return false
 	}
-	return r.ArgContains == "" || slices.ContainsFunc(args, func(arg string) bool { return strings.Contains(arg, r.ArgContains) })
+	for _, part := range r.ArgsContain {
+		if !slices.ContainsFunc(args, func(arg string) bool { return strings.Contains(arg, part) }) {
+			return false
+		}
+	}
+	return true
 }

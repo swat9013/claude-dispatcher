@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/swat9013/claude-dispatcher/internal/trigger"
+	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/workflow"
 )
 
@@ -59,8 +59,8 @@ func TestValidDefinitionIsRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	if def.Tracker.Repo.String() != "acme/widgets" || def.Interval != workflow.DefaultInterval ||
-		len(def.Triggers) != 1 || def.Triggers[0].Name != "implement" || def.Triggers[0].On != trigger.Issue ||
-		strings.Join(def.Triggers[0].When.LabelsAll, ",") != "ready-for-agent" {
+		len(def.Triggers) != 1 || def.Triggers[0].Name != "implement" || def.Triggers[0].On != target.KindIssue ||
+		strings.Join(def.Triggers[0].Issue.LabelsAll, ",") != "ready-for-agent" {
 		t.Fatalf("読んだ定義 = %+v", def)
 	}
 }
@@ -111,6 +111,13 @@ func TestErrorsNameTheItem(t *testing.T) {
 		{"YAML として読めない", strings.Replace(valid, "tracker:", "tracker: [", 1), []string{"YAML"}},
 		{"front matter が無い", "共通 prompt だけ\n", []string{"front matter"}},
 		{"front matter が閉じていない", "---\ntracker:\n  kind: github\n", []string{"front matter"}},
+		{"CL の述語に issue 側の key", withTriggers("\n  - {name: f, on: cl, when: {assignee: alice}, action: /f}"), []string{"triggers[0].when.assignee"}},
+		{"issue の述語に CL 側の key", withTriggers("\n  - {name: f, on: issue, when: {draft: false}, action: /f}"), []string{"triggers[0].when.draft"}},
+		{"CL の語彙の型", withTriggers("\n  - {name: f, on: cl, when: {conflict: yes please}, action: /f}"), []string{"triggers[0].when.conflict"}},
+		{"head の pattern の綴り", withTriggers("\n  - {name: f, on: cl, when: {head: \"[\"}, action: /f}"), []string{"triggers[0].when.head"}},
+		{"head と same_repo: false の併記", withTriggers("\n  - {name: f, on: cl, when: {head: a-*, same_repo: false}, action: /f}"), []string{"triggers[0].when", "same_repo"}},
+		{"CL の action の issue の変数", withTriggers("\n  - {name: f, on: cl, action: \"/f {{ .issue.number }}\"}"), []string{"triggers[0].action", "issue"}},
+		{"CL の trigger があるときの本文の issue の変数", withTriggers("\n  - {name: f, on: cl, action: /f}") + "{{ .issue.number }}\n", []string{"本文", "issue"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -122,6 +129,23 @@ func TestErrorsNameTheItem(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestCLTriggerIsRead(t *testing.T) {
+	def, err := load(t, withTriggers(`
+  - name: fix
+    when: {ci_failed: true, approved: false, head: worktree-issue-*, draft: false, labels: {none: [hold]}, author: collaborator}
+    on: cl
+    action: /fix {{ .cl.number }} {{ .cl.head }}`), nil)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := def.Triggers[0].CL
+	if def.Triggers[0].On != target.KindCL || p.CIFailed == nil || !*p.CIFailed || p.Approved == nil || *p.Approved ||
+		p.Head != "worktree-issue-*" || p.Draft == nil || *p.Draft || strings.Join(p.LabelsNone, ",") != "hold" || p.Author != "collaborator" {
+		t.Fatalf("trigger = %+v", def.Triggers[0])
 	}
 }
 
@@ -198,8 +222,8 @@ func TestWhenWithoutAValueIsReadAsNoCondition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if def.Triggers[0].When.LabelsAll != nil || def.Triggers[0].When.Assignee != "" {
-		t.Fatalf("述語 = %+v, want 条件なし", def.Triggers[0].When)
+	if def.Triggers[0].Issue.LabelsAll != nil || def.Triggers[0].Issue.Assignee != "" {
+		t.Fatalf("述語 = %+v, want 条件なし", def.Triggers[0].Issue)
 	}
 }
 
@@ -217,8 +241,8 @@ func TestAnchoredValuesCanBeSharedWithAliases(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(def.Triggers[1].When.LabelsAll, ",") != "ready" {
-		t.Fatalf("alias の述語 = %+v", def.Triggers[1].When)
+	if strings.Join(def.Triggers[1].Issue.LabelsAll, ",") != "ready" {
+		t.Fatalf("alias の述語 = %+v", def.Triggers[1].Issue)
 	}
 }
 

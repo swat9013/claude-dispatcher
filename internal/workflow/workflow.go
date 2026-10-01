@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	pathpkg "path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -16,6 +18,7 @@ import (
 
 	"github.com/swat9013/claude-dispatcher/internal/github"
 	"github.com/swat9013/claude-dispatcher/internal/render"
+	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/trigger"
 )
 
@@ -56,6 +59,17 @@ type Hooks struct {
 type Claude struct {
 	Command string
 	Args    []string
+}
+
+// Kinds は trigger に現れる作業対象の種類を、trigger の宣言順に重ねずに返す。
+func (d Definition) Kinds() []target.Kind {
+	var kinds []target.Kind
+	for _, t := range d.Triggers {
+		if t.On != "" && !slices.Contains(kinds, t.On) {
+			kinds = append(kinds, t.On)
+		}
+	}
+	return kinds
 }
 
 // Tracker は issue 置き場の設定。
@@ -119,8 +133,17 @@ func Load(path string, getenv func(string) string) (Definition, error) {
 		root = resolve(doc.Content[0])
 	}
 	c.decode(root, &def)
-	if err := render.Check("本文", body); err != nil {
-		c.problems = append(c.problems, problem{text: fmt.Sprintf("本文 (共通 prompt): %v", err)})
+	// 本文はどの worker にも渡るので、trigger に現れる種類すべての見本で描画してみる。種類が 1 つも読めなければ issue の見本で
+	// 描画し、本文の綴りの誤りだけは確かめる
+	kinds := def.Kinds()
+	if len(kinds) == 0 {
+		kinds = []target.Kind{target.KindIssue}
+	}
+	for _, kind := range kinds {
+		if err := render.Check("本文", body, kind); err != nil {
+			c.problems = append(c.problems, problem{text: fmt.Sprintf("本文 (共通 prompt): %v", err)})
+			break
+		}
 	}
 	if len(c.problems) > 0 {
 		return Definition{}, &Errors{Path: path, Problems: c.lines()}
@@ -426,6 +449,9 @@ func (c *checker) triggers(n *yaml.Node, path string) []trigger.Trigger {
 		at := fmt.Sprintf("%s[%d]", path, i)
 		t := &triggers[i]
 		item = resolve(item)
+		// when と action は on の種類で読み方が変わるので、on を読んでから (key の順に関わらず) 読む
+		var when, whenKey, action *yaml.Node
+		var actionPath, whenPath string
 		c.mapping(item, item, at, map[string]field{
 			"name": {required: true, read: func(_, n *yaml.Node, path string) {
 				s, ok := c.str(n, path)
@@ -442,43 +468,51 @@ func (c *checker) triggers(n *yaml.Node, path string) []trigger.Trigger {
 			}},
 			"on": {required: true, read: func(_, n *yaml.Node, path string) {
 				if s, ok := c.str(n, path); ok {
-					if trigger.Kind(s) != trigger.Issue {
-						c.fail(n, path, "未知の値 %q (%s)", s, trigger.Issue)
+					switch kind := target.Kind(s); kind {
+					case target.KindIssue, target.KindCL:
+						t.On = kind
+					default:
+						c.fail(n, path, "未知の値 %q (%s / %s)", s, target.KindIssue, target.KindCL)
 					}
-					t.On = trigger.Kind(s)
 				}
 			}},
-			"when": {read: func(key, n *yaml.Node, path string) { c.issuePredicate(key, n, path, &t.When) }},
-			"action": {required: true, read: func(_, n *yaml.Node, path string) {
-				s, ok := c.str(n, path)
-				if ok && strings.TrimSpace(s) == "" {
-					c.fail(n, path, "空白だけにできない")
-				} else if err := render.Check("action", s); ok && err != nil {
-					c.fail(n, path, "%v", err)
-				}
-				t.Action = s
-			}},
+			"when":   {read: func(key, n *yaml.Node, path string) { whenKey, when, whenPath = key, n, path }},
+			"action": {required: true, read: func(_, n *yaml.Node, path string) { action, actionPath = n, path }},
 		})
+		switch {
+		case when == nil:
+		case t.On == target.KindIssue:
+			c.issuePredicate(whenKey, when, whenPath, &t.Issue)
+		case t.On == target.KindCL:
+			c.clPredicate(whenKey, when, whenPath, &t.CL)
+		}
+		if action != nil {
+			t.Action = c.action(action, actionPath, t.On)
+		}
 	}
 	return triggers
+}
+
+// action は trigger の action を読み、on の種類の見本で描画してみる。種類が読めていなければ描画は確かめない。
+func (c *checker) action(n *yaml.Node, path string, kind target.Kind) string {
+	s, ok := c.str(n, path)
+	switch {
+	case !ok:
+	case strings.TrimSpace(s) == "":
+		c.fail(n, path, "空白だけにできない")
+	case kind != "":
+		if err := render.Check("action", s, kind); err != nil {
+			c.fail(n, path, "%v", err)
+		}
+	}
+	return s
 }
 
 func (c *checker) issuePredicate(owner, n *yaml.Node, path string, p *trigger.IssuePredicate) {
 	var assignee, unassigned *yaml.Node
 	c.mapping(owner, n, path, map[string]field{
 		"labels": {read: func(key, n *yaml.Node, path string) {
-			c.mapping(key, n, path, map[string]field{
-				"all":  {read: func(_, n *yaml.Node, path string) { p.LabelsAll, _ = c.strList(n, path) }},
-				"none": {read: func(_, n *yaml.Node, path string) { p.LabelsNone, _ = c.strList(n, path) }},
-				"any": {read: func(_, n *yaml.Node, path string) {
-					if l, ok := c.strList(n, path); ok {
-						if len(l) == 0 {
-							c.fail(n, path, "空の列は書けない (どの issue にも当たらない)")
-						}
-						p.LabelsAny = l
-					}
-				}},
-			})
+			c.labels(key, n, path, &p.LabelsAll, &p.LabelsAny, &p.LabelsNone)
 		}},
 		"assignee": {read: func(_, n *yaml.Node, path string) {
 			assignee = n
@@ -490,26 +524,78 @@ func (c *checker) issuePredicate(owner, n *yaml.Node, path string, p *trigger.Is
 				p.Unassigned = &b
 			}
 		}},
-		"author": {read: func(_, n *yaml.Node, path string) {
-			if s, ok := c.str(n, path); ok {
-				switch a := trigger.Author(s); a {
-				case trigger.Collaborator, trigger.NonCollaborator:
-					p.Author = a
-				default:
-					c.fail(n, path, "未知の値 %q (%s / %s)", s, trigger.Collaborator, trigger.NonCollaborator)
-				}
-			}
-		}},
+		"author":    {read: func(_, n *yaml.Node, path string) { p.Author = c.author(n, path) }},
 		"milestone": {read: func(_, n *yaml.Node, path string) { p.Milestone, _ = c.str(n, path) }},
-		"blocked": {read: func(_, n *yaml.Node, path string) {
-			if b, ok := c.boolean(n, path); ok {
-				p.Blocked = &b
-			}
-		}},
+		"blocked":   {read: func(_, n *yaml.Node, path string) { p.Blocked = c.condition(n, path) }},
 	})
 	if assignee != nil && unassigned != nil {
 		c.fail(assignee, path, "assignee と unassigned は一緒に書けない")
 	}
+}
+
+func (c *checker) clPredicate(owner, n *yaml.Node, path string, p *trigger.CLPredicate) {
+	var head *yaml.Node
+	c.mapping(owner, n, path, map[string]field{
+		"conflict":          {read: func(_, n *yaml.Node, path string) { p.Conflict = c.condition(n, path) }},
+		"review_unresolved": {read: func(_, n *yaml.Node, path string) { p.ReviewUnresolved = c.condition(n, path) }},
+		"ci_failed":         {read: func(_, n *yaml.Node, path string) { p.CIFailed = c.condition(n, path) }},
+		"approved":          {read: func(_, n *yaml.Node, path string) { p.Approved = c.condition(n, path) }},
+		"labels": {read: func(key, n *yaml.Node, path string) {
+			c.labels(key, n, path, &p.LabelsAll, &p.LabelsAny, &p.LabelsNone)
+		}},
+		"head": {read: func(_, n *yaml.Node, path string) {
+			head = n
+			if s, ok := c.str(n, path); ok {
+				if _, err := pathpkg.Match(s, ""); err != nil {
+					c.fail(n, path, "%q: pattern の綴りの誤り (Go の path.Match の綴りで書く)", s)
+				}
+				p.Head = s
+			}
+		}},
+		"same_repo": {read: func(_, n *yaml.Node, path string) { p.SameRepo = c.condition(n, path) }},
+		"author":    {read: func(_, n *yaml.Node, path string) { p.Author = c.author(n, path) }},
+		"draft":     {read: func(_, n *yaml.Node, path string) { p.Draft = c.condition(n, path) }},
+	})
+	if head != nil && p.SameRepo != nil && !*p.SameRepo {
+		c.fail(head, path, "head と same_repo: false は一緒に書けない (head は同じ repo の branch にだけ当たる)")
+	}
+}
+
+// labels は述語の labels (all / any / none) を読む。
+func (c *checker) labels(owner, n *yaml.Node, path string, all, anyOf, none *[]string) {
+	c.mapping(owner, n, path, map[string]field{
+		"all":  {read: func(_, n *yaml.Node, path string) { *all, _ = c.strList(n, path) }},
+		"none": {read: func(_, n *yaml.Node, path string) { *none, _ = c.strList(n, path) }},
+		"any": {read: func(_, n *yaml.Node, path string) {
+			if l, ok := c.strList(n, path); ok {
+				if len(l) == 0 {
+					c.fail(n, path, "空の列は書けない (どの作業対象にも当たらない)")
+				}
+				*anyOf = l
+			}
+		}},
+	})
+}
+
+func (c *checker) author(n *yaml.Node, path string) trigger.Author {
+	s, ok := c.str(n, path)
+	if !ok {
+		return ""
+	}
+	switch a := trigger.Author(s); a {
+	case trigger.Collaborator, trigger.NonCollaborator:
+		return a
+	}
+	c.fail(n, path, "未知の値 %q (%s / %s)", s, trigger.Collaborator, trigger.NonCollaborator)
+	return ""
+}
+
+// condition は真偽の条件を読む。読めなければ nil (条件なし) を返し、誤りは c に積む。
+func (c *checker) condition(n *yaml.Node, path string) *bool {
+	if b, ok := c.boolean(n, path); ok {
+		return &b
+	}
+	return nil
 }
 
 // str は n を空でない文字列として読む。空の文字列は、条件を書かなかったのと取り違えるので拒む。

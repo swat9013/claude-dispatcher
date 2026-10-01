@@ -100,52 +100,182 @@ func (i issue) node() map[string]any {
 	return node
 }
 
-// issuePages は `gh api graphql --paginate --slurp` の応答 (page の列) を、1 page 2 件で組む。
-func issuePages(issues ...issue) string {
-	var pages []any
-	for start := 0; start == 0 || start < len(issues); start += 2 {
-		end := min(start+2, len(issues))
-		nodes := []any{}
-		for _, i := range issues[start:end] {
-			nodes = append(nodes, i.node())
+// pages は `gh api graphql --paginate --slurp` の応答 (page の列) を、1 page 2 件で組む。connection は repository の下の
+// 一覧の名前 (issues / pullRequests)。
+func pages(connection string, nodes []map[string]any) string {
+	var out []any
+	for start := 0; start == 0 || start < len(nodes); start += 2 {
+		end := min(start+2, len(nodes))
+		page := []any{}
+		for _, n := range nodes[start:end] {
+			page = append(page, n)
 		}
-		pages = append(pages, map[string]any{"data": map[string]any{"repository": map[string]any{"issues": map[string]any{
-			"pageInfo": map[string]any{"hasNextPage": end < len(issues), "endCursor": "c" + strconv.Itoa(end)},
-			"nodes":    nodes,
+		out = append(out, map[string]any{"data": map[string]any{"repository": map[string]any{connection: map[string]any{
+			"pageInfo": map[string]any{"hasNextPage": end < len(nodes), "endCursor": "c" + strconv.Itoa(end)},
+			"nodes":    page,
 		}}}})
 	}
-	raw, _ := json.Marshal(pages)
+	raw, _ := json.Marshal(out)
 	return string(raw)
 }
 
-// setIssues は gh が issues を返すようにする。open な issue の一覧には closed でないものを載せ、1 件の読み直しには
-// どれも (closed なら CLOSED で) 返す。
-func (s *sandbox) setIssues(issues ...issue) {
-	s.t.Helper()
-	s.respondAll("gh", ghRules(issues...))
+// issuePages は open な issue の一覧の応答。
+func issuePages(issues ...issue) string {
+	nodes := []map[string]any{}
+	for _, i := range issues {
+		nodes = append(nodes, i.node())
+	}
+	return pages("issues", nodes)
 }
 
-// ghRules は setIssues の応答 rule の列。worker の代役が gh の応答 file を書き換えるときにも使う。
-func ghRules(issues ...issue) []stubwire.Rule {
+// gh の query を見分ける綴り。issue と CL の一覧と 1 件の読み直しを、query の中の field の名前で分ける
+const (
+	issueListQuery = "issues(states: OPEN"
+	issueReadQuery = "issue(number:"
+	clListQuery    = "pullRequests(states: OPEN"
+	clReadQuery    = "pullRequest(number:"
+)
+
+// setIssues は gh が issues を返すようにする。open な issue の一覧には closed でないものを載せ、1 件の読み直しには
+// どれも (closed なら CLOSED で) 返す。CL は 1 件も無い。
+func (s *sandbox) setIssues(issues ...issue) {
+	s.t.Helper()
+	s.respondAll("gh", ghRules(issues, nil))
+}
+
+// setStore は gh が issues と cls を返すようにする。
+func (s *sandbox) setStore(issues []issue, cls []cl) {
+	s.t.Helper()
+	s.respondAll("gh", ghRules(issues, cls))
+}
+
+// ghRules は setStore の応答 rule の列。worker の代役が gh の応答 file を書き換えるときにも使う。
+func ghRules(issues []issue, cls []cl) []stubwire.Rule {
 	var rules []stubwire.Rule
 	var open []issue
 	for _, i := range issues {
 		single, _ := json.Marshal(map[string]any{"data": map[string]any{"repository": map[string]any{"issue": i.node()}}})
-		rules = append(rules, stubwire.Rule{ArgsPrefix: []string{"api", "graphql"}, ArgContains: "number=" + strconv.Itoa(i.number), Stdout: string(single)})
+		rules = append(rules, stubwire.Rule{ArgsPrefix: []string{"api", "graphql"}, ArgsContain: []string{issueReadQuery, "number=" + strconv.Itoa(i.number)}, Stdout: string(single)})
 		if !i.closed {
 			open = append(open, i)
 		}
 	}
-	return append(rules, stubwire.Rule{ArgsPrefix: []string{"api", "graphql"}, Stdout: issuePages(open...)})
+	openCLs := []map[string]any{}
+	for _, c := range cls {
+		single, _ := json.Marshal(map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": c.node()}}})
+		rules = append(rules, stubwire.Rule{ArgsPrefix: []string{"api", "graphql"}, ArgsContain: []string{clReadQuery, "number=" + strconv.Itoa(c.number)}, Stdout: string(single)})
+		if c.state == "" {
+			openCLs = append(openCLs, c.node())
+		}
+	}
+	return append(rules,
+		stubwire.Rule{ArgsPrefix: []string{"api", "graphql"}, ArgsContain: []string{issueListQuery}, Stdout: issuePages(open...)},
+		stubwire.Rule{ArgsPrefix: []string{"api", "graphql"}, ArgsContain: []string{clListQuery}, Stdout: pages("pullRequests", openCLs)},
+	)
 }
 
 // ghResponses は ghRules を gh の応答 file の中身にしたもの。
 func (s *sandbox) ghResponses(issues ...issue) stubwire.FileWrite {
-	raw, err := json.Marshal(ghRules(issues...))
+	return s.storeResponses(issues, nil)
+}
+
+// clResponses は cls だけを返す gh の応答 file の中身。worker の代役が CL の状態を書き換えるときに使う。
+func (s *sandbox) clResponses(cls ...cl) stubwire.FileWrite {
+	return s.storeResponses(nil, cls)
+}
+
+// storeResponses は ghRules を gh の応答 file の中身にしたもの。
+func (s *sandbox) storeResponses(issues []issue, cls []cl) stubwire.FileWrite {
+	raw, err := json.Marshal(ghRules(issues, cls))
 	if err != nil {
 		s.t.Fatal(err)
 	}
 	return stubwire.FileWrite{Path: stubwire.ResponsesFile(s.stubRoot, "gh"), Content: string(raw)}
+}
+
+// cl は gh が返す open な CL 1 件の fixture。gh の GraphQL の応答の形に写して返す。既定は、同じ repo の head branch から
+// 開いた、draft でない、conflict も未解決の review も CI の失敗も承認も無い CL。
+type cl struct {
+	number int
+	head   string
+	// fork なら head は fork の branch
+	fork bool
+	// forkGone なら head の repo (fork) が消えている (headRepository が null)
+	forkGone bool
+	draft    bool
+	labels   []string
+	// mergeable は MERGEABLE (既定) / CONFLICTING / UNKNOWN
+	mergeable string
+	// reviewDecision は APPROVED / CHANGES_REQUESTED / REVIEW_REQUIRED。空なら null
+	reviewDecision string
+	threads        []thread
+	// checks は head commit の checks の集計 (SUCCESS / FAILURE / ERROR / PENDING)。空なら checks が無い
+	checks string
+	// state が空なら open。MERGED か CLOSED なら終端 (open な一覧に出ず、1 件の読み直しでこの state を返す)
+	state string
+}
+
+// thread は review thread 1 本。association は最初の comment の作者の立場
+type thread struct {
+	resolved    bool
+	association string
+}
+
+// readyCL は head branch が worktree-issue-<番号> の CL。作成日時は番号の順に並ぶ。
+func readyCL(number int) cl {
+	return cl{number: number, head: "worktree-issue-" + strconv.Itoa(number)}
+}
+
+func (c cl) node() map[string]any {
+	labels := []map[string]any{}
+	for _, l := range c.labels {
+		labels = append(labels, map[string]any{"name": l})
+	}
+	threads := []map[string]any{}
+	for _, t := range c.threads {
+		threads = append(threads, map[string]any{"isResolved": t.resolved, "comments": map[string]any{
+			"nodes": []map[string]any{{"authorAssociation": t.association}},
+		}})
+	}
+	var rollup any
+	if c.checks != "" {
+		rollup = map[string]any{"state": c.checks}
+	}
+	var decision any
+	if c.reviewDecision != "" {
+		decision = c.reviewDecision
+	}
+	mergeable, state := c.mergeable, c.state
+	if mergeable == "" {
+		mergeable = "MERGEABLE"
+	}
+	if state == "" {
+		state = "OPEN"
+	}
+	var headRepository any = map[string]any{"nameWithOwner": defaultIssueRepo}
+	if c.fork {
+		headRepository = map[string]any{"nameWithOwner": "stranger/widgets"}
+	}
+	if c.forkGone {
+		headRepository = nil
+	}
+	return map[string]any{
+		"number":            c.number,
+		"title":             "cl " + strconv.Itoa(c.number),
+		"url":               "https://github.com/" + defaultIssueRepo + "/pull/" + strconv.Itoa(c.number),
+		"state":             state,
+		"createdAt":         createdAt(c.number),
+		"authorAssociation": "OWNER",
+		"isDraft":           c.draft,
+		"isCrossRepository": c.fork || c.forkGone,
+		"headRefName":       c.head,
+		"headRepository":    headRepository,
+		"mergeable":         mergeable,
+		"reviewDecision":    decision,
+		"labels":            map[string]any{"totalCount": len(labels), "nodes": labels},
+		"reviewThreads":     map[string]any{"totalCount": len(threads), "nodes": threads},
+		"commits":           map[string]any{"nodes": []map[string]any{{"commit": map[string]any{"statusCheckRollup": rollup}}}},
+	}
 }
 
 // failGh は gh の呼び出しを stderr と exit で失敗させる。

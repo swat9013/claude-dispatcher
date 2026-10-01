@@ -23,7 +23,7 @@ import (
 
 // Job は起動する worker 1 回分の入力。
 type Job struct {
-	Issue     target.Issue
+	Item      target.Item
 	Trigger   trigger.Trigger
 	Attempt   int
 	SessionID string
@@ -38,14 +38,14 @@ type Event interface{ isEvent() }
 
 // Started は claude を起動したこと。
 type Started struct {
-	Number    int
+	Target    target.Ref
 	PID       int
 	Workspace string
 }
 
 // Ended は worker 1 回分が終わったこと。
 type Ended struct {
-	Number int
+	Target target.Ref
 	Result Result
 }
 
@@ -104,24 +104,24 @@ func (r *Run) stopped() bool {
 // Start は job の worker を別の goroutine で進め、起動と終わりを events に送る。終わりは必ず 1 回送る。
 func (r Runner) Start(job Job, events chan<- Event) *Run {
 	run := &Run{stop: make(chan struct{})}
-	n := job.Issue.Number
+	ref := job.Item.Ref()
 	go func() {
 		result := r.attempt(job, run, func(pid int, workspace string) {
-			events <- Started{Number: n, PID: pid, Workspace: workspace}
+			events <- Started{Target: ref, PID: pid, Workspace: workspace}
 		})
-		events <- Ended{Number: n, Result: result}
+		events <- Ended{Target: ref, Result: result}
 	}()
 	return run
 }
 
 func (r Runner) attempt(job Job, run *Run, started func(pid int, workspace string)) Result {
-	n := job.Issue.Number
-	path, err := r.Workspaces.Prepare(n)
+	ref := job.Item.Ref()
+	path, err := r.Workspaces.Prepare(ref)
 	if err != nil {
 		return Result{Failure: err.Error()}
 	}
 	result := r.launch(job, run, path, started)
-	if err := r.Workspaces.AfterRun(n); err != nil {
+	if err := r.Workspaces.AfterRun(ref); err != nil {
 		result.AfterRunError = err.Error()
 	}
 	return result
@@ -144,7 +144,7 @@ func (r Runner) launch(job Job, run *Run, workspacePath string, started func(pid
 	}
 	// stdout (stream-json) と stderr を別の file に追記する。stall は stdout の file が伸びなくなったことで見る。
 	// claude に file をそのまま渡すので、loop が死んでも claude の出力は途切れない
-	name := filepath.Join(r.StateDir, "workers", target.FileName(job.Issue.Number))
+	name := filepath.Join(r.StateDir, "workers", job.Item.Ref().FileName())
 	stream, err := openAppend(name + ".log")
 	if err != nil {
 		return Result{Failure: fmt.Sprintf("worker log を開けない: %v", err)}
@@ -202,7 +202,7 @@ func (w *streamWatch) silentFor(now time.Time) time.Duration { return now.Sub(w.
 
 // render は action を描画し、共通 prompt を描画して state dir の file に書く。
 func (r Runner) render(job Job, workspacePath string) (action, promptFile string, err error) {
-	vars := render.Vars{Issue: job.Issue, Trigger: job.Trigger.Name, Attempt: job.Attempt, Workspace: workspacePath}
+	vars := render.Vars{Item: job.Item, Trigger: job.Trigger.Name, Attempt: job.Attempt, Workspace: workspacePath}
 	action, err = render.Render("action", job.Trigger.Action, vars)
 	if err != nil {
 		return "", "", err
@@ -211,7 +211,7 @@ func (r Runner) render(job Job, workspacePath string) (action, promptFile string
 	if err != nil {
 		return "", "", err
 	}
-	promptFile = filepath.Join(r.StateDir, "prompts", target.FileName(job.Issue.Number)+".md")
+	promptFile = filepath.Join(r.StateDir, "prompts", job.Item.Ref().FileName()+".md")
 	if err := writeFile(promptFile, prompt); err != nil {
 		return "", "", fmt.Errorf("共通 prompt を書けない: %w", err)
 	}

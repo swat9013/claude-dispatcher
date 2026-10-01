@@ -9,7 +9,8 @@ import (
 	"strings"
 )
 
-// Names は PATH を自己解決する依存 CLI。git は loop 自身は撃たないが、同じ PATH を継ぐ worker と hooks が撃つ
+// Names は PATH を自己解決する依存 CLI。git は、loop が claim の workspace の branch を読むとき (CL 側の trigger) に撃ち、
+// 同じ PATH を継ぐ worker と hooks も撃つ
 var Names = []string{"gh", "claude", "git"}
 
 // candidates は PATH に無いときに足す置き場。前に居るものから探す (Homebrew は macOS の 2 つと Linux の prefix)。
