@@ -195,10 +195,10 @@ func (s *sandbox) calls(name string) []stubwire.Call {
 	return calls
 }
 
-// waitCalls は name の stub が受けた呼び出しが n 件になるまで待ち、受けた順に返す。
-func (s *sandbox) waitCalls(name string, n int) []stubwire.Call {
+// waitCalls は name の stub が受けた呼び出しが n 件になるまで待ち、受けた順に返す。待ちきれなければ msg で落ちる。
+func (s *sandbox) waitCalls(name string, n int, msg string) []stubwire.Call {
 	s.t.Helper()
-	waitFor(s.t, func() bool { return len(s.calls(name)) >= n }, name+" の呼び出しが "+strconv.Itoa(n)+" 件記録されない")
+	waitFor(s.t, func() bool { return len(s.calls(name)) >= n }, msg)
 	return s.calls(name)
 }
 

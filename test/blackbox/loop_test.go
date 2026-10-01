@@ -113,7 +113,7 @@ func TestLoopKeepsRunningWhenNobodyReadsItsOutput(t *testing.T) {
 	}
 	writer.Close()
 	t.Cleanup(func() { _ = cmd.Process.Kill() })
-	s.waitCalls("gh", 1)
+	s.waitCalls("gh", 1, "読み手の消えた stdout の loop が tick を撃たない")
 
 	if err := cmd.Process.Signal(syscall.SIGINT); err != nil {
 		t.Fatal(err)

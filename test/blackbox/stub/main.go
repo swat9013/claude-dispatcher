@@ -48,6 +48,7 @@ func main() {
 }
 
 // writeAtomically は path に data を書く。読み手に書きかけを見せないよう、同じ dir の一時 file から rename する。
+// 一時 file の名前は末尾が .tmp で、path の拡張子で glob する読み手には当たらない。
 func writeAtomically(path string, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
@@ -107,7 +108,7 @@ func record(root, name string) error {
 	if err != nil {
 		return err
 	}
-	// harness は呼び出しを待つ間 *.json を読み続ける。一時 file の名前は *.json に当たらない。
+	// harness は呼び出しを待つ間 *.json を読み続けるので、writeAtomically で書きかけを見せない。
 	file := filepath.Join(stubwire.CallsDir(root, name), fmt.Sprintf("%020d-%d.json", time.Now().UnixNano(), os.Getpid()))
 	return writeAtomically(file, raw)
 }
