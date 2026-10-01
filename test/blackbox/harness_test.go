@@ -280,8 +280,13 @@ type backgroundRun struct {
 	done   chan struct{}
 }
 
+// loopStopGrace は後片付けの停止要求から loop の終了までを待つ上限。worker の 2 段の停止 (SIGTERM → 5s → SIGKILL) が収まる長さにする
+const loopStopGrace = 15 * time.Second
+
 // startLoop は clone を cwd にして `loop <args>` を起動し、待たずに返す。stdout は端末でない (pipe)。
-// 後片付けで、走っていれば kill する。
+// 後片付けで、走っていれば停止要求を 2 回送って止める。kill で止めると、loop が別の process group で起動した子 (gh の stub・
+// hook・worker) が残り、TempDir の削除と並んで sandbox へ書いて削除を落とす。停止要求なら、loop は走っている tick の子を
+// 待ち、2 回目で worker を止め、子が終わってから exit する。
 func (s *sandbox) startLoop(args ...string) *backgroundRun {
 	s.t.Helper()
 	cmd := exec.Command(dispatcherBin, append([]string{"loop"}, args...)...)
@@ -295,10 +300,20 @@ func (s *sandbox) startLoop(args ...string) *backgroundRun {
 	// 終わり方は wait が ProcessState から読むので、Wait の error は見ない
 	go func() { _ = cmd.Wait(); close(p.done) }()
 	s.t.Cleanup(func() {
-		if p.running() {
-			if err := cmd.Process.Kill(); err != nil {
-				s.t.Errorf("%v を止められない: %v", cmd.Args, err)
+		if !p.running() {
+			return
+		}
+		// 同じ signal を続けて送ると 1 つに畳まれうるので、別の signal で 2 回にする
+		for _, sig := range []syscall.Signal{syscall.SIGTERM, syscall.SIGINT} {
+			if err := cmd.Process.Signal(sig); err != nil && !errors.Is(err, os.ErrProcessDone) {
+				s.t.Errorf("%v に %v を送れない: %v", cmd.Args, sig, err)
 			}
+		}
+		select {
+		case <-p.done:
+		case <-time.After(loopStopGrace):
+			s.t.Errorf("%v が停止要求から %v 経っても止まらない", cmd.Args, loopStopGrace)
+			_ = cmd.Process.Kill()
 			<-p.done
 		}
 	})
