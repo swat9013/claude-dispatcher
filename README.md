@@ -1,21 +1,22 @@
 # claude-dispatcher
 
-> **作り直し中 (#74)**: [openai/symphony の SPEC](https://github.com/openai/symphony/blob/main/SPEC.md) を土台に、project が宣言した trigger で worker を起動する汎用の形へ作り直している ([ADR 0009](docs/adr/0009-rebuild-on-symphony-spec.md)、新しい設計は [`docs/design/system.md`](docs/design/system.md))。以下は作り直す前の使い方で、作り直しの間は動かないことがある。この注記と下の使い方は #83 で書き直す。
-
-issue tracker の「着手可」の issue を Claude Code に無人で実装させ、CL (PR) まで運ぶ CLI。CL に conflict・未解決の review・CI 失敗が立てば、同じ branch へ手直しに戻す。
+issue tracker の issue と CL (pull request) を周期ごとに読み、project が宣言した trigger に当たったものへ Claude Code の worker を無人で起動する CLI。「`ready-for-agent` の issue を実装して CL を出す」「CL に conflict・未解決の review・CI の失敗が立ったら手直しする」といった流れを、repo に置く workflow 定義 (`WORKFLOW.md`) で決める。
 
 ## 仕組み
 
 ```
-claude-dispatcher loop ─周期ごと─▶ tick ─指示─▶ orchestrator (claude -p) ─決定ファイル─▶ tick ─起動─▶ worker (claude -p)
-(端末で起動し Ctrl+C で止める)      観測 + 指示の導出  選定 + wip label の付与              決定どおり起動      実装 → CL
+ 人 ── WORKFLOW.md を書く / label を付ける (triage) / merge
+                    │
+ claude-dispatcher loop ─周期ごと─▶ issue と CL を読む ─▶ trigger を評価 ─▶ 当たったものへ worker を起動
+ (端末で起動し Ctrl+C で止める)      (読むだけ)                                 workspace (worktree) で claude -p
+                                                                                 action の文面どおりに作業し、
+                                                                                 作業対象を trigger から外して終える
 ```
 
-- 専用の台帳を持たない。状態は tracker の label (`dispatcher:wip` / `ready-for-human`) と open CL の存在に置き、tick ごとに読み直す
-- 定期起動は cron ではなく、端末で撃つ `loop` が持つ。止めるのも撃ち直すのも人が行う
-- CLI は tracker にも CL host にも書かない。選ぶ・見送る・人へ返すは LLM が決める
-- 指示が無い tick は LLM を起動しない (静止時のコストはゼロ)
-- 続行できない worker は、issue に引き渡しコメントを書き `ready-for-human` を付けて人へ返す
+- **状態は tracker と CL host に置く**。CLI は tracker にも CL host にも書かない。label を付け替える・CL を開く・人へ返すのは worker (action の文面) と人
+- **trigger** は、作業対象 (issue か CL) の述語と action (worker に渡す prompt) の組。宣言順に評価し、最初に当たった 1 つで起動する
+- **完了は「worker が終わった後に、作業対象が trigger から外れていること」**。外れないまま終わった worker は失敗として数え、backoff して同じ session を続けさせる。上限の回数で打ち切る
+- **定期起動は cron ではなく、端末で撃つ `loop` が持つ**。止めるのも撃ち直すのも人が行う
 
 詳しくは [`docs/design/`](docs/design/)、用語は [`CONTEXT.md`](CONTEXT.md)、決定の理由は [`docs/adr/`](docs/adr/)。
 
@@ -23,12 +24,9 @@ claude-dispatcher loop ─周期ごと─▶ tick ─指示─▶ orchestrator (
 
 - macOS か Linux
 - [Claude Code](https://docs.claude.com/en/docs/claude-code) と、その認証
-- Claude Code plugin `swat-skills@swat9013` ([swat9013/claude-skills](https://github.com/swat9013/claude-skills))。worker が使う playbook・原則索引・レビュー skill を提供する
-  ```
-  /plugin marketplace add swat9013/claude-skills
-  /plugin install swat-skills@swat9013
-  ```
 - [gh](https://cli.github.com/) と、その認証 (`gh auth login`。対応する tracker は GitHub だけ)
+- git (workspace を worktree で作る hooks と、CL 側の trigger で使う)
+- action の先頭に書く skill と command (`/swat-skills:playbook-implementation` など) を、worker が呼べる場所 (plugin・repo の `.claude/`・`~/.claude/`) に入れておく。特定の plugin には依存しない。呼べない名前は起動の前の事前検査で名指しされる
 
 ## install
 
@@ -62,60 +60,66 @@ binary は署名していない。macOS でブラウザから取った archive �
 
 ## 導入
 
-実装 repo の clone を cwd にして、project 名 (`[A-Za-z0-9._-]+`。以下 `myproj`) を決めて撃つ。流れの正本は作り直す前の `docs/design/usecases.md` にあった (作り直し後の導入は [`docs/design/usecases.md`](docs/design/usecases.md) の「project を導入する」)。各段の形式は [`docs/design/formats.md`](docs/design/formats.md) §11 / §12。
+実装 repo の clone を cwd にして撃つ。流れの正本は [`docs/design/usecases.md`](docs/design/usecases.md) の UC-5、各コマンドの形式は [`docs/design/formats.md`](docs/design/formats.md) §5・§7.4。
 
-```sh
-cd ~/src/widgets
-claude-dispatcher setup myproj
-```
+1. **雛形を置く**: `setup` が cwd に `WORKFLOW.md` の雛形を書く。`tracker.repo` は `gh repo view` が返す repo で埋まる。既にある file は上書きしない
 
-`setup` は次の段を順に進め、済んだ段は何もせずに通る。途中で止まったら、示された内容を直して同じコマンドを撃ち直す。
+   ```sh
+   cd ~/src/widgets
+   claude-dispatcher setup
+   ```
 
-1. **宣言 config の雛形**: `~/.config/claude-dispatcher/myproj/config.toml` が無ければ雛形を書いて止まる。issue 置き場 (`[issue].repo`)・着手可 label (`ready_label`)・並列上限 (`[limits].max_wip`) を確かめて直す。書ける項目は [`docs/design/formats.md`](docs/design/formats.md) §2
-2. **config の検査**: 綴りの誤りや実在しない置き場を名指しで止める
-3. **label**: issue 置き場に無い label (`dispatcher:wip` / `ready-for-human` / 着手可 label / `triage_label`) を示し、`y` と答えたら作る
-4. **試運転**: `tick --dry-run` を撃ち、指示の件数を示す。何も起動せず、何も書かない
-5. **loop の起動コマンド**: 試運転が通ったら、次に撃つ `loop` のコマンドを示して終わる
+2. **自分の project に合わせて書く**: trigger の述語 (どの label・どの head branch に当てるか)・action (worker に何をさせるか)・hooks (workspace の作り方)・並列上限を直し、repo に commit する。書ける項目は [`docs/design/formats.md`](docs/design/formats.md) §2、この repo 自身の例は [`WORKFLOW.md`](WORKFLOW.md)
+   - worker が作業を終えたら作業対象を trigger から外すよう、action か本文 (共通 prompt) に書く (例: CL を開いたら `ready-for-agent` を外す)。外さないと、失敗として数えられて再起動される
+   - 承認済みの CL (`approved: true`) に action を当てるかは自分で決める。当てると merge を worker に任せうる
+   - workspace の置き場 (`workspace.root`。既定は [`docs/design/formats.md`](docs/design/formats.md) §2.1) が clone の中なら、`.gitignore` に足す
+3. **試運転**: 何も起動せず、何も書かずに、起動するはずの作業対象と trigger を 1 件 1 行で示す
 
-承認を尋ねる段は `y` / `yes` のときだけ書く。それ以外の答えと端末の無い実行では書かずに、自分で撃つコマンドを示して止まる。
+   ```sh
+   claude-dispatcher loop --dry-run
+   ```
 
-最後に `doctor` で導入の充足を確かめ、Claude Code の settings に要る entry を自分で足す (CLI は settings を書かない)。
+4. **導入を確かめる**: `doctor` が workflow 定義・issue 置き場・依存 CLI (gh・claude・git)・事前検査を確かめ、利用者の約束に頼る宣言 (承認済みの CL への action・絞り込みの無い CL 側の trigger) を警告する。Claude Code の settings に要りそうな entry も示すので、自分で足す (CLI は settings を書かない)
 
-```sh
-claude-dispatcher doctor myproj
-```
+   ```sh
+   claude-dispatcher doctor
+   ```
+
+どのコマンドも、workflow 定義の path を最後の引数で渡せる (省けば cwd の `WORKFLOW.md`)。
 
 ## 回す
 
-実装 repo の clone で `loop` を撃つ。起動直後に 1 回、以後は tick が終わるたびに指定の間隔 (`90s` / `5m` / `1h` 等。1m〜24h) を空けて tick を回す。
+実装 repo の clone で `loop` を撃つ。起動直後に 1 回、以後は `polling.interval` ごとに tick を回す。
 
 ```sh
 cd ~/src/widgets
-claude-dispatcher loop myproj 5m
+claude-dispatcher loop
 ```
 
-端末には今の worker の表と、loop の状態 (次の tick の時刻・直近の tick の結果) が描き直され続ける。loop は自分では起き直さないので、端末を閉じたりマシンを再起動したりしたら、同じコマンドを撃ち直す。同じ project の loop は 1 本しか起動できない。
-
-ssh 越しの session 等で keyring の認証が読めず tick が `auth_error` になるときは、config の `[auth]` に token file を書く (formats.md §2)。loop は撃ち直さなくてよい (次の tick が config を読み直す)。
+- 起動時に workflow 定義の検査と事前検査 (action の先頭の skill が呼べるか) を通す。落ちれば誤りを名指しして起動しない
+- tick ごとに workflow 定義を読み直すので、`WORKFLOW.md` の変更は loop を撃ち直さずに効く。tick の中で事前検査に落ちた trigger だけは起動しない
+- 同じ issue 置き場の loop は、同じマシンで 1 本しか起動できない。マシンを跨いだ排他は持たないので、1 つの issue 置き場は 1 台から回す
+- loop は自分では起き直さない。端末を閉じたりマシンを再起動したりしたら、同じコマンドを撃ち直す。`brew upgrade` の後も撃ち直す (走っている loop は起動した時点の binary で回り続ける)
 
 ## 動いているかを見る
 
 loop を撃った端末の画面が一番早い。`status` と同じ見出しと worker の表 (経過と stream の最新の活動を含む) の下に、直近 10 行の事象を描き直し続ける。stdout を pipe や file へ流しているときは、事象を 1 行ずつ追記する (形式は [`docs/design/formats.md`](docs/design/formats.md) §6)。
 
-別の端末からは `status` で見る。loop が書き出す状態 file (`status.json`) を描き、何も書かず gh も撃たない。見出しに loop が生きているか (`loop 稼働中` / `loop 停止待ち` / `loop なし`) と直近の tick を出し、走っている worker・再起動待ち・打ち切り・曖昧な CL を並べる (形式は [`docs/design/formats.md`](docs/design/formats.md) §7)。
+別の端末からは `status` で見る。loop が書き出す状態 file (`status.json`) を描き、何も書かず gh も撃たない。見出しに loop が生きているか (`loop 稼働中` / `loop 停止待ち` / `loop なし`) と直近の tick を出し、走っている worker・再起動待ち・打ち切り・曖昧な CL・事前検査に落ちた trigger を並べる (形式は [`docs/design/formats.md`](docs/design/formats.md) §7)。
 
 ```sh
-claude-dispatcher status [<workflow の path>]
+claude-dispatcher status
 ```
 
-過去の tick の結果は log.jsonl に 1 行ずつ残る。置き場は `claude-dispatcher paths --json [<workflow の path>]` で引ける。
+過去の tick と worker の起動・終わり方は log.jsonl に 1 行ずつ残る。worker の stream は worker log に残る。置き場は `claude-dispatcher paths --json` で引ける。
+
+打ち切られた作業対象は、どの trigger にも起動されない。直して再び回すなら、打ち切ったときの trigger の label を外し、1 周期待ってから付け直す。
 
 ## 止める
 
-1. loop の端末で Ctrl+C を押す。tick の合間ならすぐ止まる。tick の実行中なら、その tick を最後まで進めて (orchestrator の判断を待ち、決まった worker を起動して) から止まる
-2. 待てないときはもう一度 Ctrl+C を押す。orchestrator を止めて止まる。orchestrator が wip を付けた後だと、worker の起動されない wip が残りうる。終了行が示す orchestrator log を読み、残った wip を手で外す (起動記録が無いので `status` には出ない)
-3. 走っている worker はどちらでも止まらず、最後まで進んで CL を出すか人へ返して wip を剥がす。すぐ止めたいときは `status ps myproj` で `running` の issue を確かめ、log.jsonl の `spawned` にある `pid` の process を止めてから、その issue の `dispatcher:wip` を手で外す
-4. 使うのをやめるなら、`paths --json myproj` が返す `config_file` の dir と `state_dir` を消す。issue 置き場の label は残る
+1. loop の端末で Ctrl+C を押す (SIGTERM・SIGHUP も同じ)。新しい起動と再起動をやめ、走っている worker が終わるのを待って止まる。worker が走っていなければすぐ止まる
+2. 待てないときはもう一度 Ctrl+C を押す。走っている worker を止めて止まる。worker が途中まで書いた成果は workspace と remote branch に残る。作業対象が trigger に当たったままなら、次に起動した loop が同じ workspace で worker を起動し直す (session は新しく、attempt も 1 から数え直す。前の成果を拾わせるなら、共通 prompt にそう書く)
+3. 使うのをやめるなら、`paths --json` が返す `state_dir` と `workspace_root` を消す (workspace が worktree なら、消した後に clone で `git worktree prune` を撃つ)。tracker の label は残る
 
 ## License
 

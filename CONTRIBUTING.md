@@ -4,12 +4,15 @@
 
 ## セットアップ
 
-- 前提ツールは [README の「前提」](README.md#前提) のとおり (Claude Code / plugin `swat-skills@swat9013` / `gh`)
+- 前提ツールは [README の「前提」](README.md#前提) のとおり
+- この repo の [WORKFLOW.md](WORKFLOW.md) の action は Claude Code plugin `swat-skills@swat9013` ([swat9013/claude-skills](https://github.com/swat9013/claude-skills)) の playbook を呼ぶので、この repo で loop を回すなら入れる (user scope)
+  ```
+  /plugin marketplace add swat9013/claude-skills
+  /plugin install swat-skills@swat9013
+  ```
 - 加えて `golangci-lint` を CI と同じ版 (.github/workflows/checks.yml の `lint` job の `version:`) で入れる。公式の install script に版を渡して binary を入れる (手順は <https://golangci-lint.run/docs/welcome/install/>)。brew などの package manager は版を選べず、CI と版がずれるので使わない。`go install` と go.mod の `tool` directive は golangci-lint の公式が動作を保証していない
 - 加えて `pre-commit` (4.4.0 以上) を入れ、clone ごとに 1 回 `pre-commit install` を撃つ (commit 時と push 前の hook が両方入る)。gitleaks・actionlint・shellcheck は pre-commit が hook 環境として build するので別途の導入は要らない (初回の build に network が要る)
   - Go は手元の版が [go.mod](go.mod) の `toolchain` 行より古くても、`go` コマンドがその版を取ってきて使う (`GOTOOLCHAIN` の既定の `auto`)。hook も `go` コマンド経由で撃つので、手元と CI で同じ版の Go が動く
-
-> **作り直し中 (#74)**: この file の運用の記述は、今動いている実装 (作り直す前の形) に合わせてある。「#74 の作り直しの後は」で始まる行だけが、作り直し後の形を書いている。#83 で作り直し後の形に揃え、この注記を外す。
 
 ## 開発中の claude-dispatcher を試す
 
@@ -30,11 +33,11 @@ claude-dispatcher-dev loop
 ## branch・worktree 運用
 
 - 作業は issue 単位で行い、main から `worktree-issue-<n>` (`<n>` は issue 番号) の branch を切る
-  - dispatcher はこの綴りの head branch (fork でない、この repo 自身の branch) で worker 由来の CL を見分け、issue と紐づける。綴りを崩すと二重着手の防止が効かない
-  - #74 の作り直しの後は、この repo の workflow 定義が CL 側の trigger をこの綴りの、この repo 自身の head branch に絞り、人の CL と fork の CL に worker を送らない ([docs/design/system.md](docs/design/system.md) の「trigger」)
+  - この repo の workflow 定義 ([WORKFLOW.md](WORKFLOW.md)) は、CL 側の trigger (conflict・review・CI の手直し) をこの綴りの、この repo 自身の head branch に絞る。綴りを崩した CL には手直しの worker が起動しない。fork の CL にも worker を送らない ([docs/design/system.md](docs/design/system.md) §6)
+  - 人が自分で開いた CL もこの綴りなので、draft でなく `ready-for-human` の label も無ければ、手直しの worker がその head branch へ push しうる。自分で進める CL は draft にしておくか、`ready-for-human` の label を付ける
 - ファイルの変更 (コード・docs を問わない) は、main の checkout で直接行わず、worktree を作ってその中で行う。main の checkout に未 commit の変更を残すと、別の作業の差分と混ざって PR に切り出せなくなる
   - 対話で動かす Claude Code では `EnterWorktree` に name `issue-<n>` を渡す。branch 名は `worktree-` が前置されて `worktree-issue-<n>` になる
-  - #74 の作り直しの後は、dispatcher が workflow 定義の hooks で用意した workspace の中で worker が作業する ([docs/design/system.md](docs/design/system.md) の「起動・retry・打ち切り」)
+  - dispatcher が起動する worker は、WORKFLOW.md の hooks が clone から作った workspace (worktree。`.claude-dispatcher/workspaces/` の下) の中で作業する ([docs/design/system.md](docs/design/system.md) §7)
 - 実装が終わったら、worktree の branch を push して PR を作る
 - main へは PR 経由でだけ入れる (ruleset が強制する。下の「gate」の「main の保護」)
 
@@ -42,8 +45,8 @@ claude-dispatcher-dev loop
 
 検査の置き場は次の 2 点で決めている。
 
-- **CI に置く検査は、同じものを手元 (pre-commit) でも撃てるようにする**。dispatcher は CL の CI が落ちると `cl.ci_failed` の trigger で worker を起動し、worker は手元で再現できない失敗を推測で直さず人へ返す ([docs/design/system.md](docs/design/system.md) §6)。CI にしか無い検査が落ちると、worker は毎回人へ返すことになる
-- **CL の変更と無関係に赤くなりうる検査は、PR の gate にしない**。network 上の脆弱性 DB を引く govulncheck がこれに当たる。gate にすると、新しい脆弱性が公開されたときに、開いている worker の CL に一斉に `cl.ci_failed` の trigger が当たる
+- **CI に置く検査は、同じものを手元 (pre-commit) でも撃てるようにする**。dispatcher は CL の CI が落ちると `fix-ci` の trigger で worker を起動し、worker は手元で再現できない失敗を推測で直さず人へ返す ([WORKFLOW.md](WORKFLOW.md) の共通 prompt)。CI にしか無い検査が落ちると、worker は毎回人へ返すことになる
+- **CL の変更と無関係に赤くなりうる検査は、PR の gate にしない**。network 上の脆弱性 DB を引く govulncheck がこれに当たる。gate にすると、新しい脆弱性が公開されたときに、開いている worker の CL に一斉に `fix-ci` の trigger が当たる
 
 検査と撃たれる場所:
 
