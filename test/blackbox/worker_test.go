@@ -171,8 +171,7 @@ func TestWorkerGetsTheCommonPromptAsSystemPromptAndTheActionAsTheUserPrompt(t *t
 
 	start := s.waitEvents("start", 1)[0]
 	// start の行は claude を起動した直後に書かれ、stub が呼び出しを記録するより先になりうる。
-	waitFor(t, func() bool { return len(s.calls("claude")) > 0 }, "claude の呼び出しが記録されない")
-	argv := s.calls("claude")[0].Argv[1:]
+	argv := s.waitCalls("claude", 1)[0].Argv[1:]
 	file := argValueAfter(argv, "--append-system-prompt-file")
 	want := []string{"--permission-mode", "auto", "-p", "--output-format", "stream-json", "--verbose",
 		"--session-id", asString(start["session_id"]), "--append-system-prompt-file", file,
@@ -335,7 +334,7 @@ func TestFirstStopRequestWaitsForTheRunningWorker(t *testing.T) {
 	loop.waitForOutput(regexp.MustCompile(` 停止待ち: `))
 	// 停止待ちの間も周期ごとに作業対象を読み直す。読み直しが届いたら、少なくとも 1 周期は止まらずに待った
 	rereads := len(s.calls("gh"))
-	waitFor(t, func() bool { return len(s.calls("gh")) > rereads }, "停止待ちの間に作業対象を読み直さない")
+	s.waitCalls("gh", rereads+1)
 	if !loop.running() {
 		t.Fatal("1 回目の停止要求で、worker の終了を待たずに止まった")
 	}
