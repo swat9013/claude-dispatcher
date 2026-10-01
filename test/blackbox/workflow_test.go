@@ -42,7 +42,7 @@ func TestWorkflowDefinitionErrorsAreRejectedNamingTheItem(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			s := newSandbox(t)
-			s.writeWorkflow(c.workflow)
+			s.writeWorkflowWithCommands(c.workflow)
 
 			r := s.dryRun()
 
@@ -53,7 +53,7 @@ func TestWorkflowDefinitionErrorsAreRejectedNamingTheItem(t *testing.T) {
 
 func TestEveryWorkflowDefinitionErrorIsReportedOnItsOwnLine(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(workflowWithTriggers("\n  - {name: a, on: pr, action: /a}\n  - {name: b, on: issue, action: /b, colour: red}"))
+	s.writeWorkflowWithCommands(workflowWithTriggers("\n  - {name: a, on: pr, action: /a}\n  - {name: b, on: issue, action: /b, colour: red}"))
 
 	r := s.dryRun()
 
@@ -65,7 +65,7 @@ func TestEveryWorkflowDefinitionErrorIsReportedOnItsOwnLine(t *testing.T) {
 
 func TestUnsetVariableIsRejectedNamingTheItemAndTheVariable(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(strings.Replace(defaultWorkflow, "repo: acme/widgets", "repo: $ISSUE_REPO", 1))
+	s.writeWorkflowWithCommands(strings.Replace(defaultWorkflow, "repo: acme/widgets", "repo: $ISSUE_REPO", 1))
 
 	r := s.dryRun()
 
@@ -74,7 +74,7 @@ func TestUnsetVariableIsRejectedNamingTheItemAndTheVariable(t *testing.T) {
 
 func TestEmptyVariableIsRejectedLikeAnUnsetOne(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(strings.Replace(defaultWorkflow, "  repo: acme/widgets\n", "  repo: acme/widgets\n  token: $WIDGETS_TOKEN\n", 1))
+	s.writeWorkflowWithCommands(strings.Replace(defaultWorkflow, "  repo: acme/widgets\n", "  repo: acme/widgets\n  token: $WIDGETS_TOKEN\n", 1))
 
 	r := s.runWithEnv(map[string]string{"WIDGETS_TOKEN": ""}, "loop", "--dry-run")
 

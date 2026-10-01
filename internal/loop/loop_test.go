@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/swat9013/claude-dispatcher/internal/loop"
+	"github.com/swat9013/claude-dispatcher/internal/precheck"
 	"github.com/swat9013/claude-dispatcher/internal/status"
 	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/trigger"
@@ -33,6 +34,8 @@ type tickPlan struct {
 	fail error
 	// stopDuring が nil でなければ、この tick の観測の途中に停止要求を送る
 	stopDuring os.Signal
+	// blocked はこの tick の事前検査に落ちる trigger の名前
+	blocked []string
 }
 
 // memoryStore は in-memory の issue 置き場。
@@ -52,6 +55,9 @@ type noWorkspaces struct{}
 func (noWorkspaces) Existing() ([]target.Ref, error)   { return nil, nil }
 func (noWorkspaces) Remove(target.Ref) error           { return nil }
 func (noWorkspaces) Branch(target.Ref) (string, error) { return "", nil }
+
+// noProblems は、どの trigger も事前検査に通す。
+func noProblems(workflow.Definition) []precheck.Problem { return nil }
 
 // endedWorker は起動するとすぐに正常に終わる worker。
 type endedWorker struct{}
@@ -150,6 +156,13 @@ func (h *harness) run(t *testing.T) []string {
 			return h.withAttempts(def), err
 		},
 		Definition: h.withAttempts(definition(time.Minute, h.maxConcurrent)),
+		Precheck: func(workflow.Definition) []precheck.Problem {
+			var problems []precheck.Problem
+			for _, name := range h.plans[tick-1].blocked {
+				problems = append(problems, precheck.Problem{Trigger: name, Error: "見つからない"})
+			}
+			return problems
+		},
 		Store: func(workflow.Definition) loop.Store {
 			// scope key と観測は、その tick が読み直した workflow 定義の plan で答える
 			return memoryStore{scopeKey: func() string {
@@ -385,6 +398,7 @@ func TestLineThatCannotBeWrittenToTheLogIsReportedOnStdout(t *testing.T) {
 	loop.Run(loop.Options{
 		Load:       func() (workflow.Definition, error) { return definition(time.Minute, 0), nil },
 		Definition: definition(time.Minute, 0),
+		Precheck:   noProblems,
 		Store: func(workflow.Definition) loop.Store {
 			return memoryStore{scopeKey: func() string { return startScope }, observe: func() ([]target.Item, error) { return nil, nil }}
 		},
@@ -459,6 +473,35 @@ func TestWorkerThatFailsAfterAStopRequestHasNoRestartInTheStatus(t *testing.T) {
 
 	if len(last.Workers) != 1 || last.Workers[0].Phase != status.WaitingRetry || last.Workers[0].RetryAt != nil || last.Workers[0].StartedAt != nil {
 		t.Fatalf("worker = %+v, want 再起動の予定も起動の時刻も無い再起動待ち", last.Workers)
+	}
+}
+
+// blockedWhileRetryIsDue は、周期 5s・backoff 10s で、2 回目と 3 回目の tick (5s・10s) で implement が事前検査に落ち、
+// 4 回目で直る harness。再起動の予定 (10s) は落ちている間に明ける。
+func blockedWhileRetryIsDue() *harness {
+	return &harness{plans: []tickPlan{
+		{load: good(5 * time.Second)}, {load: good(5 * time.Second), blocked: []string{"implement"}},
+		{load: good(5 * time.Second), blocked: []string{"implement"}}, {load: good(5 * time.Second)},
+	}, maxConcurrent: 1, maxAttempts: 2}
+}
+
+func TestRetryOfATriggerThatFailsThePrecheckRestartsWhenItPasses(t *testing.T) {
+	h := blockedWhileRetryIsDue()
+
+	h.run(t)
+
+	if len(h.jobs) != 2 || h.jobs[1].Attempt != 2 {
+		t.Fatalf("起動 = %+v, want 直った後に attempt 2 を 1 回", h.jobs)
+	}
+}
+
+func TestRetryOfATriggerThatFailsThePrecheckIsNotScheduledWhileItFails(t *testing.T) {
+	h := blockedWhileRetryIsDue()
+
+	h.run(t)
+
+	if slices.Contains(h.waits, 0) {
+		t.Fatalf("待ち = %v, 事前検査に落ちている間に明けた予定で回り直した", h.waits)
 	}
 }
 

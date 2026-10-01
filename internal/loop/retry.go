@@ -63,7 +63,7 @@ func (l *loop) arm() {
 	}
 	var earliest time.Time
 	for _, c := range l.claims {
-		if c.phase == phaseWaitingRetry && (earliest.IsZero() || c.retryAt.Before(earliest)) {
+		if l.restartable(c) && (earliest.IsZero() || c.retryAt.Before(earliest)) {
 			earliest = c.retryAt
 		}
 	}
@@ -122,6 +122,10 @@ func (l *loop) retry(store Store, v *view) {
 				continue
 			}
 		}
+		if !l.restartable(c) {
+			// 事前検査に落ちている trigger は、直るまで attempt を進めずに待ち直す (tick が確かめ直す)
+			continue
+		}
 		c.item, c.waitingSlot = item, false
 		c.attempt++
 		l.start(c)
@@ -166,11 +170,18 @@ func (l *loop) releaseWaiting(ref target.Ref, c *claim, reason string) {
 		"再起動せずに解いた %s (%s): %s", name, c.trigger.Name, reason)
 }
 
-// waitingRetry は再起動待ちの claim の数。
+// restartable は、再起動待ちの claim のうち、起動できるもの (trigger が事前検査に落ちていない)。落ちている trigger の
+// claim は、直るまで並列の枠にも再起動の予定にも数えない (枠を塞いで他の trigger を止めず、明けた予定で回り続けない)。
+// retry は、落ちている間も終端や trigger から外れたことを確かめて claim を解くので、この述語で絞らずに読み直す。
+func (l *loop) restartable(c *claim) bool {
+	return c.phase == phaseWaitingRetry && !l.isBlocked(c.trigger.Name)
+}
+
+// waitingRetry は起動できる再起動待ちの claim の数。
 func (l *loop) waitingRetry() int {
 	n := 0
 	for _, c := range l.claims {
-		if c.phase == phaseWaitingRetry {
+		if l.restartable(c) {
 			n++
 		}
 	}

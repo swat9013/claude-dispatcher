@@ -18,7 +18,9 @@ import (
 	"github.com/swat9013/claude-dispatcher/internal/deps"
 	"github.com/swat9013/claude-dispatcher/internal/github"
 	"github.com/swat9013/claude-dispatcher/internal/loop"
+	"github.com/swat9013/claude-dispatcher/internal/precheck"
 	"github.com/swat9013/claude-dispatcher/internal/printable"
+	"github.com/swat9013/claude-dispatcher/internal/scaffold"
 	"github.com/swat9013/claude-dispatcher/internal/state"
 	"github.com/swat9013/claude-dispatcher/internal/status"
 	"github.com/swat9013/claude-dispatcher/internal/target"
@@ -42,6 +44,8 @@ const usage = `usage:
   claude-dispatcher loop --dry-run [<workflow の path>]
   claude-dispatcher status [<workflow の path>]
   claude-dispatcher paths --json [<workflow の path>]
+  claude-dispatcher setup [<workflow の path>]
+  claude-dispatcher doctor [<workflow の path>]
   claude-dispatcher --version
 `
 
@@ -64,6 +68,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runStatus(args[1:], stdout, stderr)
 	case "paths":
 		return runPaths(args[1:], stdout, stderr)
+	case "setup":
+		return runSetup(args[1:], stdout, stderr)
+	case "doctor":
+		return runDoctor(args[1:], stdout, stderr)
 	case "-h", "--help", "help":
 		fmt.Fprint(stdout, usage)
 		return 0
@@ -94,18 +102,33 @@ func (e environment) getenv(key string) string { return deps.Getenv(e.env, key) 
 // ghTimeout は gh の 1 回の呼び出しの上限
 const ghTimeout = 120 * time.Second
 
-// gh は workflow 定義の gh の撃ち方。tracker.token があれば gh に GH_TOKEN として渡す。
-func (e environment) gh(def workflow.Definition) github.Exec {
+// gh は gh の撃ち方。token (workflow 定義の tracker.token) があれば gh に GH_TOKEN として渡す。
+func (e environment) gh(token string) github.Exec {
 	env := e.env
-	if def.Tracker.Token != "" {
-		env = deps.WithEnv(env, map[string]string{"GH_TOKEN": def.Tracker.Token})
+	if token != "" {
+		env = deps.WithEnv(env, map[string]string{"GH_TOKEN": token})
 	}
 	return github.Exec{Env: env, Timeout: ghTimeout}
 }
 
 // store は workflow 定義から置き場の部品を組み立てる。
 func (e environment) store(def workflow.Definition) loop.Store {
-	return github.NewStore(e.gh(def), def.Tracker.Repo)
+	return github.NewStore(e.gh(def.Tracker.Token), def.Tracker.Repo)
+}
+
+// requiredCommands は loop が撃つ依存 CLI: gh と claude.command。CL 側の trigger があれば、claim の workspace の branch を
+// 読むのに git も撃つ。
+func requiredCommands(def workflow.Definition) []string {
+	commands := []string{"gh", def.Claude.Command}
+	if slices.Contains(def.Kinds(), target.KindCL) {
+		commands = append(commands, "git")
+	}
+	return commands
+}
+
+// precheck は workflow 定義の事前検査 (formats.md §2.9)。~/.claude は loop の環境の HOME から引く。
+func (e environment) precheck(def workflow.Definition) []precheck.Problem {
+	return precheck.Check(def, e.getenv("HOME"))
 }
 
 // stateDir は workflow 定義の scope key と、その state dir。
@@ -161,22 +184,20 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return exitUsage
 	}
+	// 起動時と試運転は人が画面の前にいるので、事前検査のどれが落ちても失敗させ、全部を直させる (system.md §8)
+	if problems := e.precheck(def); len(problems) > 0 {
+		for _, p := range problems {
+			fmt.Fprintln(stderr, p)
+		}
+		return exitUsage
+	}
 	if dryRun {
 		return dryRunOnce(e, def, stdout, stderr)
 	}
 
-	// 起動時は人が画面の前にいるので、tick で落ちる前に gh と claude を解決できることを確かめる (system.md §8)
-	if err := e.gh(def).Ready(); err != nil {
-		fmt.Fprintln(stderr, err)
-		return exitFailed
-	}
-	if _, err := deps.Lookup(def.Claude.Command, e.env); err != nil {
-		fmt.Fprintln(stderr, err)
-		return exitFailed
-	}
-	// CL 側の trigger があれば、claim の workspace の branch を読むのに git を撃つ
-	if slices.Contains(def.Kinds(), target.KindCL) {
-		if _, err := deps.Lookup("git", e.env); err != nil {
+	// 起動時は人が画面の前にいるので、tick で落ちる前に依存 CLI を解決できることを確かめる (system.md §8)
+	for _, name := range requiredCommands(def) {
+		if _, err := deps.Lookup(name, e.env); err != nil {
 			fmt.Fprintln(stderr, err)
 			return exitFailed
 		}
@@ -213,6 +234,7 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 	return loop.Run(loop.Options{
 		Load:       load,
 		Definition: def,
+		Precheck:   e.precheck,
 		Store:      e.store,
 		Workspaces: func(def workflow.Definition) loop.Workspaces { return e.workspaces(def) },
 		Launch: func(def workflow.Definition, job worker.Job, events chan<- worker.Event) loop.Worker {
@@ -363,5 +385,42 @@ func runPaths(args []string, stdout, stderr io.Writer) int {
 		return exitFailed
 	}
 	fmt.Fprintf(stdout, "%s\n", raw)
+	return 0
+}
+
+// --- setup ---
+
+// runSetup は `setup [<workflow の path>]` を撃つ (formats.md §7.4): cwd の repo を tracker.repo に埋めた雛形を書く。
+// 既にある file は上書きしない。
+func runSetup(args []string, stdout, stderr io.Writer) int {
+	path, ok := workflowArg(args, nil, stderr)
+	if !ok {
+		return exitUsage
+	}
+	if _, err := os.Stat(path); err == nil {
+		fmt.Fprintf(stdout, "%s は既にあるので書かない\n", path)
+		return 0
+	}
+	e := newEnvironment()
+	repo, err := github.CurrentRepo(e.gh(""))
+	if err != nil {
+		fmt.Fprintf(stderr, "tracker.repo を決められない: %v\n", err)
+		return exitFailed
+	}
+	// 確かめてから書くまでの間に他が書いても、上書きしない
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if errors.Is(err, os.ErrExist) {
+		fmt.Fprintf(stdout, "%s は既にあるので書かない\n", path)
+		return 0
+	}
+	if err == nil {
+		_, err = io.WriteString(file, scaffold.Workflow(repo.String()))
+		err = errors.Join(err, file.Close())
+	}
+	if err != nil {
+		fmt.Fprintf(stderr, "workflow 定義の雛形を書けない (%s): %v\n", path, err)
+		return exitFailed
+	}
+	fmt.Fprintf(stdout, "%s に workflow 定義の雛形を書いた (tracker.repo: %s)。project に合わせて直し、`claude-dispatcher loop --dry-run` で試運転する\n", path, repo)
 	return 0
 }

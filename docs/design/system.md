@@ -184,10 +184,10 @@ SPEC §7・§8・§16 の状態機械を土台にする。
    - trigger から外れただけでは止めない (ADR 0009「走っている worker は終端でだけ止める」)
 2. **workflow 定義の読み直しと事前検査** (§8)
    - 読めない・文法に合わないときは、この tick は何も起動しない。突き合わせは続ける
-   - action の template の先頭の `/名前` が見つからない trigger だけは、その trigger を起動しない。他の trigger は評価する
+   - action の template の先頭の `/名前` が見つからない trigger だけは、その trigger を評価から外し、再起動もしない。他の trigger は評価する
 3. **snapshot を作る**: open な issue と open な CL を読み、正規化する
 4. **trigger を評価し、候補を並べる** (§6)
-5. **空いている分だけ起動する**。並列上限から、走っている worker と再起動待ちの数を引いた分
+5. **空いている分だけ起動する**。並列上限から、走っている worker と再起動待ちの数を引いた分 (事前検査に落ちた trigger の再起動待ちは数えない)
 
 **worker の 1 回分**。
 
@@ -315,7 +315,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。
   - binary は署名しないので、macOS では cask の `postflight_steps` が quarantine を外す (ADR 0007)
 - **特定の plugin には依存しない**
   - action が呼ぶ skill と command は、利用者が入れた plugin・repo の `.claude/`・`~/.claude/` のどれに置いてもよい
-  - 事前検査 (§8) は、この 3 か所の skill と command から先頭の `/名前` を探す
+  - 事前検査 (§8) は、この 3 か所の skill と command から先頭の `/名前` を探す。plugin は、user scope で入れたものと、この repo に project scope で入れたものを数える (local scope の plugin は commit しない settings で有効になり、worker の workspace では読まれない)
 - **Claude Code の settings は CLI が書かない** (ADR 0004)。`doctor` は、worker が tracker を操作するのに要りそうな entry を表示する
 - **`doctor` は、利用者の約束に頼る宣言を警告する**
   - `cl.approved` に action を当てている (merge を worker に任せうる)

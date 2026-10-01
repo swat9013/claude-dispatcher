@@ -29,7 +29,7 @@ func (s *sandbox) startsOf(target string) []map[string]any {
 
 func TestWorkerThatEndsStillMatchingTheTriggerIsRetriedAfterABackoff(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(s.workerWorkflow(fastRetry))
+	s.writeWorkflowWithCommands(s.workerWorkflow(fastRetry))
 	s.setIssues(readyIssue(42))
 	s.onClaude(stubwire.Rule{})
 
@@ -46,7 +46,7 @@ func TestWorkerThatEndsStillMatchingTheTriggerIsRetriedAfterABackoff(t *testing.
 
 func TestFirstBackoffIsTenSeconds(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(s.workerWorkflow("limits:\n  max_retry_backoff: 30s\n"))
+	s.writeWorkflowWithCommands(s.workerWorkflow("limits:\n  max_retry_backoff: 30s\n"))
 	s.setIssues(readyIssue(42))
 	s.onClaude(stubwire.Rule{})
 
@@ -59,7 +59,7 @@ func TestFirstBackoffIsTenSeconds(t *testing.T) {
 
 func TestRetriedAttemptResumesTheSameSession(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(s.workerWorkflow(fastRetry))
+	s.writeWorkflowWithCommands(s.workerWorkflow(fastRetry))
 	s.setIssues(readyIssue(42))
 	s.onClaude(stubwire.Rule{})
 
@@ -75,7 +75,7 @@ func TestRetriedAttemptResumesTheSameSession(t *testing.T) {
 
 func TestRetriedAttemptRunsInTheSameWorkspace(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(s.workerWorkflow(fastRetry))
+	s.writeWorkflowWithCommands(s.workerWorkflow(fastRetry))
 	s.setIssues(readyIssue(42))
 	s.onClaude(stubwire.Rule{})
 
@@ -91,7 +91,7 @@ func TestRetryAfterAnAttemptThatNeverStartedClaudeStartsTheSession(t *testing.T)
 	// before_run は 1 回目だけ失敗する (marks に印を残して 2 回目は通る)
 	s := newSandbox(t)
 	once := s.mark("before_run-failed")
-	s.writeWorkflow(regexp.MustCompile(`(?m)^  before_run: .*$`).ReplaceAllString(s.workerWorkflow(fastRetry),
+	s.writeWorkflowWithCommands(regexp.MustCompile(`(?m)^  before_run: .*$`).ReplaceAllString(s.workerWorkflow(fastRetry),
 		`  before_run: '[ -e "`+once+`" ] || { : > "`+once+`"; exit 1; }'`))
 	s.setIssues(readyIssue(42))
 	s.onClaude(stubwire.Rule{})
@@ -107,7 +107,7 @@ func TestRetryAfterAnAttemptThatNeverStartedClaudeStartsTheSession(t *testing.T)
 
 func TestIssueIsAbandonedWhenItsLastAttemptFails(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(s.workerWorkflow(fastRetry + "  max_attempts: 2\n"))
+	s.writeWorkflowWithCommands(s.workerWorkflow(fastRetry + "  max_attempts: 2\n"))
 	s.setIssues(readyIssue(42))
 	s.onClaude(stubwire.Rule{})
 	s.startLoop()
@@ -121,7 +121,7 @@ func TestIssueIsAbandonedWhenItsLastAttemptFails(t *testing.T) {
 
 func TestAbandonedIssueIsNotLaunchedAgainWhileItStillMatchesTheTrigger(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(s.workerWorkflow(fastRetry + "  max_attempts: 2\n"))
+	s.writeWorkflowWithCommands(s.workerWorkflow(fastRetry + "  max_attempts: 2\n"))
 	s.setIssues(readyIssue(42))
 	s.onClaude(stubwire.Rule{})
 	s.startLoop()
@@ -147,7 +147,7 @@ func (s *sandbox) abandonedWorkflow() string {
 
 func TestAbandonedIssueIsNotLaunchedByAnotherTrigger(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(s.abandonedWorkflow())
+	s.writeWorkflowWithCommands(s.abandonedWorkflow())
 	s.setIssues(readyIssue(42))
 	s.onClaude(stubwire.Rule{})
 	s.startLoop()
@@ -166,7 +166,7 @@ func TestAbandonedIssueIsNotLaunchedByAnotherTrigger(t *testing.T) {
 
 func TestAbandonedIssueComesBackAfterLeavingTheTriggerOnce(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(s.abandonedWorkflow())
+	s.writeWorkflowWithCommands(s.abandonedWorkflow())
 	s.setIssues(readyIssue(42))
 	s.onClaude(stubwire.Rule{})
 	s.startLoop()
@@ -185,7 +185,7 @@ func TestAbandonedIssueComesBackAfterLeavingTheTriggerOnce(t *testing.T) {
 
 func TestStalledWorkerIsStoppedAndCountedAsAFailure(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(s.workerWorkflow(fastRetry + "  stall_timeout: 1s\n"))
+	s.writeWorkflowWithCommands(s.workerWorkflow(fastRetry + "  stall_timeout: 1s\n"))
 	s.setIssues(readyIssue(42))
 	s.onClaude(stubwire.Rule{ReleaseFile: s.releaseFile()})
 
@@ -199,7 +199,7 @@ func TestStalledWorkerIsStoppedAndCountedAsAFailure(t *testing.T) {
 
 func TestStalledAttemptIsRetried(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(s.workerWorkflow(fastRetry + "  stall_timeout: 1s\n"))
+	s.writeWorkflowWithCommands(s.workerWorkflow(fastRetry + "  stall_timeout: 1s\n"))
 	s.setIssues(readyIssue(42))
 	s.onClaude(stubwire.Rule{ReleaseFile: s.releaseFile()})
 
@@ -212,7 +212,7 @@ func TestStalledAttemptIsRetried(t *testing.T) {
 
 func TestWorkerThatRunsPastItsTimeLimitIsStoppedAndCountedAsAFailure(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(s.workerWorkflow(fastRetry + "  stall_timeout: 0s\n  run_timeout: 1s\n"))
+	s.writeWorkflowWithCommands(s.workerWorkflow(fastRetry + "  stall_timeout: 0s\n  run_timeout: 1s\n"))
 	s.setIssues(readyIssue(42))
 	s.onClaude(stubwire.Rule{ReleaseFile: s.releaseFile()})
 
@@ -226,7 +226,7 @@ func TestWorkerThatRunsPastItsTimeLimitIsStoppedAndCountedAsAFailure(t *testing.
 
 func TestAttemptPastItsTimeLimitIsRetried(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(s.workerWorkflow(fastRetry + "  stall_timeout: 0s\n  run_timeout: 1s\n"))
+	s.writeWorkflowWithCommands(s.workerWorkflow(fastRetry + "  stall_timeout: 0s\n  run_timeout: 1s\n"))
 	s.setIssues(readyIssue(42))
 	s.onClaude(stubwire.Rule{ReleaseFile: s.releaseFile()})
 
@@ -239,7 +239,7 @@ func TestAttemptPastItsTimeLimitIsRetried(t *testing.T) {
 
 func TestWorkerThatExitsAbnormallyIsRetried(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(s.workerWorkflow(fastRetry))
+	s.writeWorkflowWithCommands(s.workerWorkflow(fastRetry))
 	s.setIssues(readyIssue(42))
 	s.onClaude(stubwire.Rule{Exit: 1})
 
@@ -253,7 +253,7 @@ func TestWorkerThatExitsAbnormallyIsRetried(t *testing.T) {
 func TestRetryWaitingForAFreeSlotDoesNotAdvanceTheAttempt(t *testing.T) {
 	// issue#42 は失敗して再起動を待ち、issue#43 は走り続ける。並列上限を 1 に下げると、#42 の再起動は空きを待つ
 	s := newSandbox(t)
-	s.writeWorkflow(s.workerWorkflow(fastRetry + "  max_concurrent: 2\n"))
+	s.writeWorkflowWithCommands(s.workerWorkflow(fastRetry + "  max_concurrent: 2\n"))
 	s.setIssues(readyIssue(42), readyIssue(43))
 	s.respondAll("claude", []stubwire.Rule{
 		{ArgsContain: []string{"issue #43"}, Stdout: `{"type":"result"}` + "\n", ReleaseFile: s.releaseFile()},
@@ -262,7 +262,7 @@ func TestRetryWaitingForAFreeSlotDoesNotAdvanceTheAttempt(t *testing.T) {
 	s.t.Cleanup(func() { _ = os.WriteFile(s.releaseFile(), nil, 0o644); _ = os.WriteFile(s.mark("never"), nil, 0o644) })
 	s.startLoop()
 	s.waitEvents("start", 2)
-	s.writeWorkflow(s.workerWorkflow(fastRetry + "  max_concurrent: 1\n"))
+	s.writeWorkflowWithCommands(s.workerWorkflow(fastRetry + "  max_concurrent: 1\n"))
 	ticks := len(s.events("tick"))
 	s.waitEvents("tick", ticks+1)
 	mustWrite(t, s.mark("never"), "")
@@ -296,7 +296,7 @@ const slowRetry = "limits:\n  max_retry_backoff: 3s\n"
 
 func TestWaitingRetryIsReleasedWhenTheIssueLeavesTheTrigger(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(s.workerWorkflow(slowRetry))
+	s.writeWorkflowWithCommands(s.workerWorkflow(slowRetry))
 	s.setIssues(readyIssue(42))
 	s.onClaude(stubwire.Rule{})
 	s.startLoop()
@@ -316,7 +316,7 @@ func TestWaitingRetryIsReleasedWhenTheIssueLeavesTheTrigger(t *testing.T) {
 
 func TestWaitingRetryOfAClosedIssueIsReleasedAndItsWorkspaceRemoved(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(s.workerWorkflow(slowRetry))
+	s.writeWorkflowWithCommands(s.workerWorkflow(slowRetry))
 	s.setIssues(readyIssue(42))
 	s.onClaude(stubwire.Rule{})
 	s.startLoop()
@@ -336,7 +336,7 @@ func TestWaitingRetryOfAClosedIssueIsReleasedAndItsWorkspaceRemoved(t *testing.T
 
 func TestStopRequestDropsWaitingRetriesWithAnErrorLine(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(s.workerWorkflow("limits:\n  max_retry_backoff: 1m\n"))
+	s.writeWorkflowWithCommands(s.workerWorkflow("limits:\n  max_retry_backoff: 1m\n"))
 	s.setIssues(readyIssue(42))
 	s.onClaude(stubwire.Rule{})
 	loop := s.startLoop()
@@ -352,13 +352,13 @@ func TestStopRequestDropsWaitingRetriesWithAnErrorLine(t *testing.T) {
 
 func TestWaitingRetryIsReleasedWhenItsTriggerIsRemovedFromTheWorkflow(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflow(s.workerWorkflow(slowRetry))
+	s.writeWorkflowWithCommands(s.workerWorkflow(slowRetry))
 	s.setIssues(readyIssue(42))
 	s.onClaude(stubwire.Rule{})
 	s.startLoop()
 	s.waitEvents("retry", 1)
 
-	s.writeWorkflow(strings.Replace(s.workerWorkflow(slowRetry), "name: implement", "name: renamed", 1))
+	s.writeWorkflowWithCommands(strings.Replace(s.workerWorkflow(slowRetry), "name: implement", "name: renamed", 1))
 
 	if release := s.waitEvents("release", 1)[0]; release["reason"] != "trigger が workflow 定義から消えた" {
 		t.Fatalf("release の行 = %v", release)
