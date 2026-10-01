@@ -198,7 +198,7 @@ func TestCLWorkerGetsAnActionRenderedWithTheCLVariables(t *testing.T) {
 	s.startLoop()
 
 	s.waitEvents("start", 1)
-	call := s.waitCalls("claude", 1)[0]
+	call := s.waitCalls("claude", 1, "claude の呼び出しが記録されない")[0]
 	if action := call.Argv[len(call.Argv)-1]; action != "/fix CL #5 on worktree-issue-3 (cl 5, https://github.com/acme/widgets/pull/5)" {
 		t.Fatalf("action = %q", action)
 	}
