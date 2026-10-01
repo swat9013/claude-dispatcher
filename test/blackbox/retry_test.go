@@ -99,7 +99,7 @@ func TestRetryAfterAnAttemptThatNeverStartedClaudeStartsTheSession(t *testing.T)
 	s.startLoop()
 
 	start := s.waitEvents("start", 1)[0]
-	argv := s.waitCalls("claude", 1, "2 回目の attempt の claude の呼び出しが記録されない")[0].Argv
+	argv := s.waitCalls("claude", 1, "before_run が通った attempt の claude の呼び出しが記録されない")[0].Argv
 	if start["attempt"] != float64(2) || argValueAfter(argv, "--session-id") != asString(start["session_id"]) || slices.Contains(argv, "--resume") {
 		t.Fatalf("attempt %v の argv = %q, want 前に始めた session が無いので --session-id", start["attempt"], argv)
 	}

@@ -170,7 +170,6 @@ func TestWorkerGetsTheCommonPromptAsSystemPromptAndTheActionAsTheUserPrompt(t *t
 	s.startLoop()
 
 	start := s.waitEvents("start", 1)[0]
-	// start の行は claude を起動した直後に書かれ、stub が呼び出しを記録するより先になりうる。
 	argv := s.waitCalls("claude", 1, "claude の呼び出しが記録されない")[0].Argv[1:]
 	file := argValueAfter(argv, "--append-system-prompt-file")
 	want := []string{"--permission-mode", "auto", "-p", "--output-format", "stream-json", "--verbose",
