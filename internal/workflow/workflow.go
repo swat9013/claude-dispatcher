@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -14,17 +15,41 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/swat9013/claude-dispatcher/internal/github"
+	"github.com/swat9013/claude-dispatcher/internal/render"
 	"github.com/swat9013/claude-dispatcher/internal/trigger"
 )
 
 // Definition は検査に通った workflow 定義。
 type Definition struct {
+	// Dir は workflow 定義の file がある dir の絶対 path
+	Dir     string
 	Tracker Tracker
 	// Interval は tick の周期
 	Interval time.Duration
-	Triggers []trigger.Trigger
-	// Prompt は本文 (共通 prompt)。worker に渡す (#78)
+	// WorkspaceRoot は workspace を置く dir の絶対 path
+	WorkspaceRoot string
+	Hooks         Hooks
+	// MaxConcurrent は同時に走らせる worker の上限
+	MaxConcurrent int
+	Claude        Claude
+	Triggers      []trigger.Trigger
+	// Prompt は本文 (共通 prompt) の template
 	Prompt string
+}
+
+// Hooks は workspace の hooks の shell script (空なら撃たない) と、1 つの hook の上限時間。
+type Hooks struct {
+	AfterCreate  string
+	BeforeRun    string
+	AfterRun     string
+	BeforeRemove string
+	Timeout      time.Duration
+}
+
+// Claude は worker の起動の仕方。
+type Claude struct {
+	Command string
+	Args    []string
 }
 
 // Tracker は issue 置き場の設定。
@@ -36,9 +61,12 @@ type Tracker struct {
 
 // 周期の既定と範囲 (formats.md §2.1)
 const (
-	DefaultInterval = 5 * time.Minute
-	MinInterval     = time.Minute
-	MaxInterval     = 24 * time.Hour
+	DefaultInterval      = 5 * time.Minute
+	MinInterval          = time.Second
+	MaxInterval          = 24 * time.Hour
+	DefaultWorkspaceRoot = ".claude-dispatcher/workspaces"
+	DefaultHookTimeout   = 60 * time.Second
+	DefaultClaudeCommand = "claude"
 )
 
 // Errors は workflow 定義の誤りの列。1 件 1 行で出す。
@@ -70,12 +98,19 @@ func Load(path string, getenv func(string) string) (Definition, error) {
 		return Definition{}, &Errors{Path: path, Problems: []string{fmt.Sprintf("front matter を YAML として読めない: %v", err)}}
 	}
 	c := &checker{getenv: getenv}
-	def := Definition{Interval: DefaultInterval, Prompt: body}
+	dir := filepath.Dir(path)
+	def := Definition{
+		Dir: dir, Interval: DefaultInterval, WorkspaceRoot: filepath.Join(dir, DefaultWorkspaceRoot),
+		Hooks: Hooks{Timeout: DefaultHookTimeout}, MaxConcurrent: 1, Claude: Claude{Command: DefaultClaudeCommand}, Prompt: body,
+	}
 	root := &yaml.Node{Kind: yaml.MappingNode}
 	if len(doc.Content) == 1 {
 		root = resolve(doc.Content[0])
 	}
 	c.decode(root, &def)
+	if err := render.Check("本文", body); err != nil {
+		c.problems = append(c.problems, problem{text: fmt.Sprintf("本文 (共通 prompt): %v", err)})
+	}
 	if len(c.problems) > 0 {
 		return Definition{}, &Errors{Path: path, Problems: c.lines()}
 	}
@@ -191,10 +226,100 @@ func join(path, key string) string {
 func (c *checker) decode(root *yaml.Node, def *Definition) {
 	// top level は key を持たないので、欠落を行なしで名指しする
 	c.mapping(&yaml.Node{}, root, "", map[string]field{
-		"tracker":  {required: true, read: func(key, n *yaml.Node, path string) { c.tracker(key, n, path, &def.Tracker) }},
-		"polling":  {read: func(key, n *yaml.Node, path string) { c.polling(key, n, path, &def.Interval) }},
+		"tracker": {required: true, read: func(key, n *yaml.Node, path string) { c.tracker(key, n, path, &def.Tracker) }},
+		"polling": {read: func(key, n *yaml.Node, path string) { c.polling(key, n, path, &def.Interval) }},
+		"workspace": {read: func(key, n *yaml.Node, path string) {
+			c.mapping(key, n, path, map[string]field{
+				"root": {read: func(_, n *yaml.Node, path string) {
+					if s, ok := c.variableOrLiteral(n, path); ok {
+						def.WorkspaceRoot = c.absolute(n, path, def.Dir, s)
+					}
+				}},
+			})
+		}},
+		"hooks": {read: func(key, n *yaml.Node, path string) { c.hooks(key, n, path, &def.Hooks) }},
+		"limits": {read: func(key, n *yaml.Node, path string) {
+			c.mapping(key, n, path, map[string]field{
+				"max_concurrent": {read: func(_, n *yaml.Node, path string) {
+					if v, ok := c.positive(n, path); ok {
+						def.MaxConcurrent = v
+					}
+				}},
+			})
+		}},
+		"claude": {read: func(key, n *yaml.Node, path string) {
+			c.mapping(key, n, path, map[string]field{
+				"command": {read: func(_, n *yaml.Node, path string) {
+					if s, ok := c.str(n, path); ok {
+						def.Claude.Command = s
+					}
+				}},
+				"args": {read: func(_, n *yaml.Node, path string) { def.Claude.Args, _ = c.strList(n, path) }},
+			})
+		}},
 		"triggers": {required: true, read: func(_, n *yaml.Node, path string) { def.Triggers = c.triggers(n, path) }},
 	})
+}
+
+// absolute は s を絶対 path にする。`~/` は HOME から、相対 path は dir から。HOME が空なら `~/` を読めない誤りにする。
+func (c *checker) absolute(n *yaml.Node, path, dir, s string) string {
+	switch {
+	case strings.HasPrefix(s, "~/"):
+		home := c.getenv("HOME")
+		if !filepath.IsAbs(home) {
+			c.fail(n, path, "HOME が絶対 path でないので ~/ を読めない")
+			return ""
+		}
+		return filepath.Join(home, s[2:])
+	case filepath.IsAbs(s):
+		return filepath.Clean(s)
+	}
+	return filepath.Join(dir, s)
+}
+
+func (c *checker) hooks(owner, n *yaml.Node, path string, h *Hooks) {
+	script := func(target *string) field {
+		return field{read: func(_, n *yaml.Node, path string) { *target, _ = c.str(n, path) }}
+	}
+	c.mapping(owner, n, path, map[string]field{
+		"after_create":  script(&h.AfterCreate),
+		"before_run":    script(&h.BeforeRun),
+		"after_run":     script(&h.AfterRun),
+		"before_remove": script(&h.BeforeRemove),
+		"timeout": {read: func(_, n *yaml.Node, path string) {
+			if d, ok := c.duration(n, path); ok {
+				if d <= 0 {
+					c.fail(n, path, "0 より長くする")
+					return
+				}
+				h.Timeout = d
+			}
+		}},
+	})
+}
+
+// duration は Go の duration の綴りの文字列を読む。
+func (c *checker) duration(n *yaml.Node, path string) (time.Duration, bool) {
+	s, ok := c.str(n, path)
+	if !ok {
+		return 0, false
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		c.fail(n, path, "%q は Go の duration の綴り (90s / 5m / 1h30m) で書く", s)
+		return 0, false
+	}
+	return d, true
+}
+
+// positive は 1 以上の整数を読む。
+func (c *checker) positive(n *yaml.Node, path string) (int, bool) {
+	var v int
+	if n.Kind != yaml.ScalarNode || n.Tag != "!!int" || n.Decode(&v) != nil || v < 1 {
+		c.fail(n, path, "1 以上の整数で書く")
+		return 0, false
+	}
+	return v, true
 }
 
 func (c *checker) tracker(owner, n *yaml.Node, path string, t *Tracker) {
@@ -234,16 +359,11 @@ func (c *checker) tracker(owner, n *yaml.Node, path string, t *Tracker) {
 func (c *checker) polling(owner, n *yaml.Node, path string, interval *time.Duration) {
 	c.mapping(owner, n, path, map[string]field{
 		"interval": {read: func(_, n *yaml.Node, path string) {
-			s, ok := c.str(n, path)
-			if !ok {
-				return
-			}
-			d, err := time.ParseDuration(s)
+			d, ok := c.duration(n, path)
 			switch {
-			case err != nil:
-				c.fail(n, path, "%q は Go の duration の綴り (90s / 5m / 1h30m) で書く", s)
+			case !ok:
 			case d < MinInterval || d > MaxInterval:
-				c.fail(n, path, "%q は 1m 以上 24h 以下にする", s)
+				c.fail(n, path, "%q は 1s 以上 24h 以下にする", n.Value)
 			default:
 				*interval = d
 			}
@@ -291,11 +411,14 @@ func (c *checker) triggers(n *yaml.Node, path string) []trigger.Trigger {
 				}
 			}},
 			"when": {read: func(key, n *yaml.Node, path string) { c.issuePredicate(key, n, path, &t.When) }},
-			// action の値は worker を起動するときに使う (#78)。ここでは書かれていることだけを確かめる
 			"action": {required: true, read: func(_, n *yaml.Node, path string) {
-				if s, ok := c.str(n, path); ok && strings.TrimSpace(s) == "" {
+				s, ok := c.str(n, path)
+				if ok && strings.TrimSpace(s) == "" {
 					c.fail(n, path, "空白だけにできない")
+				} else if err := render.Check("action", s); ok && err != nil {
+					c.fail(n, path, "%v", err)
 				}
+				t.Action = s
 			}},
 		})
 	}

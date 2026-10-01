@@ -4,13 +4,18 @@ package target
 
 import (
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 )
 
 // Issue は open な issue 1 件。tracker の綴りは adapter が写し終えている。
 type Issue struct {
-	Number    int
-	Title     string
+	Number int
+	Title  string
+	URL    string
+	// Closed は issue が終端 (close) か。open な issue の一覧からは常に false
+	Closed    bool
 	CreatedAt time.Time
 	Labels    []string
 	Assignees []string
@@ -20,6 +25,25 @@ type Issue struct {
 	Milestone string
 	// OpenBlockers は未解決 (open) の依存先 (blocked by) の数
 	OpenBlockers int
+}
+
+// Name は作業対象の表示名 (log の `target` の値)。
+func Name(number int) string { return fmt.Sprintf("issue#%d", number) }
+
+// FileName は作業対象ごとの file と dir の名前 (workspace・描画した共通 prompt・worker log)。
+func FileName(number int) string { return fmt.Sprintf("issue-%d", number) }
+
+// NumberOf は FileName の綴りの name から番号を読む。その綴りでなければ false。
+func NumberOf(name string) (int, bool) {
+	digits, ok := strings.CutPrefix(name, "issue-")
+	if !ok {
+		return 0, false
+	}
+	n, err := strconv.Atoi(digits)
+	if err != nil || FileName(n) != name {
+		return 0, false
+	}
+	return n, true
 }
 
 // FailureKind は観測の失敗の分類 (SPEC §11.4)。

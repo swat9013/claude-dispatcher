@@ -80,6 +80,10 @@ func TestErrorsNameTheItem(t *testing.T) {
 		{"未知の作業対象の種類", strings.Replace(valid, "on: issue", "on: pr", 1), []string{"triggers[0].on", "pr"}},
 		{"空白だけの action", strings.Replace(valid, "    action: |\n      /implement\n", "    action: \" \"\n", 1), []string{"triggers[0].action"}},
 		{"action の欠落", strings.Replace(valid, "    action: |\n      /implement\n", "", 1), []string{"triggers[0].action"}},
+		{"action の未知の変数", strings.Replace(valid, "      /implement\n", "      /implement {{ .issue.body }}\n", 1), []string{"triggers[0].action", "body"}},
+		{"action の未知の関数", strings.Replace(valid, "      /implement\n", "      /implement {{ upper .issue.title }}\n", 1), []string{"triggers[0].action", "upper"}},
+		{"本文の未知の変数", valid + "{{ .issue.body }}\n", []string{"本文", "body"}},
+		{"HOME が無いのに ~/", strings.Replace(valid, "triggers:", "workspace:\n  root: ~/ws\ntriggers:", 1), []string{"workspace.root", "HOME"}},
 		{"型の誤り", strings.Replace(valid, "all: [ready-for-agent]", "all: ready-for-agent", 1), []string{"triggers[0].when.labels.all"}},
 		{"未知の作者の立場", strings.Replace(valid, "        all: [ready-for-agent]", "        all: [ready-for-agent]\n      author: owner", 1), []string{"triggers[0].when.author", "owner"}},
 		{"assignee と unassigned の併記", strings.Replace(valid, "        all: [ready-for-agent]", "        all: [ready-for-agent]\n      assignee: alice\n      unassigned: true", 1), []string{"triggers[0].when"}},
@@ -90,9 +94,13 @@ func TestErrorsNameTheItem(t *testing.T) {
 		{"trigger の名前の重複", withTriggers("\n  - {name: t, on: issue, action: /a}\n  - {name: t, on: issue, action: /b}"), []string{"triggers[1].name", "t"}},
 		{"trigger の名前の綴り", withTriggers("\n  - {name: \"a b\", on: issue, action: /a}"), []string{"triggers[0].name"}},
 		{"trigger が 1 つも無い", withTriggers(" []"), []string{"triggers"}},
-		{"周期の下限の外", strings.Replace(valid, "triggers:", "polling:\n  interval: 59s\ntriggers:", 1), []string{"polling.interval"}},
+		{"周期の下限の外", strings.Replace(valid, "triggers:", "polling:\n  interval: 999ms\ntriggers:", 1), []string{"polling.interval"}},
 		{"周期の上限の外", strings.Replace(valid, "triggers:", "polling:\n  interval: 24h1s\ntriggers:", 1), []string{"polling.interval"}},
 		{"周期の綴り", strings.Replace(valid, "triggers:", "polling:\n  interval: soon\ntriggers:", 1), []string{"polling.interval"}},
+		{"並列上限が 0", strings.Replace(valid, "triggers:", "limits:\n  max_concurrent: 0\ntriggers:", 1), []string{"limits.max_concurrent"}},
+		{"hooks の未知の key", strings.Replace(valid, "triggers:", "hooks:\n  after_start: x\ntriggers:", 1), []string{"hooks.after_start"}},
+		{"hooks の timeout の綴り", strings.Replace(valid, "triggers:", "hooks:\n  timeout: soon\ntriggers:", 1), []string{"hooks.timeout"}},
+		{"claude の args の型", strings.Replace(valid, "triggers:", "claude:\n  args: --verbose\ntriggers:", 1), []string{"claude.args"}},
 		{"同じ key の 2 回目", strings.Replace(valid, "  kind: github\n", "  kind: github\n  kind: github\n", 1), []string{"tracker.kind"}},
 		{"token に値そのもの", strings.Replace(valid, "  repo: acme/widgets\n", "  repo: acme/widgets\n  token: ghp_abc\n", 1), []string{"tracker.token"}},
 		{"$VAR の未設定", strings.Replace(valid, "repo: acme/widgets", "repo: $ISSUE_REPO", 1), []string{"tracker.repo", "ISSUE_REPO"}},
@@ -114,7 +122,7 @@ func TestErrorsNameTheItem(t *testing.T) {
 }
 
 func TestIntervalAtTheBoundsIsAccepted(t *testing.T) {
-	for _, interval := range []string{"1m", "24h"} {
+	for _, interval := range []string{"1s", "24h"} {
 		def, err := load(t, strings.Replace(valid, "triggers:", "polling:\n  interval: "+interval+"\ntriggers:", 1), nil)
 		if err != nil {
 			t.Fatalf("%s: %v", interval, err)
@@ -122,6 +130,55 @@ func TestIntervalAtTheBoundsIsAccepted(t *testing.T) {
 		if want, _ := time.ParseDuration(interval); def.Interval != want {
 			t.Fatalf("周期 = %s, want %s", def.Interval, want)
 		}
+	}
+}
+
+func TestWorkerSettingsAreRead(t *testing.T) {
+	content := strings.Replace(valid, "triggers:", `workspace:
+  root: work
+hooks:
+  after_create: echo created
+  before_run: echo run
+  after_run: echo ran
+  before_remove: echo remove
+  timeout: 5s
+limits:
+  max_concurrent: 3
+claude:
+  command: my-claude
+  args: [--permission-mode, auto]
+triggers:`, 1)
+
+	def, err := load(t, content, nil)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := workflow.Hooks{AfterCreate: "echo created", BeforeRun: "echo run", AfterRun: "echo ran", BeforeRemove: "echo remove", Timeout: 5 * time.Second}
+	if def.WorkspaceRoot != filepath.Join(def.Dir, "work") || def.Hooks != want || def.MaxConcurrent != 3 ||
+		def.Claude.Command != "my-claude" || strings.Join(def.Claude.Args, " ") != "--permission-mode auto" ||
+		def.Triggers[0].Action != "/implement\n" {
+		t.Fatalf("読んだ定義 = %+v", def)
+	}
+}
+
+func TestWorkerSettingsHaveDefaults(t *testing.T) {
+	def, err := load(t, valid, nil)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if def.WorkspaceRoot != filepath.Join(def.Dir, ".claude-dispatcher", "workspaces") || def.Hooks.Timeout != time.Minute ||
+		def.MaxConcurrent != 1 || def.Claude.Command != "claude" || len(def.Claude.Args) != 0 {
+		t.Fatalf("既定 = %+v", def)
+	}
+}
+
+func TestWorkspaceRootUnderHomeIsExpanded(t *testing.T) {
+	def, err := load(t, strings.Replace(valid, "triggers:", "workspace:\n  root: ~/ws\ntriggers:", 1), map[string]string{"HOME": "/home/me"})
+
+	if err != nil || def.WorkspaceRoot != "/home/me/ws" {
+		t.Fatalf("root = %q (%v)", def.WorkspaceRoot, err)
 	}
 }
 

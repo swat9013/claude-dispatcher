@@ -46,6 +46,8 @@ type issue struct {
 	// overflow が空でなければ、その connection (labels / assignees / blockedBy) の totalCount を
 	// 1 往復で読める 100 件より多くする (読み切れない応答)
 	overflow string
+	// closed なら issue は終端 (open な issue の一覧に出ず、1 件の読み直しで CLOSED を返す)
+	closed bool
 }
 
 // readyIssue は ready-for-agent の付いた issue。作成日時は番号の順に並ぶ。
@@ -89,6 +91,8 @@ func (i issue) node() map[string]any {
 		"assignees":         map[string]any{"totalCount": len(assignees), "nodes": assignees},
 		"milestone":         milestone,
 		"blockedBy":         map[string]any{"totalCount": len(blockers), "nodes": blockers},
+		"url":               "https://github.com/" + defaultIssueRepo + "/issues/" + strconv.Itoa(i.number),
+		"state":             map[bool]string{false: "OPEN", true: "CLOSED"}[i.closed],
 	}
 	if i.overflow != "" {
 		node[i.overflow].(map[string]any)["totalCount"] = 101
@@ -114,9 +118,34 @@ func issuePages(issues ...issue) string {
 	return string(raw)
 }
 
-// setIssues は gh が issue 置き場の open な issue として issues を返すようにする。
+// setIssues は gh が issues を返すようにする。open な issue の一覧には closed でないものを載せ、1 件の読み直しには
+// どれも (closed なら CLOSED で) 返す。
 func (s *sandbox) setIssues(issues ...issue) {
-	s.respond("gh", stubwire.Rule{ArgsPrefix: []string{"api", "graphql"}, Stdout: issuePages(issues...)})
+	s.t.Helper()
+	s.respondAll("gh", ghRules(issues...))
+}
+
+// ghRules は setIssues の応答 rule の列。worker の代役が gh の応答 file を書き換えるときにも使う。
+func ghRules(issues ...issue) []stubwire.Rule {
+	var rules []stubwire.Rule
+	var open []issue
+	for _, i := range issues {
+		single, _ := json.Marshal(map[string]any{"data": map[string]any{"repository": map[string]any{"issue": i.node()}}})
+		rules = append(rules, stubwire.Rule{ArgsPrefix: []string{"api", "graphql"}, ArgContains: "number=" + strconv.Itoa(i.number), Stdout: string(single)})
+		if !i.closed {
+			open = append(open, i)
+		}
+	}
+	return append(rules, stubwire.Rule{ArgsPrefix: []string{"api", "graphql"}, Stdout: issuePages(open...)})
+}
+
+// ghResponses は ghRules を gh の応答 file の中身にしたもの。
+func (s *sandbox) ghResponses(issues ...issue) stubwire.FileWrite {
+	raw, err := json.Marshal(ghRules(issues...))
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	return stubwire.FileWrite{Path: stubwire.ResponsesFile(s.stubRoot, "gh"), Content: string(raw)}
 }
 
 // failGh は gh の呼び出しを stderr と exit で失敗させる。
@@ -127,7 +156,13 @@ func (s *sandbox) failGh(stderr string, exit int) {
 // respond は name の stub の応答 rule を 1 つにする。
 func (s *sandbox) respond(name string, r stubwire.Rule) {
 	s.t.Helper()
-	s.rules[name] = []stubwire.Rule{r}
+	s.respondAll(name, []stubwire.Rule{r})
+}
+
+// respondAll は name の stub の応答 rule を rules にする。先頭から見て最初に当たった rule で応答する。
+func (s *sandbox) respondAll(name string, rules []stubwire.Rule) {
+	s.t.Helper()
+	s.rules[name] = rules
 	raw, err := json.Marshal(s.rules[name])
 	if err != nil {
 		s.t.Fatal(err)
@@ -158,6 +193,13 @@ func (s *sandbox) calls(name string) []stubwire.Call {
 		calls = append(calls, c)
 	}
 	return calls
+}
+
+// waitCalls は name の stub が受けた呼び出しが n 件になるまで待ち、受けた順に返す。待ちきれなければ msg で落ちる。
+func (s *sandbox) waitCalls(name string, n int, msg string) []stubwire.Call {
+	s.t.Helper()
+	waitFor(s.t, func() bool { return len(s.calls(name)) >= n }, msg)
+	return s.calls(name)
 }
 
 // assertNoGh は gh が 1 度も撃たれていないことを確かめる。

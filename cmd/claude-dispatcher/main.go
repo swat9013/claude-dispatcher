@@ -20,7 +20,9 @@ import (
 	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/trigger"
 	"github.com/swat9013/claude-dispatcher/internal/version"
+	"github.com/swat9013/claude-dispatcher/internal/worker"
 	"github.com/swat9013/claude-dispatcher/internal/workflow"
+	"github.com/swat9013/claude-dispatcher/internal/workspace"
 )
 
 // exit code は formats.md §3
@@ -147,8 +149,12 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 		return dryRunOnce(e, def, stdout, stderr)
 	}
 
-	// 起動時は人が画面の前にいるので、tick で落ちる前に gh を解決できることを確かめる (system.md §8)
+	// 起動時は人が画面の前にいるので、tick で落ちる前に gh と claude を解決できることを確かめる (system.md §8)
 	if err := e.gh(def).Ready(); err != nil {
+		fmt.Fprintln(stderr, err)
+		return exitFailed
+	}
+	if _, err := deps.Lookup(def.Claude.Command, e.env); err != nil {
 		fmt.Fprintln(stderr, err)
 		return exitFailed
 	}
@@ -164,18 +170,38 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 		return exitFailed
 	}
 	defer lock.Close()
+	logFile, err := os.OpenFile(filepath.Join(dir, "log.jsonl"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		fmt.Fprintf(stderr, "log.jsonl を開けない: %v\n", err)
+		return exitFailed
+	}
+	defer logFile.Close()
 	surviveClosedStdout()
 	fmt.Fprintf(stdout, "%s loop を始めた: scope %s · state dir %s · workflow %s\n", time.Now().UTC().Format(time.RFC3339), scopeKey, dir, abs)
 	return loop.Run(loop.Options{
-		Load:     load,
-		Open:     e.openIssues,
-		Interval: def.Interval,
-		ScopeKey: scopeKey,
-		Stdout:   stdout,
-		Signals:  stopRequests(),
-		Now:      time.Now,
-		After:    time.After,
+		Load:       load,
+		Definition: def,
+		Open:       e.openIssues,
+		Workspaces: func(def workflow.Definition) loop.Workspaces { return e.workspaces(def) },
+		Launch: func(def workflow.Definition, job worker.Job, events chan<- worker.Event) loop.Worker {
+			return worker.Runner{Workspaces: e.workspaces(def), Command: def.Claude.Command, Args: def.Claude.Args, Env: e.env, StateDir: dir}.Start(job, events)
+		},
+		NewSessionID: worker.NewSessionID,
+		ScopeKey:     scopeKey,
+		Log:          logFile,
+		Stdout:       stdout,
+		Signals:      stopRequests(),
+		Now:          time.Now,
+		After:        time.After,
 	})
+}
+
+// workspaces は workflow 定義の workspace の置き場と hooks。hooks には loop の環境を渡す。
+func (e environment) workspaces(def workflow.Definition) workspace.Manager {
+	h := def.Hooks
+	return workspace.Manager{Root: def.WorkspaceRoot, Clone: def.Dir, Env: e.env, Hooks: workspace.Hooks{
+		AfterCreate: h.AfterCreate, BeforeRun: h.BeforeRun, AfterRun: h.AfterRun, BeforeRemove: h.BeforeRemove, Timeout: h.Timeout,
+	}}
 }
 
 // dryRunOnce は試運転 (formats.md §5): snapshot を作って trigger を評価し、候補を 1 件 1 行で出す。何も書かない。

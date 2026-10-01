@@ -76,44 +76,62 @@ func (s IssueStore) ScopeKey() string { return ScopeKey(s.repo) }
 // connectionSize は issue ごとに 1 往復で読む label・assignee・依存先の上限。超えたら読み切れないとして失敗させる
 const connectionSize = 100
 
-var issuesQuery = fmt.Sprintf(`
-query($owner: String!, $name: String!, $endCursor: String) {
-  repository(owner: $owner, name: $name) {
-    issues(states: OPEN, first: 100, after: $endCursor, orderBy: {field: CREATED_AT, direction: ASC}) {
-      pageInfo { hasNextPage endCursor }
-      nodes {
+// issueFields は issue 1 件について読む field。一覧と 1 件の読み直しで同じものを読む
+var issueFields = fmt.Sprintf(`
         number
         title
+        url
+        state
         createdAt
         authorAssociation
         labels(first: %[1]d) { totalCount nodes { name } }
         assignees(first: %[1]d) { totalCount nodes { login } }
         milestone { title }
-        blockedBy(first: %[1]d) { totalCount nodes { state } }
+        blockedBy(first: %[1]d) { totalCount nodes { state } }`, connectionSize)
+
+var issuesQuery = `
+query($owner: String!, $name: String!, $endCursor: String) {
+  repository(owner: $owner, name: $name) {
+    issues(states: OPEN, first: 100, after: $endCursor, orderBy: {field: CREATED_AT, direction: ASC}) {
+      pageInfo { hasNextPage endCursor }
+      nodes {` + issueFields + `
       }
     }
   }
-}`, connectionSize)
+}`
+
+var issueQuery = `
+query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    issue(number: $number) {` + issueFields + `
+    }
+  }
+}`
 
 type connection[T any] struct {
 	TotalCount int
 	Nodes      []T
 }
 
+// issueNode は issueFields の応答。
+type issueNode struct {
+	Number            int
+	Title             string
+	URL               string
+	State             string
+	CreatedAt         time.Time
+	AuthorAssociation string
+	Labels            connection[struct{ Name string }]
+	Assignees         connection[struct{ Login string }]
+	Milestone         *struct{ Title string }
+	BlockedBy         connection[struct{ State string }]
+}
+
 type issuePage struct {
 	Data struct {
 		Repository *struct {
 			Issues struct {
-				Nodes []struct {
-					Number            int
-					Title             string
-					CreatedAt         time.Time
-					AuthorAssociation string
-					Labels            connection[struct{ Name string }]
-					Assignees         connection[struct{ Login string }]
-					Milestone         *struct{ Title string }
-					BlockedBy         connection[struct{ State string }]
-				}
+				Nodes []issueNode
 			}
 		}
 	}
@@ -137,42 +155,84 @@ func (s IssueStore) OpenIssues() ([]target.Issue, error) {
 			return nil, s.fail(target.NotVisible, errors.New("gh api graphql の出力に repository が無い"))
 		}
 		for _, n := range page.Data.Repository.Issues.Nodes {
-			for _, c := range []struct {
-				what        string
-				total, read int
-			}{
-				{"label", n.Labels.TotalCount, len(n.Labels.Nodes)},
-				{"assignee", n.Assignees.TotalCount, len(n.Assignees.Nodes)},
-				{"依存先", n.BlockedBy.TotalCount, len(n.BlockedBy.Nodes)},
-			} {
-				if c.total > c.read {
-					return nil, s.fail(target.Truncated, fmt.Errorf("issue #%d の %s が %d 件あり、1 往復で読める %d 件を超えた", n.Number, c.what, c.total, connectionSize))
-				}
-			}
-			i := target.Issue{
-				Number:               n.Number,
-				Title:                n.Title,
-				CreatedAt:            n.CreatedAt,
-				AuthorIsCollaborator: collaboratorAssociations[n.AuthorAssociation],
-			}
-			for _, l := range n.Labels.Nodes {
-				i.Labels = append(i.Labels, l.Name)
-			}
-			for _, a := range n.Assignees.Nodes {
-				i.Assignees = append(i.Assignees, a.Login)
-			}
-			if n.Milestone != nil {
-				i.Milestone = n.Milestone.Title
-			}
-			for _, b := range n.BlockedBy.Nodes {
-				if b.State == "OPEN" {
-					i.OpenBlockers++
-				}
+			i, err := s.normalize(n)
+			if err != nil {
+				return nil, err
 			}
 			issues = append(issues, i)
 		}
 	}
 	return issues, nil
+}
+
+// issueGone は、読み直した issue が消えている (削除・移管) ときの gh の文言。消えた issue は終端と同じに扱う
+const issueGone = "Could not resolve to an Issue"
+
+// Issue は issue 1 件を読み直す。close されていれば Closed。消えた issue も Closed として返す。失敗は *target.Failure。
+func (s IssueStore) Issue(number int) (target.Issue, error) {
+	out, err := s.gh.Run("api", "graphql",
+		"-f", "query="+issueQuery, "-f", "owner="+s.repo.Owner, "-f", "name="+s.repo.Name, "-F", fmt.Sprintf("number=%d", number))
+	var failed *proc.Error
+	if errors.As(err, &failed) && strings.Contains(failed.Stderr, issueGone) {
+		return target.Issue{Number: number, Closed: true}, nil
+	}
+	if err != nil {
+		return target.Issue{}, s.fail(classify(err), err)
+	}
+	var payload struct {
+		Data struct {
+			Repository *struct{ Issue *issueNode }
+		}
+	}
+	if err := json.Unmarshal(out, &payload); err != nil {
+		return target.Issue{}, s.fail(target.Unavailable, fmt.Errorf("gh api graphql の出力を読めない: %w", err))
+	}
+	switch {
+	case payload.Data.Repository == nil:
+		return target.Issue{}, s.fail(target.NotVisible, errors.New("gh api graphql の出力に repository が無い"))
+	case payload.Data.Repository.Issue == nil:
+		return target.Issue{Number: number, Closed: true}, nil
+	}
+	return s.normalize(*payload.Data.Repository.Issue)
+}
+
+// normalize は応答の issue 1 件を作業対象の形に写す。
+func (s IssueStore) normalize(n issueNode) (target.Issue, error) {
+	for _, c := range []struct {
+		what        string
+		total, read int
+	}{
+		{"label", n.Labels.TotalCount, len(n.Labels.Nodes)},
+		{"assignee", n.Assignees.TotalCount, len(n.Assignees.Nodes)},
+		{"依存先", n.BlockedBy.TotalCount, len(n.BlockedBy.Nodes)},
+	} {
+		if c.total > c.read {
+			return target.Issue{}, s.fail(target.Truncated, fmt.Errorf("issue #%d の %s が %d 件あり、1 往復で読める %d 件を超えた", n.Number, c.what, c.total, connectionSize))
+		}
+	}
+	i := target.Issue{
+		Number:               n.Number,
+		Title:                n.Title,
+		URL:                  n.URL,
+		Closed:               n.State == "CLOSED",
+		CreatedAt:            n.CreatedAt,
+		AuthorIsCollaborator: collaboratorAssociations[n.AuthorAssociation],
+	}
+	for _, l := range n.Labels.Nodes {
+		i.Labels = append(i.Labels, l.Name)
+	}
+	for _, a := range n.Assignees.Nodes {
+		i.Assignees = append(i.Assignees, a.Login)
+	}
+	if n.Milestone != nil {
+		i.Milestone = n.Milestone.Title
+	}
+	for _, b := range n.BlockedBy.Nodes {
+		if b.State == "OPEN" {
+			i.OpenBlockers++
+		}
+	}
+	return i, nil
 }
 
 // collaboratorAssociations は collaborator と数える作者の立場 (GitHub の CommentAuthorAssociation)

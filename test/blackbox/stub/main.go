@@ -33,9 +33,43 @@ func main() {
 		fmt.Fprintf(os.Stderr, "stub %s: 応答 rule の無い呼び出し: %q\n", name, os.Args[1:])
 		os.Exit(stubwire.UnmatchedExit)
 	}
+	for _, w := range r.Writes {
+		if err := writeAtomically(w.Path, []byte(w.Content)); err != nil {
+			fail(name, err)
+		}
+	}
 	fmt.Fprint(os.Stdout, r.Stdout)
 	fmt.Fprint(os.Stderr, r.Stderr)
+	if r.ReleaseFile != "" && !waitForRelease(r.ReleaseFile) {
+		fmt.Fprintf(os.Stderr, "stub %s: %s が %s 経っても現れない\n", name, r.ReleaseFile, stubwire.ReleaseDeadline)
+		os.Exit(stubwire.ReleaseTimeoutExit)
+	}
 	os.Exit(r.Exit)
+}
+
+// writeAtomically は path に data を書く。読み手に書きかけを見せないよう、同じ dir の一時 file から rename する。
+// 一時 file の名前は末尾が .tmp で、path の拡張子で glob する読み手には当たらない。
+func writeAtomically(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	tmp := fmt.Sprintf("%s.%d.tmp", path, os.Getpid())
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// waitForRelease は file が現れるまで待つ。上限を過ぎたら false。
+func waitForRelease(file string) bool {
+	deadline := time.Now().Add(stubwire.ReleaseDeadline)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(file); err == nil {
+			return true
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return false
 }
 
 func fail(name string, err error) {
@@ -74,12 +108,9 @@ func record(root, name string) error {
 	if err != nil {
 		return err
 	}
-	dir := stubwire.CallsDir(root, name)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	file := filepath.Join(dir, fmt.Sprintf("%020d-%d.json", time.Now().UnixNano(), os.Getpid()))
-	return os.WriteFile(file, raw, 0o644)
+	// harness は呼び出しを待つ間 *.json を読み続けるので、writeAtomically で書きかけを見せない。
+	file := filepath.Join(stubwire.CallsDir(root, name), fmt.Sprintf("%020d-%d.json", time.Now().UnixNano(), os.Getpid()))
+	return writeAtomically(file, raw)
 }
 
 func matchRule(root, name string, args []string) (*stubwire.Rule, error) {
@@ -103,5 +134,8 @@ func matchRule(root, name string, args []string) (*stubwire.Rule, error) {
 }
 
 func matches(r stubwire.Rule, args []string) bool {
-	return len(args) >= len(r.ArgsPrefix) && slices.Equal(args[:len(r.ArgsPrefix)], r.ArgsPrefix)
+	if len(args) < len(r.ArgsPrefix) || !slices.Equal(args[:len(r.ArgsPrefix)], r.ArgsPrefix) {
+		return false
+	}
+	return r.ArgContains == "" || slices.ContainsFunc(args, func(arg string) bool { return strings.Contains(arg, r.ArgContains) })
 }
