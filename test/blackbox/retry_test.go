@@ -67,7 +67,7 @@ func TestRetriedAttemptResumesTheSameSession(t *testing.T) {
 
 	starts := s.waitEvents("start", 2)
 	session := asString(starts[0]["session_id"])
-	calls := s.waitCalls("claude", 2)
+	calls := s.waitCalls("claude", 2, "2 回目の attempt の claude の呼び出しが記録されない")
 	if starts[1]["session_id"] != session || argValueAfter(calls[1].Argv, "--resume") != session || slices.Contains(calls[1].Argv, "--session-id") {
 		t.Fatalf("2 回目の argv = %q, want --resume %s", calls[1].Argv, session)
 	}
@@ -82,7 +82,7 @@ func TestRetriedAttemptRunsInTheSameWorkspace(t *testing.T) {
 	s.startLoop()
 
 	s.waitEvents("start", 2)
-	if calls := s.waitCalls("claude", 2); calls[0].Cwd != calls[1].Cwd || calls[1].Cwd != s.workspace(42) {
+	if calls := s.waitCalls("claude", 2, "2 回目の attempt の claude の呼び出しが記録されない"); calls[0].Cwd != calls[1].Cwd || calls[1].Cwd != s.workspace(42) {
 		t.Fatalf("cwd = %s, %s, want どちらも %s", calls[0].Cwd, calls[1].Cwd, s.workspace(42))
 	}
 }
@@ -99,7 +99,7 @@ func TestRetryAfterAnAttemptThatNeverStartedClaudeStartsTheSession(t *testing.T)
 	s.startLoop()
 
 	start := s.waitEvents("start", 1)[0]
-	argv := s.waitCalls("claude", 1)[0].Argv
+	argv := s.waitCalls("claude", 1, "2 回目の attempt の claude の呼び出しが記録されない")[0].Argv
 	if start["attempt"] != float64(2) || argValueAfter(argv, "--session-id") != asString(start["session_id"]) || slices.Contains(argv, "--resume") {
 		t.Fatalf("attempt %v の argv = %q, want 前に始めた session が無いので --session-id", start["attempt"], argv)
 	}

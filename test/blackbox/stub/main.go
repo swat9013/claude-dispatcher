@@ -34,7 +34,7 @@ func main() {
 		os.Exit(stubwire.UnmatchedExit)
 	}
 	for _, w := range r.Writes {
-		if err := writeFile(w); err != nil {
+		if err := writeAtomically(w.Path, []byte(w.Content)); err != nil {
 			fail(name, err)
 		}
 	}
@@ -47,16 +47,17 @@ func main() {
 	os.Exit(r.Exit)
 }
 
-// writeFile は w を書く。読み手に書きかけを見せないよう、同じ dir の一時 file から rename する。
-func writeFile(w stubwire.FileWrite) error {
-	if err := os.MkdirAll(filepath.Dir(w.Path), 0o755); err != nil {
+// writeAtomically は path に data を書く。読み手に書きかけを見せないよう、同じ dir の一時 file から rename する。
+// 一時 file の名前は末尾が .tmp で、path の拡張子で glob する読み手には当たらない。
+func writeAtomically(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	tmp := fmt.Sprintf("%s.%d.tmp", w.Path, os.Getpid())
-	if err := os.WriteFile(tmp, []byte(w.Content), 0o644); err != nil {
+	tmp := fmt.Sprintf("%s.%d.tmp", path, os.Getpid())
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return err
 	}
-	return os.Rename(tmp, w.Path)
+	return os.Rename(tmp, path)
 }
 
 // waitForRelease は file が現れるまで待つ。上限を過ぎたら false。
@@ -107,13 +108,9 @@ func record(root, name string) error {
 	if err != nil {
 		return err
 	}
-	dir := stubwire.CallsDir(root, name)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	// 呼び出しを読むテストに書きかけを見せないよう、writeFile で一時 file から rename する
-	file := filepath.Join(dir, fmt.Sprintf("%020d-%d.json", time.Now().UnixNano(), os.Getpid()))
-	return writeFile(stubwire.FileWrite{Path: file, Content: string(raw)})
+	// harness は呼び出しを待つ間 *.json を読み続けるので、writeAtomically で書きかけを見せない。
+	file := filepath.Join(stubwire.CallsDir(root, name), fmt.Sprintf("%020d-%d.json", time.Now().UnixNano(), os.Getpid()))
+	return writeAtomically(file, raw)
 }
 
 func matchRule(root, name string, args []string) (*stubwire.Rule, error) {

@@ -69,14 +69,6 @@ func (s *sandbox) releaseFile() string { return filepath.Join(s.root, "release")
 
 func (s *sandbox) release() { mustWrite(s.t, s.releaseFile(), "") }
 
-// waitCalls は name の stub の呼び出しが n 回記録されるまで待つ。start の行は claude を起動した直後に書かれ、stub が呼び出しを
-// 記録するのはその後なので、start の行を見てから呼び出しを読むときに使う。
-func (s *sandbox) waitCalls(name string, n int) []stubwire.Call {
-	s.t.Helper()
-	waitFor(s.t, func() bool { return len(s.calls(name)) >= n }, name+" の呼び出しが "+strconv.Itoa(n)+" 回記録されない")
-	return s.calls(name)
-}
-
 // logLines は log.jsonl の完全な行を返す。
 func (s *sandbox) logLines() []map[string]any {
 	s.t.Helper()
@@ -178,7 +170,8 @@ func TestWorkerGetsTheCommonPromptAsSystemPromptAndTheActionAsTheUserPrompt(t *t
 	s.startLoop()
 
 	start := s.waitEvents("start", 1)[0]
-	argv := s.waitCalls("claude", 1)[0].Argv[1:]
+	// start の行は claude を起動した直後に書かれ、stub が呼び出しを記録するより先になりうる。
+	argv := s.waitCalls("claude", 1, "claude の呼び出しが記録されない")[0].Argv[1:]
 	file := argValueAfter(argv, "--append-system-prompt-file")
 	want := []string{"--permission-mode", "auto", "-p", "--output-format", "stream-json", "--verbose",
 		"--session-id", asString(start["session_id"]), "--append-system-prompt-file", file,
@@ -341,7 +334,7 @@ func TestFirstStopRequestWaitsForTheRunningWorker(t *testing.T) {
 	loop.waitForOutput(regexp.MustCompile(` 停止待ち: `))
 	// 停止待ちの間も周期ごとに作業対象を読み直す。読み直しが届いたら、少なくとも 1 周期は止まらずに待った
 	rereads := len(s.calls("gh"))
-	waitFor(t, func() bool { return len(s.calls("gh")) > rereads }, "停止待ちの間に作業対象を読み直さない")
+	s.waitCalls("gh", rereads+1, "停止待ちの間に作業対象を読み直さない")
 	if !loop.running() {
 		t.Fatal("1 回目の停止要求で、worker の終了を待たずに止まった")
 	}
