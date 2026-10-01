@@ -14,7 +14,9 @@ import (
 	"time"
 
 	"github.com/swat9013/claude-dispatcher/internal/deps"
+	"github.com/swat9013/claude-dispatcher/internal/printable"
 	"github.com/swat9013/claude-dispatcher/internal/render"
+	"github.com/swat9013/claude-dispatcher/internal/status"
 	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/trigger"
 	"github.com/swat9013/claude-dispatcher/internal/workflow"
@@ -80,13 +82,29 @@ type Runner struct {
 // stopGrace は停止のときに SIGTERM から SIGKILL までに待つ時間
 const stopGrace = 5 * time.Second
 
-// watchInterval は stall と上限時間を確かめる間隔
+// watchInterval は stream の file の伸び (活動・stall) と上限時間を確かめる間隔
 const watchInterval = 250 * time.Millisecond
 
 // Run は走っている worker 1 回分。
 type Run struct {
 	stop chan struct{}
 	once sync.Once
+	// activity は最新の活動 (formats.md §6)。loop の goroutine が読むので mu で守る
+	mu       sync.Mutex
+	activity status.Activity
+}
+
+// Activity は最新の活動。まだ無ければ At がゼロ値。
+func (r *Run) Activity() status.Activity {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.activity
+}
+
+func (r *Run) setActivity(a status.Activity) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.activity = a
 }
 
 // Stop は worker を止める。起動の前なら起動せず、走っていれば process group を止める。何度呼んでもよい。
@@ -163,11 +181,16 @@ func (r Runner) launch(job Job, run *Run, workspacePath string, started func(pid
 	cmd := exec.Command(command, args...)
 	cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = workspacePath, r.Env, stream, stderr
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// 前の attempt が追記した行は、この attempt の活動でない
+	before, err := stream.Stat()
+	if err != nil {
+		return Result{Failure: fmt.Sprintf("stream の file を読めない: %v", err)}
+	}
 	if err := cmd.Start(); err != nil {
 		return Result{Failure: fmt.Sprintf("%s を起動できない: %v", claude.Command, err)}
 	}
 	started(cmd.Process.Pid, workspacePath)
-	return r.wait(cmd, run, stream)
+	return r.wait(cmd, run, stream, before.Size())
 }
 
 // sessionArgs は session の渡し方。前の attempt で始めた session があれば同じ id で続け、無ければ発行した id で始める。
@@ -183,18 +206,44 @@ type streamWatch struct {
 	file    *os.File
 	size    int64
 	changed time.Time
+	// summarized は要約した最新の行の終わりの offset。前の attempt の行と、要約済みの行を読み直さない
+	summarized int64
+	// readError は直近に stream の file を読めなかった理由。同じ理由を活動として出し直さない
+	readError string
 }
 
-// observe は now の時点の file の大きさを見て、伸びていれば伸びた時刻を進める。file を読めなければ、その失敗を返す。
-func (w *streamWatch) observe(now time.Time) error {
+// observe は now の時点の file の大きさを見て、伸びていれば伸びた時刻を進め、grew を true で返す。file を読めなければ、
+// その失敗を返す。
+func (w *streamWatch) observe(now time.Time) (grew bool, err error) {
 	info, err := w.file.Stat()
 	if err != nil {
-		return fmt.Errorf("stream の file を読めない: %w", err)
+		return false, fmt.Errorf("stream の file を読めない: %w", err)
 	}
-	if info.Size() != w.size {
-		w.size, w.changed = info.Size(), now
+	if info.Size() == w.size {
+		return false, nil
 	}
-	return nil
+	w.size, w.changed = info.Size(), now
+	return true, nil
+}
+
+// activity は file の最新の完結した行を、まだ要約していなければ要約する。要約する行が無ければ ok が false。
+// file を読めなければ、その理由を活動にする (活動は表示のためだけのものなので、worker は止めない)。
+func (w *streamWatch) activity() (summary string, ok bool) {
+	line, end, err := lastLine(w.file.Name(), w.size, w.summarized)
+	if err != nil {
+		message := printable.Line("stream を読めない: " + err.Error())
+		if message == w.readError {
+			return "", false
+		}
+		w.readError = message
+		return message, true
+	}
+	w.readError = ""
+	if line == nil {
+		return "", false
+	}
+	w.summarized = end
+	return Summarize(line)
 }
 
 // silentFor は stream の file が最後に伸びてから now までの時間。
@@ -219,10 +268,10 @@ func (r Runner) render(job Job, workspacePath string) (action, promptFile string
 }
 
 // wait は起動した claude が終わるか、止められるか、stall か上限時間で止めるまで待つ。
-func (r Runner) wait(cmd *exec.Cmd, run *Run, stream *os.File) Result {
+func (r Runner) wait(cmd *exec.Cmd, run *Run, stream *os.File, offset int64) Result {
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
-	result, ended := r.watch(done, run, stream)
+	result, ended := r.watch(done, run, stream, offset)
 	if ended {
 		return r.exited(cmd, Result{})
 	}
@@ -244,28 +293,28 @@ func (r Runner) wait(cmd *exec.Cmd, run *Run, stream *os.File) Result {
 }
 
 // watch は claude が終わるまで待つ (ended が true)。先に止める理由ができたら、その理由を持った result を返す。
-// stall と上限時間は、どちらかが有効なときだけ確かめる。
-func (r Runner) watch(done <-chan error, run *Run, stream *os.File) (result Result, ended bool) {
+// stream の file は活動のために常に確かめ、offset より後に伸びたら活動を更新する。stall と上限時間は、どちらかが
+// 有効なときだけ当てる。
+func (r Runner) watch(done <-chan error, run *Run, stream *os.File, offset int64) (result Result, ended bool) {
 	started := time.Now()
-	w := &streamWatch{file: stream, changed: started}
-	if err := w.observe(started); err != nil {
-		return Result{Failure: err.Error()}, false
-	}
-	var tick <-chan time.Time
-	if r.Definition.StallTimeout > 0 || r.Definition.RunTimeout > 0 {
-		ticker := time.NewTicker(watchInterval)
-		defer ticker.Stop()
-		tick = ticker.C
-	}
+	w := &streamWatch{file: stream, size: offset, changed: started, summarized: offset}
+	ticker := time.NewTicker(watchInterval)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-done:
 			return Result{}, true
 		case <-run.stop:
 			return Result{Stopped: true}, false
-		case now := <-tick:
-			if err := w.observe(now); err != nil {
+		case now := <-ticker.C:
+			grew, err := w.observe(now)
+			if err != nil {
 				return Result{Failure: err.Error()}, false
+			}
+			if grew {
+				if summary, ok := w.activity(); ok {
+					run.setActivity(status.Activity{At: now, Summary: summary})
+				}
 			}
 			if reason := r.overdue(now.Sub(started), w.silentFor(now)); reason != "" {
 				return Result{Failure: reason}, false

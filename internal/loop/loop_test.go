@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/swat9013/claude-dispatcher/internal/loop"
+	"github.com/swat9013/claude-dispatcher/internal/status"
 	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/trigger"
 	"github.com/swat9013/claude-dispatcher/internal/worker"
@@ -57,6 +58,8 @@ type endedWorker struct{}
 
 func (endedWorker) Stop() {}
 
+func (endedWorker) Activity() status.Activity { return status.Activity{} }
+
 // harness は plans を順に 1 tick ずつ回し、読み切ったところで stop の停止要求を送る。
 type harness struct {
 	plans []tickPlan
@@ -82,6 +85,8 @@ type harness struct {
 	jobs    []worker.Job
 	waits   []time.Duration
 	stdout  bytes.Buffer
+	// published は書き出した状態 file の中身
+	published []status.Snapshot
 }
 
 func definition(interval time.Duration, maxConcurrent int) workflow.Definition {
@@ -194,8 +199,12 @@ func (h *harness) run(t *testing.T) []string {
 		ScopeKey:     startScope,
 		Log:          io.Discard,
 		Stdout:       &h.stdout,
-		Signals:      signals,
-		Now:          h.now,
+		Publish: func(s status.Snapshot) error {
+			h.published = append(h.published, s)
+			return nil
+		},
+		Signals: signals,
+		Now:     h.now,
 		After: func(d time.Duration) <-chan time.Time {
 			h.waits = append(h.waits, d)
 			ch := make(chan time.Time, 1)
@@ -384,6 +393,7 @@ func TestLineThatCannotBeWrittenToTheLogIsReportedOnStdout(t *testing.T) {
 		ScopeKey:     startScope,
 		Log:          failingWriter{},
 		Stdout:       &stdout,
+		Publish:      func(status.Snapshot) error { return nil },
 		Signals:      signals,
 		Now:          time.Now,
 		After:        func(time.Duration) <-chan time.Time { return nil },
@@ -424,6 +434,31 @@ func TestWorkerThatFailsAfterAStopRequestIsNotScheduledForRetry(t *testing.T) {
 
 	if out := h.stdout.String(); strings.Contains(out, "再起動を予定") || !strings.Contains(out, "error issue#1: 再起動を待ったまま止まる") {
 		t.Fatalf("出力:\n%s", out)
+	}
+}
+
+// lastPublishedAfterAStopRequest は、tick の途中で停止要求を受け、走っていた worker が失敗して止まった loop の、
+// 最後に書き出した状態。
+func lastPublishedAfterAStopRequest(t *testing.T) status.Snapshot {
+	t.Helper()
+	h := &harness{plans: []tickPlan{{load: good(time.Minute), stopDuring: syscall.SIGINT}}, maxConcurrent: 1, maxAttempts: 2}
+	h.run(t)
+	return h.published[len(h.published)-1]
+}
+
+func TestStatusAfterAStopRequestHasNoNextTick(t *testing.T) {
+	last := lastPublishedAfterAStopRequest(t)
+
+	if !last.Stopping || last.NextTickAt != nil {
+		t.Fatalf("状態 = %+v, want 停止待ちで次の tick が無い", last)
+	}
+}
+
+func TestWorkerThatFailsAfterAStopRequestHasNoRestartInTheStatus(t *testing.T) {
+	last := lastPublishedAfterAStopRequest(t)
+
+	if len(last.Workers) != 1 || last.Workers[0].Phase != status.WaitingRetry || last.Workers[0].RetryAt != nil || last.Workers[0].StartedAt != nil {
+		t.Fatalf("worker = %+v, want 再起動の予定も起動の時刻も無い再起動待ち", last.Workers)
 	}
 }
 

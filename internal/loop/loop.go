@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/swat9013/claude-dispatcher/internal/status"
 	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/trigger"
 	"github.com/swat9013/claude-dispatcher/internal/worker"
@@ -36,7 +37,11 @@ type Workspaces interface {
 }
 
 // Worker は走っている worker 1 回分。
-type Worker interface{ Stop() }
+type Worker interface {
+	Stop()
+	// Activity は最新の活動 (formats.md §6)。まだ無ければ At がゼロ値
+	Activity() status.Activity
+}
 
 // Options は loop の入力。
 type Options struct {
@@ -58,9 +63,15 @@ type Options struct {
 	Log     io.Writer
 	Stdout  io.Writer
 	Signals <-chan os.Signal
-	Now     func() time.Time
+	// Publish は状態 file (formats.md §7.1) を書き出す
+	Publish func(status.Snapshot) error
+	// Workflow は workflow 定義の path (状態 file に載せる)
+	Workflow string
+	Now      func() time.Time
 	// After は d 後に届く channel を返す (time.After。テストは差し替える)
 	After func(d time.Duration) <-chan time.Time
+	// Refresh は走っている worker の活動を確かめる周期 (1s) に届く。nil なら確かめない
+	Refresh <-chan time.Time
 }
 
 // phase は claim の段階。
@@ -123,6 +134,10 @@ type claim struct {
 	retryAt time.Time
 	// waitingSlot は、backoff が明けたが並列上限で起動できず、そのことを log に書いたか
 	waitingSlot bool
+	// startedAt は今の attempt の claude を起動した時刻 (状態 file の経過に使う)。起動の前は nil
+	startedAt *time.Time
+	// activity は今の attempt の worker の最新の活動。まだ無ければ nil
+	activity *status.Activity
 }
 
 type loop struct {
@@ -139,6 +154,8 @@ type loop struct {
 	// wake は最も早い再起動の予定に届く channel、wakeAt はその時刻。予定が無ければ nil
 	wake   <-chan time.Time
 	wakeAt time.Time
+	// board は状態 file にだけ使う状態。loop の判断には使わない
+	board board
 }
 
 // Run は停止要求で止まるまで tick を回す。起動の直後に 1 回 tick を撃ち、以後は tick の終了から周期だけ待つ。
@@ -147,9 +164,11 @@ type loop struct {
 func Run(o Options) int {
 	l := &loop{
 		o: o, def: o.Definition, claims: map[target.Ref]*claim{}, abandoned: map[target.Ref]string{}, events: make(chan worker.Event),
-		rec: recorder{log: o.Log, stdout: o.Stdout, now: o.Now, scope: o.ScopeKey},
+		rec: recorder{log: o.Log, stdout: o.Stdout, now: o.Now, scope: o.ScopeKey}, board: board{startedAt: o.Now()},
 	}
 	var next <-chan time.Time
+	// 前の loop が残した状態 file を、最初の tick の前に今の loop の状態で書き換える
+	l.publish()
 	l.tick()
 	for {
 		// tick の間に届いた停止要求は、tick を終えてから受ける
@@ -163,8 +182,10 @@ func Run(o Options) int {
 		}
 		if next == nil {
 			next = o.After(l.def.Interval)
+			l.board.nextTickAt = o.Now().Add(l.def.Interval)
 		}
 		l.arm()
+		l.publish()
 		select {
 		case sig := <-o.Signals:
 			l.requestStop(sig)
@@ -182,6 +203,8 @@ func Run(o Options) int {
 			if l.stopping == 0 {
 				l.retry(l.o.Store(l.def), outsideTick)
 			}
+		case <-o.Refresh:
+			l.refresh()
 		}
 	}
 }
@@ -213,6 +236,8 @@ func (l *loop) exit() int {
 		}
 		l.rec.error(ref, fmt.Sprintf("終わり方を確かめられないまま止まる (%s)", c.trigger.Name))
 	}
+	// 止まる時点の claim を状態 file に残す (loop が止まった後の status は worker を出さないが、file は読み返せる)
+	l.publish()
 	l.rec.human("loop を止めた (停止要求 %s)", SignalName(l.lastStop))
 	return 0
 }
@@ -235,19 +260,19 @@ func (l *loop) tick() {
 	l.recheck(current)
 	def, err := l.o.Load()
 	if err != nil {
-		l.rec.tickError("workflow 定義の誤り: " + oneLine(err))
+		l.tickFailed("workflow 定義の誤り: " + oneLine(err))
 		return
 	}
 	store := l.o.Store(def)
 	if key := store.ScopeKey(); key != l.o.ScopeKey {
 		// 別の置き場を指す版は採らない。この tick は掃除も起動もせず、次の tick の突き合わせは採っていた版の置き場を読む
-		l.rec.tickError(fmt.Sprintf("workflow 定義の scope key %s が起動時の %s と違う (loop を起動し直す)", key, l.o.ScopeKey))
+		l.tickFailed(fmt.Sprintf("workflow 定義の scope key %s が起動時の %s と違う (loop を起動し直す)", key, l.o.ScopeKey))
 		return
 	}
 	l.def = def
 	open, err := OpenItems(store, def)
 	if err != nil {
-		l.rec.tickError(oneLine(err))
+		l.tickFailed(oneLine(err))
 		return
 	}
 	candidates, ambiguous := trigger.Evaluate(def.Triggers, open)
@@ -275,7 +300,9 @@ func (l *loop) tick() {
 			launched = append(launched, ref.String())
 		}
 	}
-	l.rec.event("tick", map[string]any{"result": "ok", "candidates": len(candidates), "launched": nonNil(launched), "ambiguous": ambiguousFields(ambiguous)},
+	l.board.lastTick = &status.Tick{At: l.o.Now(), Result: status.TickOK, Candidates: len(candidates)}
+	l.board.ambiguous = ambiguous
+	l.rec.event("tick", map[string]any{"result": status.TickOK, "candidates": len(candidates), "launched": nonNil(launched), "ambiguous": ambiguousFields(ambiguous)},
 		"tick ok · %s%s", Summary(candidates), ambiguousSummary(ambiguous))
 }
 
@@ -445,7 +472,7 @@ func (l *loop) launch(def workflow.Definition, c trigger.Candidate) bool {
 // start は claim の今の attempt の worker を、そのときの workflow 定義で起動する。
 func (l *loop) start(c *claim) {
 	def := l.definitionOf(c)
-	c.phase = phaseRunning
+	c.phase, c.startedAt, c.activity = phaseRunning, nil, nil
 	job := worker.Job{Item: c.item, Trigger: c.trigger, Attempt: c.attempt, SessionID: c.sessionID, Resume: c.sessionStarted, Prompt: def.Prompt}
 	c.run = l.o.Launch(def, job, l.events)
 }
@@ -467,6 +494,8 @@ func (l *loop) handle(ev worker.Event) {
 			return
 		}
 		c.sessionStarted = true
+		now := l.o.Now()
+		c.startedAt = &now
 		name := ev.Target.String()
 		l.rec.event("start", map[string]any{
 			"target": name, "trigger": c.trigger.Name, "attempt": c.attempt,
