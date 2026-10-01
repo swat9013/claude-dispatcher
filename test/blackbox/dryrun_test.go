@@ -1,131 +1,257 @@
 package blackbox_test
 
 import (
-	"encoding/json"
 	"os"
-	"path/filepath"
-	"reflect"
-	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
 
-// `tick --dry-run` (formats.md §7, system.md §9)。state dir に何も書かず、指示の種別と件数を stdout に 1 行で出す。
+// 試運転 `loop --dry-run` (formats.md §5)。述語の 1 つずつの意味は internal/trigger の単体テストが持ち、ここでは
+// gh の応答から候補の行までを通した経路を見る。
 
-func dryRunLine(t *testing.T, r runResult) map[string]any {
+// candidateLines は試運転の stdout を 1 候補 1 行の列で返す。
+func candidateLines(t *testing.T, r runResult) []string {
 	t.Helper()
-	lines := strings.Split(strings.TrimRight(r.stdout, "\n"), "\n")
-	if len(lines) != 1 {
-		t.Fatalf("stdout が 1 行でない: %q", r.stdout)
+	assertExit(t, r, 0)
+	if r.stdout == "" {
+		return nil
 	}
-	var out map[string]any
-	if err := json.Unmarshal([]byte(lines[0]), &out); err != nil {
-		t.Fatalf("stdout が JSON でない: %v\n%s", err, lines[0])
-	}
-	return out
+	return strings.Split(strings.TrimSuffix(r.stdout, "\n"), "\n")
 }
 
-func TestDryRunReportsInstructionCountsOnOneLine(t *testing.T) {
-	s := newSandbox(t)
-	s.setIssues(readyIssue(42), issue{number: 40, labels: []string{wipLabel}})
+func candidate(trigger string, number int) string {
+	return trigger + "\tissue\t#" + strconv.Itoa(number) + "\tissue " + strconv.Itoa(number)
+}
 
-	r := s.tick("--dry-run")
+func assertCandidates(t *testing.T, r runResult, want ...string) {
+	t.Helper()
+	got := candidateLines(t, r)
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("候補:\n%s\nwant:\n%s\nstderr:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"), r.stderr)
+	}
+}
+
+func TestDryRunListsTheIssuesThatMatchATriggerOldestFirst(t *testing.T) {
+	s := newSandbox(t)
+	unlabeled := readyIssue(44)
+	unlabeled.labels = nil
+	// 番号の大きい #50 のほうが古い
+	oldest := readyIssue(50)
+	oldest.createdAt = createdAt(1)
+	s.setIssues(readyIssue(43), unlabeled, oldest, readyIssue(42))
+
+	r := s.dryRun()
+
+	assertCandidates(t, r, candidate("implement", 50), candidate("implement", 42), candidate("implement", 43))
+}
+
+func TestDryRunListsCandidatesInTriggerDeclarationOrderBeforeCreationOrder(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflow(workflowWithTriggers(`
+  - name: review
+    on: issue
+    when: {labels: {all: [review]}}
+    action: /review
+  - name: implement
+    on: issue
+    when: {labels: {all: [ready-for-agent]}}
+    action: /implement`))
+	older := readyIssue(10)
+	newer := readyIssue(20)
+	newer.labels = []string{"review"}
+	s.setIssues(older, newer)
+
+	r := s.dryRun()
+
+	assertCandidates(t, r, candidate("review", 20), candidate("implement", 10))
+}
+
+func TestIssueMatchingTwoTriggersIsListedOnlyUnderTheFirstDeclared(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflow(workflowWithTriggers(`
+  - name: first
+    on: issue
+    when: {labels: {all: [ready-for-agent]}}
+    action: /first
+  - name: second
+    on: issue
+    when: {labels: {any: [ready-for-agent]}}
+    action: /second`))
+	s.setIssues(readyIssue(7))
+
+	r := s.dryRun()
+
+	assertCandidates(t, r, candidate("first", 7))
+}
+
+func TestPredicatesAreEvaluatedOnWhatGhReturns(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflow(workflowWithTriggers(`
+  - name: t
+    on: issue
+    when: {author: collaborator, unassigned: true, milestone: v1, blocked: false}
+    action: /t`))
+	matching := readyIssue(1)
+	matching.milestone = "v1"
+	matching.blockers = []string{"CLOSED"}
+	outsider := readyIssue(2)
+	outsider.milestone, outsider.association = "v1", "CONTRIBUTOR"
+	assigned := readyIssue(3)
+	assigned.milestone, assigned.assignees = "v1", []string{"bob"}
+	blocked := readyIssue(4)
+	blocked.milestone, blocked.blockers = "v1", []string{"OPEN"}
+	s.setIssues(matching, outsider, assigned, blocked)
+
+	r := s.dryRun()
+
+	assertCandidates(t, r, candidate("t", 1))
+}
+
+func TestDryRunPrintsNothingWhenNoIssueMatches(t *testing.T) {
+	s := newSandbox(t)
+	s.setIssues()
+
+	r := s.dryRun()
 
 	assertExit(t, r, 0)
-	if r.stderr != "" {
-		t.Fatalf("成功した試運転が stderr に書いた: %q", r.stderr)
-	}
-	out := dryRunLine(t, r)
-	want := []string{"candidates", "dry_run", "instructions", "observed", "project", "result", "ts", "wip"}
-	if got := keys(out); !slices.Equal(got, want) {
-		t.Fatalf("試運転の行の key = %v, want %v", got, want)
-	}
-	if out["dry_run"] != true || out["result"] != "ok" || out["project"] != s.project {
-		t.Fatalf("試運転の行 = %v", out)
-	}
-	if got := asMap(t, out["instructions"]); len(got) != 1 || number(t, got["start"]) != 1 {
-		t.Fatalf("instructions = %v, want {start: 1}", got)
-	}
-	if number(t, out["candidates"]) != 1 || number(t, out["wip"]) != 1 {
-		t.Fatalf("candidates / wip = %v / %v", out["candidates"], out["wip"])
+	if r.stdout != "" || r.stderr != "" {
+		t.Fatalf("stdout = %q, stderr = %q, want 両方とも空", r.stdout, r.stderr)
 	}
 }
 
-func TestDryRunWritesNothingToTheStateDir(t *testing.T) {
+func TestDryRunReplacesControlCharactersInTheTitleWithSpaces(t *testing.T) {
 	s := newSandbox(t)
-	s.setIssues(readyIssue(42))
-	before := fileFingerprints(t, s.stateRoot)
+	i := readyIssue(5)
+	i.title = "a\tb\nc\x1b[31md"
+	s.setIssues(i)
 
-	assertExit(t, s.tick("--dry-run"), 0)
+	r := s.dryRun()
 
-	if after := fileFingerprints(t, s.stateRoot); !reflect.DeepEqual(before, after) {
-		t.Fatalf("試運転が state dir に書いた:\nbefore %v\nafter  %v", before, after)
-	}
-	s.assertNoClaude("試運転が")
+	assertCandidates(t, r, "implement\tissue\t#5\ta b c [31md")
 }
 
-func TestDryRunOfAQuietProjectReportsEmptyInstructions(t *testing.T) {
+func TestDryRunWritesNothing(t *testing.T) {
+	s := newSandbox(t)
+	s.setIssues(readyIssue(1))
+
+	assertExit(t, s.dryRun(), 0)
+
+	if _, err := os.Stat(s.stateRoot); !os.IsNotExist(err) {
+		t.Fatalf("試運転が state root (%s) を作った: %v", s.stateRoot, err)
+	}
+}
+
+func TestDryRunReadsTheIssueRepoOfTheWorkflowDefinition(t *testing.T) {
 	s := newSandbox(t)
 
-	r := s.tick("--dry-run")
+	assertExit(t, s.dryRun(), 0)
 
-	assertExit(t, r, 0)
-	if got := asMap(t, dryRunLine(t, r)["instructions"]); len(got) != 0 {
-		t.Fatalf("instructions = %v, want {}", got)
+	calls := s.calls("gh")
+	if len(calls) != 1 {
+		t.Fatalf("gh の呼び出し = %d 回, want 1", len(calls))
+	}
+	owner, _ := argValue(calls[0].Argv, "owner")
+	name, _ := argValue(calls[0].Argv, "name")
+	if owner != "acme" || name != "widgets" {
+		t.Fatalf("gh が読んだ置き場 = %s/%s, want acme/widgets (argv %q)", owner, name, calls[0].Argv)
 	}
 }
 
-func TestDryRunVerifiesConfigEvenWhenTheMarkerMatches(t *testing.T) {
+func TestDryRunReadsTheWorkflowDefinitionAtTheGivenPath(t *testing.T) {
 	s := newSandbox(t)
-	assertExit(t, s.tick(), 0) // marker を書かせる
-	s.repoMissing()
+	other := s.root + "/elsewhere/flow.md"
+	mustWrite(t, other, strings.Replace(defaultWorkflow, "name: implement", "name: elsewhere", 1))
+	s.setIssues(readyIssue(1))
 
-	r := s.tick("--dry-run")
+	r := s.dryRun(other)
 
-	assertExit(t, r, 2)
+	assertCandidates(t, r, candidate("elsewhere", 1))
 }
 
-func TestFailedDryRunReportsOnlyADashTickLineOnStderr(t *testing.T) {
-	s := newSandbox(t)
-	s.setLabels(defaultReadyLabel)
-	before := fileFingerprints(t, s.stateRoot)
-
-	r := s.tick("--dry-run")
-
-	assertExit(t, r, 2)
-	if r.stdout != "" {
-		t.Fatalf("失敗した試運転が stdout に書いた: %q", r.stdout)
+func TestGhFailuresAreClassifiedIntoExitCodes(t *testing.T) {
+	cases := []struct {
+		name   string
+		stderr string
+		exit   int
+		want   int
+	}{
+		{"認証が通らなければ 4", "HTTP 401: Bad credentials", 1, 4},
+		{"gh auth login を促されたら 4", "To get started with GitHub CLI, please run:  gh auth login", 4, 4},
+		{"置き場が見えなければ 2", "GraphQL: Could not resolve to a Repository with the name 'acme/widgets'. (repository)", 1, 2},
+		{"rate limit なら 1", "GraphQL: API rate limit exceeded for user ID 1.", 1, 1},
+		{"その他の失敗は 1", "connection reset", 1, 1},
 	}
-	assertFailureLine(t, r.stderr, s.project, "-", "config_error")
-	if after := fileFingerprints(t, s.stateRoot); !reflect.DeepEqual(before, after) {
-		t.Fatal("失敗した試運転が state dir に書いた")
-	}
-}
-
-func TestDryRunFailsNamingADependencyItCannotResolve(t *testing.T) {
-	for _, name := range []string{"claude", "gh"} {
-		t.Run(name, func(t *testing.T) {
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
 			s := newSandbox(t)
-			skipIfSelfResolutionReachesARealOne(t, name)
-			if err := os.Remove(filepath.Join(s.binDir, name)); err != nil {
-				t.Fatal(err)
-			}
+			s.failGh(c.stderr, c.exit)
 
-			r := s.tick("--dry-run")
+			r := s.dryRun()
 
-			if r.exit == 0 {
-				t.Fatalf("%s を解決できないのに試運転が通った: %s", name, r.stdout)
+			assertExit(t, r, c.want)
+			if r.stdout != "" || r.stderr == "" {
+				t.Fatalf("stdout = %q, stderr = %q, want stdout は空で stderr に理由", r.stdout, r.stderr)
 			}
-			s.assertNames(r.stderr, name)
 		})
 	}
 }
 
-func TestTickRejectsTheRemovedCronEnvFlag(t *testing.T) {
+func TestDryRunFailsWhenGhCannotBeResolved(t *testing.T) {
+	skipIfSelfResolutionReachesARealOne(t, "gh")
 	s := newSandbox(t)
+	if err := os.Remove(s.binDir + "/gh"); err != nil {
+		t.Fatal(err)
+	}
 
-	r := s.tick("--dry-run", "--cron-env")
+	r := s.dryRun()
 
-	assertExit(t, r, 2)
-	s.assertNames(r.stderr, "--cron-env")
+	assertExit(t, r, 1)
+	if r.stdout != "" || !strings.Contains(r.stderr, "gh") {
+		t.Fatalf("stdout = %q, stderr = %q", r.stdout, r.stderr)
+	}
+}
+
+func TestIssueWithMoreThanOneReadCoversIsNotEvaluated(t *testing.T) {
+	for _, connection := range []string{"labels", "assignees", "blockedBy"} {
+		t.Run(connection, func(t *testing.T) {
+			s := newSandbox(t)
+			i := readyIssue(9)
+			i.overflow = connection
+			s.setIssues(i)
+
+			r := s.dryRun()
+
+			assertExit(t, r, 1)
+			if r.stdout != "" || !strings.Contains(r.stderr, "#9") {
+				t.Fatalf("stdout = %q, stderr = %q, want stdout は空で stderr に #9", r.stdout, r.stderr)
+			}
+		})
+	}
+}
+
+func TestTokenFromTheWorkflowDefinitionReachesGhAsGhToken(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflow(strings.Replace(defaultWorkflow, "  repo: acme/widgets\n", "  repo: acme/widgets\n  token: $WIDGETS_TOKEN\n", 1))
+
+	r := s.runWithEnv(map[string]string{"WIDGETS_TOKEN": "secret-1"}, "loop", "--dry-run")
+
+	assertExit(t, r, 0)
+	if got := s.calls("gh")[0].Env["GH_TOKEN"]; got != "secret-1" {
+		t.Fatalf("gh の GH_TOKEN = %q, want secret-1", got)
+	}
+}
+
+func TestRepoWrittenAsAVariableIsReadFromTheEnvironment(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflow(strings.Replace(defaultWorkflow, "repo: acme/widgets", "repo: $ISSUE_REPO", 1))
+
+	r := s.runWithEnv(map[string]string{"ISSUE_REPO": "other/gadgets"}, "loop", "--dry-run")
+
+	assertExit(t, r, 0)
+	owner, _ := argValue(s.calls("gh")[0].Argv, "owner")
+	name, _ := argValue(s.calls("gh")[0].Argv, "name")
+	if owner != "other" || name != "gadgets" {
+		t.Fatalf("gh が読んだ置き場 = %s/%s, want other/gadgets", owner, name)
+	}
 }

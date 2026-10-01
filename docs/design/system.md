@@ -270,6 +270,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。
   - state dir も scope key で分ける (無害化した scope key に短い hash を足した名前)
   - lock は loop の生存期間だけ持つ
   - 同じ issue 置き場の 2 本目の loop は、clone や workflow 定義が違っても起動時に止まる
+  - 走っている間に workflow 定義の issue 置き場を書き換えて scope key が変わったら、その tick は何も起動しない。lock は起動時の scope key で取っているので、別の置き場を回すには loop を起動し直す
 - **loop は自分では起き直さない** (ADR 0006)
   - 起動し直した loop は、外部 store と workspace から続きを拾う
 - **停止は 2 段にする**

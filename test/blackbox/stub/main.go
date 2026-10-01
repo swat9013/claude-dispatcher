@@ -1,4 +1,4 @@
-// stub は black-box テストで PATH に置く外部 CLI (gh / claude / git / ps) の代役。
+// stub は black-box テストで PATH に置く外部 CLI (gh / claude / git) の代役。
 //
 // 1 つの binary を名前ごとに hard link して使い、起動された名前で振る舞いを引く。harness との取り決め
 // (置き場と JSON の形) は stubwire が持つ。
@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
@@ -34,15 +33,6 @@ func main() {
 		fmt.Fprintf(os.Stderr, "stub %s: 応答 rule の無い呼び出し: %q\n", name, os.Args[1:])
 		os.Exit(stubwire.UnmatchedExit)
 	}
-	if r.Decisions != nil {
-		if err := writeDecisions(*r.Decisions); err != nil {
-			fail(name, err)
-		}
-	}
-	if r.ReleaseFile != "" && !waitForRelease(r.ReleaseFile) {
-		fmt.Fprintf(os.Stderr, "stub %s: %s が %s 経っても現れない\n", name, r.ReleaseFile, stubwire.ReleaseDeadline)
-		os.Exit(stubwire.ReleaseTimeoutExit)
-	}
 	fmt.Fprint(os.Stdout, r.Stdout)
 	fmt.Fprint(os.Stderr, r.Stderr)
 	os.Exit(r.Exit)
@@ -63,18 +53,6 @@ func stubRoot() (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(string(raw)), nil
-}
-
-// waitForRelease は file が現れるまで待つ。上限を過ぎたら false。
-func waitForRelease(file string) bool {
-	deadline := time.Now().Add(stubwire.ReleaseDeadline)
-	for time.Now().Before(deadline) {
-		if _, err := os.Stat(file); err == nil {
-			return true
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	return false
 }
 
 func record(root, name string) error {
@@ -125,33 +103,5 @@ func matchRule(root, name string, args []string) (*stubwire.Rule, error) {
 }
 
 func matches(r stubwire.Rule, args []string) bool {
-	if len(args) < len(r.ArgsPrefix) || !slices.Equal(args[:len(r.ArgsPrefix)], r.ArgsPrefix) {
-		return false
-	}
-	if r.ArgContains == "" {
-		return true
-	}
-	return slices.ContainsFunc(args, func(arg string) bool { return strings.Contains(arg, r.ArgContains) })
-}
-
-func writeDecisions(w stubwire.DecisionsWrite) error {
-	instructions, err := filepath.Glob(stubwire.InstructionsGlob(w.StateDir))
-	if err != nil {
-		return err
-	}
-	if len(instructions) == 0 {
-		return fmt.Errorf("指示ファイルが無い (%s)", stubwire.InstructionsGlob(w.StateDir))
-	}
-	sort.Strings(instructions)
-	stem := strings.TrimSuffix(filepath.Base(instructions[len(instructions)-1]), ".json")
-	file := stubwire.DecisionsFile(w.StateDir, stem)
-	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
-		return err
-	}
-	for _, issue := range w.ObstructWorkerLogs {
-		if err := os.MkdirAll(stubwire.WorkerLogFile(w.StateDir, issue, stem), 0o755); err != nil {
-			return err
-		}
-	}
-	return os.WriteFile(file, []byte(w.Content), 0o644)
+	return len(args) >= len(r.ArgsPrefix) && slices.Equal(args[:len(r.ArgsPrefix)], r.ArgsPrefix)
 }

@@ -18,14 +18,14 @@
 ```sh
 alias claude-dispatcher-dev=~/src/claude-dispatcher/scripts/claude-dispatcher-dev.sh   # worktree で試すときは、その worktree の script を指す
 claude-dispatcher-dev --version   # 版に checkout の commit が出る (未 commit の変更があれば +dirty)
-claude-dispatcher-dev tick myproj --dry-run
-claude-dispatcher-dev loop myproj 5m
+claude-dispatcher-dev loop --dry-run   # cwd の WORKFLOW.md を読み、起動するはずの作業対象を示す
+claude-dispatcher-dev loop
 ```
 
-- **Homebrew 版と区別する**: 素の `claude-dispatcher` は PATH 上の版 (Homebrew 等) を呼ぶ。build した binary は、その checkout の `dist/dev/claude-dispatcher` に置く。basename を `claude-dispatcher` のままにするのは、`status` が process の argv[0] の basename で loop / tick を見分けるため
+- **Homebrew 版と区別する**: 素の `claude-dispatcher` は PATH 上の版 (Homebrew 等) を呼ぶ。build した binary は、その checkout の `dist/dev/claude-dispatcher` に置く
 - **走っている dev の loop は止まらない**: build は一時 file に書いてから rename で入れ替えるので、dev の loop を回したまま別の端末で撃ち直せる。loop は起動した時点の binary で回り続けるので、変更を効かせるには loop を撃ち直す
-- **状態は Homebrew 版と共有する**: 宣言 config と state dir ([docs/design/formats.md](docs/design/formats.md) §1) は Homebrew 版と同じものを読み書きする。同じ project の loop は 1 本しか動かせない (`loop.lock`) ので、Homebrew 版の loop を止めてから dev の loop を撃つ。分けたいときは `XDG_CONFIG_HOME` / `XDG_STATE_HOME` を上書きして撃つ
-- **tracker と CL host は本物**: dry-run でない tick は、実際の issue 置き場に label を付け、worker を起動する。試すなら使い捨ての issue に着手可 label を付けるか、`tick --dry-run` で止める
+- **状態は Homebrew 版と共有する**: state dir ([docs/design/formats.md](docs/design/formats.md) §1) は Homebrew 版と同じものを読み書きする。同じ issue 置き場の loop は 1 本しか動かせない (`loop.lock`) ので、Homebrew 版の loop を止めてから dev の loop を撃つ。分けたいときは `XDG_STATE_HOME` を上書きして撃つ
+- **tracker と CL host は本物**: 試運転でない loop は、実際の issue 置き場を読んで worker を起動する。試すなら使い捨ての issue に trigger の label を付けるか、`loop --dry-run` で止める
 
 ## branch・worktree 運用
 
@@ -34,7 +34,6 @@ claude-dispatcher-dev loop myproj 5m
   - #74 の作り直しの後は、この repo の workflow 定義が CL 側の trigger をこの綴りの、この repo 自身の head branch に絞り、人の CL と fork の CL に worker を送らない ([docs/design/system.md](docs/design/system.md) の「trigger」)
 - ファイルの変更 (コード・docs を問わない) は、main の checkout で直接行わず、worktree を作ってその中で行う。main の checkout に未 commit の変更を残すと、別の作業の差分と混ざって PR に切り出せなくなる
   - 対話で動かす Claude Code では `EnterWorktree` に name `issue-<n>` を渡す。branch 名は `worktree-` が前置されて `worktree-issue-<n>` になる
-  - dispatcher が spawn した worker は、spawn prompt の「作業ツリー」の手順に従う (正本は [internal/contract/orchestrator.md](internal/contract/orchestrator.md))。cwd を clone root に置いたまま `git worktree add` で作る点が上と違う
   - #74 の作り直しの後は、dispatcher が workflow 定義の hooks で用意した workspace の中で worker が作業する ([docs/design/system.md](docs/design/system.md) の「起動・retry・打ち切り」)
 - 実装が終わったら、worktree の branch を push して PR を作る
 - main へは PR 経由でだけ入れる (ruleset が強制する。下の「gate」の「main の保護」)
