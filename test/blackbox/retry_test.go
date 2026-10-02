@@ -73,6 +73,27 @@ func TestRetriedAttemptResumesTheSameSession(t *testing.T) {
 	}
 }
 
+func TestEndLineOfARetriedAttemptDoesNotCarryTheResultOfThePreviousAttempt(t *testing.T) {
+	// worker log は attempt を跨いで追記するので、attempt 2 の終わりにも attempt 1 の result が file に残っている
+	s := newSandbox(t)
+	s.writeWorkflowWithCommands(s.workerWorkflow(fastRetry))
+	s.setIssues(readyIssue(42))
+	s.respondAll("claude", []stubwire.Rule{
+		{ArgsContain: []string{"attempt 1"}, Stdout: `{"type":"result","subtype":"success","is_error":false,"num_turns":4,"permission_denials":[]}` + "\n"},
+		{},
+	})
+
+	s.startLoop()
+
+	ends := s.waitEvents("end", 2)
+	if ends[0]["num_turns"] != float64(4) {
+		t.Fatalf("attempt 1 の end の行 = %v, want num_turns 4", ends[0])
+	}
+	if _, ok := ends[1]["num_turns"]; ok {
+		t.Fatalf("attempt 2 の end の行 = %v, want attempt 1 の result を載せない", ends[1])
+	}
+}
+
 func TestRetriedAttemptRunsInTheSameWorkspace(t *testing.T) {
 	s := newSandbox(t)
 	s.writeWorkflowWithCommands(s.workerWorkflow(fastRetry))
