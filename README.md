@@ -58,6 +58,8 @@ mkdir -p ~/.local/bin && install -m 755 claude-dispatcher ~/.local/bin/
 
 binary は署名していない。macOS でブラウザから取った archive は Gatekeeper に起動を止められるので、`gh release download` か `curl -LO` で取る (ブラウザで取ったなら `xattr -d com.apple.quarantine ~/.local/bin/claude-dispatcher`)。
 
+入れた版は `claude-dispatcher --version` で確かめる。不具合を報告するときは、この出力を添える。
+
 ## 導入
 
 実装 repo の clone を cwd にして撃つ。流れの正本は [`docs/design/usecases.md`](docs/design/usecases.md) の UC-5、各コマンドの形式は [`docs/design/formats.md`](docs/design/formats.md) §5・§7.4。
@@ -72,7 +74,7 @@ binary は署名していない。macOS でブラウザから取った archive �
 2. **自分の project に合わせて書く**: trigger の述語 (どの label・どの head branch に当てるか)・action (worker に何をさせるか)・hooks (workspace の作り方)・並列上限を直し、repo に commit する。書ける項目は [`docs/design/formats.md`](docs/design/formats.md) §2、この repo 自身の例は [`WORKFLOW.md`](WORKFLOW.md)
    - worker が作業を終えたら作業対象を trigger から外すよう、action か本文 (共通 prompt) に書く (例: CL を開いたら `ready-for-agent` を外す)。外さないと、失敗として数えられて再起動される
    - 承認済みの CL (`approved: true`) に action を当てるかは自分で決める。当てると merge を worker に任せうる
-   - workspace の置き場 (`workspace.root`。既定は [`docs/design/formats.md`](docs/design/formats.md) §2.1) が clone の中なら、`.gitignore` に足す
+   - workspace の置き場 (`workspace.root`) が clone の中なら、`.gitignore` に足す。既定の `.claude-dispatcher/workspaces` (`WORKFLOW.md` の dir からの相対) は clone の中に入る。`setup` は `.gitignore` を書かない
 3. **試運転**: 何も起動せず、何も書かずに、起動するはずの作業対象と trigger を 1 件 1 行で示す
 
    ```sh
@@ -97,8 +99,12 @@ claude-dispatcher loop
 ```
 
 - 起動時に workflow 定義の検査と事前検査 (action の先頭の skill が呼べるか) を通す。落ちれば誤りを名指しして起動しない
-- tick ごとに workflow 定義を読み直すので、`WORKFLOW.md` の変更は loop を撃ち直さずに効く。tick の中で事前検査に落ちた trigger だけは起動しない
+- tick ごとに workflow 定義を読み直すので、`WORKFLOW.md` の変更は loop を撃ち直さずに効く。ただし次の場合は効き方が違う
+  - 読み直した定義が検査に落ちたら、その tick は何も起動しない
+  - tick の中で事前検査に落ちた trigger は起動しない
+  - `tracker.repo` を変えたら、loop を撃ち直すまでどの tick も何も起動しない
 - 同じ issue 置き場の loop は、同じマシンで 1 本しか起動できない。マシンを跨いだ排他は持たないので、1 つの issue 置き場は 1 台から回す
+- loop を起動した環境から gh の認証を取れない (ssh 越しの session など) なら、`tracker.token` に `$VAR` で token を渡して撃ち直す ([`docs/design/formats.md`](docs/design/formats.md) §2.1)
 - loop は自分では起き直さない。端末を閉じたりマシンを再起動したりしたら、同じコマンドを撃ち直す。`brew upgrade` の後も撃ち直す (走っている loop は起動した時点の binary で回り続ける)
 
 ## 動いているかを見る
@@ -111,15 +117,32 @@ loop を撃った端末の画面が一番早い。`status` と同じ見出しと
 claude-dispatcher status
 ```
 
-過去の tick と worker の起動・終わり方は log.jsonl に 1 行ずつ残る。worker の stream は worker log に残る。置き場は `claude-dispatcher paths --json` で引ける。
+過去の tick と worker の起動・終わり方は log.jsonl に 1 行ずつ残る。置き場は `claude-dispatcher paths --json` の `log` で引ける。worker の stream は `<state_dir>/workers/<作業対象>.log` (stderr は `.stderr.log`) に残る。
 
-打ち切られた作業対象は、どの trigger にも起動されない。直して再び回すなら、打ち切ったときの trigger の label を外し、1 周期待ってから付け直す。
+打ち切られた作業対象は、どの trigger にも起動されない。打ち切りは loop の memory にだけ持つので、loop を撃ち直すと解ける。loop を止めずに解くなら、作業対象を打ち切ったときの trigger から外し (label で当てる trigger なら label を外す)、1 周期待ってから戻す。
 
 ## 止める
 
 1. loop の端末で Ctrl+C を押す (SIGTERM・SIGHUP も同じ)。新しい起動と再起動をやめ、走っている worker が終わるのを待って止まる。worker が走っていなければすぐ止まる
 2. 待てないときはもう一度 Ctrl+C を押す。走っている worker を止めて止まる。worker が途中まで書いた成果は workspace と remote branch に残る。作業対象が trigger に当たったままなら、次に起動した loop が同じ workspace で worker を起動し直す (session は新しく、attempt も 1 から数え直す。前の成果を拾わせるなら、共通 prompt にそう書く)
 3. 使うのをやめるなら、`paths --json` が返す `state_dir` と `workspace_root` を消す (workspace が worktree なら、消した後に clone で `git worktree prune` を撃つ)。tracker の label は残る
+
+## 開発中の版を動かす
+
+この repo の checkout を build して動かすなら、`scripts/claude-dispatcher-dev.sh` を使う。その checkout を build し直してから、渡した引数で実行する。Go は手元の版が [go.mod](go.mod) の `toolchain` 行より古くても、`go` コマンドがその版を取ってきて使う。
+
+```sh
+alias claude-dispatcher-dev=<claude-dispatcher の clone>/scripts/claude-dispatcher-dev.sh
+cd ~/src/widgets
+claude-dispatcher-dev --version        # 版に checkout の commit が出る (未 commit の変更があれば +dirty)
+claude-dispatcher-dev loop --dry-run
+```
+
+- build した binary は checkout の `dist/dev/claude-dispatcher` に置く。素の `claude-dispatcher` は PATH 上の版のまま
+- 状態 (state dir) は配布版と共有する。同じ issue 置き場の loop は 1 本しか動かせないので、配布版の loop を止めてから dev の loop を撃つ
+- `--dry-run` を付けない loop は、本物の tracker を読んで worker を起動する
+
+詳しい注意と、テスト・lint の撃ち方は [`CONTRIBUTING.md`](CONTRIBUTING.md) の「開発中の claude-dispatcher を試す」と「gate」。
 
 ## License
 
