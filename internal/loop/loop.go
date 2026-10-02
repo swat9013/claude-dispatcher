@@ -554,7 +554,7 @@ func (l *loop) handle(ev worker.Event) {
 		}
 		result := ev.Result
 		c.run = nil
-		for _, message := range []string{result.AfterRunError, result.StopError, result.ResultReadError} {
+		for _, message := range []string{result.AfterRunError, result.StopError, result.ResultSummaryError} {
 			if message != "" {
 				l.rec.error(ev.Target, message)
 			}
@@ -652,15 +652,15 @@ func (l *loop) end(ref target.Ref, c *claim, o outcome, reason string, result wo
 	if result.ExitCode != nil {
 		fields["exit_code"] = *result.ExitCode
 	}
-	if last := result.LastResult; last != nil {
-		if last.IsError != nil {
-			fields["is_error"] = *last.IsError
+	if summary := result.ResultSummary; summary != nil {
+		if summary.IsError != nil {
+			fields["is_error"] = *summary.IsError
 		}
-		if last.NumTurns != nil {
-			fields["num_turns"] = *last.NumTurns
+		if summary.NumTurns != nil {
+			fields["num_turns"] = *summary.NumTurns
 		}
-		if last.PermissionDenialCount != nil {
-			fields["permission_denial_count"] = *last.PermissionDenialCount
+		if summary.PermissionDenialCount != nil {
+			fields["permission_denial_count"] = *summary.PermissionDenialCount
 		}
 	}
 	l.rec.event("end", fields, endKinds[o], "終了", " %s (%s): %s — %s", name, c.trigger.Name, o, reason)

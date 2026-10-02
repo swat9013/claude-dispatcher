@@ -218,6 +218,25 @@ func TestStalledWorkerIsStoppedAndCountedAsAFailure(t *testing.T) {
 	}
 }
 
+func TestEndLineOfAWorkerStalledBeforeWritingAResultHasNoResultSummary(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflowWithCommands(s.workerWorkflow(fastRetry + "  stall_timeout: 1s\n"))
+	s.setIssues(readyIssue(42))
+	s.onClaude(stubwire.Rule{Stdout: `{"type":"assistant","message":{"content":[]}}` + "\n", ReleaseFile: s.releaseFile()})
+
+	s.startLoop()
+
+	end := s.waitEvents("end", 1)[0]
+	if !strings.Contains(asString(end["reason"]), "stall") {
+		t.Fatalf("end の行 = %v, want stall の失敗", end)
+	}
+	for _, key := range []string{"is_error", "num_turns", "permission_denial_count"} {
+		if _, ok := end[key]; ok {
+			t.Fatalf("end の行 = %v, want result を書く前に止めたので %s を載せない", end, key)
+		}
+	}
+}
+
 func TestStalledAttemptIsRetried(t *testing.T) {
 	s := newSandbox(t)
 	s.writeWorkflowWithCommands(s.workerWorkflow(fastRetry + "  stall_timeout: 1s\n"))

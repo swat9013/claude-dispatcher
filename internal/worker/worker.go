@@ -66,10 +66,10 @@ type Result struct {
 	AfterRunError string
 	// StopError は止めるときに process group へ signal を送れなかった理由
 	StopError string
-	// LastResult は attempt の最後の stream-json の result の要約。claude を起動しなかったか、result の行が無ければ nil
-	LastResult *StreamResult
-	// ResultReadError は worker log から LastResult を読めなかった理由
-	ResultReadError string
+	// ResultSummary は attempt の最後の stream-json の result の行の要約。claude を起動しなかったか、result の行が無ければ nil
+	ResultSummary *ResultSummary
+	// ResultSummaryError は worker log から ResultSummary を (一部でも) 読めなかった理由
+	ResultSummaryError string
 }
 
 // Runner は worker を起動する。
@@ -195,10 +195,10 @@ func (r Runner) launch(job Job, run *Run, workspacePath string, started func(pid
 	}
 	started(cmd.Process.Pid, workspacePath)
 	result := r.wait(cmd, run, stream, before.Size())
-	// claude が終わった後に読むので、この attempt の行は書き終わっている
-	result.LastResult, err = lastResult(stream.Name(), before.Size())
+	// claude の process が終わった後に読むので、claude が書く result の行はそろっている
+	result.ResultSummary, err = summarizeLastResult(stream.Name(), before.Size())
 	if err != nil {
-		result.ResultReadError = fmt.Sprintf("worker log から attempt の最後の result を読めない: %v", err)
+		result.ResultSummaryError = fmt.Sprintf("worker log から attempt の最後の result を読めない: %v", err)
 	}
 	return result
 }
