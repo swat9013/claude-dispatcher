@@ -109,7 +109,7 @@ claude-dispatcher loop
 
 ## 動いているかを見る
 
-loop を撃った端末の画面が一番早い。`status` と同じ見出しと worker の表 (経過と stream の最新の活動を含む) の下に、直近 10 行の事象を描き直し続ける。stdout を pipe や file へ流しているときは、事象を 1 行ずつ追記する (形式は [`docs/design/formats.md`](docs/design/formats.md) §6)。
+loop を撃った端末の画面が一番早い。`status` と同じ見出しと `workers` の表 (段階・経過・stream の最新の活動を含む)・`要対処` の下に、直近 10 行のログ (tick・起動・終了・再起動・停止・error) を描き直し続ける。色は端末のときだけ付き、`NO_COLOR` を設定すれば付かない。stdout を pipe や file へ流しているときは、ログの行と worker の活動を 1 行ずつ追記する (形式は [`docs/design/formats.md`](docs/design/formats.md) §6)。
 
 別の端末からは `status` で見る。loop が書き出す状態 file (`status.json`) を描き、何も書かず gh も撃たない。見出しに loop が生きているか (`loop 稼働中` / `loop 停止待ち` / `loop なし`) と直近の tick を出し、走っている worker・再起動待ち・打ち切り・曖昧な CL・事前検査に落ちた trigger を並べる (形式は [`docs/design/formats.md`](docs/design/formats.md) §7)。
 

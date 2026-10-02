@@ -114,3 +114,21 @@ _Avoid_: done, success
 **打ち切り**:
 attempt が上限に達した作業対象を、loop がどの trigger でもそれ以上起動しないこと。打ち切ったときの trigger から作業対象が一度外れたのを観測すると解ける。
 _Avoid_: give up, dead letter
+
+## 観測
+
+**段階**:
+claim がどこまで進んだか。worker が走っている・止めている・終わりを確かめ待ち・再起動待ちのどれか。
+_Avoid_: 状態 (状態 file と紛れる)
+
+**活動**:
+worker が今何をしているかを、worker の stream の最新の行から要約したもの。人が worker の様子を読む手掛かり。
+_Avoid_: 進捗, event
+
+**ログの行**:
+loop が人に向けて出す 1 行。tick・起動・終了・再起動・停止・error などの出来事を 1 件ずつ書く。機械向けの記録とも、worker の stream とも別物。
+_Avoid_: 事象, ログ (単独では機械向けの記録・worker の stream と紛れる)
+
+**要対処**:
+人が手当てしないと進まないものの総称。打ち切り・曖昧な CL・起動しない trigger を指す。
+_Avoid_: alert, warning

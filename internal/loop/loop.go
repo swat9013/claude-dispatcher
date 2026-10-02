@@ -62,9 +62,9 @@ type Options struct {
 	NewSessionID func() (string, error)
 	// ScopeKey は起動時の scope key (lock を取った鍵)
 	ScopeKey string
-	// Log は log.jsonl (formats.md §4)、Stdout は人が読む行の出し先
+	// Log は log.jsonl (formats.md §4)、Output は人が読む行の出し先
 	Log     io.Writer
-	Stdout  io.Writer
+	Output  Output
 	Signals <-chan os.Signal
 	// Publish は状態 file (formats.md §7.1) を書き出す
 	Publish func(status.Snapshot) error
@@ -114,6 +114,9 @@ const (
 	failed    outcome = "failed"
 	stopped   outcome = "stopped"
 )
+
+// endKinds は終わり方ごとの終了の行の種類
+var endKinds = map[outcome]LineKind{completed: LineCompleted, failed: LineFailed, stopped: LineNote}
 
 // claim は loop が worker を起動中か、終わり方を確かめ待ちか、再起動待ちの作業対象。
 type claim struct {
@@ -169,7 +172,7 @@ type loop struct {
 func Run(o Options) int {
 	l := &loop{
 		o: o, def: o.Definition, claims: map[target.Ref]*claim{}, abandoned: map[target.Ref]string{}, events: make(chan worker.Event),
-		rec: recorder{log: o.Log, stdout: o.Stdout, now: o.Now, scope: o.ScopeKey}, board: board{startedAt: o.Now()},
+		rec: recorder{log: o.Log, output: o.Output, now: o.Now, scope: o.ScopeKey}, board: board{startedAt: o.Now()},
 	}
 	var next <-chan time.Time
 	// 前の loop が残した状態 file を、最初の tick の前に今の loop の状態で書き換える
@@ -223,7 +226,7 @@ func (l *loop) requestStop(sig os.Signal) {
 		return
 	}
 	if l.stopping == 1 {
-		l.rec.human("停止待ち: 走っている worker %d 本の終了を待つ (もう一度で止める)", running)
+		l.rec.human(LineStopping, "停止待ち", ": 走っている worker %d 本の終了を待つ (もう一度で止める)", running)
 		return
 	}
 	for _, c := range l.claims {
@@ -243,7 +246,7 @@ func (l *loop) exit() int {
 	}
 	// 止まる時点の claim を状態 file に残す (loop が止まった後の status は worker を出さないが、file は読み返せる)
 	l.publish()
-	l.rec.human("loop を止めた (停止要求 %s)", SignalName(l.lastStop))
+	l.rec.human(LineNote, "loop を止めた", " (停止要求 %s)", SignalName(l.lastStop))
 	return 0
 }
 
@@ -309,7 +312,7 @@ func (l *loop) tick() {
 	l.board.lastTick = &status.Tick{At: l.o.Now(), Result: status.TickOK, Candidates: len(candidates)}
 	l.board.ambiguous = ambiguous
 	l.rec.event("tick", map[string]any{"result": status.TickOK, "candidates": len(candidates), "launched": nonNil(launched), "ambiguous": ambiguousFields(ambiguous), "blocked": blockedFields(l.blocked)},
-		"tick ok · %s%s%s", Summary(candidates), ambiguousSummary(ambiguous), blockedSummary(l.blocked))
+		LineTickOK, "tick ok", " · %s%s%s", Summary(candidates), ambiguousSummary(ambiguous), blockedSummary(l.blocked))
 }
 
 // view は tick が読んだ open な一覧と、そこから導いた CL の除外 (曖昧な CL と、claim している作業対象の branch)。
@@ -494,7 +497,7 @@ func (l *loop) sweep(store Store, open []target.Item) {
 			continue
 		}
 		if item.Terminal() && l.remove(ws, ref) {
-			l.rec.human("掃除 %s: 終端の workspace を消した", ref)
+			l.rec.human(LineNote, "掃除", " %s: 終端の workspace を消した", ref)
 		}
 	}
 }
@@ -543,7 +546,7 @@ func (l *loop) handle(ev worker.Event) {
 		l.rec.event("start", map[string]any{
 			"target": name, "trigger": c.trigger.Name, "attempt": c.attempt,
 			"session_id": c.sessionID, "workspace": ev.Workspace, "pid": ev.PID,
-		}, "起動 %s (%s, attempt %d, session %s)", name, c.trigger.Name, c.attempt, c.sessionID)
+		}, LineStart, "起動", " %s (%s, attempt %d, session %s)", name, c.trigger.Name, c.attempt, c.sessionID)
 	case worker.Ended:
 		c, ok := l.claimOf(ev.Target)
 		if !ok {
@@ -649,7 +652,7 @@ func (l *loop) end(ref target.Ref, c *claim, o outcome, reason string, result wo
 	if result.ExitCode != nil {
 		fields["exit_code"] = *result.ExitCode
 	}
-	l.rec.event("end", fields, "終了 %s (%s): %s — %s", name, c.trigger.Name, o, reason)
+	l.rec.event("end", fields, endKinds[o], "終了", " %s (%s): %s — %s", name, c.trigger.Name, o, reason)
 }
 
 func nonNil(s []string) []string {

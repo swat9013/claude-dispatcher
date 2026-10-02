@@ -211,7 +211,7 @@ func (h *harness) run(t *testing.T) []string {
 		NewSessionID: func() (string, error) { return "session-1", nil },
 		ScopeKey:     startScope,
 		Log:          io.Discard,
-		Stdout:       &h.stdout,
+		Output:       loop.Appender{W: &h.stdout},
 		Publish: func(s status.Snapshot) error {
 			h.published = append(h.published, s)
 			return nil
@@ -406,7 +406,7 @@ func TestLineThatCannotBeWrittenToTheLogIsReportedOnStdout(t *testing.T) {
 		NewSessionID: func() (string, error) { return "", nil },
 		ScopeKey:     startScope,
 		Log:          failingWriter{},
-		Stdout:       &stdout,
+		Output:       loop.Appender{W: &stdout},
 		Publish:      func(status.Snapshot) error { return nil },
 		Signals:      signals,
 		Now:          time.Now,

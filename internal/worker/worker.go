@@ -210,6 +210,8 @@ type streamWatch struct {
 	summarized int64
 	// readError は直近に stream の file を読めなかった理由。同じ理由を活動として出し直さない
 	readError string
+	// workspace は worker の workspace の path (活動の tool の入力の path を相対にする)
+	workspace string
 }
 
 // observe は now の時点の file の大きさを見て、伸びていれば伸びた時刻を進め、grew を true で返す。file を読めなければ、
@@ -226,10 +228,10 @@ func (w *streamWatch) observe(now time.Time) (grew bool, err error) {
 	return true, nil
 }
 
-// activity は file の最新の完結した行を、まだ要約していなければ要約する。要約する行が無ければ ok が false。
-// file を読めなければ、その理由を活動にする (活動は表示のためだけのものなので、worker は止めない)。
+// activity は前に確かめてから完結した行を新しい側から見て、活動として数える最初の行を要約する。数える行が無ければ ok が
+// false。file を読めなければ、その理由を活動にする (活動は表示のためだけのものなので、worker は止めない)。
 func (w *streamWatch) activity() (summary string, ok bool) {
-	line, end, err := lastLine(w.file.Name(), w.size, w.summarized)
+	lines, end, err := completeLines(w.file.Name(), w.size, w.summarized)
 	if err != nil {
 		message := printable.Line("stream を読めない: " + err.Error())
 		if message == w.readError {
@@ -239,11 +241,15 @@ func (w *streamWatch) activity() (summary string, ok bool) {
 		return message, true
 	}
 	w.readError = ""
-	if line == nil {
-		return "", false
+	if end > w.summarized {
+		w.summarized = end
 	}
-	w.summarized = end
-	return Summarize(line)
+	for i := len(lines) - 1; i >= 0; i-- {
+		if summary, ok := Summarize(lines[i], w.workspace); ok {
+			return summary, true
+		}
+	}
+	return "", false
 }
 
 // silentFor は stream の file が最後に伸びてから now までの時間。
@@ -271,7 +277,7 @@ func (r Runner) render(job Job, workspacePath string) (action, promptFile string
 func (r Runner) wait(cmd *exec.Cmd, run *Run, stream *os.File, offset int64) Result {
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
-	result, ended := r.watch(done, run, stream, offset)
+	result, ended := r.watch(done, run, stream, offset, cmd.Dir)
 	if ended {
 		return r.exited(cmd, Result{})
 	}
@@ -295,9 +301,9 @@ func (r Runner) wait(cmd *exec.Cmd, run *Run, stream *os.File, offset int64) Res
 // watch は claude が終わるまで待つ (ended が true)。先に止める理由ができたら、その理由を持った result を返す。
 // stream の file は活動のために常に確かめ、offset より後に伸びたら活動を更新する。stall と上限時間は、どちらかが
 // 有効なときだけ当てる。
-func (r Runner) watch(done <-chan error, run *Run, stream *os.File, offset int64) (result Result, ended bool) {
+func (r Runner) watch(done <-chan error, run *Run, stream *os.File, offset int64, workspace string) (result Result, ended bool) {
 	started := time.Now()
-	w := &streamWatch{file: stream, size: offset, changed: started, summarized: offset}
+	w := &streamWatch{file: stream, size: offset, changed: started, summarized: offset, workspace: workspace}
 	ticker := time.NewTicker(watchInterval)
 	defer ticker.Stop()
 	for {
