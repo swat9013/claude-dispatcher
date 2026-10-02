@@ -415,8 +415,11 @@ claude-dispatcher loop [<workflow の path>]
 
 **画面**: loop の stdout が端末かどうかで形を変える。どちらも、状態 file (§7) と同じ中身を描く。
 
-- 端末でなければ、log.jsonl (§4) に書く行と worker の活動を、人が読む形で 1 事象 1 行ずつ追記する (下の例)
-- 端末なら、周期ごと (1s) と事象ごとに画面を描き直す。上から、`status` (§7) と同じ見出しと表、空行、直近の事象の行 (最大 10 行、上の 1 事象 1 行と同じ形)
+- 端末でなければ、log.jsonl (§4) に書く行と worker の活動を、人が読む形で 1 行ずつ追記する (下の例)。時刻は RFC 3339 の UTC
+- 端末なら、周期ごと (1s) とログの行ごとに画面を描き直す。上から、`status` (§7.2) と同じ見出し、停止待ちの案内、`status` と同じセクション (`workers`・`要対処`)、`ログ` のセクション
+  - 停止待ちの案内: 停止要求を受けて worker の終了を待つ間、見出しの下に `走っている worker <n> 本の終了を待っている。もう一度 Ctrl+C で worker を止めて終える` を出し続ける
+  - `ログ`: 下の行のうち活動の行を除いた、直近の 10 行。時刻は端末の local time の `HH:MM:SS`。最新の活動は `workers` の表の列で見る
+  - 色と幅は §7.2 の規則に従う。`ログ` の行は、時刻を灰にし、行の頭の語に色を付ける: `起動` は青、`終了` は completed なら緑・failed なら赤、`error` は赤、`再起動を予定` と `停止待ち` は黄。`tick ok` の行は全体を薄く、`tick error` の行は全体を赤にする
 - stdout に書けなくても loop は止めない (その行と画面は捨てる)
 
 ```
@@ -426,7 +429,7 @@ claude-dispatcher loop [<workflow の path>]
 <時刻> tick ok · 候補 1: implement issue #42 · 起動しない trigger: implement (action の先頭の /playbook が見つからない …)
 <時刻> tick error · <理由>
 <時刻> 起動 issue#42 (implement, attempt 1, session <uuid>)
-<時刻> 活動 issue#42: tool Bash
+<時刻> 活動 issue#42: Bash go test ./...
 <時刻> 終了 issue#42 (implement): completed — trigger から外れた
 <時刻> 再起動を予定 issue#42 (implement, attempt 2, 10s 後)
 <時刻> 再起動せずに解いた issue#42 (implement): trigger から外れた
@@ -438,21 +441,53 @@ claude-dispatcher loop [<workflow の path>]
 <時刻> loop を止めた (停止要求 SIGINT)
 ```
 
+端末の画面 (停止待ち):
+
+```
+● loop 停止待ち  github.com/acme/widgets
+次の tick なし · 直近の tick 00:05:00 ok · 候補 1
+走っている worker 1 本の終了を待っている。もう一度 Ctrl+C で worker を止めて終える
+
+workers 1 ────────────────────────────────────────────
+作業対象  trigger    attempt  段階     経過   活動
+issue#42  implement  1        running  5m10s  Edit internal/status/status.go
+
+ログ ─────────────────────────────────────────────────
+00:00:00 loop を始めた: scope github.com/acme/widgets · state dir <path> · workflow <path>
+00:00:00 tick ok · 候補 1: implement issue #42
+00:00:00 起動 issue#42 (implement, attempt 1, session <uuid>)
+00:05:00 tick ok · 候補 1: implement issue #42
+00:05:10 停止待ち: 走っている worker 1 本の終了を待つ (もう一度で止める)
+```
+
 - tick の行の候補は、試運転 (§5) と同じ順。候補が無ければ `tick ok · 候補 0`
-- **活動**: worker の stream (stdout の stream-json) の最新の完結した行の要約。loop は 1s ごとに確かめ、変わったら `活動` の行を出す。log.jsonl には書かない (stream は worker log に残る)
+- **活動**: worker の stream (stdout の stream-json) のうち、活動として数える最新の完結した行の要約。loop は 1s ごとに確かめ、変わったら `活動` の行を出す。log.jsonl には書かない (stream は worker log に残る)
 
 | stream の行 | 要約 |
 |---|---|
 | `type: assistant` の message の最後の content が text | その text の最初の行 |
-| `type: assistant` の message の最後の content が tool_use | `tool <tool の名前>` (tool の入力は載せない) |
-| `type: assistant` のそれ以外 (content が無い・最後の content が text でも tool_use でもない) | `assistant` |
+| `type: assistant` の message の最後の content が thinking | `thinking` |
+| `type: assistant` の message の最後の content が tool_use | `<tool の名前> <入力の要点>` (下の表。要点が無ければ tool の名前だけ) |
+| `type: assistant` のそれ以外 (content が無い・最後の content が上のどれでもない) | `assistant` |
 | `type: user` (tool の結果) | `tool の結果` |
-| `type: system` | `system <subtype>` |
+| `type: system` で subtype が `init` | `system init` |
+| `type: system` のそれ以外 | 活動として数えない |
 | `type: result` | `result <subtype>` |
 | それ以外の `type` | `<type>` |
 
+| tool | 入力の要点 |
+|---|---|
+| `Bash` | `command` の最初の行 |
+| `Read` / `Edit` / `Write` | `file_path`。workspace の中なら workspace からの相対 path、外なら絶対 path のまま |
+| `Grep` / `Glob` | `pattern` |
+| `Skill` | `skill` |
+| `Agent` | `description` |
+| それ以外 (MCP の tool を含む) | 無し |
+
+- 秘密が混ざりやすい入力 (`Write` の本文・MCP の tool の引数) は載せない
 - 要約の制御文字 (タブ・改行・ESC など) は空白に置き換え、80 文字で切る (`…` を足す)
 - JSON として読めない行と、`type` の無い行は活動として数えない。改行を含めて 64 KiB を超える行も数えない (stream の file の末尾だけを読む)
+- 前に確かめてから完結した行を新しい側から見て、活動として数える最初の行を要約する。数える行が無ければ活動は変えない
 - 活動は今の attempt が書いた行だけから取る (worker log は attempt を跨いで追記する)。同じ行を活動として出し直さない
 - stream の file を読めなければ、`stream を読めない: <理由>` を活動にする。worker は止めない
 
@@ -471,7 +506,7 @@ exit: 0 = 停止要求で止まった / 1・2・3 = 起動時の検査 (上表)�
 
 loop の今の状態を、表示のためだけに書き出す (system.md §9)。loop は読み戻さない。
 
-- loop が、tick の終わり・事象の後・1s ごとに書き換える。書くのは loop だけで、同じ dir の一時 file から rename する (読み手に書きかけを見せない)
+- loop が、tick の終わり・ログの行の後・1s ごとに書き換える。書くのは loop だけで、同じ dir の一時 file から rename する (読み手に書きかけを見せない)
 - 経過は書かない。時刻を書き、読む側が今の時刻から出す
 - loop は最初の tick の前と止まる直前にも書く。止まった後も残る。loop が生きているかは状態 file ではなく `alive.lock` (§6) で決める
 
@@ -486,7 +521,7 @@ loop の今の状態を、表示のためだけに書き出す (system.md §9)�
   "last_tick": {"at": "2026-10-01T00:05:00Z", "result": "ok", "candidates": 1},
   "workers": [
     {"target": "issue#42", "trigger": "implement", "attempt": 1, "session_id": "<uuid>", "phase": "running",
-     "started_at": "2026-10-01T00:05:00Z", "activity": {"at": "2026-10-01T00:05:10Z", "summary": "tool Bash"}}
+     "started_at": "2026-10-01T00:05:00Z", "activity": {"at": "2026-10-01T00:05:10Z", "summary": "Bash go test ./..."}}
   ],
   "abandoned": [{"target": "issue#43", "trigger": "implement"}],
   "ambiguous": [{"head": "worktree-issue-7", "targets": ["cl#52", "cl#53"]}],
@@ -516,21 +551,44 @@ claude-dispatcher status [<workflow の path>]
 別の端末から loop の今の状態を見る。workflow 定義を読んで scope key を決め、その state dir の状態 file を描く。**何も書かず、gh も撃たない**。
 
 ```
-loop 稼働中 · scope github.com/acme/widgets · 次の tick 00:10:00 · 直近の tick 00:05:00 ok (候補 1)
-issue#42  implement  attempt 1  走っている  5m10s  tool Bash
-issue#44  implement  attempt 2  再起動待ち  00:06:40 に再起動
+● loop 稼働中  github.com/acme/widgets
+次の tick 00:10:00 · 直近の tick 00:05:00 ok · 候補 1
+
+workers 2 ────────────────────────────────────────────
+作業対象  trigger    attempt  段階           経過               活動
+issue#42  implement  1        running        5m10s              Bash go test ./...
+issue#44  implement  2        waiting_retry  00:06:40 に再起動
+
+要対処 3 ─────────────────────────────────────────────
 打ち切り issue#43 (implement): label を外して trigger から外し、1 周期待ってから付け直すと解ける
 曖昧な CL worktree-issue-7: cl#52, cl#53
 起動しない trigger fix-ci: action の先頭の /fix が見つからない (plugin・repo の .claude・~/.claude の skill と command)
 ```
 
-- 1 行目は見出し。loop が生きていれば `loop 稼働中` (停止要求の後は `loop 停止待ち`)、`alive.lock` を取れれば `loop なし`
-- 直近の tick が error なら、見出しの tick の欄は `直近の tick <時刻> error: <理由>`
-- worker の行は列をタブで区切る: 作業対象・trigger・`attempt <n>`・段階 (`走っている` / `止めている` / `確かめ待ち` / `再起動待ち`)・経過 (段階が `走っている` か `止めている` worker の、今の attempt の起動から) か再起動の予定・活動
-- 再起動待ちの行の `attempt <n>` は失敗した attempt の番号 (事象の行の `再起動を予定` は次の attempt の番号を出す)。停止要求の後に失敗した claim は再起動を予定しないので、予定の欄は空
+- 見出しは 2 行。1 行目は loop の状態と scope key: loop が生きていれば `● loop 稼働中` (停止要求の後は `● loop 停止待ち`)、`alive.lock` を取れれば `○ loop なし`
+- 2 行目は `次の tick <時刻>` (停止要求の後は `次の tick なし`)・`直近の tick <時刻> ok · 候補 <n>` を ` · ` で繋ぐ。直近の tick が error なら `直近の tick <時刻> error: <理由>`。`loop なし` のときは次の tick の欄を出さない。出す欄が無ければ 2 行目を出さない
 - `loop なし` のときは見出しだけを出す (状態 file が残っていても、worker と打ち切りは loop の memory と一緒に消えている)
-- 状態 file が無ければ見出しは `loop なし · scope <scope key> · 記録なし` (loop が生きていれば `loop 稼働中 · scope <scope key> · 記録なし`)
+- 状態 file が無ければ、見出しの 2 行目は `記録なし`
+- 見出しの後に空行を挟み、セクションを空行で区切って並べる。セクションの 1 行目はセクション名と件数の後に罫線を引く
+- `workers <n>`: claim の表。列見出しの行 (作業対象・trigger・attempt・段階・経過・活動) の後に claim を 1 行ずつ並べる。claim が無ければ列見出しも出さない
+  - 列は空白で揃える (列の間は 2 桁)
+  - attempt は番号。再起動待ちの行は失敗した attempt の番号 (ログの行の `再起動を予定` は次の attempt の番号を出す)
+  - 段階は `workers[].phase` (§7.1) の値のまま
+  - 経過は、段階が `running` か `stopping` の claim の、今の attempt の起動からの時間 (`45s`・`5m10s`・`1h02m05s`)。`waiting_retry` の claim は `<時刻> に再起動`。停止要求の後に失敗した claim は再起動を予定しないので空
+  - 活動は §6 の要約
+- `要対処 <n>`: 打ち切り・曖昧な CL・起動しない trigger を 1 件 1 行で並べる。1 件も無ければセクションごと出さない
 - 時刻は端末の local time の `HH:MM:SS`
+
+**色と幅** (loop の画面 (§6) も同じ):
+
+- 色は stdout が端末のときだけ付ける。端末でも、環境変数 `NO_COLOR` が空でない値で設定されていれば付けない
+- 色を付けるところ:
+  - 見出しの `● loop 稼働中` は緑、`● loop 停止待ち` は黄、`○ loop なし` は灰。scope key は太字。直近の tick の `ok` は緑、`error: <理由>` は赤。欄の名前 (`次の tick` など) は灰
+  - セクション名は太字 (`要対処` は黄)、罫線は薄く、列見出しは灰
+  - 段階は `running` が水色、`waiting_retry` が黄、`verifying` が灰
+  - `要対処` の行の頭の語は、`打ち切り` と `起動しない trigger` が赤、`曖昧な CL` が黄
+- stdout が端末なら、長い行を端末の幅で切り、`…` を付ける。幅は全角の文字を 2 桁、それ以外を 1 桁と数える。罫線は端末の幅まで引く
+- stdout が端末でないか、端末の幅を取れなければ、行を切らず、罫線はセクションの 1 行目が 60 桁になるまで引く
 
 exit: 0 = 描けた / 2 = 引数・workflow 定義の誤り / 1 = 状態 file か `alive.lock` を読めない、または workflow 定義の path を解決できない。
 
