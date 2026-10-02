@@ -73,6 +73,27 @@ func TestRetriedAttemptResumesTheSameSession(t *testing.T) {
 	}
 }
 
+func TestEndLineOfARetriedAttemptDoesNotCarryTheResultOfThePreviousAttempt(t *testing.T) {
+	// worker log は attempt を跨いで追記するので、attempt 2 の終わりにも attempt 1 の result が file に残っている
+	s := newSandbox(t)
+	s.writeWorkflowWithCommands(s.workerWorkflow(fastRetry))
+	s.setIssues(readyIssue(42))
+	s.respondAll("claude", []stubwire.Rule{
+		{ArgsContain: []string{"attempt 1"}, Stdout: `{"type":"result","subtype":"success","is_error":false,"num_turns":4,"permission_denials":[]}` + "\n"},
+		{},
+	})
+
+	s.startLoop()
+
+	ends := s.waitEvents("end", 2)
+	if ends[0]["num_turns"] != float64(4) {
+		t.Fatalf("attempt 1 の end の行 = %v, want num_turns 4", ends[0])
+	}
+	if _, ok := ends[1]["num_turns"]; ok {
+		t.Fatalf("attempt 2 の end の行 = %v, want attempt 1 の result を載せない", ends[1])
+	}
+}
+
 func TestRetriedAttemptRunsInTheSameWorkspace(t *testing.T) {
 	s := newSandbox(t)
 	s.writeWorkflowWithCommands(s.workerWorkflow(fastRetry))
@@ -194,6 +215,40 @@ func TestStalledWorkerIsStoppedAndCountedAsAFailure(t *testing.T) {
 	end := s.waitEvents("end", 1)[0]
 	if end["outcome"] != "failed" || !strings.Contains(asString(end["reason"]), "stall") {
 		t.Fatalf("end の行 = %v, want stall の失敗", end)
+	}
+}
+
+func TestEndLineOfAWorkerStalledBeforeWritingAResultHasNoResultSummary(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflowWithCommands(s.workerWorkflow(fastRetry + "  stall_timeout: 1s\n"))
+	s.setIssues(readyIssue(42))
+	s.onClaude(stubwire.Rule{Stdout: `{"type":"assistant","message":{"content":[]}}` + "\n", ReleaseFile: s.releaseFile()})
+
+	s.startLoop()
+
+	end := s.waitEvents("end", 1)[0]
+	if !strings.Contains(asString(end["reason"]), "stall") {
+		t.Fatalf("end の行 = %v, want stall の失敗", end)
+	}
+	for _, key := range []string{"is_error", "num_turns", "permission_denial_count"} {
+		if _, ok := end[key]; ok {
+			t.Fatalf("end の行 = %v, want result を書く前に止めたので %s を載せない", end, key)
+		}
+	}
+}
+
+func TestEndLineOfAWorkerStalledAfterWritingAResultCarriesItsSummary(t *testing.T) {
+	// result の後に background の task の通知を待って stream が途絶えた worker
+	s := newSandbox(t)
+	s.writeWorkflowWithCommands(s.workerWorkflow(fastRetry + "  stall_timeout: 1s\n"))
+	s.setIssues(readyIssue(42))
+	s.onClaude(stubwire.Rule{Stdout: `{"type":"result","subtype":"success","is_error":false,"num_turns":6,"permission_denials":[]}` + "\n", ReleaseFile: s.releaseFile()})
+
+	s.startLoop()
+
+	end := s.waitEvents("end", 1)[0]
+	if !strings.Contains(asString(end["reason"]), "stall") || end["num_turns"] != float64(6) {
+		t.Fatalf("end の行 = %v, want stall の失敗に、止める前の result の num_turns 6 を載せる", end)
 	}
 }
 

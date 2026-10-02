@@ -256,6 +256,72 @@ func TestWorkerThatEndsStillMatchingTheTriggerFails(t *testing.T) {
 	}
 }
 
+func TestEndLineCarriesTheSummaryOfTheResultTheWorkerWrote(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflowWithCommands(s.workerWorkflow(""))
+	s.setIssues(readyIssue(42))
+	s.onClaude(stubwire.Rule{Stdout: `{"type":"assistant","message":{"content":[]}}` + "\n" +
+		`{"type":"result","subtype":"success","is_error":false,"num_turns":7,"permission_denials":[{"tool_name":"Bash"},{"tool_name":"Write"}]}` + "\n"})
+
+	s.startLoop()
+
+	end := s.waitEvents("end", 1)[0]
+	if end["is_error"] != false || end["num_turns"] != float64(7) || end["permission_denial_count"] != float64(2) {
+		t.Fatalf("end の行 = %v, want is_error false・num_turns 7・permission_denial_count 2", end)
+	}
+}
+
+func TestEndLineCarriesTheLastOfTheResultsTheWorkerWrote(t *testing.T) {
+	// background の task の通知で turn が続くと、1 回の attempt が result を 2 つ書く
+	s := newSandbox(t)
+	s.writeWorkflowWithCommands(s.workerWorkflow(""))
+	s.setIssues(readyIssue(42))
+	s.onClaude(stubwire.Rule{Stdout: `{"type":"result","subtype":"success","is_error":false,"num_turns":3,"permission_denials":[]}` + "\n" +
+		`{"type":"assistant","message":{"content":[]}}` + "\n" +
+		`{"type":"result","subtype":"success","is_error":true,"num_turns":5,"permission_denials":[{"tool_name":"Bash"}]}` + "\n"})
+
+	s.startLoop()
+
+	end := s.waitEvents("end", 1)[0]
+	if end["is_error"] != true || end["num_turns"] != float64(5) || end["permission_denial_count"] != float64(1) {
+		t.Fatalf("end の行 = %v, want 2 つ目の result (is_error true・num_turns 5・permission_denial_count 1)", end)
+	}
+}
+
+func TestEndLineOfAWorkerThatWroteNoResultHasNoResultSummary(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflowWithCommands(s.workerWorkflow(""))
+	s.setIssues(readyIssue(42))
+	s.onClaude(stubwire.Rule{Stdout: `{"type":"assistant","message":{"content":[]}}` + "\n"})
+
+	s.startLoop()
+
+	end := s.waitEvents("end", 1)[0]
+	for _, key := range []string{"is_error", "num_turns", "permission_denial_count"} {
+		if _, ok := end[key]; ok {
+			t.Fatalf("end の行 = %v, want result が無いので %s を載せない", end, key)
+		}
+	}
+}
+
+func TestResultItemOfAnotherTypeIsLeftOffTheEndLineAndLoggedAsAnError(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflowWithCommands(s.workerWorkflow(""))
+	s.setIssues(readyIssue(42))
+	s.onClaude(stubwire.Rule{Stdout: `{"type":"result","subtype":"success","is_error":false,"num_turns":"five","permission_denials":[]}` + "\n"})
+
+	s.startLoop()
+
+	end := s.waitEvents("end", 1)[0]
+	if _, ok := end["num_turns"]; ok || end["is_error"] != false {
+		t.Fatalf("end の行 = %v, want num_turns を載せず、is_error は載せる", end)
+	}
+	errs := s.events("error")
+	if len(errs) != 1 || !strings.Contains(asString(errs[0]["error"]), "num_turns") {
+		t.Fatalf("error の行 = %v, want num_turns を読めないことを 1 行", errs)
+	}
+}
+
 func TestLoopWithAnActionThatCannotBeRenderedFailsToStart(t *testing.T) {
 	s := newSandbox(t)
 	s.writeWorkflowWithCommands(strings.Replace(s.workerWorkflow(""), "{{ .trigger.name }}", "{{ .issue.body }}", 1))
