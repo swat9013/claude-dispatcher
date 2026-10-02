@@ -11,7 +11,7 @@ allowed-tools: Read, Bash(jq:*), Bash(scripts/claude-dispatcher-dev.sh paths:*),
 claude-dispatcher を実際に回している project から、**claude-dispatcher 本体**の改善点を拾う。dispatch (派遣) から帰った痕跡を吸い上げるので debrief と呼ぶ。
 
 - 提案の宛先は本体だけ。project 側 (WORKFLOW.md・worker が使う playbook) が原因の症状は、「本体の既定値・事前検査・status 表示・log の行・doc で防げたか、早く気づけたか」に言い換えて扱う。言い換えられないものは捨てる。この repo の issue にしか持ち込み先が無いため
-- 証拠源は state dir と WORKFLOW.md に限る。Claude Code の transcript は撃った人の環境にしか無く、起票した証拠を他の人が引けないため
+- 証拠源は state dir と WORKFLOW.md (その変更履歴を含む) に限る。Claude Code の transcript は撃った人の環境にしか無く、起票した証拠を他の人が引けないため
 - 判定を script にしていないのは、痕跡がまだ少なく、どの判定を繰り返すかが分かっていないため。同じ jq の繰り返しに気づいたら、script は作らず、提示の末尾に 1 行で挙げる
 - 形式の正本は [docs/design/formats.md](../../../docs/design/formats.md)。log.jsonl (§4) と `paths --json` (§7.3) は公開契約で、status.json・`prompts/`・`workers/` は契約外 (形が変わりうる)
 - **読むだけ**: state dir にも workspace にも書かず、loop に停止要求も signal も送らない。loop が走っている最中にも撃つため
@@ -34,7 +34,7 @@ CLI はこの checkout から build した版 (`scripts/claude-dispatcher-dev.sh
 - `paths` が 0 以外で終わる (workflow 定義が無い・誤っている)
 - `log` の file が無い (その project で loop を一度も回していない)
 
-一時 file は 1 つの dir にまとめ、どの終わり方 (読めなかった・提案 0 件・承認なし・起票後) でも、終える前に dir ごと消す。
+一時 file は 1 つの dir にまとめ、どの終わり方 (読めなかった・提案 0 件・承認なし・起票後) でも、終える前に dir ごと消す。消す操作が permission や hook に止められたら、別の形で消し直さず、残った path と消す command を user に告げて終える。
 
 ```sh
 mktemp -d "${TMPDIR:-/tmp}/debrief-XXXXXX"     # 以降の W
@@ -82,7 +82,7 @@ jq -r 'select(.event=="tick") | .ambiguous[]? | [.head, (.targets | join(","))] 
 jq -r 'select(.event=="tick" and .candidates > 0 and (.launched | length) == 0) | .ts' F
 ```
 
-候補があるのに起動しなかった tick は、その時刻に走っていた attempt (start と end の間) の数が `limits.max_concurrent` に達していれば正常。達していないのに起動していなければ、同じ tick の `blocked`・`ambiguous` と、その候補の claim・打ち切りの状態で理由を読む。
+候補があるのに起動しなかった tick は、その時刻に走っていた attempt (start と end の間) の数が `limits.max_concurrent` に達していれば正常。並列上限は tick ごとに workflow 定義を読み直して決まり (formats.md §6)、tick 行には載らないので、その時刻の値は `git -C <WORKFLOW.md の dir> log -p -- WORKFLOW.md` の変更時刻と照らして決める。達していないのに起動していなければ、同じ tick の `blocked`・`ambiguous` と、その候補の claim・打ち切りの状態で理由を読む。
 
 **3. 時間**
 
