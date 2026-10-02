@@ -295,8 +295,9 @@ func waitStart(t *testing.T, s *sandbox, target string, n int) map[string]any {
 const slowRetry = "limits:\n  max_retry_backoff: 3s\n"
 
 func TestTickLineCountsTheClaimWaitingToRetry(t *testing.T) {
+	// backoff を 10s にして、retry の行の後の tick が再起動より先に来るようにする
 	s := newSandbox(t)
-	s.writeWorkflowWithCommands(s.workerWorkflow(slowRetry))
+	s.writeWorkflowWithCommands(s.workerWorkflow("limits:\n  max_retry_backoff: 30s\n"))
 	s.setIssues(readyIssue(42))
 	s.onClaude(stubwire.Rule{})
 	s.startLoop()
