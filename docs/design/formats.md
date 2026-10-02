@@ -309,13 +309,14 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 | `failed` | worker が終わった後も作業対象が trigger に当たったままで、worker が失敗した (異常終了・hook の失敗・描画の失敗・起動できない・stall・上限時間の超過) か、正常に終わった。claim は解かず、`retry` か `abandon` の行が続く |
 | `stopped` | loop が止めた (作業対象が終端になった・2 回目の停止要求) |
 
-- `error` の行を書く場面: `after_run` と `before_remove` の失敗・workspace を消せない (次の tick の掃除で消し直す)・終わった worker の作業対象を読み直せない (claim を持ったまま次の tick で読み直す)・止める worker の process group に signal を送れない・worker log から attempt の最後の `result` を読めない
+- `error` の行を書く場面: `after_run` と `before_remove` の失敗・workspace を消せない (次の tick の掃除で消し直す)・終わった worker の作業対象を読み直せない (claim を持ったまま次の tick で読み直す)・止める worker の process group に signal を送れない・worker log から attempt の最後の `result` を読めない (項目の型が違うときを含む)
 - log.jsonl に行を書けなければ、そのことを stdout に出して続ける
 - `attempt` は、その行が指す claim の最後に起動した (起動しようとした) attempt
 - `end` の行の attempt の最後の `result` の要約: worker log (stream-json。§1) のうち、その attempt が追記した完結した行 (改行で終わる行) から、最後の `type: result` の行を読む。worker log は attempt を跨いで追記するので、前の attempt の `result` は読まない
   - `is_error`・`num_turns`: その `result` の同じ名前の項目の値
   - `permission_denial_count`: その `result` の `permission_denials` (配列) の要素の数
-  - `result` の行が無ければ (claude を起動できなかった・stall や上限時間や signal で `result` を書く前に止めた 等) 3 つとも載せない。`result` の行にその項目が無ければ、その key だけ載せない
+  - `result` の行が無ければ (claude を起動できなかった・stall や上限時間や signal で `result` を書く前に止めた 等) 3 つとも載せない。`result` の行にその項目が無ければ、その key だけ載せない。項目の型が違えば (`num_turns` が数でない 等)、その key を載せず `error` の行を残す
+  - 止めた attempt (stall・上限時間・停止要求) でも、止める前に `result` の行を書いていれば要約を載せる
 - `session_id` は CLI が発行して最初の attempt に `--session-id` で渡した値。同じ claim の attempt を通して 1 つ。Claude Code の transcript へ辿る鍵
 - claim を解くのは `completed` と `stopped` の `end`・`release`・`abandon` の行
 
