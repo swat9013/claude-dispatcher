@@ -301,11 +301,9 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 | `error` | 処理は続けるが、運用者が知るべき失敗 | `target` (あれば)・`error` |
 
 - `target` は、issue なら `issue#<番号>`、CL なら `cl#<番号>`
-- `tick` の行の起動の判定に使った値 (§6 の tick の手順 7)
-  - `running`: tick の終わりに走っている worker (止めている途中を含む) の数。その tick で起動した worker を含む
-  - `waiting_retry`: tick の終わりの再起動待ちの claim の数。事前検査に落ちた trigger のものは数えない
+- `tick` の行の起動の判定に使った値は、§6 の tick の手順 7 (候補の起動) の判定のもの
+  - `running`・`waiting_retry`: その tick で候補の起動を始める前の、走っている worker と再起動待ちの claim の数 (手順 7 が `limits.max_concurrent` から引く数)
   - `max_concurrent`: その tick で読み直した workflow 定義の `limits.max_concurrent`
-  - 起動しなかった候補は、`running` と `waiting_retry` の和が `max_concurrent` に達していなければ、claim・打ち切り・branch の除外で外れたもの
 - `outcome`
 
 | 値 | 意味 |
