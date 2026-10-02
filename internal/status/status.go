@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -131,8 +132,8 @@ func Read(dir string) (s Snapshot, ok bool, err error) {
 	return s, true, nil
 }
 
-// phaseLabels は worker の行の段階の欄
-var phaseLabels = map[Phase]string{Running: "走っている", Stopping: "止めている", Verifying: "確かめ待ち", WaitingRetry: "再起動待ち"}
+// phaseTones は workers の表の段階の欄の色
+var phaseTones = map[Phase]Tone{Running: Cyan, WaitingRetry: Yellow, Verifying: Gray}
 
 // Liveness は loop が生きているか。
 type Liveness bool
@@ -142,64 +143,147 @@ const (
 	LoopAlive Liveness = true
 )
 
-// heading は見出しの先頭の語。
-func heading(loop Liveness, stopping bool) string {
+// state は見出しの 1 行目の loop の状態。
+func state(loop Liveness, stopping bool) Span {
 	switch {
 	case loop == LoopGone:
-		return "loop なし"
+		return Span{Gray, "○ loop なし"}
 	case stopping:
-		return "loop 停止待ち"
+		return Span{BoldYellow, "● loop 停止待ち"}
 	}
-	return "loop 稼働中"
+	return Span{BoldGreen, "● loop 稼働中"}
 }
 
 // Unrecorded は状態 file が無いときの見出し (formats.md §7.2)。loop が生きていれば、lock を取ってから最初に書き出すまでの間。
-func Unrecorded(scope string, loop Liveness) string {
-	return fmt.Sprintf("%s · scope %s · 記録なし\n", heading(loop, false), scope)
+func Unrecorded(scope string, loop Liveness, d Display) string {
+	return d.Line(state(loop, false), Span{Plain, "  "}, Span{Bold, scope}) + "\n" + d.Line(Span{Gray, "記録なし"}) + "\n"
 }
 
-// Render は状態を人が読む形に描く (formats.md §7.2)。時刻は loc の HH:MM:SS で出す。
-func Render(s Snapshot, loop Liveness, now time.Time, loc *time.Location) string {
-	clock := func(t time.Time) string { return t.In(loc).Format("15:04:05") }
-	alive := loop == LoopAlive
-	head := heading(loop, s.Stopping) + " · scope " + s.Scope
-	if alive && s.NextTickAt != nil {
-		head += " · 次の tick " + clock(*s.NextTickAt)
+// Render は状態を人が読む形に描く (formats.md §7.2): 見出しと、loop が生きていればセクション。時刻は loc の HH:MM:SS で出す。
+func Render(s Snapshot, loop Liveness, now time.Time, loc *time.Location, d Display) string {
+	if loop == LoopGone {
+		// worker と打ち切りは loop の memory と一緒に消えている
+		return Heading(s, loop, loc, d)
+	}
+	return Heading(s, loop, loc, d) + "\n" + Sections(s, now, loc, d)
+}
+
+func clock(t time.Time, loc *time.Location) string { return t.In(loc).Format("15:04:05") }
+
+// Heading は見出し: loop の状態と scope key の行と、次の tick と直近の tick の行 (出す欄が無ければ出さない)。
+func Heading(s Snapshot, loop Liveness, loc *time.Location, d Display) string {
+	head := d.Line(state(loop, s.Stopping), Span{Plain, "  "}, Span{Bold, s.Scope}) + "\n"
+	var ticks [][]Span
+	switch {
+	case loop == LoopGone:
+	case s.Stopping:
+		ticks = append(ticks, []Span{{Gray, "次の tick なし"}})
+	case s.NextTickAt != nil:
+		ticks = append(ticks, []Span{{Gray, "次の tick "}, {Plain, clock(*s.NextTickAt, loc)}})
 	}
 	if t := s.LastTick; t != nil {
+		last := []Span{{Gray, "直近の tick "}, {Plain, clock(t.At, loc) + " "}}
 		if t.Result == TickError {
-			head += fmt.Sprintf(" · 直近の tick %s error: %s", clock(t.At), printable.Line(t.Error))
+			last = append(last, Span{Red, "error: " + printable.Line(t.Error)})
 		} else {
-			head += fmt.Sprintf(" · 直近の tick %s %s (候補 %d)", clock(t.At), t.Result, t.Candidates)
+			last = append(last, Span{Green, string(t.Result)}, Span{Gray, " · 候補 "}, Span{Plain, strconv.Itoa(t.Candidates)})
+		}
+		ticks = append(ticks, last)
+	}
+	if len(ticks) == 0 {
+		return head
+	}
+	var line []Span
+	for i, spans := range ticks {
+		if i > 0 {
+			line = append(line, Span{Gray, " · "})
+		}
+		line = append(line, spans...)
+	}
+	return head + d.Line(line...) + "\n"
+}
+
+// Sections は見出しの後に並べるセクション: workers と、人の手当てを待つものがあれば要対処。セクションは空行で区切る。
+func Sections(s Snapshot, now time.Time, loc *time.Location, d Display) string {
+	sections := d.Section(Span{Bold, fmt.Sprintf("workers %d", len(s.Workers))}) + "\n" + workers(s.Workers, now, loc, d)
+	if attention := needsAttention(s); len(attention) > 0 {
+		sections += "\n" + d.Section(Span{BoldYellow, fmt.Sprintf("要対処 %d", len(attention))}) + "\n"
+		for _, line := range attention {
+			sections += d.Line(line...) + "\n"
 		}
 	}
-	lines := []string{head}
-	if !alive {
-		// worker と打ち切りは loop の memory と一緒に消えている
-		return head + "\n"
+	return sections
+}
+
+// workers は claim の表。列は空白で揃え、行の終わりの空の欄は描かない。claim が無ければ列見出しも出さない。
+func workers(ws []Worker, now time.Time, loc *time.Location, d Display) string {
+	if len(ws) == 0 {
+		return ""
 	}
-	for _, w := range s.Workers {
+	rows := [][]Span{{{Gray, "作業対象"}, {Gray, "trigger"}, {Gray, "attempt"}, {Gray, "段階"}, {Gray, "経過"}, {Gray, "活動"}}}
+	for _, w := range ws {
 		when := ""
 		switch {
 		case w.Phase == WaitingRetry && w.RetryAt != nil:
-			when = clock(*w.RetryAt) + " に再起動"
+			when = clock(*w.RetryAt, loc) + " に再起動"
 		case (w.Phase == Running || w.Phase == Stopping) && w.StartedAt != nil:
-			when = now.Sub(*w.StartedAt).Truncate(time.Second).String()
+			when = elapsed(now.Sub(*w.StartedAt))
 		}
 		activity := ""
 		if w.Activity != nil {
 			activity = w.Activity.Summary
 		}
-		lines = append(lines, strings.Join([]string{w.Target, w.Trigger, fmt.Sprintf("attempt %d", w.Attempt), phaseLabels[w.Phase], when, activity}, "\t"))
+		rows = append(rows, []Span{{Plain, w.Target}, {Plain, w.Trigger}, {Plain, strconv.Itoa(w.Attempt)}, {phaseTones[w.Phase], string(w.Phase)}, {Plain, when}, {Plain, activity}})
 	}
+	// 最後の列 (活動) は揃えないので幅を数えない
+	widths := make([]int, len(rows[0])-1)
+	for _, row := range rows {
+		for i := range widths {
+			widths[i] = max(widths[i], cells(row[i].Text))
+		}
+	}
+	var b strings.Builder
+	for _, row := range rows {
+		last := len(row) - 1
+		for last > 0 && row[last].Text == "" {
+			last--
+		}
+		var line []Span
+		for i, cell := range row[:last+1] {
+			line = append(line, cell)
+			if i < last {
+				line = append(line, Span{Plain, strings.Repeat(" ", widths[i]-cells(cell.Text)+2)})
+			}
+		}
+		b.WriteString(d.Line(line...) + "\n")
+	}
+	return b.String()
+}
+
+// elapsed は経過を `45s`・`5m10s`・`1h02m05s` の形にする (秒未満は切り捨てる)。
+func elapsed(d time.Duration) string {
+	sec := int(d / time.Second)
+	h, m, s := sec/3600, sec/60%60, sec%60
+	switch {
+	case h > 0:
+		return fmt.Sprintf("%dh%02dm%02ds", h, m, s)
+	case m > 0:
+		return fmt.Sprintf("%dm%02ds", m, s)
+	}
+	return fmt.Sprintf("%ds", s)
+}
+
+// needsAttention は要対処の行: 打ち切り・曖昧な CL・起動しない trigger。
+func needsAttention(s Snapshot) [][]Span {
+	var lines [][]Span
 	for _, a := range s.Abandoned {
-		lines = append(lines, fmt.Sprintf("打ち切り %s (%s): label を外して trigger から外し、1 周期待ってから付け直すと解ける", a.Target, a.Trigger))
+		lines = append(lines, []Span{{Red, "打ち切り"}, {Plain, fmt.Sprintf(" %s (%s): label を外して trigger から外し、1 周期待ってから付け直すと解ける", a.Target, a.Trigger)}})
 	}
 	for _, a := range s.Ambiguous {
-		lines = append(lines, fmt.Sprintf("曖昧な CL %s: %s", a.Head, strings.Join(a.Targets, ", ")))
+		lines = append(lines, []Span{{Yellow, "曖昧な CL"}, {Plain, fmt.Sprintf(" %s: %s", a.Head, strings.Join(a.Targets, ", "))}})
 	}
 	for _, b := range s.Blocked {
-		lines = append(lines, fmt.Sprintf("起動しない trigger %s: %s", b.Trigger, b.Error))
+		lines = append(lines, []Span{{Red, "起動しない trigger"}, {Plain, fmt.Sprintf(" %s: %s", b.Trigger, b.Error)}})
 	}
-	return strings.Join(lines, "\n") + "\n"
+	return lines
 }

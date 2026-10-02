@@ -106,6 +106,6 @@ func (l *loop) refresh() {
 			continue
 		}
 		c.activity = &a
-		l.rec.human("活動 %s: %s", ref, a.Summary)
+		l.rec.human(LineActivity, "活動", " %s: %s", ref, a.Summary)
 	}
 }

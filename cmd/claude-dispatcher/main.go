@@ -221,16 +221,17 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 	defer logFile.Close()
 	surviveClosedStdout()
 	publish := func(snap status.Snapshot) error { return status.Write(dir, snap) }
-	// 端末なら画面を描き直し、そうでなければ事象の行を追記する (formats.md §6)
+	// 端末なら画面を描き直し、そうでなければログの行を追記する (formats.md §6)
+	var output loop.Output = loop.Appender{W: stdout}
 	if f, ok := stdout.(*os.File); ok && isTerminal(f) {
-		sc := &screen{out: stdout, now: time.Now}
-		stdout = sc
+		sc := &screen{out: stdout, now: time.Now, loc: time.Local, display: func() status.Display { return display(f, e.getenv) }}
+		output = sc
 		publish = func(snap status.Snapshot) error {
 			sc.show(snap)
 			return status.Write(dir, snap)
 		}
 	}
-	fmt.Fprintf(stdout, "%s loop を始めた: scope %s · state dir %s · workflow %s\n", time.Now().UTC().Format(time.RFC3339), scopeKey, dir, abs)
+	output.Show(loop.Line{At: time.Now(), Label: "loop を始めた", Rest: fmt.Sprintf(": scope %s · state dir %s · workflow %s", scopeKey, dir, abs)})
 	return loop.Run(loop.Options{
 		Load:       load,
 		Definition: def,
@@ -245,7 +246,7 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 		Workflow:     abs,
 		ScopeKey:     scopeKey,
 		Log:          logFile,
-		Stdout:       stdout,
+		Output:       output,
 		Signals:      stopRequests(),
 		Now:          time.Now,
 		After:        time.After,
@@ -356,11 +357,15 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return exitFailed
 	}
+	d := status.Display{Palette: status.Monochrome}
+	if f, ok := stdout.(*os.File); ok {
+		d = display(f, e.getenv)
+	}
 	if !found {
-		fmt.Fprint(stdout, status.Unrecorded(scopeKey, status.Liveness(alive)))
+		fmt.Fprint(stdout, status.Unrecorded(scopeKey, status.Liveness(alive), d))
 		return 0
 	}
-	fmt.Fprint(stdout, status.Render(snap, status.Liveness(alive), time.Now(), time.Local))
+	fmt.Fprint(stdout, status.Render(snap, status.Liveness(alive), time.Now(), time.Local, d))
 	return 0
 }
 

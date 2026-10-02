@@ -100,7 +100,7 @@ func TestRetryOfATriggerThatLostItsSkillDoesNotHoldTheSlot(t *testing.T) {
 	s.setIssues(readyIssue(42), urgent)
 
 	loop.waitForOutput(regexp.MustCompile(`起動 issue#42 \(implement`))
-	s.waitStatus("issue#43\turgent\tattempt 1\t再起動待ち")
+	s.waitStatusRow("issue#43", "urgent", "1", "waiting_retry")
 }
 
 func TestRetryOfATriggerThatLostItsSkillIsReleasedWhenTheIssueCloses(t *testing.T) {

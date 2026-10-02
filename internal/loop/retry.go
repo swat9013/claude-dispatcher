@@ -40,7 +40,7 @@ func (l *loop) fail(ref target.Ref, c *claim) {
 		delete(l.claims, ref)
 		l.abandoned[ref] = c.trigger.Name
 		l.rec.event("abandon", map[string]any{"target": name, "trigger": c.trigger.Name, "attempt": c.attempt, "session_id": c.sessionID},
-			"打ち切り %s (%s, attempt %d 回): label を外して trigger から外すと解ける (外してから 1 周期待つ)", name, c.trigger.Name, c.attempt)
+			LineNote, "打ち切り", " %s (%s, attempt %d 回): label を外して trigger から外すと解ける (外してから 1 周期待つ)", name, c.trigger.Name, c.attempt)
 		return
 	}
 	// 前の attempt の起動の時刻と活動は、次の attempt を起動するまで持たない
@@ -53,7 +53,7 @@ func (l *loop) fail(ref target.Ref, c *claim) {
 	l.rec.event("retry", map[string]any{
 		"target": name, "trigger": c.trigger.Name, "attempt": c.attempt, "next_attempt": c.attempt + 1,
 		"session_id": c.sessionID, "backoff": wait.Seconds(),
-	}, "再起動を予定 %s (%s, attempt %d, %s 後)", name, c.trigger.Name, c.attempt+1, wait)
+	}, LineRetry, "再起動を予定", " %s (%s, attempt %d, %s 後)", name, c.trigger.Name, c.attempt+1, wait)
 }
 
 // arm は、最も早い再起動の予定に届く wake を置く。もっと早い予定の wake が既にあれば置き直さない。停止要求の後は置かない。
@@ -88,7 +88,7 @@ func (l *loop) retry(store Store, v *view) {
 			if !c.waitingSlot {
 				c.waitingSlot = true
 				l.rec.event("wait_slot", map[string]any{"target": ref.String(), "trigger": c.trigger.Name, "next_attempt": c.attempt + 1, "max_concurrent": l.def.MaxConcurrent},
-					"再起動を待つ %s (%s, attempt %d): 並列上限 %d に空きが出るまで待つ", ref, c.trigger.Name, c.attempt+1, l.def.MaxConcurrent)
+					LineNote, "再起動を待つ", " %s (%s, attempt %d): 並列上限 %d に空きが出るまで待つ", ref, c.trigger.Name, c.attempt+1, l.def.MaxConcurrent)
 			}
 			continue
 		}
@@ -167,7 +167,7 @@ func (l *loop) releaseWaiting(ref target.Ref, c *claim, reason string) {
 	delete(l.claims, ref)
 	name := ref.String()
 	l.rec.event("release", map[string]any{"target": name, "trigger": c.trigger.Name, "attempt": c.attempt, "session_id": c.sessionID, "reason": reason},
-		"再起動せずに解いた %s (%s): %s", name, c.trigger.Name, reason)
+		LineNote, "再起動せずに解いた", " %s (%s): %s", name, c.trigger.Name, reason)
 }
 
 // restartable は、再起動待ちの claim のうち、起動できるもの (trigger が事前検査に落ちていない)。落ちている trigger の
@@ -197,7 +197,7 @@ func (l *loop) clearAbandoned(def workflow.Definition, v *view) {
 		}
 		delete(l.abandoned, ref)
 		l.rec.event("unabandon", map[string]any{"target": ref.String(), "trigger": name},
-			"打ち切りを解いた %s (%s)", ref, name)
+			LineNote, "打ち切りを解いた", " %s (%s)", ref, name)
 	}
 }
 
