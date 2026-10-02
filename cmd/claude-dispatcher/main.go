@@ -227,7 +227,7 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 		sc := &screen{out: stdout, now: time.Now, loc: time.Local, display: func() status.Display { return display(f, e.getenv) }}
 		output = sc
 		publish = func(snap status.Snapshot) error {
-			sc.show(snap)
+			sc.showStatus(snap)
 			return status.Write(dir, snap)
 		}
 	}

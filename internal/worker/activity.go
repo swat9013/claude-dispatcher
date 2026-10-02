@@ -25,10 +25,10 @@ type streamLine struct {
 	Subtype string `json:"subtype"`
 	Message struct {
 		Content []struct {
-			Type  string    `json:"type"`
-			Text  string    `json:"text"`
-			Name  string    `json:"name"`
-			Input toolInput `json:"input"`
+			Type  string          `json:"type"`
+			Text  string          `json:"text"`
+			Name  string          `json:"name"`
+			Input json.RawMessage `json:"input"`
 		} `json:"content"`
 	} `json:"message"`
 }
@@ -42,22 +42,35 @@ type toolInput struct {
 	Description string `json:"description"`
 }
 
-// gist は tool の入力の要点 (formats.md §6)。要点を持たない tool は ""。
-func (in toolInput) gist(tool, workspace string) string {
-	switch tool {
-	case "Bash":
+// gists は tool ごとの入力の要点の取り出し方 (formats.md §6)。ここに無い tool は要点を持たない
+var gists = map[string]func(in toolInput, workspace string) string{
+	"Bash": func(in toolInput, _ string) string {
 		first, _, _ := strings.Cut(in.Command, "\n")
 		return first
-	case "Read", "Edit", "Write":
-		return relativeTo(workspace, in.FilePath)
-	case "Grep", "Glob":
-		return in.Pattern
-	case "Skill":
-		return in.Skill
-	case "Agent":
-		return in.Description
+	},
+	"Read":  filePath,
+	"Edit":  filePath,
+	"Write": filePath,
+	"Grep":  func(in toolInput, _ string) string { return in.Pattern },
+	"Glob":  func(in toolInput, _ string) string { return in.Pattern },
+	"Skill": func(in toolInput, _ string) string { return in.Skill },
+	"Agent": func(in toolInput, _ string) string { return in.Description },
+}
+
+func filePath(in toolInput, workspace string) string { return relativeTo(workspace, in.FilePath) }
+
+// gist は tool の入力の要点。要点を持たない tool と、入力を読めない tool は ""。入力は要点を持つ tool のときだけ読む (ほかの
+// tool の入力は、同じ名前の項目が文字列でないことがある)。
+func gist(tool string, input json.RawMessage, workspace string) string {
+	pick, ok := gists[tool]
+	if !ok {
+		return ""
 	}
-	return ""
+	var in toolInput
+	if err := json.Unmarshal(input, &in); err != nil {
+		return ""
+	}
+	return pick(in, workspace)
 }
 
 // relativeTo は workspace の中の path を workspace からの相対 path にする。外の path はそのまま返す (`../` を重ねた path は
@@ -87,7 +100,7 @@ func Summarize(line []byte, workspace string) (summary string, ok bool) {
 			case "thinking":
 				summary = "thinking"
 			case "tool_use":
-				summary = strings.TrimSpace(last.Name + " " + last.Input.gist(last.Name, workspace))
+				summary = strings.TrimSpace(last.Name + " " + gist(last.Name, last.Input, workspace))
 			}
 		}
 	case "user":

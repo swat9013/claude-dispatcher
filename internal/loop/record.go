@@ -29,6 +29,8 @@ const (
 	LineCompleted
 	LineFailed
 	LineError
+	// LineTickError は失敗した tick の行
+	LineTickError
 	// LineRetry は再起動の予定
 	LineRetry
 	// LineStopping は停止待ち
@@ -70,13 +72,13 @@ func (r recorder) event(event string, fields map[string]any, kind LineKind, labe
 		_, err = fmt.Fprintf(r.log, "%s\n", raw)
 	}
 	if err != nil {
-		r.human(LineError, fmt.Sprintf("log.jsonl に %s の行を書けない: %v", event, err), "")
+		r.human(LineError, "log.jsonl", " に %s の行を書けない: %v", event, err)
 	}
 	r.human(kind, label, format, a...)
 }
 
 func (r recorder) tickError(message string) {
-	r.event("tick", map[string]any{"result": "error", "error": message}, LineError, "tick error · "+message, "")
+	r.event("tick", map[string]any{"result": "error", "error": message}, LineTickError, "tick error", " · %s", message)
 }
 
 // error は処理を続けるが運用者が知るべき失敗を残す。ref がゼロ値なら作業対象を持たない。

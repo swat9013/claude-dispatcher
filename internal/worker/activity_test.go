@@ -50,6 +50,8 @@ func TestSummarizeToolUseShowsTheGistOfItsInput(t *testing.T) {
 		{"Agent は description", "Agent", `{"description":"差分をレビューする","prompt":"長い指示","subagent_type":"reviewer"}`, "Agent 差分をレビューする"},
 		{"MCP の tool は名前だけ", "mcp__slack__send_message", `{"channel":"C1","text":"秘密"}`, "mcp__slack__send_message"},
 		{"要点が無ければ名前だけ", "Bash", `{}`, "Bash"},
+		{"要点を持たない tool の入力は読まない", "mcp__x__search", `{"description":{"nested":true},"pattern":["a"]}`, "mcp__x__search"},
+		{"入力を読めなければ名前だけ", "Agent", `{"description":42}`, "Agent"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

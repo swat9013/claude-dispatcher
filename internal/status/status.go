@@ -260,9 +260,10 @@ func workers(ws []Worker, now time.Time, loc *time.Location, d Display) string {
 	return b.String()
 }
 
-// elapsed は経過を `45s`・`5m10s`・`1h02m05s` の形にする (秒未満は切り捨てる)。
+// elapsed は経過を `45s`・`5m10s`・`1h02m05s` の形にする (秒未満は切り捨てる)。読み手の時計が起動の時刻より遅れて負に
+// なったら 0s にする。
 func elapsed(d time.Duration) string {
-	sec := int(d / time.Second)
+	sec := int(max(d, 0) / time.Second)
 	h, m, s := sec/3600, sec/60%60, sec%60
 	switch {
 	case h > 0:

@@ -17,18 +17,6 @@ func at(d time.Duration) *time.Time { t := base.Add(d); return &t }
 // pipe は stdout が端末でないときの描き方 (色も幅も無い)
 var pipe = status.Display{Palette: status.Monochrome}
 
-// rule は端末でないときのセクションの 1 行目 (60 桁。全角は 2 桁)
-func rule(title string) string {
-	cells := 0
-	for _, r := range title {
-		cells++
-		if r >= 0x80 {
-			cells++
-		}
-	}
-	return title + " " + strings.Repeat("─", 59-cells)
-}
-
 func TestHeadingOfARunningLoopShowsTheNextAndTheLastTick(t *testing.T) {
 	s := status.Snapshot{Scope: "github.com/acme/widgets", NextTickAt: at(5 * time.Minute), LastTick: &status.Tick{At: base, Result: status.TickOK, Candidates: 1}}
 
@@ -85,7 +73,7 @@ func TestWorkersAreATableWithColumnHeadings(t *testing.T) {
 	got := status.Render(s, status.LoopAlive, base.Add(5*time.Minute+5*time.Second), time.UTC, pipe)
 
 	want := strings.Join([]string{
-		rule("workers 2"),
+		"workers 2 " + strings.Repeat("─", 50),
 		"作業対象  trigger    attempt  段階           経過               活動",
 		"issue#42  implement  2        running        5m05s              Bash go test ./...",
 		"issue#44  fix-ci     1        waiting_retry  00:01:30 に再起動",
@@ -103,6 +91,7 @@ func TestElapsedTimeOfAWorker(t *testing.T) {
 		{45 * time.Second, "45s"},
 		{time.Minute, "1m00s"},
 		{time.Hour + 2*time.Minute + 5*time.Second + 500*time.Millisecond, "1h02m05s"},
+		{-65 * time.Second, "0s"},
 	}
 	for _, c := range cases {
 		s := status.Snapshot{Scope: "s", Workers: []status.Worker{{Target: "issue#42", Trigger: "implement", Attempt: 1, Phase: status.Stopping, StartedAt: at(0)}}}
@@ -118,7 +107,7 @@ func TestElapsedTimeOfAWorker(t *testing.T) {
 func TestNoWorkersShowsAnEmptySection(t *testing.T) {
 	got := status.Render(status.Snapshot{Scope: "s"}, status.LoopAlive, base, time.UTC, pipe)
 
-	if !strings.HasSuffix(got, "\n\n"+rule("workers 0")+"\n") {
+	if !strings.HasSuffix(got, "\n\nworkers 0 "+strings.Repeat("─", 50)+"\n") {
 		t.Fatalf("描画:\n%s", got)
 	}
 }
@@ -133,12 +122,12 @@ func TestNeedsAttentionGathersWhatAPersonMustFix(t *testing.T) {
 	got := status.Render(s, status.LoopAlive, base, time.UTC, pipe)
 
 	want := strings.Join([]string{
-		rule("要対処 3"),
+		"要対処 3 " + strings.Repeat("─", 51),
 		"打ち切り issue#43 (implement): label を外して trigger から外し、1 周期待ってから付け直すと解ける",
 		"曖昧な CL worktree-issue-7: cl#52, cl#53",
 		"起動しない trigger fix-ci: action の先頭の /fix が見つからない",
 	}, "\n") + "\n"
-	if !strings.HasSuffix(got, rule("workers 0")+"\n\n"+want) {
+	if !strings.HasSuffix(got, "workers 0 "+strings.Repeat("─", 50)+"\n\n"+want) {
 		t.Fatalf("描画:\n%s\nwant 要対処:\n%s", got, want)
 	}
 }
@@ -151,30 +140,54 @@ func TestNeedsAttentionIsLeftOutWhenNothingNeedsAPerson(t *testing.T) {
 	}
 }
 
-func TestColorsAreOnlyPaintedOnATerminal(t *testing.T) {
-	s := status.Snapshot{Scope: "s", Workers: []status.Worker{{Target: "issue#42", Trigger: "implement", Attempt: 1, Phase: status.Running, StartedAt: at(0)}}}
+// running は走っている worker 1 本の状態
+var running = status.Snapshot{Scope: "s", Workers: []status.Worker{{Target: "issue#42", Trigger: "implement", Attempt: 1, Phase: status.Running, StartedAt: at(0)}}}
 
-	painted := status.Render(s, status.LoopAlive, base, time.UTC, status.Display{Palette: status.ANSI})
-	plain := status.Render(s, status.LoopAlive, base, time.UTC, pipe)
+func TestRunningIsPaintedCyanOnATerminal(t *testing.T) {
+	got := status.Render(running, status.LoopAlive, base, time.UTC, status.Display{Palette: status.ANSI})
 
-	if !strings.Contains(painted, "\033[36mrunning\033[0m") {
-		t.Errorf("端末の描画で running が水色でない:\n%q", painted)
-	}
-	if strings.Contains(plain, "\033[") {
-		t.Errorf("端末でない描画に色が付いた:\n%q", plain)
+	if !strings.Contains(got, "\033[36mrunning\033[0m") {
+		t.Fatalf("端末の描画で running が水色でない:\n%q", got)
 	}
 }
+
+func TestNothingIsPaintedWithoutColors(t *testing.T) {
+	got := status.Render(running, status.LoopAlive, base, time.UTC, pipe)
+
+	if strings.Contains(got, "\033[") {
+		t.Fatalf("色の無い描画に色が付いた:\n%q", got)
+	}
+}
+
+// narrow は幅 20 の端末
+var narrow = status.Display{Palette: status.Monochrome, Width: 20}
 
 func TestLongLinesAreCutAtTheWidthOfTheTerminal(t *testing.T) {
 	s := status.Snapshot{Scope: "s", Abandoned: []status.Abandoned{{Target: "issue#43", Trigger: "implement"}}}
 
-	got := status.Render(s, status.LoopAlive, base, time.UTC, status.Display{Palette: status.Monochrome, Width: 20})
+	got := status.Render(s, status.LoopAlive, base, time.UTC, narrow)
 
 	// 全角は 2 桁と数える: 「打ち切り」(8) + 「 issue#43 (」(11) で 19 桁、残る 1 桁に … を置く
 	if want := "\n打ち切り issue#43 (…\n"; !strings.Contains(got, want) {
 		t.Fatalf("描画:\n%s\nwant 行 %q", got, want)
 	}
-	if want := "\n" + "workers 0 " + strings.Repeat("─", 10) + "\n"; !strings.Contains(got, want) {
+}
+
+func TestEmojiTakeTwoColumns(t *testing.T) {
+	s := status.Snapshot{Scope: "s", Blocked: []status.Blocked{{Trigger: "a", Error: "✅✅"}}}
+
+	got := status.Render(s, status.LoopAlive, base, time.UTC, status.Display{Palette: status.Monochrome, Width: 25})
+
+	// 「起動しない trigger a: ✅✅」は 18 + 4 + 2×2 で 26 桁。幅 25 に収まらないので、24 桁で切って … を置く
+	if want := "\n起動しない trigger a: ✅…\n"; !strings.Contains(got, want) {
+		t.Fatalf("描画:\n%s\nwant 行 %q", got, want)
+	}
+}
+
+func TestSectionRulesStopAtTheWidthOfTheTerminal(t *testing.T) {
+	got := status.Render(status.Snapshot{Scope: "s"}, status.LoopAlive, base, time.UTC, narrow)
+
+	if want := "\nworkers 0 " + strings.Repeat("─", 10) + "\n"; !strings.Contains(got, want) {
 		t.Fatalf("罫線が端末の幅で止まらない:\n%s", got)
 	}
 }

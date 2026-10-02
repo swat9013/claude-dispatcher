@@ -41,7 +41,7 @@ func TestScreenDrawsTheStatusAboveTheLog(t *testing.T) {
 		Target: "issue#42", Trigger: "implement", Attempt: 1, Phase: status.Running, StartedAt: &started,
 		Activity: &status.Activity{At: screenNow, Summary: "Bash go test ./..."},
 	}}}
-	sc.show(snap)
+	sc.showStatus(snap)
 
 	sc.Show(loop.Line{At: screenNow, Kind: loop.LineStart, Label: "起動", Rest: " issue#42 (implement, attempt 1, session x)"})
 
@@ -80,8 +80,8 @@ func TestScreenTellsHowToStopWhileTheLoopWaitsForWorkers(t *testing.T) {
 	var out bytes.Buffer
 	sc := newScreen(&out, pipe)
 
-	sc.show(status.Snapshot{Scope: "s", Stopping: true, Workers: []status.Worker{
-		{Target: "issue#42", Phase: status.Running}, {Target: "issue#43", Phase: status.Stopping}, {Target: "issue#44", Phase: status.Verifying},
+	sc.showStatus(status.Snapshot{Scope: "s", Stopping: true, Workers: []status.Worker{
+		{Target: "issue#42", Phase: status.Running}, {Target: "issue#43", Phase: status.Running}, {Target: "issue#44", Phase: status.Verifying},
 	}})
 
 	want := "● loop 停止待ち  s\n次の tick なし\n走っている worker 2 本の終了を待っている。もう一度 Ctrl+C で worker を止めて終える\n\nworkers 3 "
@@ -90,18 +90,78 @@ func TestScreenTellsHowToStopWhileTheLoopWaitsForWorkers(t *testing.T) {
 	}
 }
 
+func TestScreenStopsTellingHowToStopOnceTheWorkersAreBeingStopped(t *testing.T) {
+	// 2 回目の停止要求の後は、走っている worker が止めている段階へ移る
+	var out bytes.Buffer
+	sc := newScreen(&out, pipe)
+
+	sc.showStatus(status.Snapshot{Scope: "s", Stopping: true, Workers: []status.Worker{{Target: "issue#42", Phase: status.Stopping}}})
+
+	if got := lastFrame(&out); strings.Contains(got, "Ctrl+C") {
+		t.Fatalf("画面:\n%s", got)
+	}
+}
+
 func TestScreenPaintsTheHeadOfALogLine(t *testing.T) {
 	var out bytes.Buffer
 	sc := newScreen(&out, status.Display{Palette: status.ANSI})
 
 	sc.Show(loop.Line{At: screenNow, Kind: loop.LineStart, Label: "起動", Rest: " issue#42"})
-	sc.Show(loop.Line{At: screenNow, Kind: loop.LineTickOK, Label: "tick ok · 候補 0"})
 
-	got := lastFrame(&out)
-	if want := "\033[90m09:00:00\033[0m \033[34m起動\033[0m issue#42\n"; !strings.Contains(got, want) {
-		t.Errorf("起動の行の色:\n%q\nwant %q", got, want)
+	if got, want := lastFrame(&out), "\033[90m09:00:00\033[0m \033[34m起動\033[0m issue#42\n"; !strings.HasSuffix(got, want) {
+		t.Fatalf("起動の行の色:\n%q\nwant %q", got, want)
 	}
-	if want := "\033[2m09:00:00 tick ok · 候補 0\033[0m\n"; !strings.Contains(got, want) {
-		t.Errorf("tick ok の行が薄くない:\n%q\nwant %q", got, want)
+}
+
+func TestScreenFadesATickOKLine(t *testing.T) {
+	var out bytes.Buffer
+	sc := newScreen(&out, status.Display{Palette: status.ANSI})
+
+	sc.Show(loop.Line{At: screenNow, Kind: loop.LineTickOK, Label: "tick ok", Rest: " · 候補 0"})
+
+	if got, want := lastFrame(&out), "\033[2m09:00:00 tick ok · 候補 0\033[0m\n"; !strings.HasSuffix(got, want) {
+		t.Fatalf("tick ok の行が薄くない:\n%q\nwant %q", got, want)
+	}
+}
+
+func TestScreenPaintsAFailedTickLineRed(t *testing.T) {
+	var out bytes.Buffer
+	sc := newScreen(&out, status.Display{Palette: status.ANSI})
+
+	sc.Show(loop.Line{At: screenNow, Kind: loop.LineTickError, Label: "tick error", Rest: " · gh の障害"})
+
+	if got, want := lastFrame(&out), "\033[31m09:00:00 tick error · gh の障害\033[0m\n"; !strings.HasSuffix(got, want) {
+		t.Fatalf("tick error の行が赤くない:\n%q\nwant %q", got, want)
+	}
+}
+
+func TestScreenKeepsAMultiLineErrorOnOneRow(t *testing.T) {
+	// hook の stderr のような複数行の文も、ログの 1 行に収める
+	var out bytes.Buffer
+	sc := newScreen(&out, pipe)
+
+	sc.Show(loop.Line{At: screenNow, Kind: loop.LineError, Label: "error", Rest: " issue#42: after_run が失敗した\n1 行目\n2 行目"})
+
+	if got := lastFrame(&out); !strings.HasSuffix(got, "09:00:00 error issue#42: after_run が失敗した 1 行目 2 行目\n") {
+		t.Fatalf("画面:\n%s", got)
+	}
+}
+
+func TestTerminalPaletteFollowsNoColor(t *testing.T) {
+	cases := []struct {
+		name    string
+		env     map[string]string
+		palette status.Palette
+	}{
+		{"NO_COLOR が無ければ色を付ける", map[string]string{}, status.ANSI},
+		{"NO_COLOR が空なら色を付ける", map[string]string{"NO_COLOR": ""}, status.ANSI},
+		{"NO_COLOR が空でなければ色を付けない", map[string]string{"NO_COLOR": "1"}, status.Monochrome},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := terminalPalette(func(key string) string { return c.env[key] }); got != c.palette {
+				t.Fatalf("palette = %v, want %v", got, c.palette)
+			}
+		})
 	}
 }
