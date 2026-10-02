@@ -292,7 +292,7 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 |---|---|---|
 | `tick` | tick の終わり | `result` (`ok` / `error`)・`candidates` (候補の数)・`launched` (起動した作業対象の列)・`ambiguous` (曖昧な CL。`{"head": <head branch>, "targets": [<作業対象>…]}` の列)・`blocked` (事前検査 (§2.9) に落ちて起動しない trigger。`{"trigger": <名前>, "error": <理由>}` の列)・`error` (`result` が `error` のとき) |
 | `start` | worker を起動した | `target`・`trigger`・`attempt`・`session_id`・`workspace`・`pid` |
-| `end` | worker 1 回分の終わり方を決めた | `target`・`trigger`・`attempt`・`session_id`・`outcome`・`reason`・`exit_code` (process が自分で終わったときだけ。signal で止まったら載せない) |
+| `end` | worker 1 回分の終わり方を決めた | `target`・`trigger`・`attempt`・`session_id`・`outcome`・`reason`・`exit_code` (process が自分で終わったときだけ。signal で止まったら載せない)・`is_error`・`num_turns`・`permission_denial_count` (attempt の最後の `result` の要約。下の箇条) |
 | `retry` | `failed` の後、次の attempt を予定した | `target`・`trigger`・`attempt`・`next_attempt`・`session_id`・`backoff` (秒。小数を含む) |
 | `release` | 再起動を待つ claim を、起動せずに解いた | `target`・`trigger`・`attempt`・`session_id`・`reason` (`終端` / `trigger から外れた` / `trigger が workflow 定義から消えた` / `曖昧な CL`) |
 | `abandon` | attempt の上限で打ち切った | `target`・`trigger`・`attempt`・`session_id` |
@@ -309,9 +309,13 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 | `failed` | worker が終わった後も作業対象が trigger に当たったままで、worker が失敗した (異常終了・hook の失敗・描画の失敗・起動できない・stall・上限時間の超過) か、正常に終わった。claim は解かず、`retry` か `abandon` の行が続く |
 | `stopped` | loop が止めた (作業対象が終端になった・2 回目の停止要求) |
 
-- `error` の行を書く場面: `after_run` と `before_remove` の失敗・workspace を消せない (次の tick の掃除で消し直す)・終わった worker の作業対象を読み直せない (claim を持ったまま次の tick で読み直す)・止める worker の process group に signal を送れない
+- `error` の行を書く場面: `after_run` と `before_remove` の失敗・workspace を消せない (次の tick の掃除で消し直す)・終わった worker の作業対象を読み直せない (claim を持ったまま次の tick で読み直す)・止める worker の process group に signal を送れない・worker log から attempt の最後の `result` を読めない
 - log.jsonl に行を書けなければ、そのことを stdout に出して続ける
 - `attempt` は、その行が指す claim の最後に起動した (起動しようとした) attempt
+- `end` の行の attempt の最後の `result` の要約: worker log (stream-json。§1) のうち、その attempt が追記した完結した行 (改行で終わる行) から、最後の `type: result` の行を読む。worker log は attempt を跨いで追記するので、前の attempt の `result` は読まない
+  - `is_error`・`num_turns`: その `result` の同じ名前の項目の値
+  - `permission_denial_count`: その `result` の `permission_denials` (配列) の要素の数
+  - `result` の行が無ければ (claude を起動できなかった・stall や上限時間や signal で `result` を書く前に止めた 等) 3 つとも載せない。`result` の行にその項目が無ければ、その key だけ載せない
 - `session_id` は CLI が発行して最初の attempt に `--session-id` で渡した値。同じ claim の attempt を通して 1 つ。Claude Code の transcript へ辿る鍵
 - claim を解くのは `completed` と `stopped` の `end`・`release`・`abandon` の行
 
@@ -409,7 +413,7 @@ claude-dispatcher loop [<workflow の path>]
    - action は `--` の後ろに置く (`-` で始まる action を option と読ませない)
    - stream の file が `limits.stall_timeout` のあいだ伸びないか、起動からの経過が `limits.run_timeout` を超えたら、process group を止めて失敗とする (止め方は 2 回目の停止要求と同じ)。止める判断と停止要求が重なったら、停止要求で止めたことにする
 
-4. 終わったら `after_run` を撃ち、作業対象を読み直す。終端か、起動した trigger から外れていれば `completed` として claim を解き、当たったままなら `failed` として再起動 (上) に回す
+4. 終わったら (止めたときを含む)、worker log からその attempt の最後の `result` を読んで `end` の行に要約を載せ (§4)、`after_run` を撃ち、作業対象を読み直す。終端か、起動した trigger から外れていれば `completed` として claim を解き、当たったままなら `failed` として再起動 (上) に回す
    - 当たるかをまだ決められなければ (conflict を計算中の CL)、読み直せなかったときと同じく、error の行を残して claim を持ったまま次の tick で確かめ直す
    - workspace を消すときは、worker を最初に起動したときの `workspace.root` と、消す時点の workflow 定義の hooks を使う
 
@@ -461,7 +465,7 @@ issue#42  implement  1        running  5m10s  Edit internal/status/status.go
 ```
 
 - tick の行の候補は、試運転 (§5) と同じ順。候補が無ければ `tick ok · 候補 0`
-- **活動**: worker の stream (stdout の stream-json) のうち、活動として数える最新の完結した行の要約。loop は 1s ごとに確かめ、変わったら `活動` の行を出す。log.jsonl には書かない (stream は worker log に残る)
+- **活動**: worker の stream (stdout の stream-json) のうち、活動として数える最新の完結した行の要約。loop は 1s ごとに確かめ、変わったら `活動` の行を出す。log.jsonl には書かない (stream は worker log に残る)。`type: result` の行は、活動とは別に attempt の終わりに worker log から読み直し、`end` の行に要約を載せる (§4)
 
 | stream の行 | 要約 |
 |---|---|
