@@ -3,7 +3,7 @@ name: debrief
 description: claude-dispatcher を回している project の workflow 定義と痕跡を読み、本体の改善点を提案して、承認された分をこの repo に起票する
 disable-model-invocation: true
 argument-hint: "<WORKFLOW.md か project の dir の path> [--since <日時>]"
-allowed-tools: Read, Bash(jq:*), Bash(scripts/claude-dispatcher-dev.sh:*), Bash(gh issue list:*), Bash(gh repo view:*)
+allowed-tools: Read, Bash(jq:*), Bash(scripts/claude-dispatcher-dev.sh paths:*), Bash(scripts/claude-dispatcher-dev.sh status:*), Bash(gh issue list:*), Bash(gh repo view:*)
 ---
 
 # debrief
