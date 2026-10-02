@@ -320,6 +320,36 @@ func TestWorkersAreLaunchedOnlyUpToTheConcurrencyLimit(t *testing.T) {
 	}
 }
 
+func TestTickLineCarriesTheConcurrencyLimitAndTheRunningWorkersItWasJudgedBy(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflowWithCommands(s.workerWorkflow("limits:\n  max_concurrent: 1\n"))
+	s.setIssues(readyIssue(42), readyIssue(43))
+	s.onClaude(stubwire.Rule{ReleaseFile: s.releaseFile()})
+	s.startLoop()
+	s.waitEvents("start", 1)
+
+	ticks := s.waitEvents("tick", len(s.events("tick"))+1)
+
+	tick := ticks[len(ticks)-1]
+	if tick["running"] != float64(1) || tick["waiting_retry"] != float64(0) || tick["max_concurrent"] != float64(1) {
+		t.Fatalf("tick の行 = %v, want 走っている worker 1・再起動待ち 0・並列上限 1", tick)
+	}
+}
+
+func TestTickLineCountsTheWorkerItLaunchedAsRunning(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflowWithCommands(s.workerWorkflow("limits:\n  max_concurrent: 3\n"))
+	s.setIssues(readyIssue(42))
+	s.onClaude(stubwire.Rule{ReleaseFile: s.releaseFile()})
+
+	s.startLoop()
+
+	tick := s.waitEvents("tick", 1)[0]
+	if tick["running"] != float64(1) || tick["max_concurrent"] != float64(3) {
+		t.Fatalf("最初の tick の行 = %v, want 起動した issue#42 を走っている worker に数え、並列上限 3", tick)
+	}
+}
+
 func TestFirstStopRequestWaitsForTheRunningWorker(t *testing.T) {
 	s := newSandbox(t)
 	s.writeWorkflowWithCommands(s.workerWorkflow(""))

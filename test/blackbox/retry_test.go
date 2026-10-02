@@ -294,6 +294,21 @@ func waitStart(t *testing.T, s *sandbox, target string, n int) map[string]any {
 // slowRetry は backoff を 3s にして、再起動を待つ間に作業対象を書き換えられるようにする
 const slowRetry = "limits:\n  max_retry_backoff: 3s\n"
 
+func TestTickLineCountsTheClaimWaitingToRetry(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflowWithCommands(s.workerWorkflow(slowRetry))
+	s.setIssues(readyIssue(42))
+	s.onClaude(stubwire.Rule{})
+	s.startLoop()
+	s.waitEvents("retry", 1)
+
+	ticks := s.waitEvents("tick", len(s.events("tick"))+1)
+
+	if tick := ticks[len(ticks)-1]; tick["running"] != float64(0) || tick["waiting_retry"] != float64(1) {
+		t.Fatalf("tick の行 = %v, want 走っている worker 0・再起動待ち 1", tick)
+	}
+}
+
 func TestWaitingRetryIsReleasedWhenTheIssueLeavesTheTrigger(t *testing.T) {
 	s := newSandbox(t)
 	s.writeWorkflowWithCommands(s.workerWorkflow(slowRetry))
