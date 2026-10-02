@@ -289,9 +289,11 @@ func (l *loop) tick() {
 	l.sweep(store, open)
 	l.clearAbandoned(def, v)
 	l.retry(store, v)
+	// 起動を始める前の数を tick の行にも載せる。起動した worker は走っている worker に加わるので、launched の数を足して判定する
+	running, waitingRetry := l.running(), l.waitingRetry()
 	var launched []string
 	for _, c := range candidates {
-		if l.running()+l.waitingRetry() >= def.MaxConcurrent {
+		if running+waitingRetry+len(launched) >= def.MaxConcurrent {
 			break
 		}
 		if cl, ok := c.Item.(target.CL); ok && v.branchHeld(cl, target.Ref{}) {
@@ -311,7 +313,8 @@ func (l *loop) tick() {
 	}
 	l.board.lastTick = &status.Tick{At: l.o.Now(), Result: status.TickOK, Candidates: len(candidates)}
 	l.board.ambiguous = ambiguous
-	l.rec.event("tick", map[string]any{"result": status.TickOK, "candidates": len(candidates), "launched": nonNil(launched), "ambiguous": ambiguousFields(ambiguous), "blocked": blockedFields(l.blocked)},
+	l.rec.event("tick", map[string]any{"result": status.TickOK, "candidates": len(candidates), "launched": nonNil(launched), "ambiguous": ambiguousFields(ambiguous), "blocked": blockedFields(l.blocked),
+		"running": running, "waiting_retry": waitingRetry, "max_concurrent": def.MaxConcurrent},
 		LineTickOK, "tick ok", " · %s%s%s", Summary(candidates), ambiguousSummary(ambiguous), blockedSummary(l.blocked))
 }
 

@@ -290,7 +290,7 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 
 | `event` | いつ | ほかの key |
 |---|---|---|
-| `tick` | tick の終わり | `result` (`ok` / `error`)・`candidates` (候補の数)・`launched` (起動した作業対象の列)・`ambiguous` (曖昧な CL。`{"head": <head branch>, "targets": [<作業対象>…]}` の列)・`blocked` (事前検査 (§2.9) に落ちて起動しない trigger。`{"trigger": <名前>, "error": <理由>}` の列)・`error` (`result` が `error` のとき) |
+| `tick` | tick の終わり | `result` (`ok` / `error`)・`candidates` (候補の数)・`launched` (起動した作業対象の列)・`ambiguous` (曖昧な CL。`{"head": <head branch>, "targets": [<作業対象>…]}` の列)・`blocked` (事前検査 (§2.9) に落ちて起動しない trigger。`{"trigger": <名前>, "error": <理由>}` の列)・`running`・`waiting_retry`・`max_concurrent` (起動の判定に使った値。`result` が `ok` のとき)・`error` (`result` が `error` のとき) |
 | `start` | worker を起動した | `target`・`trigger`・`attempt`・`session_id`・`workspace`・`pid` |
 | `end` | worker 1 回分の終わり方を決めた | `target`・`trigger`・`attempt`・`session_id`・`outcome`・`reason`・`exit_code` (process が自分で終わったときだけ。signal で止まったら載せない) |
 | `retry` | `failed` の後、次の attempt を予定した | `target`・`trigger`・`attempt`・`next_attempt`・`session_id`・`backoff` (秒。小数を含む) |
@@ -301,6 +301,10 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 | `error` | 処理は続けるが、運用者が知るべき失敗 | `target` (あれば)・`error` |
 
 - `target` は、issue なら `issue#<番号>`、CL なら `cl#<番号>`
+- `tick` の行の起動の判定に使った値は、§6 の tick の手順 7 (候補の起動) の判定のもの
+  - `running`・`waiting_retry`: その tick で候補の起動を始める前の、走っている worker と再起動待ちの claim の数 (手順 7 が `limits.max_concurrent` から引く数)
+  - `max_concurrent`: その tick で読み直した workflow 定義の `limits.max_concurrent`
+  - 手順 7 は、`running`・`waiting_retry`・その tick で起動した数 (`launched` の数) の和が `max_concurrent` に達したところで候補の起動をやめる
 - `outcome`
 
 | 値 | 意味 |

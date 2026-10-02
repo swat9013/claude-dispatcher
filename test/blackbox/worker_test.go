@@ -320,6 +320,59 @@ func TestWorkersAreLaunchedOnlyUpToTheConcurrencyLimit(t *testing.T) {
 	}
 }
 
+func TestTickLineThatLaunchesNothingCarriesTheRunningWorkersThatFillTheConcurrencyLimit(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflowWithCommands(s.workerWorkflow("limits:\n  max_concurrent: 1\n"))
+	s.setIssues(readyIssue(42), readyIssue(43))
+	s.onClaude(stubwire.Rule{ReleaseFile: s.releaseFile()})
+	s.startLoop()
+	s.waitEvents("start", 1)
+
+	ticks := s.waitEvents("tick", len(s.events("tick"))+1)
+
+	tick := ticks[len(ticks)-1]
+	if tick["candidates"] != float64(2) || len(tick["launched"].([]any)) != 0 ||
+		tick["running"] != float64(1) || tick["waiting_retry"] != float64(0) || tick["max_concurrent"] != float64(1) {
+		t.Fatalf("tick の行 = %v, want 候補 2・起動なし・走っている worker 1・再起動待ち 0・並列上限 1", tick)
+	}
+}
+
+func TestTickLineCountsTheWorkersBeforeItStartsLaunching(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflowWithCommands(s.workerWorkflow("limits:\n  max_concurrent: 3\n"))
+	s.setIssues(readyIssue(42))
+	s.onClaude(stubwire.Rule{ReleaseFile: s.releaseFile()})
+
+	s.startLoop()
+
+	tick := s.waitEvents("tick", 1)[0]
+	if len(tick["launched"].([]any)) != 1 || tick["running"] != float64(0) || tick["max_concurrent"] != float64(3) {
+		t.Fatalf("最初の tick の行 = %v, want issue#42 を起動し、起動の前の走っている worker 0・並列上限 3", tick)
+	}
+}
+
+func TestTickLineCarriesTheConcurrencyLimitReadAgainInThatTick(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflowWithCommands(s.workerWorkflow("limits:\n  max_concurrent: 1\n"))
+	s.setIssues(readyIssue(42), readyIssue(43))
+	s.onClaude(stubwire.Rule{ReleaseFile: s.releaseFile()})
+	s.startLoop()
+	s.waitEvents("start", 1)
+
+	s.writeWorkflowWithCommands(s.workerWorkflow("limits:\n  max_concurrent: 2\n"))
+
+	s.waitEvents("start", 2)
+	for _, tick := range s.events("tick") {
+		if launched := tick["launched"].([]any); len(launched) == 1 && launched[0] == "issue#43" {
+			if tick["max_concurrent"] != float64(2) || tick["running"] != float64(1) {
+				t.Fatalf("issue#43 を起動した tick の行 = %v, want 書き換えた並列上限 2・走っている worker 1", tick)
+			}
+			return
+		}
+	}
+	t.Fatalf("tick の行 = %v, want issue#43 を起動した行がある", s.events("tick"))
+}
+
 func TestFirstStopRequestWaitsForTheRunningWorker(t *testing.T) {
 	s := newSandbox(t)
 	s.writeWorkflowWithCommands(s.workerWorkflow(""))
