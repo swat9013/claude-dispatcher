@@ -93,7 +93,7 @@ func (s *screen) draw() {
 		b.WriteString(status.Heading(*snap, status.LoopAlive, s.loc, d))
 		// 2 回目の停止要求の後は、worker が running でなくなる (止めている) ので案内を消す
 		if n := running(snap.Workers); snap.Stopping && n > 0 {
-			b.WriteString(d.Line(status.Span{Tone: status.Yellow, Text: fmt.Sprintf("走っている worker %d 本の終了を待っている。もう一度 Ctrl+C で worker を止めて終える", n)}) + "\n")
+			b.WriteString(d.Line(status.Span{Tone: status.Yellow, Text: fmt.Sprintf("worker の終了を待っている。もう一度 Ctrl+C で走っている worker %d 本を止めて終える", n)}) + "\n")
 		}
 		b.WriteString("\n" + status.Sections(*snap, s.now(), s.loc, d) + "\n")
 	}

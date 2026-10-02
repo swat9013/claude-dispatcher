@@ -417,7 +417,7 @@ claude-dispatcher loop [<workflow の path>]
 
 - 端末でなければ、log.jsonl (§4) に書く行と worker の活動を、人が読む形で 1 行ずつ追記する (下の例)。時刻は RFC 3339 の UTC
 - 端末なら、周期ごと (1s) とログの行ごとに画面を描き直す。上から、`status` (§7.2) と同じ見出し、停止待ちの案内、`status` と同じセクション (`workers`・`要対処`)、`ログ` のセクション
-  - 停止待ちの案内: 停止要求を受けた後、段階が `running` の worker (2 回目の停止要求が止める worker) がある間、見出しの下に `走っている worker <n> 本の終了を待っている。もう一度 Ctrl+C で worker を止めて終える` を出し続ける
+  - 停止待ちの案内: 停止要求を受けた後、段階が `running` の worker (2 回目の停止要求が止める worker) がある間、見出しの下に `worker の終了を待っている。もう一度 Ctrl+C で走っている worker <n> 本を止めて終える` を出し続ける (`<n>` は段階が `running` の worker の数)
   - `ログ`: 下の行のうち活動の行を除いた、直近の 10 行。時刻は端末の local time の `HH:MM:SS`。最新の活動は `workers` の表の列で見る
   - 色と幅は §7.2 の規則に従う。`ログ` の行は、時刻を灰にし、行の頭の語に色を付ける: `起動` は青、`終了` は completed なら緑・failed なら赤、`error` は赤、`再起動を予定` と `停止待ち` は黄。`tick ok` の行は全体を薄く、`tick error` の行は全体を赤にする
 - stdout に書けなくても loop は止めない (その行と画面は捨てる)
@@ -483,6 +483,8 @@ issue#42  implement  1        running  5m10s  Edit internal/status/status.go
 | `Skill` | `skill` |
 | `Agent` | `description` |
 | それ以外 (MCP の tool を含む) | 無し |
+
+- 入力を読めなければ (要点の項目が文字列でないなど)、要点を出さずに tool の名前だけにする
 
 - 秘密が混ざりやすい入力 (`Write` の本文・MCP の tool の引数) は載せない
 - 要約の制御文字 (タブ・改行・ESC など) は空白に置き換え、80 文字で切る (`…` を足す)

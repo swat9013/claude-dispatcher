@@ -11,8 +11,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/swat9013/claude-dispatcher/internal/printable"
 )
 
 // FileName は state dir の中の状態 file の名前
@@ -184,7 +182,7 @@ func Heading(s Snapshot, loop Liveness, loc *time.Location, d Display) string {
 	if t := s.LastTick; t != nil {
 		last := []Span{{Gray, "直近の tick "}, {Plain, clock(t.At, loc) + " "}}
 		if t.Result == TickError {
-			last = append(last, Span{Red, "error: " + printable.Line(t.Error)})
+			last = append(last, Span{Red, "error: " + t.Error})
 		} else {
 			last = append(last, Span{Green, string(t.Result)}, Span{Gray, " · 候補 "}, Span{Plain, strconv.Itoa(t.Candidates)})
 		}

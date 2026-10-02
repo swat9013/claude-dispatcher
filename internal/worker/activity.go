@@ -48,16 +48,20 @@ var gists = map[string]func(in toolInput, workspace string) string{
 		first, _, _ := strings.Cut(in.Command, "\n")
 		return first
 	},
-	"Read":  filePath,
-	"Edit":  filePath,
-	"Write": filePath,
-	"Grep":  func(in toolInput, _ string) string { return in.Pattern },
-	"Glob":  func(in toolInput, _ string) string { return in.Pattern },
+	"Read":  relativeFilePath,
+	"Edit":  relativeFilePath,
+	"Write": relativeFilePath,
+	"Grep":  pattern,
+	"Glob":  pattern,
 	"Skill": func(in toolInput, _ string) string { return in.Skill },
 	"Agent": func(in toolInput, _ string) string { return in.Description },
 }
 
-func filePath(in toolInput, workspace string) string { return relativeTo(workspace, in.FilePath) }
+func relativeFilePath(in toolInput, workspace string) string {
+	return relativeTo(workspace, in.FilePath)
+}
+
+func pattern(in toolInput, _ string) string { return in.Pattern }
 
 // gist は tool の入力の要点。要点を持たない tool と、入力を読めない tool は ""。入力は要点を持つ tool のときだけ読む (ほかの
 // tool の入力は、同じ名前の項目が文字列でないことがある)。

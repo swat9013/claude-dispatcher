@@ -184,6 +184,30 @@ func TestEmojiTakeTwoColumns(t *testing.T) {
 	}
 }
 
+func TestEmojiPresentationSelectorTakesAColumn(t *testing.T) {
+	// ⚠️ (U+26A0 U+FE0F) は多くの端末が 2 桁で描くので、U+FE0F を 1 桁と数えて 2 桁にする
+	s := status.Snapshot{Scope: "s", Blocked: []status.Blocked{{Trigger: "a", Error: "⚠️⚠️"}}}
+
+	got := status.Render(s, status.LoopAlive, base, time.UTC, status.Display{Palette: status.Monochrome, Width: 25})
+
+	// 18 + 4 + 2×2 で 26 桁。幅 25 に収まらないので、24 桁で切って … を置く
+	if want := "\n起動しない trigger a: ⚠️…\n"; !strings.Contains(got, want) {
+		t.Fatalf("描画:\n%q\nwant 行 %q", got, want)
+	}
+}
+
+func TestCharactersWithoutWidthTakeNoColumns(t *testing.T) {
+	// 結合文字の濁点 (U+3099) と異体字セレクタ (U+FE0E) は桁を占めない
+	s := status.Snapshot{Scope: "s", Blocked: []status.Blocked{{Trigger: "a", Error: "か\u3099\u3099\u3099な\uFE0E"}}}
+
+	got := status.Render(s, status.LoopAlive, base, time.UTC, status.Display{Palette: status.Monochrome, Width: 26})
+
+	// 「起動しない trigger a: かな」は 18 + 4 + 2 + 2 で 26 桁なので切らない
+	if want := "\n起動しない trigger a: か\u3099\u3099\u3099な\uFE0E\n"; !strings.Contains(got, want) {
+		t.Fatalf("描画:\n%q\nwant 行 %q", got, want)
+	}
+}
+
 func TestSectionRulesStopAtTheWidthOfTheTerminal(t *testing.T) {
 	got := status.Render(status.Snapshot{Scope: "s"}, status.LoopAlive, base, time.UTC, narrow)
 

@@ -55,7 +55,7 @@ func TestScreenLeavesActivityOutOfTheLog(t *testing.T) {
 	var out bytes.Buffer
 	sc := newScreen(&out, pipe)
 
-	sc.Show(loop.Line{At: screenNow, Kind: loop.LineTickOK, Label: "tick ok · 候補 1"})
+	sc.Show(loop.Line{At: screenNow, Kind: loop.LineTickOK, Label: "tick ok", Rest: " · 候補 1"})
 	sc.Show(loop.Line{At: screenNow, Kind: loop.LineActivity, Label: "活動", Rest: " issue#42: thinking"})
 
 	if got := lastFrame(&out); strings.Contains(got, "活動") || !strings.HasSuffix(got, "09:00:00 tick ok · 候補 1\n") {
@@ -84,7 +84,7 @@ func TestScreenTellsHowToStopWhileTheLoopWaitsForWorkers(t *testing.T) {
 		{Target: "issue#42", Phase: status.Running}, {Target: "issue#43", Phase: status.Running}, {Target: "issue#44", Phase: status.Verifying},
 	}})
 
-	want := "● loop 停止待ち  s\n次の tick なし\n走っている worker 2 本の終了を待っている。もう一度 Ctrl+C で worker を止めて終える\n\nworkers 3 "
+	want := "● loop 停止待ち  s\n次の tick なし\nworker の終了を待っている。もう一度 Ctrl+C で走っている worker 2 本を止めて終える\n\nworkers 3 "
 	if got := lastFrame(&out); !strings.HasPrefix(got, want) {
 		t.Fatalf("画面:\n%s\nwant 見出し:\n%s", got, want)
 	}
