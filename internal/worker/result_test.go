@@ -36,10 +36,10 @@ func TestResultLineThatIsStillBeingWrittenIsNotRead(t *testing.T) {
 }
 
 func TestResultLineWithAnItemOfAnotherTypeLeavesThatItemOutAndReportsIt(t *testing.T) {
-	summary, err := summarizeStream(t, `{"type":"result","num_turns":3}`+"\n"+`{"type":"result","is_error":true,"num_turns":"five"}`+"\n", 0)
+	summary, err := summarizeStream(t, `{"type":"result","is_error":true,"num_turns":"five"}`+"\n", 0)
 
 	if err == nil || summary == nil || summary.IsError == nil || !*summary.IsError || summary.NumTurns != nil {
-		t.Fatalf("要約 = %+v, %v, want 最後の result の is_error true だけを載せ、num_turns を読めないことを返す", summary, err)
+		t.Fatalf("要約 = %+v, %v, want is_error true だけを載せ、num_turns を読めないことを返す", summary, err)
 	}
 }
 

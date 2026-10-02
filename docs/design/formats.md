@@ -315,7 +315,7 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 - `end` の行の attempt の最後の `result` の要約: worker log (stream-json。§1) のうち、その attempt が追記した完結した行 (改行で終わる行) から、最後の `type: result` の行を読む。worker log は attempt を跨いで追記するので、前の attempt の `result` は読まない
   - `is_error`・`num_turns`: その `result` の同じ名前の項目の値
   - `permission_denial_count`: その `result` の `permission_denials` (配列) の要素の数
-  - `result` の行が無ければ (claude を起動できなかった・stall や上限時間や signal で `result` を書く前に止めた 等) 3 つとも載せない。`result` の行にその項目が無ければ、その key だけ載せない。項目の型が違えば (`num_turns` が数でない 等)、その key を載せず `error` の行を残す
+  - `result` の行が無ければ (claude を起動できなかった・stall や上限時間や signal で `result` を書く前に止めた 等) 3 つとも載せない。`result` の行にその項目が無ければ、その key だけ載せない。項目の型が違えば (`num_turns` が数でない 等)、その key を載せず `error` の行を残す。worker log を最後まで読めなければ (どれが最後の `result` か決まらない)、3 つとも載せず `error` の行を残す
   - 止めた attempt (stall・上限時間・停止要求) でも、止める前に `result` の行を書いていれば要約を載せる
 - `session_id` は CLI が発行して最初の attempt に `--session-id` で渡した値。同じ claim の attempt を通して 1 つ。Claude Code の transcript へ辿る鍵
 - claim を解くのは `completed` と `stopped` の `end`・`release`・`abandon` の行

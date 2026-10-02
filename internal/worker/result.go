@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -29,7 +28,8 @@ type resultItems struct {
 }
 
 // summarizeLastResult は file の offset より後の完結した行 (今の attempt が追記した行) から、最後の type: result の行を要約する。
-// result の行が無ければ nil。途中で読めなくなったか、項目の型が違えば、それまでに読めた要約とともに理由を返す。
+// result の行が無ければ nil。最後まで読めなければ、どれが最後の result か決まらないので nil と理由を返す。項目の型が違えば、
+// その項目を除いた要約とともに理由を返す。
 func summarizeLastResult(file string, offset int64) (*ResultSummary, error) {
 	f, err := os.Open(file)
 	if err != nil {
@@ -41,15 +41,14 @@ func summarizeLastResult(file string, offset int64) (*ResultSummary, error) {
 	}
 	reader := bufio.NewReader(f)
 	var last *resultItems
-	var readErr error
 	for {
 		line, err := reader.ReadBytes('\n')
-		if err != nil {
-			// io.EOF なら、改行で終わらない末尾は書きかけの行
-			if err != io.EOF {
-				readErr = err
-			}
+		if err == io.EOF {
+			// 改行で終わらない末尾は書きかけの行
 			break
+		}
+		if err != nil {
+			return nil, err
 		}
 		// worker log は数 MB になり、ほとんどの行は result でないので、"result" を含む行だけを decode する
 		if !bytes.Contains(line, []byte(`"result"`)) {
@@ -62,10 +61,9 @@ func summarizeLastResult(file string, offset int64) (*ResultSummary, error) {
 		last = &items
 	}
 	if last == nil {
-		return nil, readErr
+		return nil, nil
 	}
-	summary, err := last.summarize()
-	return summary, errors.Join(readErr, err)
+	return last.summarize()
 }
 
 // summarize は result の行の項目を要約する。型の違う項目は要約に載せず、その理由を返す。

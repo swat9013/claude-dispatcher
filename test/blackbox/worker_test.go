@@ -304,6 +304,24 @@ func TestEndLineOfAWorkerThatWroteNoResultHasNoResultSummary(t *testing.T) {
 	}
 }
 
+func TestResultItemOfAnotherTypeIsLeftOffTheEndLineAndLoggedAsAnError(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflowWithCommands(s.workerWorkflow(""))
+	s.setIssues(readyIssue(42))
+	s.onClaude(stubwire.Rule{Stdout: `{"type":"result","subtype":"success","is_error":false,"num_turns":"five","permission_denials":[]}` + "\n"})
+
+	s.startLoop()
+
+	end := s.waitEvents("end", 1)[0]
+	if _, ok := end["num_turns"]; ok || end["is_error"] != false {
+		t.Fatalf("end の行 = %v, want num_turns を載せず、is_error は載せる", end)
+	}
+	errs := s.events("error")
+	if len(errs) != 1 || !strings.Contains(asString(errs[0]["error"]), "num_turns") {
+		t.Fatalf("error の行 = %v, want num_turns を読めないことを 1 行", errs)
+	}
+}
+
 func TestLoopWithAnActionThatCannotBeRenderedFailsToStart(t *testing.T) {
 	s := newSandbox(t)
 	s.writeWorkflowWithCommands(strings.Replace(s.workerWorkflow(""), "{{ .trigger.name }}", "{{ .issue.body }}", 1))

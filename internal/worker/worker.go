@@ -66,9 +66,10 @@ type Result struct {
 	AfterRunError string
 	// StopError は止めるときに process group へ signal を送れなかった理由
 	StopError string
-	// ResultSummary は attempt の最後の stream-json の result の行の要約。claude を起動しなかったか、result の行が無ければ nil
+	// ResultSummary は attempt の最後の stream-json の result の行の要約。claude を起動しなかった・result の行が無い・worker log を
+	// 最後まで読めなかったなら nil。項目の型が違えば、その項目を除いた要約
 	ResultSummary *ResultSummary
-	// ResultSummaryError は worker log から ResultSummary を (一部でも) 読めなかった理由
+	// ResultSummaryError は要約を作れなかったか、一部の項目を読めなかった理由
 	ResultSummaryError string
 }
 
@@ -198,7 +199,7 @@ func (r Runner) launch(job Job, run *Run, workspacePath string, started func(pid
 	// claude の process が終わった後に読むので、claude が書く result の行はそろっている
 	result.ResultSummary, err = summarizeLastResult(stream.Name(), before.Size())
 	if err != nil {
-		result.ResultSummaryError = fmt.Sprintf("worker log から attempt の最後の result を読めない: %v", err)
+		result.ResultSummaryError = fmt.Sprintf("attempt の最後の result の要約を (一部) 作れない: %v", err)
 	}
 	return result
 }
