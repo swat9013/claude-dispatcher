@@ -34,27 +34,20 @@ CLI はこの checkout から build した版 (`scripts/claude-dispatcher-dev.sh
 - `paths` が 0 以外で終わる (workflow 定義が無い・誤っている)
 - `log` の file が無い (その project で loop を一度も回していない)
 
-一時 file は 1 つの dir にまとめ、どの終わり方 (読めなかった・提案 0 件・承認なし・起票後) でも、終える前に dir ごと消す。消す操作が permission や hook に止められたら、別の形で消し直さず、残った path と消す command を user に告げて終える。
+以降の jq の `F` は `log` の path を指す。`--since` があれば、日時を UTC の RFC 3339 (`2026-10-01T00:00:00Z`) に直し (offset の無い日時は端末の local time、日付だけなら local の 0 時として読む。`status` の表示と同じ)、各 jq の `F` を外して前に次の絞り込みを置き、stdin で渡す。log の `ts` は UTC の `Z` 表記なので、文字列の比較で絞れる。一時 file は作らない (作ると、どの終わり方でも消す後始末が要る)。
 
 ```sh
-mktemp -d "${TMPDIR:-/tmp}/debrief-XXXXXX"     # 以降の W
+jq -c --arg since "<--since の UTC>" 'select(.ts >= $since)' <log> | jq ...
 ```
-
-`--since` があれば、日時を UTC の RFC 3339 (`2026-10-01T00:00:00Z`) に直す。offset の無い日時は端末の local time として読み、日付だけなら local の 0 時とする (`status` の表示と同じ)。log の `ts` は UTC の `Z` 表記なので、文字列の比較で絞れる。
-
-```sh
-jq -c --arg since "<--since の UTC。無ければ空>" 'select($since == "" or .ts >= $since)' <log> > W/log.jsonl
-```
-
-以降の `F` はこの file を指す。
 
 ### 2. log.jsonl から数える (観点 1〜4)
 
-決定的に数えられる観点。どれも件数と、該当する行の `ts`・`target` を控える。
+log.jsonl から決定的に数える観点。どれも件数と、該当する行の `ts`・`target` を控える。件数は確度「決定的」で出す。一方、件数を status・WORKFLOW.md (とその履歴) と突き合わせて下す判定 (閉じていない claim の読み分け・起動しなかった tick の正否・上限時間との比べ合わせ) は「解釈」とする。
 
 ```sh
 jq -s -r '[length, .[0].ts, .[-1].ts] | @tsv' F     # 読んだ行数と期間
 jq -r .event F | sort | uniq -c                     # event の数
+jq '{last_tick, abandoned, ambiguous, blocked}' <status_file>   # 最後に書いた状態。loop が止まった後も残る
 ```
 
 **1. 終わり方**
@@ -66,11 +59,16 @@ jq -r 'select(.event=="end") | [.trigger, .outcome, (.reason // "")] | @tsv' F |
 jq -r 'select(.target) | [.target, .ts, .event, (.attempt // .next_attempt // ""), (.outcome // .reason // .error // "")] | @tsv' F | sort -s -k1,1
 # attempt 1 回分の所要時間 (分)
 jq -s -r 'map(select(.event=="start" or .event=="end")) | group_by([.session_id, .attempt])[] | select(length==2) | [.[0].target, .[0].trigger, .[0].attempt, (((.[1].ts|fromdateiso8601) - (.[0].ts|fromdateiso8601))/60 | floor), .[1].outcome] | @tsv' F
-# 閉じていない claim (最後の行が claim を解いていない作業対象)
-jq -s -r 'map(select(.target and .event != "error")) | group_by(.target)[] | last | select(.event=="start" or .event=="retry" or .event=="wait_slot" or (.event=="end" and .outcome=="failed")) | [.target, .event, .ts] | @tsv' F
+# 閉じていない claim (最後の行が claim を持ったままの event である作業対象)
+jq -s -r 'map(select(.target)) | group_by(.target)[] | last | select(.event=="start" or .event=="retry" or .event=="wait_slot" or (.event=="end" and .outcome=="failed")) | [.target, .event, .ts] | @tsv' F
 ```
 
-閉じていない claim は、`scripts/claude-dispatcher-dev.sh status <WORKFLOW.md の path>` が示す今の loop の worker と突き合わせる。loop が走っていて worker に居ないもの、loop が居ないのに claim が残るものが、本体の記録の欠け (end 行の書き漏れ・loop の異常終了) の候補になる。
+claim を解く行は formats.md §4 (`completed` と `stopped` の `end`・`release`・`abandon`) が正本。停止要求で捨てた再起動待ちの claim は、最後の行が `error` になる (§6 の停止要求)。そのため上の jq は `error` の行も含めて最後の行を見る。
+
+閉じていない claim は、`scripts/claude-dispatcher-dev.sh status <WORKFLOW.md の path>` が示す今の loop の worker と突き合わせる。claim は loop の memory にしか無いので、loop が居なければすべて消えている。本体の記録の欠けの候補は次の 2 つ。
+
+- loop が走っているのに worker に居ないもの
+- loop が居ないのに最後の行が `start`・`retry`・`wait_slot` のもの (end や停止の行を書く前に loop が落ちた)
 
 **2. tick**
 
@@ -115,7 +113,7 @@ jq -c 'select(.type=="result") | {subtype, is_error, num_turns, duration_ms, den
 
 - 走っていない作業対象の log の最後の行が `result` でなければ、stall・上限時間・signal で止められた候補。観点 1 の end 行と照らす
 - `workers/<作業対象>.stderr.log` は `sort | uniq -c | sort -rn | head` で繰り返す行を見る
-- 描画の崩れを `grep -l -E '<no value>|\{\{' <state_dir>/prompts/*.md` で探す
+- 描画の崩れを `grep -l -E '<no value>|\{\{' <state_dir>/prompts/<作業対象>.md` で探す (F に現れる作業対象の分だけ)
 
 **6. 設定の回避策**
 
@@ -137,13 +135,13 @@ WORKFLOW.md の front matter と本文を読み、利用者が本体の不足を
 改善ごとに、要点の語で open と closed の両方を引く。
 
 ```sh
-gh issue list -R swat9013/claude-dispatcher --state all --search "<要点の語>" --json number,title,state,stateReason,labels --jq '.[] | [.number, .state, .stateReason, .title, ([.labels[].name] | join(","))] | @tsv'
+gh issue list --state all --search "<要点の語>" --json number,title,state,stateReason,labels --jq '.[] | [.number, .state, .stateReason, .title, ([.labels[].name] | join(","))] | @tsv'
 ```
 
 | 当たった issue | 扱い |
 |---|---|
 | open | 新しく起票せず、新しい証拠を足すコメントの案にする |
-| closed で `wontfix` か not planned | 「過去に却下済み」と添え、既定では起票しない |
+| closed で `wontfix` か not planned | 既定では提示しない。提示の末尾に「過去に却下済み: #n」と 1 行ずつ並べるだけにする |
 | closed で completed | 直したはずの症状の再発として起票し、本文で元の issue を指す |
 | closed で duplicate | 重複先の issue を辿り、その issue でこの表を引き直す |
 | 当たらない | 新しく起票する |
@@ -159,7 +157,7 @@ gh issue list -R swat9013/claude-dispatcher --state all --search "<要点の語>
 - 証拠 (`ts` と `target`、WORKFLOW.md の項目名)
 - 本体の該当箇所 (system.md・formats.md の §、`internal/` の package)
 - 提案
-- 照合の結果 (新規 / #n へコメント / #n で却下済み / #n の再発)
+- 照合の結果 (新規 / #n へコメント / #n の再発)
 
 `gh repo view <WORKFLOW.md の tracker.repo> --json visibility` が public でなければ、出典の scope key を本文に載せるかも同じ問いで確かめる。
 
@@ -167,11 +165,15 @@ gh issue list -R swat9013/claude-dispatcher --state all --search "<要点の語>
 
 ### 7. 起票する
 
-承認された分だけ、本文を `W/<番号>.md` に書いて撃つ。
+承認された分だけ撃つ。repo は clone の remote から gh が推定する (docs/agents/issue-tracker.md)。本文は heredoc で stdin に渡す。
 
 ```sh
-gh issue create -R swat9013/claude-dispatcher --title "<改善を「〜する」の形で>" --label needs-triage --body-file W/<番号>.md
-gh issue comment <n> -R swat9013/claude-dispatcher --body-file W/<番号>.md
+gh issue create --title "<改善を「〜する」の形で>" --label needs-triage --body-file - <<'EOF'
+<本文>
+EOF
+gh issue comment <n> --body-file - <<'EOF'
+<本文>
+EOF
 ```
 
 - 起票の本文は「症状 / 証拠 / 本体の該当箇所 / 提案 / 出典」の節で書く。コメントは「証拠 / 出典」だけにし、既存の本文と重なる症状と提案は繰り返さない
