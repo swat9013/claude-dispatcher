@@ -304,6 +304,7 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 - `tick` の行の起動の判定に使った値は、§6 の tick の手順 7 (候補の起動) の判定のもの
   - `running`・`waiting_retry`: その tick で候補の起動を始める前の、走っている worker と再起動待ちの claim の数 (手順 7 が `limits.max_concurrent` から引く数)
   - `max_concurrent`: その tick で読み直した workflow 定義の `limits.max_concurrent`
+  - 手順 7 は、`running`・`waiting_retry`・その tick で起動した数 (`launched` の数) の和が `max_concurrent` に達したところで候補の起動をやめる
 - `outcome`
 
 | 値 | 意味 |
