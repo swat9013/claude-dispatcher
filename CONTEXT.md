@@ -122,7 +122,7 @@ claim がどこまで進んだか。worker が走っている・止めている�
 _Avoid_: 状態 (状態 file と紛れる)
 
 **活動**:
-worker が今何をしているかを、worker の stream の最新の行から要約したもの。人が worker の様子を読む手掛かり。
+worker が今何をしているかを、worker の stream のうち、何をしているかを表す最新の行を要約したもの。人が worker の様子を読む手掛かり。
 _Avoid_: 進捗, event
 
 **ログの行**:

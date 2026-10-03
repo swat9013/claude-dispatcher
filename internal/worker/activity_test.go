@@ -22,7 +22,6 @@ func TestSummarizeStreamLines(t *testing.T) {
 		{"tool の結果", `{"type":"user","message":{"content":[{"type":"tool_result","content":"秘密"}]}}`, "tool の結果"},
 		{"system init", `{"type":"system","subtype":"init"}`, "system init"},
 		{"result", `{"type":"result","subtype":"success"}`, "result success"},
-		{"それ以外の type", `{"type":"stream_event"}`, "stream_event"},
 		{"制御文字は空白", `{"type":"assistant","message":{"content":[{"type":"text","text":"a\tb\u001b[2Jc"}]}}`, "a b [2Jc"},
 		{"80 文字で切る", `{"type":"assistant","message":{"content":[{"type":"text","text":"` + strings.Repeat("あ", 81) + `"}]}}`, strings.Repeat("あ", 80) + "…"},
 	}
@@ -70,6 +69,9 @@ func TestSummarizeSkipsLinesThatAreNotActivity(t *testing.T) {
 	for _, line := range []string{
 		`{"type":"assist`, `plain text`, `{"message":{}}`,
 		`{"type":"system","subtype":"thinking_tokens"}`, `{"type":"system","subtype":"task_progress"}`,
+		`{"type":"tool_progress","tool_use_id":"toolu_1-heartbeat-0","tool_name":"Bash","elapsed_time_seconds":30,"heartbeat":true}`,
+		`{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning"}}`,
+		`{"type":"stream_event"}`,
 	} {
 		if got, ok := worker.Summarize([]byte(line), workspace); ok {
 			t.Errorf("Summarize(%q) = %q, want 数えない", line, got)

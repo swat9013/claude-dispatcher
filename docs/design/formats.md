@@ -482,7 +482,7 @@ issue#42  implement  1        running  5m10s  Edit internal/status/status.go
 | `type: system` で subtype が `init` | `system init` |
 | `type: system` のそれ以外 | 活動として数えない |
 | `type: result` | `result <subtype>` |
-| それ以外の `type` | `<type>` |
+| それ以外の `type` (`tool_progress`・`rate_limit_event` を含む) | 活動として数えない |
 
 | tool | 入力の要点 |
 |---|---|
