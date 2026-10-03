@@ -88,7 +88,7 @@ func relativeTo(workspace, path string) string {
 }
 
 // Summarize は stream-json の 1 行を要約する。workspace は worker の workspace の path (tool の入力の path を相対にする)。
-// 活動として数えない行 (JSON として読めない・type が無い・init 以外の system) なら ok が false。
+// formats.md §6 で活動として数えない行なら ok が false。
 func Summarize(line []byte, workspace string) (summary string, ok bool) {
 	var l streamLine
 	if err := json.Unmarshal(line, &l); err != nil || l.Type == "" {
@@ -117,7 +117,7 @@ func Summarize(line []byte, workspace string) (summary string, ok bool) {
 	case "result":
 		summary = "result " + l.Subtype
 	default:
-		summary = l.Type
+		return "", false
 	}
 	summary = printable.Line(summary)
 	if utf8.RuneCountInString(summary) > summaryLimit {

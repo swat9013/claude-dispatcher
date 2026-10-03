@@ -482,7 +482,7 @@ issue#42  implement  1        running  5m10s  Edit internal/status/status.go
 | `type: system` で subtype が `init` | `system init` |
 | `type: system` のそれ以外 | 活動として数えない |
 | `type: result` | `result <subtype>` |
-| それ以外の `type` | `<type>` |
+| それ以外の `type` (`tool_progress`・`rate_limit_event` を含む) | 活動として数えない |
 
 | tool | 入力の要点 |
 |---|---|
@@ -497,7 +497,8 @@ issue#42  implement  1        running  5m10s  Edit internal/status/status.go
 
 - 秘密が混ざりやすい入力 (`Write` の本文・MCP の tool の引数) は載せない
 - 要約の制御文字 (タブ・改行・ESC など) は空白に置き換え、80 文字で切る (`…` を足す)
-- JSON として読めない行と、`type` の無い行は活動として数えない。改行を含めて 64 KiB を超える行も数えない (stream の file の末尾だけを読む)
+- 表で活動として数えない行は、worker が何をしているかを表さない。数えると、直前に数えた行 (tool_use の要点など) を上書きする
+- JSON として読めない行 (項目の型が要約に使う形と合わない行を含む) と、`type` の無い行は、表によらず活動として数えない。改行を含めて 64 KiB を超える行も数えない (stream の file の末尾だけを読む)
 - 前に確かめてから完結した行を新しい側から見て、活動として数える最初の行を要約する。数える行が無ければ活動は変えない
 - 活動は今の attempt が書いた行だけから取る (worker log は attempt を跨いで追記する)。同じ行を活動として出し直さない
 - stream の file を読めなければ、`stream を読めない: <理由>` を活動にする。worker は止めない
