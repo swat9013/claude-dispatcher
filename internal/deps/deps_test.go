@@ -28,33 +28,29 @@ func pathWith(t *testing.T, names ...string) (onPath, home, local string) {
 func TestPATHIsExtendedWhenOnlyGitIsMissing(t *testing.T) {
 	onPath, home, local := pathWith(t, "gh", "claude")
 
-	got := deps.ResolvePATH(onPath, home)
+	got := deps.ResolvePATH(onPath, home, []string{"gh", "claude", "git"})
 
 	if !strings.HasPrefix(got, local+string(os.PathListSeparator)) || !strings.HasSuffix(got, onPath) {
 		t.Fatalf("PATH = %s", got)
 	}
 }
 
-func TestPATHIsExtendedWhenNeitherTrackerCLIIsOnIt(t *testing.T) {
-	onPath, home, local := pathWith(t, "claude", "git")
+func TestPATHIsExtendedWhenTheTrackerCLIInUseIsMissingEvenIfTheOtherIsOnIt(t *testing.T) {
+	onPath, home, local := pathWith(t, "gh", "claude", "git")
 
-	got := deps.ResolvePATH(onPath, home)
+	got := deps.ResolvePATH(onPath, home, []string{"glab", "claude", "git"})
 
 	if !strings.HasPrefix(got, local+string(os.PathListSeparator)) {
 		t.Fatalf("PATH = %s", got)
 	}
 }
 
-func TestPATHIsKeptWhenOneOfTheTrackerCLIsIsOnIt(t *testing.T) {
-	for _, tracker := range []string{"gh", "glab"} {
-		t.Run(tracker, func(t *testing.T) {
-			onPath, home, _ := pathWith(t, tracker, "claude", "git")
+func TestPATHIsKeptWhenOnlyACLINotInUseIsMissing(t *testing.T) {
+	onPath, home, _ := pathWith(t, "gh", "claude", "git")
 
-			got := deps.ResolvePATH(onPath, home)
+	got := deps.ResolvePATH(onPath, home, []string{"gh", "claude", "git"})
 
-			if got != onPath {
-				t.Fatalf("PATH = %s, want %s (使わない方の tracker の CLI が無いだけで書き換えた)", got, onPath)
-			}
-		})
+	if got != onPath {
+		t.Fatalf("PATH = %s, want %s (使わない glab が無いだけで書き換えた)", got, onPath)
 	}
 }

@@ -88,19 +88,27 @@ func usageError(stderr io.Writer, format string, args ...any) int {
 	return exitUsage
 }
 
-// environment は subcommand が共有する実行環境。env は依存 CLI の PATH を解決した後の env。
+// environment は subcommand が共有する実行環境。env は撃つ依存 CLI の PATH を解決した後の env。
 type environment struct {
 	env []string
 }
 
-func newEnvironment() environment {
-	return environment{env: deps.WithEnv(os.Environ(), map[string]string{"PATH": deps.ResolvePATH(os.Getenv("PATH"), os.Getenv("HOME"))})}
+// newEnvironment は commands (撃つ依存 CLI) を PATH で解決できるようにした環境。commands を渡さなければ PATH は書き換えない。
+func newEnvironment(commands ...string) environment {
+	path := deps.ResolvePATH(os.Getenv("PATH"), os.Getenv("HOME"), commands)
+	return environment{env: deps.WithEnv(os.Environ(), map[string]string{"PATH": path})}
+}
+
+// pathCommands は、workflow 定義で loop・試運転・doctor が PATH から解決できるようにする依存 CLI: tracker の CLI・claude・
+// git。git は CL 側の trigger と、loop の PATH を継ぐ worker と hooks が撃つ。
+func pathCommands(def workflow.Definition) []string {
+	return []string{trackerCommand(def), "claude", "git"}
 }
 
 func (e environment) getenv(key string) string { return deps.Getenv(e.env, key) }
 
-// trackerTimeout は tracker の CLI (gh / glab) の 1 回の呼び出しの上限
-const trackerTimeout = 120 * time.Second
+// commandTimeout は外部 CLI (gh / glab / git) の 1 回の呼び出しの上限
+const commandTimeout = 120 * time.Second
 
 // gh は gh の撃ち方。token (workflow 定義の tracker.token) があれば gh に GH_TOKEN として渡す。
 func (e environment) gh(token string) github.Exec {
@@ -108,12 +116,12 @@ func (e environment) gh(token string) github.Exec {
 	if token != "" {
 		env = deps.WithEnv(env, map[string]string{"GH_TOKEN": token})
 	}
-	return github.Exec{Env: env, Timeout: trackerTimeout}
+	return github.Exec{Env: env, Timeout: commandTimeout}
 }
 
 // glab は glab の撃ち方。認証は glab 自身のもの (glab auth login の結果) を使う。
 func (e environment) glab() gitlab.Exec {
-	return gitlab.Exec{Env: e.env, Timeout: trackerTimeout}
+	return gitlab.Exec{Env: e.env, Timeout: commandTimeout}
 }
 
 // store は workflow 定義の tracker.kind の adapter で置き場の部品を組み立てる。
@@ -193,13 +201,15 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "workflow 定義の path を解決できない (%s): %v\n", path, err)
 		return exitFailed
 	}
-	e := newEnvironment()
-	load := func() (workflow.Definition, error) { return workflow.Load(abs, e.getenv) }
+	// workflow 定義は PATH を使わずに読めるので、撃つ依存 CLI が決まる前の環境で読む
+	load := func() (workflow.Definition, error) { return workflow.Load(abs, newEnvironment().getenv) }
 	def, err := load()
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return exitUsage
 	}
+	// PATH は起動時の workflow 定義が撃つ依存 CLI で解決する
+	e := newEnvironment(pathCommands(def)...)
 	// 起動時と試運転は人が画面の前にいるので、事前検査のどれが落ちても失敗させ、全部を直させる (system.md §8)
 	if problems := e.precheck(def); len(problems) > 0 {
 		for _, p := range problems {

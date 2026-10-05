@@ -151,6 +151,7 @@ triggers:                    # 必須。1 つ以上
 - label と login の綴りは、tracker によらず大文字と小文字を区別せずに比べる
   - GitLab の label は大文字と小文字を区別するが、dispatcher の規則として揃える。trigger の評価は正規化した作業対象だけを見る (system.md §13) ので、tracker ごとに比べ方を変えない
   - 誤って当たるのは、大文字と小文字だけが違う label を 2 つ持つ project に限られる
+- `tracker.kind` が `gitlab` なら、作業対象は種類が issue のものだけ (`issue_type` が `issue`)。同じ一覧に出る task・incident・test case は読まない
 - `tracker.kind` が `gitlab` なら `blocked` は書けない (名指しで失敗する)。GitLab の issue の依存 (blocks / is blocked by) は有償の tier の機能で、CE の API は依存を返さない。読むと常に 0 件になり、`blocked: false` が黙って全件に当たる
 
 ### 2.3 CL 側の述語 (`on: cl` の `when`)
@@ -376,7 +377,7 @@ claude-dispatcher loop [<workflow の path>]
 | state dir を作れる | 1 |
 | 同じ scope key の loop が走っていない (`loop.lock` を取れる) | 3 |
 
-- よく使われる置き場は、claude と git と、gh か glab のどちらかが PATH に無いときだけ PATH の前に足す。使わない方の tracker の CLI が無いことでは PATH を書き換えない (worker と hooks は loop の PATH を継ぐので、足すと worker が撃つ git などが入れ替わりうる)
+- よく使われる置き場は、workflow 定義が撃つ依存 CLI (`tracker.kind` の CLI・claude・git) のどれかが PATH に無いときだけ PATH の前に足す。使わない方の tracker の CLI が無いことでは PATH を書き換えない (worker と hooks は loop の PATH を継ぐので、足すと worker が撃つ git などが入れ替わりうる)
 - 同じ issue 置き場の 2 本目の loop は、clone や workflow 定義の path が違っても起動時に止まる
 - lock は loop の生存期間だけ持つ。loop が死ねば外れる
 - `loop.lock` を取った loop は、続けて `alive.lock` も生存期間のあいだ持つ。`status` は `alive.lock` だけを確かめるので、`loop.lock` を取り合わない (`alive.lock` を `status` が一瞬持っていれば、外れるまで待つ)
@@ -648,7 +649,7 @@ claude-dispatcher doctor [<workflow の path>]
 - `tracker.kind` は、cwd で `git remote get-url origin` が返す URL の host で決める。host が `github.com` なら `github`、それ以外は `gitlab`
   - URL は `https://<host>/…`・`ssh://<user>@<host>[:<port>]/…`・`<user>@<host>:…` (scp の綴り) を読む。host は port を除いて小文字にする
   - `github`: `tracker.repo` を、cwd で `gh repo view --json nameWithOwner` が返す repo で埋める
-  - `gitlab`: `tracker.host` を URL の host で、`tracker.repo` を `glab repo view <URL> --output json` の `path_with_namespace` で埋める。host と path を同じ remote から決める
+  - `gitlab`: `glab repo view <URL> --output json` が返す project で、`tracker.host` を `web_url` の host (port を含む) で、`tracker.repo` を `path_with_namespace` で埋める。origin の URL の host は ssh の host (alias・ssh 専用の host) でありうるので、`tracker.host` には使わない
 - path に file が既にあれば書かない (上書きしない)。そのことを stdout に出して exit 0
 - 書いたら、path と、次に試運転 (§5) を撃つことを stdout に出す
 

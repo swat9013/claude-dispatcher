@@ -25,7 +25,7 @@ const (
 	// gitlabProject は REST の endpoint で project を指す綴り (path を URL エンコードしたもの)
 	gitlabProject = "projects/acme%2Fsub%2Fwidgets"
 	// gitlabOpenIssues は open な issue の一覧の endpoint
-	gitlabOpenIssues = gitlabProject + "/issues?state=opened&order_by=created_at&sort=asc&per_page=100"
+	gitlabOpenIssues = gitlabProject + "/issues?state=opened&issue_type=issue&order_by=created_at&sort=asc&per_page=100"
 )
 
 // gitlabTracker は gitlab の issue 置き場を指す tracker の宣言。
@@ -368,16 +368,19 @@ func TestGitLabDoctorNamesThePlaceAndTheGlabEntries(t *testing.T) {
 	}
 }
 
-// gitlabOrigin は clone の origin の URL (scp の綴り) を返す git の応答 rule。
-var gitlabOrigin = stubwire.Rule{ArgsPrefix: []string{"remote", "get-url", "origin"}, Stdout: "git@" + gitlabHost + ":" + gitlabRepo + ".git\n"}
+// gitlabOriginURL は clone の origin の URL。scp の綴りで、host は web の host と違う ssh 専用の host
+const gitlabOriginURL = "git@ssh." + gitlabHost + ":" + gitlabRepo + ".git"
+
+// gitlabOrigin は clone の origin の URL を返す git の応答 rule。
+var gitlabOrigin = stubwire.Rule{ArgsPrefix: []string{"remote", "get-url", "origin"}, Stdout: gitlabOriginURL + "\n"}
 
 // gitlabRepoView は origin の URL を渡した glab repo view が project を返す応答 rule。
 var gitlabRepoView = stubwire.Rule{
-	ArgsPrefix: []string{"repo", "view", "git@" + gitlabHost + ":" + gitlabRepo + ".git", "--output", "json"},
-	Stdout:     `{"id":7,"path_with_namespace":"` + gitlabRepo + `"}`,
+	ArgsPrefix: []string{"repo", "view", gitlabOriginURL, "--output", "json"},
+	Stdout:     `{"id":7,"path_with_namespace":"` + gitlabRepo + `","web_url":"https://` + gitlabHost + `/` + gitlabRepo + `"}`,
 }
 
-func TestGitLabSetupWritesTheHostAndPathOfTheOrigin(t *testing.T) {
+func TestGitLabSetupWritesTheWebHostAndPathOfTheProjectTheOriginPointsAt(t *testing.T) {
 	s := newSandbox(t)
 	if err := os.Remove(s.workflowFile()); err != nil {
 		t.Fatal(err)
@@ -444,5 +447,25 @@ func TestPathIsLeftAsIsWhenOnlyTheUnusedTrackerCLIIsMissing(t *testing.T) {
 	}
 	if got := calls[0].Env["PATH"]; got != s.binDir {
 		t.Fatalf("gh に渡った PATH = %q, want %q (使わない glab が無いだけで PATH を書き換えた)", got, s.binDir)
+	}
+}
+
+func TestGlabOnlyInACandidateDirIsResolvedEvenIfGhIsOnThePath(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflowWithCommands(gitlabWorkflow)
+	// glab を PATH から外し、自己解決が探す ~/.local/bin にだけ置く。gh は PATH に残る
+	local := filepath.Join(s.home, ".local", "bin")
+	mustMkdir(t, local)
+	if err := os.Rename(filepath.Join(s.binDir, "glab"), filepath.Join(local, "glab")); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Join(local, stubwire.RootFile), s.stubRoot+"\n")
+	s.setGitLabIssues(readyGitLabIssue(42))
+
+	r := s.dryRun()
+
+	assertCandidates(t, r, candidate("implement", 42))
+	if calls := s.calls("glab"); len(calls) == 0 || calls[0].Exe != filepath.Join(local, "glab") {
+		t.Fatalf("glab の呼び出し = %v, want %s から", calls, filepath.Join(local, "glab"))
 	}
 }

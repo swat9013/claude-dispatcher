@@ -79,6 +79,35 @@ func ParsePath(text string) (string, error) {
 	return text, nil
 }
 
+// CurrentProject は git の remote の URL が指す project を glab repo view で引く。host は応答の web_url の host
+// (port を含む) で決める。remote の URL の host は ssh の host (alias・altssh・ssh 専用の host) でありうるので使わない。
+func CurrentProject(glab Runner, remote string) (Project, error) {
+	out, err := glab.Run("repo", "view", remote, "--output", "json")
+	if err != nil {
+		return Project{}, fmt.Errorf("glab repo view が失敗した: %w", err)
+	}
+	var view struct {
+		PathWithNamespace string `json:"path_with_namespace"`
+		WebURL            string `json:"web_url"`
+	}
+	if err := json.Unmarshal(out, &view); err != nil {
+		return Project{}, fmt.Errorf("glab repo view の出力を読めない: %w", err)
+	}
+	web, err := url.Parse(view.WebURL)
+	if err != nil {
+		return Project{}, fmt.Errorf("glab repo view の web_url %q を読めない: %w", view.WebURL, err)
+	}
+	host, err := ParseHost(strings.ToLower(web.Host))
+	if err != nil {
+		return Project{}, fmt.Errorf("glab repo view の web_url %q: %w", view.WebURL, err)
+	}
+	path, err := ParsePath(view.PathWithNamespace)
+	if err != nil {
+		return Project{}, fmt.Errorf("glab repo view の path_with_namespace %q: %w", view.PathWithNamespace, err)
+	}
+	return Project{Host: host, Path: path}, nil
+}
+
 // ScopeKey は project の issue 置き場を指す scope key。GitLab の path は大文字と小文字を区別しないので小文字にする。
 func ScopeKey(p Project) string { return strings.ToLower(p.String()) }
 
@@ -158,7 +187,8 @@ type issueJSON struct {
 
 // openIssues は project の open な issue を全件読み、正規化して返す。失敗は *target.Failure。
 func (s Store) openIssues() ([]target.Issue, error) {
-	out, err := s.get(s.endpoint("issues?state=opened&order_by=created_at&sort=asc&per_page=100"), "--paginate")
+	// issue_type で issue だけに絞る (task・incident・test case も同じ一覧に出るが、作業対象の issue ではない)
+	out, err := s.get(s.endpoint("issues?state=opened&issue_type=issue&order_by=created_at&sort=asc&per_page=100"), "--paginate")
 	if err != nil {
 		return nil, s.fail(classify(err), err)
 	}

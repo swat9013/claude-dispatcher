@@ -292,7 +292,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。
   - 雛形は `--permission-mode auto` を置く
   - permission 層を外すかどうかは利用者が決める
 - **依存 CLI (tracker の CLI・claude・git) の path は CLI が自分でも解決する**。最小の PATH の shell (ssh 越しなど) から起動されても動くようにする
-  - tracker の CLI は `tracker.kind` で決まる (`github` は gh、`gitlab` は glab)。使わない方の CLI が無いことは、PATH を書き換える理由にしない
+  - 解決するのは workflow 定義が撃つ CLI だけ。tracker の CLI は `tracker.kind` で決まる (`github` は gh、`gitlab` は glab)。使わない方の CLI が無いことは、PATH を書き換える理由にしない
 - **試運転**
   - 1 tick 分の読み直し・事前検査・trigger の評価までを通し、起動する直前で止めて、起動するはずの作業対象と trigger を示す
   - state dir に何も書かない
@@ -316,7 +316,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。
 
 - **CLI は Go の単一 binary**。`go install`・GitHub Releases・Homebrew tap `swat9013/tap` の cask の 3 経路で、macOS / Linux に配る (ADR 0003 / 0007)
   - tag の push で、GoReleaser が Releases の binary と tap の cask を同時に更新する
-  - cask は `depends_on` を持たない。依存 (gh / claude) の充足は README の「前提」と `doctor` が見る
+  - cask は `depends_on` を持たない。依存 (tracker の CLI (gh か glab) / claude) の充足は README の「前提」と `doctor` が見る
   - binary は署名しないので、macOS では cask の `postflight_steps` が quarantine を外す (ADR 0007)
 - **特定の plugin には依存しない**
   - action が呼ぶ skill と command は、利用者が入れた plugin・repo の `.claude/`・`~/.claude/` のどれに置いてもよい

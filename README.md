@@ -64,7 +64,7 @@ binary は署名していない。macOS でブラウザから取った archive �
 
 実装 repo の clone を cwd にして撃つ。流れの正本は [`docs/design/usecases.md`](docs/design/usecases.md) の UC-5、各コマンドの形式は [`docs/design/formats.md`](docs/design/formats.md) §5・§7.4。
 
-1. **雛形を置く**: `setup` が cwd に `WORKFLOW.md` の雛形を書く。origin の host が `github.com` なら GitHub の雛形で、`tracker.repo` は `gh repo view` が返す repo で埋まる。それ以外の host なら GitLab の雛形で、`tracker.host` と `tracker.repo` は origin の host と `glab repo view` が返す path で埋まる。既にある file は上書きしない
+1. **雛形を置く**: `setup` が cwd に `WORKFLOW.md` の雛形を書く。origin の host が `github.com` なら GitHub の雛形で、`tracker.repo` は `gh repo view` が返す repo で埋まる。それ以外の host なら GitLab の雛形で、`tracker.host` と `tracker.repo` は origin を渡した `glab repo view` が返す project の web の host と path で埋まる。既にある file は上書きしない
 
    ```sh
    cd ~/src/widgets

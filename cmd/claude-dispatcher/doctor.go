@@ -32,14 +32,15 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "workflow 定義の path を解決できない (%s): %v\n", path, err)
 		return exitFailed
 	}
-	e := newEnvironment()
-	def, err := workflow.Load(abs, e.getenv)
+	def, err := workflow.Load(abs, newEnvironment().getenv)
 	if err != nil {
 		for _, line := range strings.Split(err.Error(), "\n") {
 			fmt.Fprintf(stdout, "NG   %s\n", line)
 		}
 		return exitFailed
 	}
+	// loop の起動時と同じく、workflow 定義が撃つ依存 CLI で PATH を解決する
+	e := newEnvironment(pathCommands(def)...)
 	fmt.Fprintf(stdout, "ok   workflow 定義 %s\n", abs)
 	failed := false
 	for _, check := range []func(environment, workflow.Definition, io.Writer) bool{checkStore, checkCommands, checkPrecheck} {

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -27,8 +26,7 @@ func runSetup(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "%s は既にあるので書かない\n", path)
 		return 0
 	}
-	e := newEnvironment()
-	template, place, err := e.scaffold()
+	template, place, err := scaffoldFromOrigin()
 	if err != nil {
 		fmt.Fprintf(stderr, "issue 置き場を決められない: %v\n", err)
 		return exitFailed
@@ -51,40 +49,32 @@ func runSetup(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// scaffold は cwd の clone の origin の host で tracker.kind を決め、issue 置き場を埋めたその種類の雛形と、issue 置き場の
+// scaffoldFromOrigin は cwd の clone の origin の host で tracker.kind を決め、issue 置き場を埋めたその種類の雛形と、issue 置き場の
 // 表示名を返す。host が github.com なら github、それ以外は gitlab。
-func (e environment) scaffold() (template, place string, err error) {
-	origin, err := e.origin()
+// PATH は撃つ CLI ごとに解決する (git の後、host で決まった tracker の CLI だけ)。
+func scaffoldFromOrigin() (template, place string, err error) {
+	origin, err := newEnvironment("git").origin()
 	if err != nil {
 		return "", "", err
 	}
 	host, err := remoteHost(origin)
 	if err != nil {
-		return "", "", fmt.Errorf("origin の URL %q: %w", origin, err)
+		// URL は認証情報を含みうるので名指しに載せない
+		return "", "", fmt.Errorf("origin の URL: %w", err)
 	}
 	if host == "github.com" {
-		repo, err := github.CurrentRepo(e.gh(""))
+		repo, err := github.CurrentRepo(newEnvironment("gh").gh(""))
 		if err != nil {
 			return "", "", err
 		}
 		return scaffold.GitHub(repo.String()), repo.String(), nil
 	}
-	// host と path を同じ remote から決めるので、glab にも origin の URL を渡す (glab 自身の remote の選び方に依らない)
-	out, err := e.glab().Run("repo", "view", origin, "--output", "json")
+	// path を host と同じ remote から決めるので、glab にも origin の URL を渡す (glab 自身の remote の選び方に依らない)
+	project, err := gitlab.CurrentProject(newEnvironment("glab").glab(), origin)
 	if err != nil {
-		return "", "", fmt.Errorf("glab repo view が失敗した: %w", err)
+		return "", "", err
 	}
-	var project struct {
-		PathWithNamespace string `json:"path_with_namespace"`
-	}
-	if err := json.Unmarshal(out, &project); err != nil {
-		return "", "", fmt.Errorf("glab repo view の出力を読めない: %w", err)
-	}
-	path, err := gitlab.ParsePath(project.PathWithNamespace)
-	if err != nil {
-		return "", "", fmt.Errorf("glab repo view の path_with_namespace %q: %w", project.PathWithNamespace, err)
-	}
-	return scaffold.GitLab(host, path), gitlab.Project{Host: host, Path: path}.String(), nil
+	return scaffold.GitLab(project.Host, project.Path), project.String(), nil
 }
 
 // origin は cwd の clone の origin の URL。
@@ -93,7 +83,7 @@ func (e environment) origin() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	out, err := proc.Command{Path: git, Env: e.env, Timeout: trackerTimeout}.Output("remote", "get-url", "origin")
+	out, err := proc.Command{Path: git, Env: e.env, Timeout: commandTimeout}.Output("remote", "get-url", "origin")
 	if err != nil {
 		return "", fmt.Errorf("cwd で origin の URL を読めない: %w", err)
 	}
@@ -101,13 +91,14 @@ func (e environment) origin() (string, error) {
 }
 
 // remoteHost は git の remote の URL から host を読む。読むのは `https://<host>/…`・`ssh://<user>@<host>[:<port>]/…`・
-// `<user>@<host>:…` (scp の綴り)。port を除いて小文字にする。
+// `<user>@<host>:…` (scp の綴り)。port を除いて小文字にする。URL は認証情報を含みうるので、誤りに URL を載せない。
 func remoteHost(remote string) (string, error) {
 	var host string
 	if strings.Contains(remote, "://") {
 		u, err := url.Parse(remote)
 		if err != nil {
-			return "", err
+			// url.Parse の誤りは URL をそのまま持つので捨てる
+			return "", errors.New("URL として読めない")
 		}
 		host = u.Hostname()
 	} else if before, _, ok := strings.Cut(remote, ":"); ok && !strings.Contains(before, "/") {
