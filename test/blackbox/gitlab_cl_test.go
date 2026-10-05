@@ -3,7 +3,6 @@ package blackbox_test
 import (
 	"encoding/json"
 	"strconv"
-	"strings"
 	"testing"
 
 	"github.com/swat9013/claude-dispatcher/test/blackbox/stubwire"
@@ -31,7 +30,8 @@ type glMR struct {
 	branch string
 	fork   bool
 	draft  bool
-	labels []string
+	// authorID は作者の user id。0 なら developerID
+	authorID int
 	// hasConflicts は has_conflicts。mergeStatus は detailed_merge_status (空なら mergeable)
 	hasConflicts bool
 	mergeStatus  string
@@ -39,12 +39,15 @@ type glMR struct {
 	pipeline    string
 	approved    bool
 	discussions []glDiscussion
-	// state が空なら opened。merged / closed なら終端
-	state string
 }
 
-// glDiscussion は discussion 1 本。最初の note の書き手と、解決済みか・system note か。
+// glDiscussion は discussion 1 本。notes の先頭が最初の note。
 type glDiscussion struct {
+	notes []glNote
+}
+
+// glNote は discussion の note 1 つ。どの note も解決できる (resolvable)。
+type glNote struct {
 	authorID int
 	resolved bool
 	system   bool
@@ -54,20 +57,16 @@ type glDiscussion struct {
 func readyMR(iid int) glMR { return glMR{iid: iid, branch: "worktree-issue-" + strconv.Itoa(iid)} }
 
 func (m glMR) json() map[string]any {
-	source := gitlabProjectID
+	source, author := gitlabProjectID, m.authorID
 	if m.fork {
 		source = gitlabForkID
 	}
-	status, state := m.mergeStatus, m.state
+	if author == 0 {
+		author = developerID
+	}
+	status := m.mergeStatus
 	if status == "" {
 		status = "mergeable"
-	}
-	if state == "" {
-		state = "opened"
-	}
-	labels := m.labels
-	if labels == nil {
-		labels = []string{}
 	}
 	var pipeline any
 	if m.pipeline != "" {
@@ -78,9 +77,9 @@ func (m glMR) json() map[string]any {
 		"iid":                   m.iid,
 		"title":                 "cl " + strconv.Itoa(m.iid),
 		"web_url":               "https://" + gitlabHost + "/" + gitlabRepo + "/-/merge_requests/" + strconv.Itoa(m.iid),
-		"state":                 state,
+		"state":                 "opened",
 		"created_at":            createdAt(m.iid),
-		"labels":                labels,
+		"labels":                []string{},
 		"draft":                 m.draft,
 		"source_branch":         m.branch,
 		"source_project_id":     source,
@@ -88,23 +87,28 @@ func (m glMR) json() map[string]any {
 		"has_conflicts":         m.hasConflicts,
 		"detailed_merge_status": status,
 		"head_pipeline":         pipeline,
-		"author":                map[string]any{"id": developerID, "username": "dev"},
+		"author":                map[string]any{"id": author, "username": "user" + strconv.Itoa(author)},
 	}
 }
 
 func (m glMR) discussionsJSON() []map[string]any {
 	out := []map[string]any{}
 	for i, d := range m.discussions {
-		out = append(out, map[string]any{
-			"id":              "d" + strconv.Itoa(i),
-			"individual_note": false,
-			"notes": []map[string]any{{
-				"id": i + 1, "system": d.system, "resolvable": !d.system, "resolved": d.resolved,
-				"author": map[string]any{"id": d.authorID, "username": "user" + strconv.Itoa(d.authorID)},
-			}},
-		})
+		notes := []map[string]any{}
+		for j, n := range d.notes {
+			notes = append(notes, map[string]any{
+				"id": 100*i + j + 1, "system": n.system, "resolvable": true, "resolved": n.resolved,
+				"author": map[string]any{"id": n.authorID, "username": "user" + strconv.Itoa(n.authorID)},
+			})
+		}
+		out = append(out, map[string]any{"id": "d" + strconv.Itoa(i), "individual_note": false, "notes": notes})
 	}
 	return out
+}
+
+// singleNote は note 1 つだけの discussion。
+func singleNote(authorID int, resolved bool) glDiscussion {
+	return glDiscussion{notes: []glNote{{authorID: authorID, resolved: resolved}}}
 }
 
 // glabStoreRules は glab が issues と mrs を返す応答 rule の列。merge request の作者と discussion の書き手の access level は、
@@ -126,9 +130,7 @@ func glabStoreRules(issues []glIssue, mrs []glMR) []stubwire.Rule {
 			stubwire.Rule{ArgsPrefix: glabAPI(base + "/approvals"), Stdout: marshal(map[string]any{"approved": m.approved})},
 			stubwire.Rule{ArgsPrefix: glabAPI("--paginate", base+"/discussions?per_page=100"), Stdout: marshal(m.discussionsJSON())},
 		)
-		if m.state == "" {
-			open = append(open, m.json())
-		}
+		open = append(open, m.json())
 	}
 	rules = append(rules, stubwire.Rule{ArgsPrefix: glabAPI("--paginate", gitlabOpenMRs), Stdout: marshal(open)})
 	return append(rules, glabRules(issues...)...)
@@ -146,10 +148,15 @@ func TestGitLabCLVocabularyIsReadFromTheMergeRequest(t *testing.T) {
 	conflicting, clean := readyMR(1), readyMR(2)
 	conflicting.hasConflicts = true
 	byDeveloper, resolved, byReporter, systemNote := readyMR(3), readyMR(4), readyMR(5), readyMR(6)
-	byDeveloper.discussions = []glDiscussion{{authorID: developerID}}
-	resolved.discussions = []glDiscussion{{authorID: developerID, resolved: true}}
-	byReporter.discussions = []glDiscussion{{authorID: reporterID}}
-	systemNote.discussions = []glDiscussion{{authorID: developerID, system: true}}
+	byDeveloper.discussions = []glDiscussion{singleNote(developerID, false)}
+	resolved.discussions = []glDiscussion{singleNote(developerID, true)}
+	byReporter.discussions = []glDiscussion{singleNote(reporterID, false)}
+	systemNote.discussions = []glDiscussion{{notes: []glNote{{authorID: developerID, system: true}}}}
+	// 最初の note で書き手を決める: Reporter が始めて Developer が返信した discussion は数えず、Developer が始めて
+	// 返信が未解決のまま残る discussion は数える
+	reporterThenDeveloper, laterNoteUnresolved := readyMR(11), readyMR(12)
+	reporterThenDeveloper.discussions = []glDiscussion{{notes: []glNote{{authorID: reporterID}, {authorID: developerID}}}}
+	laterNoteUnresolved.discussions = []glDiscussion{{notes: []glNote{{authorID: developerID, resolved: true}, {authorID: reporterID}}}}
 	failed, passed := readyMR(7), readyMR(8)
 	failed.pipeline, passed.pipeline = "failed", "success"
 	approved, unapproved := readyMR(9), readyMR(10)
@@ -160,7 +167,7 @@ func TestGitLabCLVocabularyIsReadFromTheMergeRequest(t *testing.T) {
 		want       []int
 	}{
 		{"conflict", []glMR{conflicting, clean}, []int{1}},
-		{"review_unresolved", []glMR{byDeveloper, resolved, byReporter, systemNote}, []int{3}},
+		{"review_unresolved", []glMR{byDeveloper, resolved, byReporter, systemNote, reporterThenDeveloper, laterNoteUnresolved}, []int{3, 12}},
 		{"ci_failed", []glMR{failed, passed}, []int{7}},
 		{"approved", []glMR{approved, unapproved}, []int{9}},
 	} {
@@ -181,15 +188,19 @@ func TestGitLabCLVocabularyIsReadFromTheMergeRequest(t *testing.T) {
 }
 
 func TestGitLabConflictThatIsStillBeingCheckedMatchesNeitherWay(t *testing.T) {
-	s := newSandbox(t)
-	checking := readyMR(1)
-	checking.mergeStatus = "checking"
+	for _, status := range []string{"checking", "unchecked", "preparing"} {
+		t.Run(status, func(t *testing.T) {
+			s := newSandbox(t)
+			pending := readyMR(1)
+			pending.mergeStatus = status
 
-	r := s.dryRunGitLabCL(`
+			r := s.dryRunGitLabCL(`
   - {name: conflicted, on: cl, when: {conflict: true}, action: /t}
-  - {name: clean, on: cl, when: {conflict: false}, action: /t}`, checking)
+  - {name: clean, on: cl, when: {conflict: false}, action: /t}`, pending)
 
-	assertCandidates(t, r)
+			assertCandidates(t, r)
+		})
+	}
 }
 
 func TestGitLabCanceledPipelineIsNotAFailure(t *testing.T) {
@@ -214,9 +225,11 @@ func TestGitLabCLFiltersReadTheSourceBranchProjectAndDraft(t *testing.T) {
 	draft.branch, draft.draft = "claude-dispatcher/issue-3", true
 	other := readyMR(4)
 	other.branch = "feature/x"
+	byReporter := readyMR(5)
+	byReporter.branch, byReporter.authorID = "claude-dispatcher/issue-5", reporterID
 
 	r := s.dryRunGitLabCL(`
-  - {name: t, on: cl, when: {head: "claude-dispatcher/*", draft: false, author: collaborator}, action: /t}`, own, fromFork, draft, other)
+  - {name: t, on: cl, when: {head: "claude-dispatcher/*", draft: false, author: collaborator}, action: /t}`, own, fromFork, draft, other, byReporter)
 
 	assertCandidates(t, r, clCandidate("t", 1))
 }
@@ -232,7 +245,4 @@ func TestGitLabMergeRequestsFromTheSameBranchAreAmbiguousButAForkIsAnotherBranch
   - {name: u, on: cl, action: /t}`, first, second, fromFork)
 
 	assertCandidates(t, r, clCandidate("t", 3))
-	if strings.Contains(r.stdout, "\t#1\t") || strings.Contains(r.stdout, "\t#2\t") {
-		t.Fatalf("曖昧な merge request を候補にした:\n%s", r.stdout)
-	}
 }
