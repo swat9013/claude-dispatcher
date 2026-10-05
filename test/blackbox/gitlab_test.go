@@ -311,7 +311,6 @@ func TestGitLabRejectsTheDeclarationsItCannotSupportWhereverTheyAreWritten(t *te
 	s.writeWorkflowWithCommands(`---
 triggers:
   - {name: implement, on: issue, when: {blocked: false}, action: /implement}
-  - {name: fix, on: cl, when: {ci_failed: true, head: "x/*"}, action: /fix}
 tracker:
   kind: gitlab
   repo: acme/sub/widgets
@@ -322,7 +321,7 @@ tracker:
 
 	r := s.runWithEnv(map[string]string{"GL_TOKEN": "secret"}, "loop", "--dry-run")
 
-	s.assertRejected(r, "triggers[0].when.blocked", "triggers[1].on", "tracker.token")
+	s.assertRejected(r, "triggers[0].when.blocked", "tracker.token")
 	s.assertNoGlab("workflow 定義が誤っているのに")
 }
 
@@ -399,7 +398,7 @@ func TestGitLabSetupWritesTheWebHostAndPathOfTheProjectTheOriginPointsAt(t *test
 	if !strings.Contains(string(written), gitlabTracker) {
 		t.Fatalf("雛形の tracker が %q でない:\n%s", gitlabTracker, written)
 	}
-	for _, unwanted := range []string{"blocked:", "on: cl", "pull request", " gh "} {
+	for _, unwanted := range []string{"blocked:", "pull request", " gh "} {
 		if strings.Contains(string(written), unwanted) {
 			t.Errorf("gitlab の雛形に %q がある:\n%s", unwanted, written)
 		}
@@ -421,15 +420,14 @@ func TestGitLabSetupTemplateAloneLetsTheDryRunPassWithoutPlugins(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.respond("git", gitlabOrigin)
-	s.respondAll("glab", append([]stubwire.Rule{gitlabRepoView}, glabRules(readyGitLabIssue(42))...))
+	conflicting := readyMR(5)
+	conflicting.branch, conflicting.hasConflicts = "claude-dispatcher/issue-5", true
+	s.respondAll("glab", append([]stubwire.Rule{gitlabRepoView}, glabStoreRules([]glIssue{readyGitLabIssue(42)}, []glMR{conflicting})...))
 	assertExit(t, s.run("setup"), 0)
 
 	r := s.dryRun()
 
-	assertExit(t, r, 0)
-	if !strings.HasPrefix(r.stdout, "implement\tissue\t#42\t") {
-		t.Fatalf("試運転の stdout:\n%s\nstderr:\n%s", r.stdout, r.stderr)
-	}
+	assertCandidates(t, r, candidate("implement", 42), mrCandidate("resolve-conflict", 5))
 }
 
 func TestPathIsLeftAsIsWhenOnlyTheUnusedTrackerCLIIsMissing(t *testing.T) {

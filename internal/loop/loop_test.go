@@ -514,3 +514,19 @@ func TestBackoffDoublesAfterEachFailedAttempt(t *testing.T) {
 		t.Fatalf("出力:\n%s", h.stdout.String())
 	}
 }
+
+func TestTickLineNamesAMergeRequestWithItsGitLabReference(t *testing.T) {
+	candidates := []trigger.Candidate{
+		{Trigger: &trigger.Trigger{Name: "implement", On: target.KindIssue}, Item: target.Issue{Number: 42}},
+		{Trigger: &trigger.Trigger{Name: "fix-ci", On: target.KindCL}, Item: target.CL{Number: 7}},
+	}
+
+	for kind, want := range map[workflow.TrackerKind]string{
+		workflow.GitHub: "候補 2: implement issue #42, fix-ci cl #7",
+		workflow.GitLab: "候補 2: implement issue #42, fix-ci cl !7",
+	} {
+		if got := loop.Summary(candidates, workflow.Tracker{Kind: kind}); got != want {
+			t.Errorf("%s: Summary = %q, want %q", kind, got, want)
+		}
+	}
+}

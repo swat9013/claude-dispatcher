@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -89,6 +90,15 @@ type Tracker struct {
 	Project gitlab.Project
 	// Token は gh に GH_TOKEN として渡す token。書かれていなければ ""。gitlab では書けない
 	Token string
+}
+
+// Reference は作業対象を人が読む行に出す参照 (formats.md §5)。GitLab の merge request は `!<番号>`、それ以外は `#<番号>`。
+// GitLab は issue と merge request に別々に番号を振るので、同じ番号の issue と取り違えないよう綴りを分ける。
+func (t Tracker) Reference(ref target.Ref) string {
+	if t.Kind == GitLab && ref.Kind == target.KindCL {
+		return "!" + strconv.Itoa(ref.Number)
+	}
+	return "#" + strconv.Itoa(ref.Number)
 }
 
 // Place は issue 置き場の表示名 (github は `owner/name`、gitlab は `<host>/<path>`)。
@@ -551,10 +561,7 @@ func (c *checker) triggers(n *yaml.Node, path string) []trigger.Trigger {
 			"on": {required: true, read: func(_, n *yaml.Node, path string) {
 				if s, ok := c.str(n, path); ok {
 					switch kind := target.Kind(s); kind {
-					case target.KindCL:
-						t.On = kind
-						c.githubOnly(n, path, "GitLab の merge request は未対応で、on: cl の trigger を当てられない")
-					case target.KindIssue:
+					case target.KindIssue, target.KindCL:
 						t.On = kind
 					default:
 						c.fail(n, path, "未知の値 %q (%s / %s)", s, target.KindIssue, target.KindCL)

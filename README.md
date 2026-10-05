@@ -24,7 +24,7 @@ issue tracker の issue と CL (pull request) を周期ごとに読み、project
 
 - macOS か Linux
 - [Claude Code](https://docs.claude.com/en/docs/claude-code) と、その認証
-- tracker の CLI と、その認証。tracker が GitHub なら [gh](https://cli.github.com/) (`gh auth login`)、GitLab なら [glab](https://gitlab.com/gitlab-org/cli) (`glab auth login`)。GitLab は issue 側だけに対応し、merge request に当てる trigger はまだ書けない
+- tracker の CLI と、その認証。tracker が GitHub なら [gh](https://cli.github.com/) (`gh auth login`)、GitLab なら [glab](https://gitlab.com/gitlab-org/cli) (`glab auth login`)。GitLab は issue 置き場と merge request の置き場が同じ project の構成を扱う。対象の GitLab は、GitLab が security 修正を出している版 ([maintenance policy](https://docs.gitlab.com/policy/maintenance/) の、最新の minor から 3 つ)
 - git (workspace を worktree で作る hooks と、CL 側の trigger で使う)
 - action の先頭に書く skill と command (`/swat-skills:playbook-implementation` など) を、worker が呼べる場所 (plugin・repo の `.claude/`・`~/.claude/`) に入れておく。特定の plugin には依存しない。呼べない名前は起動の前の事前検査で名指しされる
 

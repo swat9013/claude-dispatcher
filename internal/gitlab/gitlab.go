@@ -1,5 +1,5 @@
-// Package gitlab は glab CLI を撃って GitLab の issue 置き場を読む adapter (system.md §13)。tracker には書かない。
-// CL 置き場 (merge request) はまだ読まない。
+// Package gitlab は glab CLI を撃って GitLab の issue 置き場と CL 置き場 (merge request) を読む adapter (system.md §13)。
+// tracker には書かない。
 package gitlab
 
 import (
@@ -112,7 +112,7 @@ func CurrentProject(glab Runner) (Project, error) {
 // ScopeKey は project の issue 置き場を指す scope key。GitLab の path は大文字と小文字を区別しないので小文字にする。
 func ScopeKey(p Project) string { return strings.ToLower(p.String()) }
 
-// Store は project の issue 置き場を読む部品。
+// Store は project の issue 置き場と CL 置き場 (merge request) を読む部品。
 type Store struct {
 	glab    Runner
 	project Project
@@ -122,24 +122,13 @@ func NewStore(glab Runner, project Project) Store { return Store{glab: glab, pro
 
 func (s Store) ScopeKey() string { return ScopeKey(s.project) }
 
-// errMergeRequests は CL 置き場を読もうとしたときの誤り。workflow 定義の検査が gitlab の on: cl を落とすので、届けば実装の誤り
-var errMergeRequests = errors.New("GitLab の merge request は CL 置き場として読めない (未対応)")
-
 // Open は種類の open な作業対象を全件読む。失敗は *target.Failure。
 func (s Store) Open(kind target.Kind) ([]target.Item, error) {
 	switch kind {
 	case target.KindIssue:
-		issues, err := s.openIssues()
-		if err != nil {
-			return nil, err
-		}
-		items := make([]target.Item, len(issues))
-		for i, issue := range issues {
-			items[i] = issue
-		}
-		return items, nil
+		return items(s.openIssues())
 	case target.KindCL:
-		return nil, errMergeRequests
+		return items(s.openMergeRequests())
 	}
 	return nil, fmt.Errorf("未知の作業対象の種類 %q", kind)
 }
@@ -150,9 +139,48 @@ func (s Store) Read(ref target.Ref) (target.Item, error) {
 	case target.KindIssue:
 		return s.issue(ref.Number)
 	case target.KindCL:
-		return nil, errMergeRequests
+		cl, _, err := s.mergeRequest(ref.Number, collaborators{})
+		return cl, err
 	}
 	return nil, fmt.Errorf("未知の作業対象の種類 %q", ref.Kind)
+}
+
+func items[T target.Item](list []T, err error) ([]target.Item, error) {
+	if err != nil {
+		return nil, err
+	}
+	out := make([]target.Item, len(list))
+	for i, item := range list {
+		out[i] = item
+	}
+	return out, nil
+}
+
+// pages は `glab api --paginate` の出力を要素の列として読む。glab は page ごとの配列を連ねて出すか、1 つの配列に結合して
+// 出す (版による) ので、どちらも配列の列として読む。
+func pages[T any](out []byte) ([]T, error) {
+	var all []T
+	decoder := json.NewDecoder(bytes.NewReader(out))
+	for {
+		var page []T
+		err := decoder.Decode(&page)
+		if errors.Is(err, io.EOF) {
+			return all, nil
+		}
+		if err != nil {
+			return nil, fmt.Errorf("glab api の出力を読めない: %w", err)
+		}
+		all = append(all, page...)
+	}
+}
+
+// object は `glab api` の出力を JSON の値 1 つとして読む。
+func object[T any](out []byte) (T, error) {
+	var v T
+	if err := json.Unmarshal(out, &v); err != nil {
+		return v, fmt.Errorf("glab api の出力を読めない: %w", err)
+	}
+	return v, nil
 }
 
 // get は REST の endpoint を GET で撃つ。glab は field (-f / -F) を渡すと POST を撃つので、条件は query string に書く。
@@ -193,25 +221,14 @@ func (s Store) openIssues() ([]target.Issue, error) {
 	if err != nil {
 		return nil, s.fail(classify(err), err)
 	}
-	// --paginate は page ごとの配列を連ねて出すか 1 つの配列に結合して出す (glab の版による)。どちらも配列の列として読む
-	var nodes []issueJSON
-	decoder := json.NewDecoder(bytes.NewReader(out))
-	for {
-		var page []issueJSON
-		err := decoder.Decode(&page)
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			return nil, s.fail(target.Unavailable, fmt.Errorf("glab api の出力を読めない: %w", err))
-		}
-		nodes = append(nodes, page...)
+	nodes, err := pages[issueJSON](out)
+	if err != nil {
+		return nil, s.fail(target.Unavailable, err)
 	}
-	// 作者の立場は作者ごとに 1 回だけ読む
-	collaborators := map[int]bool{}
+	known := collaborators{}
 	issues := []target.Issue{}
 	for _, n := range nodes {
-		i, err := s.normalize(n, collaborators)
+		i, err := s.normalize(n, known)
 		if err != nil {
 			return nil, err
 		}
@@ -229,22 +246,18 @@ func (s Store) issue(iid int) (target.Issue, error) {
 	if err != nil {
 		return target.Issue{}, s.fail(classify(err), err)
 	}
-	var n issueJSON
-	if err := json.Unmarshal(out, &n); err != nil {
-		return target.Issue{}, s.fail(target.Unavailable, fmt.Errorf("glab api の出力を読めない: %w", err))
+	n, err := object[issueJSON](out)
+	if err != nil {
+		return target.Issue{}, s.fail(target.Unavailable, err)
 	}
-	return s.normalize(n, map[int]bool{})
+	return s.normalize(n, collaborators{})
 }
 
-// normalize は応答の issue 1 件を作業対象の形に写す。collaborators は作者ごとの立場の読み出し済みの分。
-func (s Store) normalize(n issueJSON, collaborators map[int]bool) (target.Issue, error) {
-	collaborator, known := collaborators[n.Author.ID]
-	if !known {
-		var err error
-		if collaborator, err = s.collaborator(n.Author.ID); err != nil {
-			return target.Issue{}, err
-		}
-		collaborators[n.Author.ID] = collaborator
+// normalize は応答の issue 1 件を作業対象の形に写す。
+func (s Store) normalize(n issueJSON, known collaborators) (target.Issue, error) {
+	collaborator, err := s.isCollaborator(n.Author.ID, known)
+	if err != nil {
+		return target.Issue{}, err
 	}
 	i := target.Issue{
 		Number:               n.IID,
@@ -267,6 +280,23 @@ func (s Store) normalize(n issueJSON, collaborators map[int]bool) (target.Issue,
 // developerAccess は collaborator と数える access level の下限 (Developer)。push できる層に揃える (formats.md §2.2)
 const developerAccess = 30
 
+// collaborators は user ごとの collaborator かの読み出し済みの分。1 回の観測 (一覧か 1 件の読み直し) の中で、同じ user を
+// 読み直さないために使い回す
+type collaborators map[int]bool
+
+// isCollaborator は user が collaborator か。known に無ければ読んで known に足す。
+func (s Store) isCollaborator(userID int, known collaborators) (bool, error) {
+	if collaborator, ok := known[userID]; ok {
+		return collaborator, nil
+	}
+	collaborator, err := s.collaborator(userID)
+	if err != nil {
+		return false, err
+	}
+	known[userID] = collaborator
+	return collaborator, nil
+}
+
 // collaborator は user が project で Developer 以上の access level (group から継承したものを含む) を持つか。member で
 // なければ false。
 func (s Store) collaborator(userID int) (bool, error) {
@@ -277,11 +307,11 @@ func (s Store) collaborator(userID int) (bool, error) {
 	if err != nil {
 		return false, s.fail(classify(err), err)
 	}
-	var member struct {
+	member, err := object[struct {
 		AccessLevel int `json:"access_level"`
-	}
-	if err := json.Unmarshal(out, &member); err != nil {
-		return false, s.fail(target.Unavailable, fmt.Errorf("glab api の出力を読めない: %w", err))
+	}](out)
+	if err != nil {
+		return false, s.fail(target.Unavailable, err)
 	}
 	return member.AccessLevel >= developerAccess, nil
 }
@@ -295,11 +325,12 @@ const (
 	authMarker      = "(HTTP 401)"
 	notFoundMarker  = "(HTTP 404)"
 	rateLimitMarker = "(HTTP 429)"
-	// projectGone は project が見えないときの 404 の文言。issue や member が無いときの 404 (`404 Not found`) と分ける
+	// projectGone は project が見えないときの 404 の文言。issue・merge request・member が無いときの 404 (`404 Not found`)
+	// と分ける
 	projectGone = "Project Not Found"
 )
 
-// gone は、project は見えていて、読んだもの (issue・member) が無いときの 404 か。
+// gone は、project は見えていて、読んだもの (issue・merge request・member) が無いときの 404 か。
 func gone(err error) bool {
 	var failed *proc.Error
 	return errors.As(err, &failed) && strings.Contains(failed.Stderr, notFoundMarker) && !strings.Contains(failed.Stderr, projectGone)

@@ -40,7 +40,8 @@ type CL struct {
 	AuthorIsCollaborator bool
 	// Head は head branch の名前
 	Head string
-	// HeadRepo は head branch のある repo (`owner/name`)。曖昧な CL を数えるときに、fork の同じ名前の branch と分ける
+	// HeadRepo は head branch のある repo を見分ける鍵 (形は adapter が決める。GitHub は `owner/name`、GitLab は project の id)。
+	// 曖昧な CL を数えるときに、fork の同じ名前の branch と分ける。head の repo が消えていれば ""
 	HeadRepo string
 	// SameRepo は head が CL の置き場と同じ repo の branch か (fork でないか)
 	SameRepo bool
