@@ -9,21 +9,48 @@ import (
 	"github.com/swat9013/claude-dispatcher/internal/deps"
 )
 
-func TestPATHIsExtendedWhenOnlyGitIsMissing(t *testing.T) {
-	onPath, home := t.TempDir(), t.TempDir()
-	for _, name := range []string{"gh", "claude"} {
+// pathWith は names の実行 file だけを置いた dir と、候補の置き場 (~/.local/bin) を持つ HOME を作る。
+func pathWith(t *testing.T, names ...string) (onPath, home, local string) {
+	t.Helper()
+	onPath, home = t.TempDir(), t.TempDir()
+	for _, name := range names {
 		if err := os.WriteFile(filepath.Join(onPath, name), []byte("#!/bin/sh\n"), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
-	local := filepath.Join(home, ".local", "bin")
+	local = filepath.Join(home, ".local", "bin")
 	if err := os.MkdirAll(local, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	return onPath, home, local
+}
 
-	got := deps.ResolvePATH(onPath, home)
+func TestPATHIsExtendedWhenOnlyGitIsMissing(t *testing.T) {
+	onPath, home, local := pathWith(t, "gh", "claude")
+
+	got := deps.ResolvePATH(onPath, home, []string{"gh", "claude", "git"})
 
 	if !strings.HasPrefix(got, local+string(os.PathListSeparator)) || !strings.HasSuffix(got, onPath) {
 		t.Fatalf("PATH = %s", got)
+	}
+}
+
+func TestPATHIsExtendedWhenANamedCLIIsMissingEvenIfAnUnnamedOneIsOnIt(t *testing.T) {
+	onPath, home, local := pathWith(t, "gh", "claude", "git")
+
+	got := deps.ResolvePATH(onPath, home, []string{"glab", "claude", "git"})
+
+	if !strings.HasPrefix(got, local+string(os.PathListSeparator)) {
+		t.Fatalf("PATH = %s", got)
+	}
+}
+
+func TestPATHIsKeptWhenEveryNamedCLIIsOnIt(t *testing.T) {
+	onPath, home, _ := pathWith(t, "gh", "claude", "git")
+
+	got := deps.ResolvePATH(onPath, home, []string{"gh", "claude", "git"})
+
+	if got != onPath {
+		t.Fatalf("PATH = %s, want %s", got, onPath)
 	}
 }

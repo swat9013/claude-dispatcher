@@ -14,6 +14,10 @@ import (
 // repoView は `gh repo view` が cwd の repo として acme/widgets を返す応答 rule。
 var repoView = stubwire.Rule{ArgsPrefix: []string{"repo", "view"}, Stdout: "acme/widgets\n"}
 
+// githubOrigin は clone の origin の URL として GitHub の repo を返す git の応答 rule。setup は origin の host で
+// tracker.kind を決める
+var githubOrigin = stubwire.Rule{ArgsPrefix: []string{"remote", "get-url", "origin"}, Stdout: "https://github.com/acme/widgets.git\n"}
+
 func TestSetupTemplateAloneLetsTheDryRunPassWithoutPlugins(t *testing.T) {
 	s := newSandbox(t)
 	if err := os.RemoveAll(filepath.Join(s.home, ".claude")); err != nil {
@@ -22,6 +26,7 @@ func TestSetupTemplateAloneLetsTheDryRunPassWithoutPlugins(t *testing.T) {
 	if err := os.Remove(s.workflowFile()); err != nil {
 		t.Fatal(err)
 	}
+	s.respond("git", githubOrigin)
 	s.respondAll("gh", append([]stubwire.Rule{repoView}, ghRules([]issue{readyIssue(42)}, nil)...))
 	assertExit(t, s.run("setup"), 0)
 
@@ -39,6 +44,7 @@ func (s *sandbox) setupTemplate() string {
 	if err := os.Remove(s.workflowFile()); err != nil {
 		s.t.Fatal(err)
 	}
+	s.respond("git", githubOrigin)
 	s.respond("gh", repoView)
 	assertExit(s.t, s.run("setup"), 0)
 	written, err := os.ReadFile(s.workflowFile())
@@ -88,6 +94,7 @@ func TestSetupFailsWhenTheRepoCannotBeDetermined(t *testing.T) {
 	if err := os.Remove(s.workflowFile()); err != nil {
 		t.Fatal(err)
 	}
+	s.respond("git", githubOrigin)
 	s.respond("gh", stubwire.Rule{ArgsPrefix: []string{"repo", "view"}, Stderr: "no git remotes found", Exit: 1})
 
 	r := s.run("setup")
@@ -95,5 +102,23 @@ func TestSetupFailsWhenTheRepoCannotBeDetermined(t *testing.T) {
 	assertExit(t, r, 1)
 	if _, err := os.Stat(s.workflowFile()); !os.IsNotExist(err) {
 		t.Fatalf("repo を決められないのに書いた: %v", err)
+	}
+}
+
+func TestSetupFailsWhenTheCloneHasNoOrigin(t *testing.T) {
+	s := newSandbox(t)
+	if err := os.Remove(s.workflowFile()); err != nil {
+		t.Fatal(err)
+	}
+	s.respond("git", stubwire.Rule{ArgsPrefix: []string{"remote", "get-url", "origin"}, Stderr: "error: No such remote 'origin'\n", Exit: 2})
+
+	r := s.run("setup")
+
+	assertExit(t, r, 1)
+	if _, err := os.Stat(s.workflowFile()); !os.IsNotExist(err) {
+		t.Fatalf("origin が無いのに書いた: %v", err)
+	}
+	if !strings.Contains(r.stderr, "origin") {
+		t.Fatalf("stderr が origin を名指ししていない: %q", r.stderr)
 	}
 }

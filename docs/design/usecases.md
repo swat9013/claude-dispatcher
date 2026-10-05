@@ -143,7 +143,7 @@ Cockburn『ユースケース実践ガイド』(Writing Effective Use Cases) の
 - **Scope**: dispatcher (機械システム)
 - **Level**: user-goal (sea)
 - **Trigger**: 新しい project で dispatcher を使い始める
-- **事前条件**: claude-dispatcher・Claude Code・gh が導入され、gh と claude が認証済み
+- **事前条件**: claude-dispatcher・Claude Code と、`tracker.kind` に応じた tracker の CLI (`github` なら gh、`gitlab` なら glab) が導入され、その CLI と claude が認証済み
 - **成功保証**: 誤った workflow 定義で起動が始まっていない。試運転で worker が起動していない。loop が回り始めている
 
 **Main Success Scenario**

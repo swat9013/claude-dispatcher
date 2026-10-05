@@ -40,9 +40,8 @@ const (
 	runTimeout = 60 * time.Second
 )
 
-// stubNames は PATH に置く stub。今の binary が撃つのは gh だけだが、PATH の自己解決 (依存 CLI が揃っているか) が
-// claude と git も探すので置いておく
-var stubNames = []string{"gh", "claude", "git"}
+// stubNames は PATH に置く stub。tracker の CLI (gh / glab) と、worker の claude と、setup と CL 側の trigger が撃つ git
+var stubNames = []string{"gh", "glab", "claude", "git"}
 
 // selfResolutionDirs は PATH の自己解決 (internal/deps の candidates) が探す置き場のうち、sandbox の HOME の外にあるもの。
 // sandbox の PATH は stub だけで閉じているが、自己解決はここまで探しに行くので、ここにある実物には stub で蓋ができない。

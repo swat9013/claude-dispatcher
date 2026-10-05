@@ -1,5 +1,5 @@
-// Package deps は依存 CLI (gh / claude / git) の path を解決する。loop は起動した shell の PATH を継ぐが、最小の PATH の
-// shell (ssh 越し等) から撃たれても動くように、よく使われる置き場も探す (system.md §9)。
+// Package deps は依存 CLI (tracker の CLI (gh / glab)・claude・git) の path を解決する。loop は起動した shell の PATH を
+// 継ぐが、最小の PATH の shell (ssh 越し等) から撃たれても動くように、よく使われる置き場も探す (system.md §9)。
 package deps
 
 import (
@@ -9,10 +9,6 @@ import (
 	"strings"
 )
 
-// Names は PATH を自己解決する依存 CLI。git は、loop が claim の workspace の branch を読むとき (CL 側の trigger) に撃ち、
-// 同じ PATH を継ぐ worker と hooks も撃つ
-var Names = []string{"gh", "claude", "git"}
-
 // candidates は PATH に無いときに足す置き場。前に居るものから探す (Homebrew は macOS の 2 つと Linux の prefix)。
 // HOME の外の置き場を変えたら、black-box テストの selfResolutionDirs も揃える (candidates_test.go が一致を確かめる)
 var candidates = []string{
@@ -20,11 +16,12 @@ var candidates = []string{
 	"/opt/homebrew/bin", "/usr/local/bin", "/home/linuxbrew/.linuxbrew/bin",
 }
 
-// ResolvePATH は依存 CLI がすべて PATH で見つかれば PATH をそのまま、見つからないものがあれば
-// 実在する候補の置き場を前置した PATH を返す。
-func ResolvePATH(path, home string) string {
+// ResolvePATH は、撃つ依存 CLI (names) がすべて PATH で見つかれば PATH をそのまま、見つからないものがあれば実在する
+// 候補の置き場を前置した PATH を返す。names は workflow 定義から決める。撃たない CLI (使わない方の tracker の CLI) が
+// 無いだけで PATH を書き換えると、PATH を継ぐ worker と hooks が撃つ git などが黙って入れ替わりうる。
+func ResolvePATH(path, home string, names []string) string {
 	missing := false
-	for _, name := range Names {
+	for _, name := range names {
 		if LookPath(name, path) == "" {
 			missing = true
 		}

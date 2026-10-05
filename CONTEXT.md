@@ -46,7 +46,7 @@ _Avoid_: issue repo (tracker が GitHub 以外でも通る語にする)
 dispatcher が CL を読む CL host 上の場所。
 
 **scope key**:
-issue 置き場を tracker の種類を問わずに一意に指す識別子。どの粒度で指すかは tracker ごとに決まり、Jira では site と project の組になる。同じマシンの中では、同じ scope key の loop は 1 本しか立たない。
+issue 置き場を tracker の種類を問わずに一意に指す識別子。どの粒度で指すかは tracker ごとに決まる。GitHub は owner と repo の組、GitLab は host と repo の path (group と subgroup を含み、段数を問わない path) の組、Jira は site と project の組になる。同じマシンの中では、同じ scope key の loop は 1 本しか立たない。
 _Avoid_: project 名, repo 名
 
 **CL**:
