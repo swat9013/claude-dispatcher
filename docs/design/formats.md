@@ -123,7 +123,7 @@ triggers:                    # 必須。1 つ以上
 | `claude.args` | 文字列の列 | command に、dispatcher の引数 (§6「worker の起動」) より前に渡す引数。既定は空 |
 | `triggers` | 列 | trigger の宣言。宣言順が起動の優先順 (system.md §6) |
 | `triggers[].name` | 文字列 | trigger の名前。`[A-Za-z0-9._-]+`。trigger の間で重複しない |
-| `triggers[].on` | 文字列 | 作業対象の種類。`issue` か `cl`。`tracker.kind` が `gitlab` なら `issue` だけ (merge request は未対応で、`cl` は名指しで失敗する) |
+| `triggers[].on` | 文字列 | 作業対象の種類。`issue` か `cl` (`gitlab` では merge request) |
 | `triggers[].when` | 対応表 | 述語。書いた条件はすべて AND で評価する。書ける key は `on` で変わる (issue は §2.2、CL は §2.3) |
 | `triggers[].action` | 文字列 | worker に渡す prompt の template (§2.7)。空にできない |
 
@@ -178,11 +178,26 @@ CL の状態の語彙 (system.md §6) は、真偽の key で書く。`true` な
 - `head` を書いたら、fork の CL には当たらない。fork からは誰でも同じ綴りの head branch を作れるため (system.md §6)。`head` と `same_repo: false` は一緒に書けない
 - head branch の名前は、大文字と小文字を区別して比べる (git と同じ)
 
+上の表は `tracker.kind` が `github` のときの GitHub の field で書いた。`gitlab` では、語彙と絞り込みを merge request の field に次のように写す。
+
+| 語彙 / 絞り込み | GitLab の field |
+|---|---|
+| `conflict` | `has_conflicts` が `true` なら conflict を持つ。そうでなく `detailed_merge_status` が `checking` / `unchecked` / `preparing` なら、計算し終えていないので `true` にも `false` にも当たらない (次の tick で見直す)。どちらでもなければ conflict を持たない |
+| `review_unresolved` | 解決できる (resolvable な note を持つ) discussion で、解決されていない (resolvable な note のどれかが未解決) もののうち、最初の note の作者が collaborator のものが 1 本以上ある。最初の note が system note の discussion は数えない |
+| `ci_failed` | head の pipeline (`head_pipeline`) の `status` が `failed`。`canceled` は失敗に数えない (人が意図して止めた pipeline に worker を送らない)。pipeline が無ければ失敗ではない |
+| `approved` | merge request の承認 (`/merge_requests/:iid/approvals`) の `approved`。CE では 1 人以上の承認、有償の tier では承認ルールの充足で、どちらも host の判断に従う |
+| `draft` | `draft` |
+| `same_repo` | `source_project_id` と `target_project_id` が同じ |
+| `head` | `source_branch` |
+| `author` | issue 側 (§2.2) と同じ線 (access level が Developer 以上) |
+
+- `gitlab` の merge request は、open な一覧を読んだ後に 1 本ずつ、merge request 本体・承認・discussion を読み直す (`head_pipeline` は一覧の応答に無いため)。CL 側の trigger を置くと、open な merge request 1 本につき 3 往復の API を毎 tick 撃つ
+
 ### 2.4 評価の規則
 
 - 作業対象ごとに trigger を宣言順に評価し、最初に当たった 1 つだけを採る。issue には `on: issue` の trigger だけを、CL には `on: cl` の trigger だけを当てる
 - 候補は、trigger の宣言順を先に、同じ trigger の中では作業対象の作成日時の古い順に並べる。作成日時が同じなら番号の小さい順
-- **曖昧な CL** (同じ repo の同じ head branch から、open な CL が 2 本以上ある) には、CL 側の trigger を当てない。fork の head branch は、fork ごとに別の branch として数える
+- **曖昧な CL** (同じ repo の同じ head branch から、open な CL が 2 本以上ある) には、CL 側の trigger を当てない。fork の head branch は、fork ごとに別の branch として数える (fork は GitHub では head の repo の名前、GitLab では `source_project_id` で見分ける)
 - loop は、claim している作業対象 (走っている・止めている・確かめ待ち・再起動待ち) の workspace で checkout されている branch を head に持つ、同じ repo の CL にも CL 側の trigger を当てない (§6 の tick の手順)。試運転 (§5) は claim を持たないので、この除外は掛からない
 - open な一覧は、trigger に現れる種類のものだけを読む (`on: cl` の trigger が 1 つも無ければ CL の一覧を読まず、`on: issue` の trigger が無ければ issue の一覧を読まない)
 - head の repo が消えた fork の CL (GitHub の `headRepository` が null) は、どの fork の branch か分からないので、曖昧さを数えるときに数えない
@@ -240,7 +255,7 @@ action と本文 (共通 prompt) は、worker を起動するたびに Go の te
 - 空の文字列 (空の `assignee` や label を「条件なし」と取り違えないため)
 - 上の表の各項目の制約 (`polling.interval` の範囲・trigger の名前の綴りと重複・`assignee` と `unassigned` の併記・空の `labels.any`・`head` の pattern の綴り・`head` と `same_repo: false` の併記・空の `action`)
 - `$VAR` の未設定と、`tracker.token` に値そのものを書いたこと
-- `tracker.kind` が支えない宣言: `gitlab` での `tracker.token`・`blocked`・`on: cl` (§2.1・§2.2)。`github` での `tracker.host` は未知の key。key を書く順 (`triggers` を `tracker` より前に書くなど) によらず名指しする
+- `tracker.kind` が支えない宣言: `gitlab` での `tracker.token`・`blocked` (§2.1・§2.2)。`github` での `tracker.host` は未知の key。key を書く順 (`triggers` を `tracker` より前に書くなど) によらず名指しする
 - 同じ key を 1 つの対応表に 2 回書いたこと
 - action と本文の template を描画できないこと (§2.7。綴りの誤り・未知の変数・未知の関数)
 
@@ -657,9 +672,9 @@ exit: 0 = 書いた・既にある / 2 = 引数の誤り / 1 = repo を決めら
 
 **雛形**: `tracker.kind` ごとに持つ。`github` の雛形を下に置く。
 
-- `gitlab` の雛形は、同じ action を "merge request"・`glab`・`Closes #N` の綴りで書く
+- `gitlab` の雛形は、同じ trigger と action を "merge request"・`glab`・`Closes #N` の綴りで書く
   - `blocked` の述語を書かない (§2.2)
-  - CL 側の trigger (conflict・review・CI) を置かない (merge request は未対応。§2.1)
+  - CL 側の trigger (conflict・review・CI) は `github` と同じ述語と絞り込みで置く
 
 汎用の action (実装・conflict・review・CI) を置く。action は先頭に skill を書かない文で、plugin の無い環境でも事前検査 (§2.9) に通る。承認済みの CL (`approved: true`) に当てる trigger は置かない (merge を worker に任せるかは利用者が決める)。
 

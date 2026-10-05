@@ -235,7 +235,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。
 
 - **front matter が持つもの**
   - tracker の種類 (`github` / `gitlab`) と adapter の設定
-    - 書ける設定は種類ごとに決まる。種類が支えない設定 (`gitlab` の `blocked` の述語・`tracker.token`・CL 側の trigger) は、検査で名指しして失敗させる。黙って通すと、条件が全件に当たるか、渡したつもりの設定が効かない
+    - 書ける設定は種類ごとに決まる。種類が支えない設定 (`gitlab` の `blocked` の述語・`tracker.token`) は、検査で名指しして失敗させる。黙って通すと、条件が全件に当たるか、渡したつもりの設定が効かない
   - trigger の列
   - hooks
   - 並列上限・attempt の上限・backoff の上限・stall の上限・worker 1 回分の上限時間 (既定 1 時間。0 で無効)
@@ -334,7 +334,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。
 - **loop の監督** (boot 時の起動・落ちた loop の起こし直し): 人が同じコマンドで起動し直す (ADR 0006)
 - **tracker 以外の起点** (定期実行・外部の webhook): SPEC §2.2 の「汎用の workflow engine にしない」に従う
 - **SPEC §13.7 の HTTP API と dashboard**: 観測は loop の画面・状態 file・`status` で足りる
-- **GitHub と GitLab の issue 側以外の tracker / CL host** (GitLab の merge request / Jira): tracker の adapter を足す形で広げる (§13)。scope key の粒度は adapter が決める
+- **GitHub と GitLab 以外の tracker / CL host** (Jira): tracker の adapter を足す形で広げる (§13)。scope key の粒度は adapter が決める
   - GitLab は、issue 置き場と CL 置き場が同じ host の同じ project にある構成だけを扱う
 
 ## 13. CLI の seam
@@ -344,7 +344,7 @@ CLI の中で、呼び出し側から中身を隠す部品と、差し替えの�
 | 部品 | 呼び出し側 | 呼び出し側から隠すもの | adapter |
 |---|---|---|---|
 | issue 置き場の部品 | tick / 試運転 / `setup` / `doctor` | tracker の呼び方・応答の綴り・失敗の見分け方・scope key の決め方 | gh / glab / テストの in-memory |
-| CL 置き場の部品 | tick / 試運転 / `doctor` | CL host の呼び方・応答から CL の状態の語彙への写し方・失敗の見分け方 | gh / テストの in-memory |
+| CL 置き場の部品 | tick / 試運転 / `doctor` | CL host の呼び方・応答から CL の状態の語彙への写し方・失敗の見分け方 | gh / glab / テストの in-memory |
 | 起動部 | tick | セッションの起動の形 (argv・process group・stream の読み方・停止・回収) | `claude -p` / テストの fake |
 | hooks の実行 | tick | shell の撃ち方・timeout | (seam を置かない。テストは一時 dir で本物を撃つ) |
 
