@@ -182,7 +182,7 @@ CL の状態の語彙 (system.md §6) は、真偽の key で書く。`true` な
 
 | 語彙 / 絞り込み | GitLab の field |
 |---|---|
-| `conflict` | `has_conflicts` が `true` なら conflict を持つ。そうでなく `detailed_merge_status` が `checking` / `unchecked` / `preparing` なら、計算し終えていないので `true` にも `false` にも当たらない (次の tick で見直す)。`detailed_merge_status` の無い GitLab (15.6 より前) では、`merge_status` の `unchecked` / `checking` / `cannot_be_merged_recheck` を計算中とする。どちらでもなければ conflict を持たない |
+| `conflict` | `has_conflicts` が `true` なら conflict を持つ。そうでなく `detailed_merge_status` が `checking` / `unchecked` / `preparing` なら、計算し終えていないので `true` にも `false` にも当たらない (次の tick で見直す)。どちらでもなければ conflict を持たない。`detailed_merge_status` が無い応答は、対象の版より古い GitLab として読めない失敗にする |
 | `review_unresolved` | 解決できる (resolvable な note を持つ) discussion で、解決されていない (resolvable な note のどれかが未解決) もののうち、最初の note の作者が collaborator のものが 1 本以上ある。最初の note が system note の discussion は数えない |
 | `ci_failed` | head の pipeline (`head_pipeline`) の `status` が `failed`。`canceled` は失敗に数えない (人が意図して止めた pipeline に worker を送らない)。pipeline が無ければ失敗ではない |
 | `approved` | merge request の承認 (`/merge_requests/:iid/approvals`) の `approved`。CE では 1 人以上の承認、有償の tier では承認ルールの充足で、どちらも host の判断に従う |

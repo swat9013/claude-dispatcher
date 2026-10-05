@@ -1,6 +1,7 @@
 package gitlab
 
 import (
+	"errors"
 	"slices"
 	"strconv"
 	"time"
@@ -24,9 +25,7 @@ type mergeRequestJSON struct {
 	TargetProjectID     int    `json:"target_project_id"`
 	HasConflicts        bool   `json:"has_conflicts"`
 	DetailedMergeStatus string `json:"detailed_merge_status"`
-	// MergeStatus は detailed_merge_status の無い GitLab (15.6 より前) の計算状況
-	MergeStatus  string `json:"merge_status"`
-	HeadPipeline *struct {
+	HeadPipeline        *struct {
 		Status string `json:"status"`
 	} `json:"head_pipeline"`
 	Author struct {
@@ -99,6 +98,10 @@ func (s Store) mergeRequest(iid int, known collaborators) (target.CL, string, er
 
 // normalizeMergeRequest は open な merge request 1 本を、承認と discussion を読み足して CL の形に写す。
 func (s Store) normalizeMergeRequest(base string, m mergeRequestJSON, known collaborators) (target.CL, error) {
+	// detailed_merge_status の無い GitLab は対象の版より古い。conflict を計算中のものを conflict なしと読まないよう失敗にする
+	if m.DetailedMergeStatus == "" {
+		return target.CL{}, s.fail(target.Unavailable, errors.New("merge request の応答に detailed_merge_status が無い (GitLab が対象の版より古い)"))
+	}
 	approved, err := s.approved(base)
 	if err != nil {
 		return target.CL{}, err
@@ -138,21 +141,13 @@ func (s Store) normalizeMergeRequest(base string, m mergeRequestJSON, known coll
 // checkingStatuses は、GitLab が mergeability を計算し終えていない detailed_merge_status
 var checkingStatuses = []string{"checking", "unchecked", "preparing"}
 
-// legacyCheckingStatuses は、detailed_merge_status の無い GitLab (15.6 より前) で計算し終えていない merge_status
-var legacyCheckingStatuses = []string{"unchecked", "checking", "cannot_be_merged_recheck"}
-
 // mergeability は merge request の conflict の有無 (cl.conflict) を決める。has_conflicts が立っていれば conflict、
 // そうでなく計算中なら未決 (次の tick で見直す)、どちらでもなければ conflict なし。
 func mergeability(m mergeRequestJSON) target.Mergeability {
-	// detailed_merge_status があればそれだけで決め、無い GitLab でだけ merge_status を見る
-	status, checking := m.DetailedMergeStatus, checkingStatuses
-	if status == "" {
-		status, checking = m.MergeStatus, legacyCheckingStatuses
-	}
 	switch {
 	case m.HasConflicts:
 		return target.MergeConflict
-	case slices.Contains(checking, status):
+	case slices.Contains(checkingStatuses, m.DetailedMergeStatus):
 		return target.MergeUnknown
 	}
 	return target.MergeClean

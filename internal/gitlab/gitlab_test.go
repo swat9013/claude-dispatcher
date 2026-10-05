@@ -120,7 +120,7 @@ func readMergeRequest(t *testing.T, g glab) target.CL {
 func TestMergeRequestIsTerminalOnlyWhenMergedOrClosed(t *testing.T) {
 	for state, terminal := range map[string]bool{"merged": true, "closed": true, "opened": false, "locked": false} {
 		t.Run(state, func(t *testing.T) {
-			cl := readMergeRequest(t, mergeRequest(`"state":"`+state+`","source_project_id":7,"target_project_id":7`))
+			cl := readMergeRequest(t, mergeRequest(`"state":"`+state+`","source_project_id":7,"target_project_id":7,"detailed_merge_status":"mergeable"`))
 
 			if cl.Terminal() != terminal {
 				t.Fatalf("Terminal() = %v, want %v", cl.Terminal(), terminal)
@@ -133,7 +133,7 @@ func TestMergeRequestThatLeftOpenedAfterTheListIsLeftOutOfTheOpenOnes(t *testing
 	// locked (merge の処理中) は Read では終端にしないが、merge 中の branch へ手直しの worker を送らないよう一覧からは外す
 	for _, state := range []string{"merged", "closed", "locked"} {
 		t.Run(state, func(t *testing.T) {
-			g := mergeRequest(`"state":"` + state + `","source_project_id":7,"target_project_id":7`)
+			g := mergeRequest(`"state":"` + state + `","source_project_id":7,"target_project_id":7,"detailed_merge_status":"mergeable"`)
 			g[mergeRequestsEndpoint+"?"] = response{stdout: `[{"iid":7}]`}
 
 			items, err := gitlab.NewStore(g, project).Open(target.KindCL)
@@ -146,32 +146,37 @@ func TestMergeRequestThatLeftOpenedAfterTheListIsLeftOutOfTheOpenOnes(t *testing
 }
 
 func TestMergeRequestFromADeletedForkHasNoHeadRepo(t *testing.T) {
-	cl := readMergeRequest(t, mergeRequest(`"state":"opened","source_project_id":null,"target_project_id":7`))
+	cl := readMergeRequest(t, mergeRequest(`"state":"opened","source_project_id":null,"target_project_id":7,"detailed_merge_status":"mergeable"`))
 
 	if cl.HeadRepo != "" || cl.SameRepo {
 		t.Fatalf("HeadRepo = %q, SameRepo = %v", cl.HeadRepo, cl.SameRepo)
 	}
 }
 
-func TestDetailedMergeStatusDecidesWhetherTheConflictIsStillBeingCheckedAndMergeStatusOnlyWithoutIt(t *testing.T) {
-	for name, tc := range map[string]struct {
-		fields string
-		want   target.Mergeability
-	}{
-		"detailed: checking":                                    {`"detailed_merge_status":"checking"`, target.MergeUnknown},
-		"detailed: mergeable":                                   {`"detailed_merge_status":"mergeable"`, target.MergeClean},
-		"detailed が merge_status より勝つ":                          {`"detailed_merge_status":"mergeable","merge_status":"unchecked"`, target.MergeClean},
-		"detailed が無ければ merge_status: unchecked":                {`"merge_status":"unchecked"`, target.MergeUnknown},
-		"detailed が無ければ merge_status: cannot_be_merged_recheck": {`"merge_status":"cannot_be_merged_recheck"`, target.MergeUnknown},
-		"detailed が無ければ merge_status: can_be_merged":            {`"merge_status":"can_be_merged"`, target.MergeClean},
+func TestDetailedMergeStatusDecidesWhetherTheConflictIsStillBeingChecked(t *testing.T) {
+	for status, want := range map[string]target.Mergeability{
+		"checking": target.MergeUnknown, "unchecked": target.MergeUnknown, "preparing": target.MergeUnknown,
+		"mergeable": target.MergeClean, "ci_must_pass": target.MergeClean,
 	} {
-		t.Run(name, func(t *testing.T) {
-			cl := readMergeRequest(t, mergeRequest(`"state":"opened","source_project_id":7,"target_project_id":7,`+tc.fields))
+		t.Run(status, func(t *testing.T) {
+			cl := readMergeRequest(t, mergeRequest(`"state":"opened","source_project_id":7,"target_project_id":7,"detailed_merge_status":"`+status+`"`))
 
-			if cl.Mergeable != tc.want {
-				t.Fatalf("Mergeable = %v, want %v", cl.Mergeable, tc.want)
+			if cl.Mergeable != want {
+				t.Fatalf("Mergeable = %v, want %v", cl.Mergeable, want)
 			}
 		})
+	}
+}
+
+func TestMergeRequestWithoutDetailedMergeStatusFailsAsAGitLabOlderThanSupported(t *testing.T) {
+	// detailed_merge_status の無い GitLab は対象外。conflict を計算中の merge request を conflict なしと読まない
+	g := mergeRequest(`"state":"opened","source_project_id":7,"target_project_id":7,"merge_status":"unchecked"`)
+
+	_, err := gitlab.NewStore(g, project).Read(target.Ref{Kind: target.KindCL, Number: 7})
+
+	var failure *target.Failure
+	if !errors.As(err, &failure) || failure.Kind != target.Unavailable || !strings.Contains(err.Error(), "detailed_merge_status") {
+		t.Fatalf("err = %v", err)
 	}
 }
 
