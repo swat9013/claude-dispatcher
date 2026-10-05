@@ -551,10 +551,7 @@ func (c *checker) triggers(n *yaml.Node, path string) []trigger.Trigger {
 			"on": {required: true, read: func(_, n *yaml.Node, path string) {
 				if s, ok := c.str(n, path); ok {
 					switch kind := target.Kind(s); kind {
-					case target.KindCL:
-						t.On = kind
-						c.githubOnly(n, path, "GitLab の merge request は未対応で、on: cl の trigger を当てられない")
-					case target.KindIssue:
+					case target.KindIssue, target.KindCL:
 						t.On = kind
 					default:
 						c.fail(n, path, "未知の値 %q (%s / %s)", s, target.KindIssue, target.KindCL)

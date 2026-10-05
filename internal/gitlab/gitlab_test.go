@@ -88,13 +88,13 @@ func TestAuthorWhoIsNotAMemberIsNotACollaborator(t *testing.T) {
 	}
 }
 
-func TestMergeRequestsAreNotRead(t *testing.T) {
-	store := gitlab.NewStore(glab{}, project)
+func TestMergeRequestThatIsGoneIsReadAsClosed(t *testing.T) {
+	store := gitlab.NewStore(glab{"projects/acme%2Fsub%2Fwidgets/merge_requests/7": {stderr: "glab: 404 Not found (HTTP 404)"}}, project)
 
-	_, err := store.Open(target.KindCL)
+	item, err := store.Read(target.Ref{Kind: target.KindCL, Number: 7})
 
-	if err == nil {
-		t.Fatal("merge request を読めたことにした")
+	if err != nil || !item.Terminal() {
+		t.Fatalf("item = %v, err = %v", item, err)
 	}
 }
 
