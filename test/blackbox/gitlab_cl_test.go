@@ -131,6 +131,11 @@ func glabStoreRules(issues []glIssue, mrs []glMR) []stubwire.Rule {
 	return append(rules, glabRules(issues...)...)
 }
 
+// mrCandidate は試運転が merge request の候補に出す 1 行。番号は GitLab の merge request の綴り (`!<番号>`) で出る。
+func mrCandidate(trigger string, iid int) string {
+	return trigger + "\tcl\t!" + strconv.Itoa(iid) + "\tcl " + strconv.Itoa(iid)
+}
+
 // dryRunGitLabCL は triggers の gitlab の workflow 定義で、glab が mrs を返すときの試運転を撃つ。
 func (s *sandbox) dryRunGitLabCL(triggers string, mrs ...glMR) runResult {
 	s.t.Helper()
@@ -177,7 +182,7 @@ func TestGitLabCLVocabularyIsReadFromTheMergeRequest(t *testing.T) {
 
 			var want []string
 			for _, n := range tc.want {
-				want = append(want, clCandidate("t", n))
+				want = append(want, mrCandidate("t", n))
 			}
 			assertCandidates(t, r, want...)
 			s.assertGlabOnlyReads()
@@ -210,7 +215,7 @@ func TestGitLabCanceledPipelineIsNotAFailure(t *testing.T) {
   - {name: fix, on: cl, when: {ci_failed: true}, action: /t}
   - {name: green, on: cl, when: {ci_failed: false}, action: /t}`, canceled, noPipeline)
 
-	assertCandidates(t, r, clCandidate("green", 1), clCandidate("green", 2))
+	assertCandidates(t, r, mrCandidate("green", 1), mrCandidate("green", 2))
 }
 
 func TestGitLabCLFiltersReadTheSourceBranchProjectAndDraft(t *testing.T) {
@@ -229,7 +234,7 @@ func TestGitLabCLFiltersReadTheSourceBranchProjectAndDraft(t *testing.T) {
 	r := s.dryRunGitLabCL(`
   - {name: t, on: cl, when: {head: "claude-dispatcher/*", draft: false, author: collaborator}, action: /t}`, own, fromFork, draft, other, byReporter)
 
-	assertCandidates(t, r, clCandidate("t", 1))
+	assertCandidates(t, r, mrCandidate("t", 1))
 }
 
 func TestGitLabMergeRequestsFromTheSameBranchAreAmbiguousButAForkIsAnotherBranch(t *testing.T) {
@@ -242,5 +247,5 @@ func TestGitLabMergeRequestsFromTheSameBranchAreAmbiguousButAForkIsAnotherBranch
   - {name: t, on: cl, when: {same_repo: false}, action: /t}
   - {name: u, on: cl, action: /t}`, first, second, fromFork)
 
-	assertCandidates(t, r, clCandidate("t", 3))
+	assertCandidates(t, r, mrCandidate("t", 3))
 }

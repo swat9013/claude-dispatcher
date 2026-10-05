@@ -315,7 +315,7 @@ func (l *loop) tick() {
 	l.board.ambiguous = ambiguous
 	l.rec.event("tick", map[string]any{"result": status.TickOK, "candidates": len(candidates), "launched": nonNil(launched), "ambiguous": ambiguousFields(ambiguous), "blocked": blockedFields(l.blocked),
 		"running": running, "waiting_retry": waitingRetry, "max_concurrent": def.MaxConcurrent},
-		LineTickOK, "tick ok", " · %s%s%s", Summary(candidates), ambiguousSummary(ambiguous), blockedSummary(l.blocked))
+		LineTickOK, "tick ok", " · %s%s%s", Summary(candidates, def.Tracker), ambiguousSummary(ambiguous), blockedSummary(l.blocked))
 }
 
 // view は tick が読んだ open な一覧と、そこから導いた CL の除外 (曖昧な CL と、claim している作業対象の branch)。
@@ -676,14 +676,14 @@ func nonNil(s []string) []string {
 	return s
 }
 
-// Summary は tick の行の候補の欄。
-func Summary(candidates []trigger.Candidate) string {
+// Summary は tick の行の候補の欄。番号は tracker の綴りの参照で出す。
+func Summary(candidates []trigger.Candidate, tracker workflow.Tracker) string {
 	if len(candidates) == 0 {
 		return "候補 0"
 	}
 	names := make([]string, len(candidates))
 	for i, c := range candidates {
-		names[i] = fmt.Sprintf("%s %s #%d", c.Trigger.Name, c.Trigger.On, c.Item.Ref().Number)
+		names[i] = fmt.Sprintf("%s %s %s", c.Trigger.Name, c.Trigger.On, tracker.Reference(c.Item.Ref()))
 	}
 	return fmt.Sprintf("候補 %d: %s", len(candidates), strings.Join(names, ", "))
 }

@@ -427,7 +427,7 @@ func TestGitLabSetupTemplateAloneLetsTheDryRunPassWithoutPlugins(t *testing.T) {
 
 	r := s.dryRun()
 
-	assertCandidates(t, r, candidate("implement", 42), clCandidate("resolve-conflict", 5))
+	assertCandidates(t, r, candidate("implement", 42), mrCandidate("resolve-conflict", 5))
 }
 
 func TestPathIsLeftAsIsWhenOnlyTheUnusedTrackerCLIIsMissing(t *testing.T) {

@@ -302,7 +302,7 @@ func dryRunOnce(e environment, def workflow.Definition, stdout, stderr io.Writer
 	}
 	candidates, _ := trigger.Evaluate(def.Triggers, open)
 	for _, c := range candidates {
-		fmt.Fprintf(stdout, "%s\t%s\t#%d\t%s\n", c.Trigger.Name, c.Trigger.On, c.Item.Ref().Number, printable.Line(c.Item.Heading()))
+		fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", c.Trigger.Name, c.Trigger.On, def.Tracker.Reference(c.Item.Ref()), printable.Line(c.Item.Heading()))
 	}
 	return 0
 }

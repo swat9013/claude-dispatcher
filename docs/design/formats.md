@@ -369,7 +369,8 @@ implement	issue	#42	ログインの失敗を記録する
 fix-ci	cl	#51	ログインの失敗を記録する
 ```
 
-- 列はタブで区切る: trigger の名前・作業対象の種類 (`issue` / `cl`)・`#<番号>`・題名
+- 列はタブで区切る: trigger の名前・作業対象の種類 (`issue` / `cl`)・参照・題名
+- 参照は tracker の綴りで書く: issue と GitHub の CL は `#<番号>`、GitLab の CL (merge request) は `!<番号>`。GitLab では issue と merge request が別々に番号を振るので、同じ番号が両方にありうる
 - 題名の制御文字 (タブ・改行・ESC など) は空白に置き換える
 
 失敗したら、stdout に何も出さず、stderr に理由を出して §3 の exit code で終わる。workflow 定義の誤りは 1 件 1 行で出す。
@@ -502,7 +503,7 @@ issue#42  implement  1        running  5m10s  Edit internal/status/status.go
 00:05:10 停止待ち: 走っている worker 1 本の終了を待つ (もう一度で止める)
 ```
 
-- tick の行の候補は、試運転 (§5) と同じ順。候補が無ければ `tick ok · 候補 0`
+- tick の行の候補は、試運転 (§5) と同じ順で、`<trigger の名前> <種類> <参照>` を並べる。参照の綴りは試運転と同じ。候補が無ければ `tick ok · 候補 0`
 - **活動**: worker の stream (stdout の stream-json) のうち、活動として数える最新の完結した行の要約。loop は 1s ごとに確かめ、変わったら `活動` の行を出す。log.jsonl には書かない (stream は worker log に残る)。`type: result` の行は、活動とは別に attempt の終わりに worker log から読み直し、`end` の行に要約を載せる (§4)
 
 | stream の行 | 要約 |
