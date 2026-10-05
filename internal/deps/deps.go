@@ -1,4 +1,4 @@
-// Package deps は依存 CLI (gh / claude / git) の path を解決する。loop は起動した shell の PATH を継ぐが、最小の PATH の
+// Package deps は依存 CLI (tracker の CLI (gh / glab)・claude・git) の path を解決する。loop は起動した shell の PATH を継ぐが、最小の PATH の
 // shell (ssh 越し等) から撃たれても動くように、よく使われる置き場も探す (system.md §9)。
 package deps
 
@@ -6,12 +6,18 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
-// Names は PATH を自己解決する依存 CLI。git は、loop が claim の workspace の branch を読むとき (CL 側の trigger) に撃ち、
-// 同じ PATH を継ぐ worker と hooks も撃つ
-var Names = []string{"gh", "claude", "git"}
+// always は PATH を自己解決する依存 CLI のうち、tracker の種類によらず撃つもの。git は、loop が claim の workspace の
+// branch を読むとき (CL 側の trigger) と setup が撃ち、同じ PATH を継ぐ worker と hooks も撃つ
+var always = []string{"claude", "git"}
+
+// trackerCLIs は tracker の CLI (github は gh、gitlab は glab)。PATH は workflow 定義を読む前に解決するのでどちらを
+// 使うかは決まっていない。どちらか 1 つが PATH にあれば足りるとし、使わない方が無いだけで PATH を書き換えない
+// (書き換えると、loop の PATH を継ぐ worker と hooks が撃つ git などが黙って入れ替わりうる)
+var trackerCLIs = []string{"gh", "glab"}
 
 // candidates は PATH に無いときに足す置き場。前に居るものから探す (Homebrew は macOS の 2 つと Linux の prefix)。
 // HOME の外の置き場を変えたら、black-box テストの selfResolutionDirs も揃える (candidates_test.go が一致を確かめる)
@@ -20,16 +26,11 @@ var candidates = []string{
 	"/opt/homebrew/bin", "/usr/local/bin", "/home/linuxbrew/.linuxbrew/bin",
 }
 
-// ResolvePATH は依存 CLI がすべて PATH で見つかれば PATH をそのまま、見つからないものがあれば
-// 実在する候補の置き場を前置した PATH を返す。
+// ResolvePATH は依存 CLI (always のすべてと、trackerCLIs のどれか) が PATH で見つかれば PATH をそのまま、
+// 見つからないものがあれば実在する候補の置き場を前置した PATH を返す。
 func ResolvePATH(path, home string) string {
-	missing := false
-	for _, name := range Names {
-		if LookPath(name, path) == "" {
-			missing = true
-		}
-	}
-	if !missing {
+	found := func(name string) bool { return LookPath(name, path) != "" }
+	if !slices.ContainsFunc(always, func(name string) bool { return !found(name) }) && slices.ContainsFunc(trackerCLIs, found) {
 		return path
 	}
 	var dirs []string

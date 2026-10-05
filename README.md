@@ -24,7 +24,7 @@ issue tracker の issue と CL (pull request) を周期ごとに読み、project
 
 - macOS か Linux
 - [Claude Code](https://docs.claude.com/en/docs/claude-code) と、その認証
-- [gh](https://cli.github.com/) と、その認証 (`gh auth login`。対応する tracker は GitHub だけ)
+- tracker の CLI と、その認証。tracker が GitHub なら [gh](https://cli.github.com/) (`gh auth login`)、GitLab なら [glab](https://gitlab.com/gitlab-org/cli) (`glab auth login`)。GitLab は issue 側だけに対応し、merge request に当てる trigger はまだ書けない
 - git (workspace を worktree で作る hooks と、CL 側の trigger で使う)
 - action の先頭に書く skill と command (`/swat-skills:playbook-implementation` など) を、worker が呼べる場所 (plugin・repo の `.claude/`・`~/.claude/`) に入れておく。特定の plugin には依存しない。呼べない名前は起動の前の事前検査で名指しされる
 
@@ -64,7 +64,7 @@ binary は署名していない。macOS でブラウザから取った archive �
 
 実装 repo の clone を cwd にして撃つ。流れの正本は [`docs/design/usecases.md`](docs/design/usecases.md) の UC-5、各コマンドの形式は [`docs/design/formats.md`](docs/design/formats.md) §5・§7.4。
 
-1. **雛形を置く**: `setup` が cwd に `WORKFLOW.md` の雛形を書く。`tracker.repo` は `gh repo view` が返す repo で埋まる。既にある file は上書きしない
+1. **雛形を置く**: `setup` が cwd に `WORKFLOW.md` の雛形を書く。origin の host が `github.com` なら GitHub の雛形で、`tracker.repo` は `gh repo view` が返す repo で埋まる。それ以外の host なら GitLab の雛形で、`tracker.host` と `tracker.repo` は origin の host と `glab repo view` が返す path で埋まる。既にある file は上書きしない
 
    ```sh
    cd ~/src/widgets
@@ -81,7 +81,7 @@ binary は署名していない。macOS でブラウザから取った archive �
    claude-dispatcher loop --dry-run
    ```
 
-4. **導入を確かめる**: `doctor` が workflow 定義・issue 置き場・依存 CLI (gh・claude・git)・事前検査を確かめ、利用者の約束に頼る宣言 (承認済みの CL への action・絞り込みの無い CL 側の trigger) を警告する。Claude Code の settings に要りそうな entry も示すので、自分で足す (CLI は settings を書かない)
+4. **導入を確かめる**: `doctor` が workflow 定義・issue 置き場・依存 CLI (gh か glab・claude・git)・事前検査を確かめ、利用者の約束に頼る宣言 (承認済みの CL への action・絞り込みの無い CL 側の trigger) を警告する。Claude Code の settings に要りそうな entry も示すので、自分で足す (CLI は settings を書かない)
 
    ```sh
    claude-dispatcher doctor
@@ -111,7 +111,7 @@ claude-dispatcher loop
 
 loop を撃った端末の画面が一番早い。`status` と同じ見出しと `workers` の表 (段階・経過・stream の最新の活動を含む)・`要対処` の下に、直近 10 行のログ (tick・起動・終了・再起動・停止・error) を描き直し続ける。色は端末のときだけ付き、`NO_COLOR` を設定すれば付かない。stdout を pipe や file へ流しているときは、ログの行と worker の活動を 1 行ずつ追記する (形式は [`docs/design/formats.md`](docs/design/formats.md) §6)。
 
-別の端末からは `status` で見る。loop が書き出す状態 file (`status.json`) を描き、何も書かず gh も撃たない。見出しに loop が生きているか (`loop 稼働中` / `loop 停止待ち` / `loop なし`) と直近の tick を出し、走っている worker・再起動待ち・打ち切り・曖昧な CL・事前検査に落ちた trigger を並べる (形式は [`docs/design/formats.md`](docs/design/formats.md) §7)。
+別の端末からは `status` で見る。loop が書き出す状態 file (`status.json`) を描き、何も書かず tracker の CLI も撃たない。見出しに loop が生きているか (`loop 稼働中` / `loop 停止待ち` / `loop なし`) と直近の tick を出し、走っている worker・再起動待ち・打ち切り・曖昧な CL・事前検査に落ちた trigger を並べる (形式は [`docs/design/formats.md`](docs/design/formats.md) §7)。
 
 ```sh
 claude-dispatcher status

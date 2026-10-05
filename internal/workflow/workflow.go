@@ -17,6 +17,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/swat9013/claude-dispatcher/internal/github"
+	"github.com/swat9013/claude-dispatcher/internal/gitlab"
 	"github.com/swat9013/claude-dispatcher/internal/render"
 	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/trigger"
@@ -72,11 +73,30 @@ func (d Definition) Kinds() []target.Kind {
 	return kinds
 }
 
-// Tracker は issue 置き場の設定。
+// TrackerKind は tracker の種類 (formats.md §2.1 の tracker.kind)。
+type TrackerKind string
+
+const (
+	GitHub TrackerKind = "github"
+	GitLab TrackerKind = "gitlab"
+)
+
+// Tracker は issue 置き場の設定。置き場は種類の field (github は Repo、gitlab は Project) にだけ入る。
 type Tracker struct {
+	Kind TrackerKind
 	Repo github.Repo
-	// Token は gh に GH_TOKEN として渡す token。書かれていなければ ""
+	// Project は gitlab の issue 置き場 (host と path)
+	Project gitlab.Project
+	// Token は gh に GH_TOKEN として渡す token。書かれていなければ ""。gitlab では書けない
 	Token string
+}
+
+// Place は issue 置き場の表示名 (github は `owner/name`、gitlab は `<host>/<path>`)。
+func (t Tracker) Place() string {
+	if t.Kind == GitLab {
+		return t.Project.String()
+	}
+	return t.Repo.String()
 }
 
 // 周期の既定と範囲 (formats.md §2.1)
@@ -171,6 +191,9 @@ func split(raw []byte) (front []byte, body string, err error) {
 type checker struct {
 	getenv   func(string) string
 	problems []problem
+	// byTracker は tracker の種類に依る検査。key の順 (triggers を tracker より前に書くなど) に依らないよう、front matter を
+	// 読み終えてから tracker の種類を渡して撃つ
+	byTracker []func(TrackerKind)
 }
 
 // problem は誤り 1 件。line は file の行番号 (分からなければ 0)
@@ -309,6 +332,18 @@ func (c *checker) decode(root *yaml.Node, def *Definition) {
 		}},
 		"triggers": {required: true, read: func(_, n *yaml.Node, path string) { def.Triggers = c.triggers(n, path) }},
 	})
+	for _, check := range c.byTracker {
+		check(def.Tracker.Kind)
+	}
+}
+
+// onlyFor は、tracker の種類が kind でないときに n を名指しで失敗させる検査を予約する。
+func (c *checker) onlyFor(kind TrackerKind, n *yaml.Node, path, why string) {
+	c.byTracker = append(c.byTracker, func(actual TrackerKind) {
+		if actual != "" && actual != kind {
+			c.fail(n, path, "tracker.kind: %s では書けない (%s)", actual, why)
+		}
+	})
 }
 
 // absolute は s を絶対 path にする。`~/` は HOME から、相対 path は dir から。HOME が空なら `~/` を読めない誤りにする。
@@ -383,38 +418,83 @@ func (c *checker) positive(n *yaml.Node, path string) (int, bool) {
 	return v, true
 }
 
+// trackerItem は tracker の項目 1 つの key と値と位置。項目の読み方は tracker の種類で変わるので、種類を読んでから読む
+type trackerItem struct {
+	key, value *yaml.Node
+	path       string
+}
+
 func (c *checker) tracker(owner, n *yaml.Node, path string, t *Tracker) {
+	var repo, host, token *trackerItem
+	keep := func(target **trackerItem) field {
+		return field{read: func(key, n *yaml.Node, path string) { *target = &trackerItem{key: key, value: n, path: path} }}
+	}
+	repoField, hostField, tokenField := keep(&repo), keep(&host), keep(&token)
+	repoField.required = true
 	c.mapping(owner, n, path, map[string]field{
 		"kind": {required: true, read: func(_, n *yaml.Node, path string) {
 			if s, ok := c.str(n, path); ok {
-				if s != "github" {
-					c.fail(n, path, "未知の値 %q (github)", s)
+				switch kind := TrackerKind(s); kind {
+				case GitHub, GitLab:
+					t.Kind = kind
+				default:
+					c.fail(n, path, "未知の値 %q (%s / %s)", s, GitHub, GitLab)
 				}
 			}
 		}},
-		"repo": {required: true, read: func(_, n *yaml.Node, path string) {
-			s, ok := c.variableOrLiteral(n, path)
-			if !ok {
-				return
+		"repo":  repoField,
+		"host":  hostField,
+		"token": tokenField,
+	})
+	switch t.Kind {
+	case GitHub:
+		if host != nil {
+			c.fail(host.key, host.path, "未知の key")
+		}
+		if repo != nil {
+			if s, ok := c.parsed(repo.value, repo.path, func(s string) error { _, err := github.ParseRepo(s); return err }); ok {
+				t.Repo, _ = github.ParseRepo(s)
 			}
-			parsed, err := github.ParseRepo(s)
-			if err != nil {
-				if n.Value != s {
-					// 環境変数の値は名指しに載せない (秘密を置く運用がありうる)
-					c.fail(n, path, "%s の値が %v", n.Value, err)
-				} else {
-					c.fail(n, path, "%q: %v", s, err)
-				}
-				return
-			}
-			t.Repo = parsed
-		}},
-		"token": {read: func(_, n *yaml.Node, path string) {
-			if s, ok := c.variableOnly(n, path); ok {
+		}
+		if token != nil {
+			if s, ok := c.variableOnly(token.value, token.path); ok {
 				t.Token = s
 			}
-		}},
-	})
+		}
+	case GitLab:
+		t.Project.Host = gitlab.DefaultHost
+		if host != nil {
+			if s, ok := c.parsed(host.value, host.path, func(s string) error { _, err := gitlab.ParseHost(s); return err }); ok {
+				t.Project.Host = s
+			}
+		}
+		if repo != nil {
+			if s, ok := c.parsed(repo.value, repo.path, func(s string) error { _, err := gitlab.ParsePath(s); return err }); ok {
+				t.Project.Path = s
+			}
+		}
+		if token != nil {
+			c.fail(token.key, token.path, "tracker.kind: gitlab では書けない (glab は glab auth login の認証を使う)")
+		}
+	}
+}
+
+// parsed は `$VAR` で書ける項目を読み、check で綴りを確かめる。
+func (c *checker) parsed(n *yaml.Node, path string, check func(string) error) (string, bool) {
+	s, ok := c.variableOrLiteral(n, path)
+	if !ok {
+		return "", false
+	}
+	if err := check(s); err != nil {
+		if n.Value != s {
+			// 環境変数の値は名指しに載せない (秘密を置く運用がありうる)
+			c.fail(n, path, "%s の値が %v", n.Value, err)
+		} else {
+			c.fail(n, path, "%q: %v", s, err)
+		}
+		return "", false
+	}
+	return s, true
 }
 
 func (c *checker) polling(owner, n *yaml.Node, path string, interval *time.Duration) {
@@ -469,7 +549,10 @@ func (c *checker) triggers(n *yaml.Node, path string) []trigger.Trigger {
 			"on": {required: true, read: func(_, n *yaml.Node, path string) {
 				if s, ok := c.str(n, path); ok {
 					switch kind := target.Kind(s); kind {
-					case target.KindIssue, target.KindCL:
+					case target.KindCL:
+						t.On = kind
+						c.onlyFor(GitHub, n, path, "GitLab の merge request は未対応で、on: cl の trigger を当てられない")
+					case target.KindIssue:
 						t.On = kind
 					default:
 						c.fail(n, path, "未知の値 %q (%s / %s)", s, target.KindIssue, target.KindCL)
@@ -526,7 +609,10 @@ func (c *checker) issuePredicate(owner, n *yaml.Node, path string, p *trigger.Is
 		}},
 		"author":    {read: func(_, n *yaml.Node, path string) { p.Author = c.author(n, path) }},
 		"milestone": {read: func(_, n *yaml.Node, path string) { p.Milestone, _ = c.str(n, path) }},
-		"blocked":   {read: func(_, n *yaml.Node, path string) { p.Blocked = c.condition(n, path) }},
+		"blocked": {read: func(key, n *yaml.Node, path string) {
+			p.Blocked = c.condition(n, path)
+			c.onlyFor(GitHub, key, path, "GitLab の CE は issue の依存を API で返さないので、blocked: false が全件に当たる")
+		}},
 	})
 	if assignee != nil && unassigned != nil {
 		c.fail(assignee, path, "assignee と unassigned は一緒に書けない")

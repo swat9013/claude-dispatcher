@@ -13,8 +13,12 @@ import (
 	"github.com/swat9013/claude-dispatcher/internal/workflow"
 )
 
-// settingsEntries は、worker が tracker を操作するのに要りそうな Claude Code の settings の permissions.allow の entry
-var settingsEntries = []string{"Bash(gh issue:*)", "Bash(gh pr:*)", "Bash(git push:*)"}
+// settingsEntries は、worker が tracker を操作するのに要りそうな Claude Code の settings の permissions.allow の entry。
+// tracker の CLI の綴りで書く
+var settingsEntries = map[workflow.TrackerKind][]string{
+	workflow.GitHub: {"Bash(gh issue:*)", "Bash(gh pr:*)", "Bash(git push:*)"},
+	workflow.GitLab: {"Bash(glab issue:*)", "Bash(glab mr:*)", "Bash(git push:*)"},
+}
 
 // runDoctor は `doctor [<workflow の path>]` を撃つ (formats.md §7.4)。何も書かない。確かめたことを 1 件 1 行で出し、
 // NG があれば exit 1 (警告では落とさない)。
@@ -47,7 +51,7 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "警告 %s\n", w)
 	}
 	fmt.Fprintln(stdout, "settings の permissions.allow に要りそうな entry (CLI は書かない):")
-	for _, entry := range settingsEntries {
+	for _, entry := range settingsEntries[def.Tracker.Kind] {
 		fmt.Fprintf(stdout, "  %s\n", entry)
 	}
 	if failed {
@@ -59,10 +63,10 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 // checkStore は issue 置き場を読めるかを確かめる。
 func checkStore(e environment, def workflow.Definition, stdout io.Writer) bool {
 	if _, err := loop.OpenItems(e.store(def), def); err != nil {
-		fmt.Fprintf(stdout, "NG   issue 置き場 %s: %s\n", def.Tracker.Repo, printable.Line(err.Error()))
+		fmt.Fprintf(stdout, "NG   issue 置き場 %s: %s\n", def.Tracker.Place(), printable.Line(err.Error()))
 		return false
 	}
-	fmt.Fprintf(stdout, "ok   issue 置き場 %s\n", def.Tracker.Repo)
+	fmt.Fprintf(stdout, "ok   issue 置き場 %s\n", def.Tracker.Place())
 	return true
 }
 

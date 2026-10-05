@@ -17,10 +17,10 @@ import (
 
 	"github.com/swat9013/claude-dispatcher/internal/deps"
 	"github.com/swat9013/claude-dispatcher/internal/github"
+	"github.com/swat9013/claude-dispatcher/internal/gitlab"
 	"github.com/swat9013/claude-dispatcher/internal/loop"
 	"github.com/swat9013/claude-dispatcher/internal/precheck"
 	"github.com/swat9013/claude-dispatcher/internal/printable"
-	"github.com/swat9013/claude-dispatcher/internal/scaffold"
 	"github.com/swat9013/claude-dispatcher/internal/state"
 	"github.com/swat9013/claude-dispatcher/internal/status"
 	"github.com/swat9013/claude-dispatcher/internal/target"
@@ -99,8 +99,8 @@ func newEnvironment() environment {
 
 func (e environment) getenv(key string) string { return deps.Getenv(e.env, key) }
 
-// ghTimeout は gh の 1 回の呼び出しの上限
-const ghTimeout = 120 * time.Second
+// trackerTimeout は tracker の CLI (gh / glab) の 1 回の呼び出しの上限
+const trackerTimeout = 120 * time.Second
 
 // gh は gh の撃ち方。token (workflow 定義の tracker.token) があれば gh に GH_TOKEN として渡す。
 func (e environment) gh(token string) github.Exec {
@@ -108,18 +108,34 @@ func (e environment) gh(token string) github.Exec {
 	if token != "" {
 		env = deps.WithEnv(env, map[string]string{"GH_TOKEN": token})
 	}
-	return github.Exec{Env: env, Timeout: ghTimeout}
+	return github.Exec{Env: env, Timeout: trackerTimeout}
 }
 
-// store は workflow 定義から置き場の部品を組み立てる。
+// glab は glab の撃ち方。認証は glab 自身のもの (glab auth login の結果) を使う。
+func (e environment) glab() gitlab.Exec {
+	return gitlab.Exec{Env: e.env, Timeout: trackerTimeout}
+}
+
+// store は workflow 定義の tracker.kind の adapter で置き場の部品を組み立てる。
 func (e environment) store(def workflow.Definition) loop.Store {
+	if def.Tracker.Kind == workflow.GitLab {
+		return gitlab.NewStore(e.glab(), def.Tracker.Project)
+	}
 	return github.NewStore(e.gh(def.Tracker.Token), def.Tracker.Repo)
 }
 
-// requiredCommands は loop が撃つ依存 CLI: gh と claude.command。CL 側の trigger があれば、claim の workspace の branch を
-// 読むのに git も撃つ。
+// trackerCommand は workflow 定義の tracker.kind の CLI。
+func trackerCommand(def workflow.Definition) string {
+	if def.Tracker.Kind == workflow.GitLab {
+		return "glab"
+	}
+	return "gh"
+}
+
+// requiredCommands は loop が撃つ依存 CLI: tracker の CLI と claude.command。CL 側の trigger があれば、claim の workspace の
+// branch を読むのに git も撃つ。
 func requiredCommands(def workflow.Definition) []string {
-	commands := []string{"gh", def.Claude.Command}
+	commands := []string{trackerCommand(def), def.Claude.Command}
 	if slices.Contains(def.Kinds(), target.KindCL) {
 		commands = append(commands, "git")
 	}
@@ -390,42 +406,5 @@ func runPaths(args []string, stdout, stderr io.Writer) int {
 		return exitFailed
 	}
 	fmt.Fprintf(stdout, "%s\n", raw)
-	return 0
-}
-
-// --- setup ---
-
-// runSetup は `setup [<workflow の path>]` を撃つ (formats.md §7.4): cwd の repo を tracker.repo に埋めた雛形を書く。
-// 既にある file は上書きしない。
-func runSetup(args []string, stdout, stderr io.Writer) int {
-	path, ok := workflowArg(args, nil, stderr)
-	if !ok {
-		return exitUsage
-	}
-	if _, err := os.Stat(path); err == nil {
-		fmt.Fprintf(stdout, "%s は既にあるので書かない\n", path)
-		return 0
-	}
-	e := newEnvironment()
-	repo, err := github.CurrentRepo(e.gh(""))
-	if err != nil {
-		fmt.Fprintf(stderr, "tracker.repo を決められない: %v\n", err)
-		return exitFailed
-	}
-	// 確かめてから書くまでの間に他が書いても、上書きしない
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
-	if errors.Is(err, os.ErrExist) {
-		fmt.Fprintf(stdout, "%s は既にあるので書かない\n", path)
-		return 0
-	}
-	if err == nil {
-		_, err = io.WriteString(file, scaffold.Workflow(repo.String()))
-		err = errors.Join(err, file.Close())
-	}
-	if err != nil {
-		fmt.Fprintf(stderr, "workflow 定義の雛形を書けない (%s): %v\n", path, err)
-		return exitFailed
-	}
-	fmt.Fprintf(stdout, "%s に workflow 定義の雛形を書いた (tracker.repo: %s)。project に合わせて直し、`claude-dispatcher loop --dry-run` で試運転する\n", path, repo)
 	return 0
 }
