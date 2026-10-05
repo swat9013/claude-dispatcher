@@ -53,7 +53,7 @@ func runSetup(args []string, stdout, stderr io.Writer) int {
 // 表示名を返す。host が github.com なら github、それ以外は gitlab。
 // PATH は撃つ CLI ごとに解決する (git の後、host で決まった tracker の CLI だけ)。
 func scaffoldFromOrigin() (template, place string, err error) {
-	origin, err := newEnvironment("git").origin()
+	origin, err := commandEnvironment("git").origin()
 	if err != nil {
 		return "", "", err
 	}
@@ -63,14 +63,13 @@ func scaffoldFromOrigin() (template, place string, err error) {
 		return "", "", fmt.Errorf("origin の URL: %w", err)
 	}
 	if host == "github.com" {
-		repo, err := github.CurrentRepo(newEnvironment("gh").gh(""))
+		repo, err := github.CurrentRepo(commandEnvironment("gh").gh(""))
 		if err != nil {
 			return "", "", err
 		}
 		return scaffold.GitHub(repo.String()), repo.String(), nil
 	}
-	// path を host と同じ remote から決めるので、glab にも origin の URL を渡す (glab 自身の remote の選び方に依らない)
-	project, err := gitlab.CurrentProject(newEnvironment("glab").glab(), origin)
+	project, err := gitlab.CurrentProject(commandEnvironment("glab").glab())
 	if err != nil {
 		return "", "", err
 	}

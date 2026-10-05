@@ -79,10 +79,11 @@ func ParsePath(text string) (string, error) {
 	return text, nil
 }
 
-// CurrentProject は git の remote の URL が指す project を glab repo view で引く。host は応答の web_url の host
-// (port を含む) で決める。remote の URL の host は ssh の host (alias・altssh・ssh 専用の host) でありうるので使わない。
-func CurrentProject(glab Runner, remote string) (Project, error) {
-	out, err := glab.Run("repo", "view", remote, "--output", "json")
+// CurrentProject は cwd の clone の project を glab repo view で引く。host は応答の web_url の host (port を含む) で決める。
+// remote の URL は渡さない: URL の host は ssh の host (alias・altssh・ssh 専用の host) でありえ、渡すと glab がその host の
+// API を撃つ。URL は認証情報を含みうるので、argv に載せないためでもある。
+func CurrentProject(glab Runner) (Project, error) {
+	out, err := glab.Run("repo", "view", "--output", "json")
 	if err != nil {
 		return Project{}, fmt.Errorf("glab repo view が失敗した: %w", err)
 	}

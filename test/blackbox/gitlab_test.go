@@ -374,9 +374,10 @@ const gitlabOriginURL = "git@ssh." + gitlabHost + ":" + gitlabRepo + ".git"
 // gitlabOrigin は clone の origin の URL を返す git の応答 rule。
 var gitlabOrigin = stubwire.Rule{ArgsPrefix: []string{"remote", "get-url", "origin"}, Stdout: gitlabOriginURL + "\n"}
 
-// gitlabRepoView は origin の URL を渡した glab repo view が project を返す応答 rule。
+// gitlabRepoView は cwd の clone で撃った glab repo view が project を返す応答 rule。origin の URL は argv に載らない
+// (載ると glab が URL の ssh の host の API を撃つ)
 var gitlabRepoView = stubwire.Rule{
-	ArgsPrefix: []string{"repo", "view", gitlabOriginURL, "--output", "json"},
+	ArgsPrefix: []string{"repo", "view", "--output", "json"},
 	Stdout:     `{"id":7,"path_with_namespace":"` + gitlabRepo + `","web_url":"https://` + gitlabHost + `/` + gitlabRepo + `"}`,
 }
 

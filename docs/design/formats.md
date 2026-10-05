@@ -649,7 +649,7 @@ claude-dispatcher doctor [<workflow の path>]
 - `tracker.kind` は、cwd で `git remote get-url origin` が返す URL の host で決める。host が `github.com` なら `github`、それ以外は `gitlab`
   - URL は `https://<host>/…`・`ssh://<user>@<host>[:<port>]/…`・`<user>@<host>:…` (scp の綴り) を読む。host は port を除いて小文字にする
   - `github`: `tracker.repo` を、cwd で `gh repo view --json nameWithOwner` が返す repo で埋める
-  - `gitlab`: `glab repo view <URL> --output json` が返す project で、`tracker.host` を `web_url` の host (port を含む) で、`tracker.repo` を `path_with_namespace` で埋める。origin の URL の host は ssh の host (alias・ssh 専用の host) でありうるので、`tracker.host` には使わない
+  - `gitlab`: cwd で `glab repo view --output json` が返す project で、`tracker.host` を `web_url` の host (port を含む) で、`tracker.repo` を `path_with_namespace` で埋める。origin の URL の host は ssh の host (alias・ssh 専用の host) でありうるので、`tracker.host` に使わず、glab にも渡さない (渡すと glab がその host の API を撃つ。URL が認証情報を含むときに argv へ載せないためでもある)
 - path に file が既にあれば書かない (上書きしない)。そのことを stdout に出して exit 0
 - 書いたら、path と、次に試運転 (§5) を撃つことを stdout に出す
 
