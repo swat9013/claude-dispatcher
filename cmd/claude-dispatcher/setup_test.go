@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestRemoteHostIsReadFromEachSpellingOfTheURL(t *testing.T) {
 	for _, tc := range []struct {
@@ -20,6 +23,14 @@ func TestRemoteHostIsReadFromEachSpellingOfTheURL(t *testing.T) {
 				t.Fatalf("remoteHost(%q) = %q, %v, want %q", tc.remote, got, err, tc.want)
 			}
 		})
+	}
+}
+
+func TestRemoteHostDoesNotRepeatAnUnreadableURLThatMayCarryCredentials(t *testing.T) {
+	_, err := remoteHost("https://user:s3cret@gitlab.example.com:bad/acme/widgets.git")
+
+	if err == nil || strings.Contains(err.Error(), "s3cret") {
+		t.Fatalf("err = %v, want 認証情報を含まない誤り", err)
 	}
 }
 

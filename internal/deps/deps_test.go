@@ -35,7 +35,7 @@ func TestPATHIsExtendedWhenOnlyGitIsMissing(t *testing.T) {
 	}
 }
 
-func TestPATHIsExtendedWhenTheTrackerCLIInUseIsMissingEvenIfTheOtherIsOnIt(t *testing.T) {
+func TestPATHIsExtendedWhenANamedCLIIsMissingEvenIfAnUnnamedOneIsOnIt(t *testing.T) {
 	onPath, home, local := pathWith(t, "gh", "claude", "git")
 
 	got := deps.ResolvePATH(onPath, home, []string{"glab", "claude", "git"})
@@ -45,12 +45,12 @@ func TestPATHIsExtendedWhenTheTrackerCLIInUseIsMissingEvenIfTheOtherIsOnIt(t *te
 	}
 }
 
-func TestPATHIsKeptWhenOnlyACLINotInUseIsMissing(t *testing.T) {
+func TestPATHIsKeptWhenEveryNamedCLIIsOnIt(t *testing.T) {
 	onPath, home, _ := pathWith(t, "gh", "claude", "git")
 
 	got := deps.ResolvePATH(onPath, home, []string{"gh", "claude", "git"})
 
 	if got != onPath {
-		t.Fatalf("PATH = %s, want %s (使わない glab が無いだけで書き換えた)", got, onPath)
+		t.Fatalf("PATH = %s, want %s", got, onPath)
 	}
 }

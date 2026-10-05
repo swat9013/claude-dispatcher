@@ -441,18 +441,15 @@ func (c *checker) positive(n *yaml.Node, path string) (int, bool) {
 // tracker は tracker の項目を、先に読んだ種類 (c.trackerKind) の読み方で読む。種類が読めなければ repo と token は読まない
 // (誤りは tracker.kind で名指しする)。
 func (c *checker) tracker(owner, n *yaml.Node, path string, t *Tracker) {
+	t.Kind = c.trackerKind
 	if c.trackerKind == GitLab {
 		t.Project.Host = gitlab.DefaultHost
 	}
 	c.mapping(owner, n, path, map[string]field{
+		// 種類の値は peekTrackerKind が読んだものを使う。ここでは読めなかった誤りを名指しする
 		"kind": {required: true, read: func(_, n *yaml.Node, path string) {
-			if s, ok := c.str(n, path); ok {
-				switch kind := TrackerKind(s); kind {
-				case GitHub, GitLab:
-					t.Kind = kind
-				default:
-					c.fail(n, path, "未知の値 %q (%s / %s)", s, GitHub, GitLab)
-				}
+			if s, ok := c.str(n, path); ok && c.trackerKind == "" {
+				c.fail(n, path, "未知の値 %q (%s / %s)", s, GitHub, GitLab)
 			}
 		}},
 		"repo": {required: true, read: func(_, n *yaml.Node, path string) {

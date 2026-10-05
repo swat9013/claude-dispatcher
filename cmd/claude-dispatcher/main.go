@@ -93,16 +93,21 @@ type environment struct {
 	env []string
 }
 
-// newEnvironment は commands (撃つ依存 CLI) を PATH で解決できるようにした環境。commands を渡さなければ PATH は書き換えない。
-func newEnvironment(commands ...string) environment {
+// unresolvedEnvironment は PATH を書き換えない環境。依存 CLI を撃たない読み取り (workflow 定義・状態 file) に使う。
+func unresolvedEnvironment() environment {
+	return environment{env: os.Environ()}
+}
+
+// commandEnvironment は commands (撃つ依存 CLI) を PATH で解決できるようにした環境。
+func commandEnvironment(commands ...string) environment {
 	path := deps.ResolvePATH(os.Getenv("PATH"), os.Getenv("HOME"), commands)
 	return environment{env: deps.WithEnv(os.Environ(), map[string]string{"PATH": path})}
 }
 
-// pathCommands は、workflow 定義で loop・試運転・doctor が PATH から解決できるようにする依存 CLI: tracker の CLI・claude・
-// git。git は CL 側の trigger と、loop の PATH を継ぐ worker と hooks が撃つ。
-func pathCommands(def workflow.Definition) []string {
-	return []string{trackerCommand(def), "claude", "git"}
+// definitionEnvironment は、workflow 定義で loop・試運転・doctor が撃つ依存 CLI (tracker の CLI・claude.command・git) を
+// PATH で解決できるようにした環境。git は CL 側の trigger と、loop の PATH を継ぐ worker と hooks が撃つ。
+func definitionEnvironment(def workflow.Definition) environment {
+	return commandEnvironment(trackerCommand(def), def.Claude.Command, "git")
 }
 
 func (e environment) getenv(key string) string { return deps.Getenv(e.env, key) }
@@ -202,14 +207,14 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 		return exitFailed
 	}
 	// workflow 定義は PATH を使わずに読めるので、撃つ依存 CLI が決まる前の環境で読む
-	load := func() (workflow.Definition, error) { return workflow.Load(abs, newEnvironment().getenv) }
+	load := func() (workflow.Definition, error) { return workflow.Load(abs, unresolvedEnvironment().getenv) }
 	def, err := load()
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return exitUsage
 	}
 	// PATH は起動時の workflow 定義が撃つ依存 CLI で解決する
-	e := newEnvironment(pathCommands(def)...)
+	e := definitionEnvironment(def)
 	// 起動時と試運転は人が画面の前にいるので、事前検査のどれが落ちても失敗させ、全部を直させる (system.md §8)
 	if problems := e.precheck(def); len(problems) > 0 {
 		for _, p := range problems {
@@ -367,7 +372,7 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 	if !ok {
 		return exitUsage
 	}
-	e := newEnvironment()
+	e := unresolvedEnvironment()
 	def, code := loadForReading(e, path, stderr)
 	if code != 0 {
 		return code
@@ -401,7 +406,7 @@ func runPaths(args []string, stdout, stderr io.Writer) int {
 	if !ok {
 		return exitUsage
 	}
-	e := newEnvironment()
+	e := unresolvedEnvironment()
 	def, code := loadForReading(e, path, stderr)
 	if code != 0 {
 		return code
