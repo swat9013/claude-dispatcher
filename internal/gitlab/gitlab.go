@@ -139,7 +139,8 @@ func (s Store) Read(ref target.Ref) (target.Item, error) {
 	case target.KindIssue:
 		return s.issue(ref.Number)
 	case target.KindCL:
-		return s.mergeRequest(ref.Number, collaborators{})
+		cl, _, err := s.mergeRequest(ref.Number, collaborators{})
+		return cl, err
 	}
 	return nil, fmt.Errorf("未知の作業対象の種類 %q", ref.Kind)
 }

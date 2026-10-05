@@ -61,37 +61,44 @@ func (s Store) openMergeRequests() ([]target.CL, error) {
 	known := collaborators{}
 	cls := []target.CL{}
 	for _, m := range listed {
-		cl, err := s.mergeRequest(m.IID, known)
+		cl, state, err := s.mergeRequest(m.IID, known)
 		if err != nil {
 			return nil, err
 		}
-		// 一覧を読んでから読み直すまでに merge か close されたものは open な一覧に載せない
-		if !cl.Closed {
+		// 一覧を読んでから読み直すまでに opened でなくなったもの (merge・close・merge の処理中の locked) は open な一覧に
+		// 載せない。locked の branch へ手直しの worker を送らない
+		if state == "opened" {
 			cls = append(cls, cl)
 		}
 	}
 	return cls, nil
 }
 
-// mergeRequest は merge request 1 本を読み直す。merge か close されていれば Closed。消えたものも Closed として返す。
-// 失敗は *target.Failure。
-func (s Store) mergeRequest(iid int, known collaborators) (target.CL, error) {
+// mergeRequest は merge request 1 本を読み直し、CL と state を返す。merge か close されていれば Closed。消えたものも
+// Closed として返す (state は "")。locked (merge の処理中) は終端にしない。merge に失敗すると opened に戻るので、走っている
+// worker を止めて workspace を消さない。失敗は *target.Failure。
+func (s Store) mergeRequest(iid int, known collaborators) (target.CL, string, error) {
 	base := "merge_requests/" + strconv.Itoa(iid)
 	out, err := s.get(s.endpoint(base))
 	if gone(err) {
-		return target.CL{Number: iid, Closed: true}, nil
+		return target.CL{Number: iid, Closed: true}, "", nil
 	}
 	if err != nil {
-		return target.CL{}, s.fail(classify(err), err)
+		return target.CL{}, "", s.fail(classify(err), err)
 	}
 	m, err := object[mergeRequestJSON](out)
 	if err != nil {
-		return target.CL{}, s.fail(target.Unavailable, err)
+		return target.CL{}, "", s.fail(target.Unavailable, err)
 	}
-	// locked (merge の処理中) は終端にしない。merge に失敗すると opened に戻る
 	if m.State == "merged" || m.State == "closed" {
-		return target.CL{Number: iid, Closed: true}, nil
+		return target.CL{Number: iid, Closed: true}, m.State, nil
 	}
+	cl, err := s.normalizeMergeRequest(base, m, known)
+	return cl, m.State, err
+}
+
+// normalizeMergeRequest は open な merge request 1 本を、承認と discussion を読み足して CL の形に写す。
+func (s Store) normalizeMergeRequest(base string, m mergeRequestJSON, known collaborators) (target.CL, error) {
 	approved, err := s.approved(base)
 	if err != nil {
 		return target.CL{}, err
@@ -137,14 +144,15 @@ var legacyCheckingStatuses = []string{"unchecked", "checking", "cannot_be_merged
 // mergeability は merge request の conflict の有無 (cl.conflict) を決める。has_conflicts が立っていれば conflict、
 // そうでなく計算中なら未決 (次の tick で見直す)、どちらでもなければ conflict なし。
 func mergeability(m mergeRequestJSON) target.Mergeability {
-	checking := slices.Contains(checkingStatuses, m.DetailedMergeStatus)
-	if m.DetailedMergeStatus == "" {
-		checking = slices.Contains(legacyCheckingStatuses, m.MergeStatus)
+	// detailed_merge_status があればそれだけで決め、無い GitLab でだけ merge_status を見る
+	status, checking := m.DetailedMergeStatus, checkingStatuses
+	if status == "" {
+		status, checking = m.MergeStatus, legacyCheckingStatuses
 	}
 	switch {
 	case m.HasConflicts:
 		return target.MergeConflict
-	case checking:
+	case slices.Contains(checking, status):
 		return target.MergeUnknown
 	}
 	return target.MergeClean

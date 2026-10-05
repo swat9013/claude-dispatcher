@@ -30,12 +30,18 @@ func (g glab) Run(args ...string) ([]byte, error) {
 			return []byte(r.stdout), nil
 		}
 	}
-	return nil, &proc.Error{Name: "glab", Args: args, Exit: 1, Stderr: "glab: 404 Not found (HTTP 404)"}
+	// 登録の無い endpoint は、どの分類にも当たらない失敗にする (綴りを誤った endpoint を 404 の消えた扱いで通さない)
+	return nil, &proc.Error{Name: "glab", Args: args, Exit: 1, Stderr: "fake glab: no response for " + endpoint}
 }
 
 var project = gitlab.Project{Host: "gitlab.example.com", Path: "acme/sub/widgets"}
 
 const issuesEndpoint = "projects/acme%2Fsub%2Fwidgets/issues"
+
+// nonMember は作者 (user 1) が project の member でないことを返す応答
+const nonMember = "projects/acme%2Fsub%2Fwidgets/members/all/1"
+
+var notFound = response{stderr: "glab: 404 Not found (HTTP 404)"}
 
 func issueJSON(iid int) string {
 	return `{"iid":` + strconv.Itoa(iid) + `,"title":"t","state":"opened","labels":["a"],"author":{"id":1}}`
@@ -47,7 +53,7 @@ func TestOpenIssuesReadsBothSpellingsOfThePaginatedOutput(t *testing.T) {
 		"1 つの配列に結合する":    "[" + issueJSON(1) + "," + issueJSON(2) + "," + issueJSON(3) + "]",
 	} {
 		t.Run(name, func(t *testing.T) {
-			store := gitlab.NewStore(glab{issuesEndpoint + "?": {stdout: stdout}}, project)
+			store := gitlab.NewStore(glab{issuesEndpoint + "?": {stdout: stdout}, nonMember: notFound}, project)
 
 			items, err := store.Open(target.KindIssue)
 
@@ -59,7 +65,7 @@ func TestOpenIssuesReadsBothSpellingsOfThePaginatedOutput(t *testing.T) {
 }
 
 func TestIssueThatIsGoneIsReadAsClosed(t *testing.T) {
-	store := gitlab.NewStore(glab{issuesEndpoint + "/7": {stderr: "glab: 404 Not found (HTTP 404)"}}, project)
+	store := gitlab.NewStore(glab{issuesEndpoint + "/7": notFound}, project)
 
 	item, err := store.Read(target.Ref{Kind: target.KindIssue, Number: 7})
 
@@ -80,7 +86,7 @@ func TestIssueOfAProjectThatIsNotVisibleFailsAsNotVisible(t *testing.T) {
 }
 
 func TestAuthorWhoIsNotAMemberIsNotACollaborator(t *testing.T) {
-	store := gitlab.NewStore(glab{issuesEndpoint + "/7": {stdout: issueJSON(7)}}, project)
+	store := gitlab.NewStore(glab{issuesEndpoint + "/7": {stdout: issueJSON(7)}, nonMember: notFound}, project)
 
 	item, err := store.Read(target.Ref{Kind: target.KindIssue, Number: 7})
 
@@ -98,6 +104,7 @@ func mergeRequest(fields string) glab {
 		base:                               {stdout: `{"iid":7,"author":{"id":1},` + fields + `}`},
 		base + "/approvals":                {stdout: `{"approved":false}`},
 		base + "/discussions?per_page=100": {stdout: `[]`},
+		nonMember:                          notFound,
 	}
 }
 
@@ -122,14 +129,19 @@ func TestMergeRequestIsTerminalOnlyWhenMergedOrClosed(t *testing.T) {
 	}
 }
 
-func TestMergeRequestClosedAfterTheListIsLeftOutOfTheOpenOnes(t *testing.T) {
-	g := mergeRequest(`"state":"merged"`)
-	g[mergeRequestsEndpoint+"?"] = response{stdout: `[{"iid":7}]`}
+func TestMergeRequestThatLeftOpenedAfterTheListIsLeftOutOfTheOpenOnes(t *testing.T) {
+	// locked (merge の処理中) は Read では終端にしないが、merge 中の branch へ手直しの worker を送らないよう一覧からは外す
+	for _, state := range []string{"merged", "closed", "locked"} {
+		t.Run(state, func(t *testing.T) {
+			g := mergeRequest(`"state":"` + state + `","source_project_id":7,"target_project_id":7`)
+			g[mergeRequestsEndpoint+"?"] = response{stdout: `[{"iid":7}]`}
 
-	items, err := gitlab.NewStore(g, project).Open(target.KindCL)
+			items, err := gitlab.NewStore(g, project).Open(target.KindCL)
 
-	if err != nil || len(items) != 0 {
-		t.Fatalf("items = %v, err = %v", items, err)
+			if err != nil || len(items) != 0 {
+				t.Fatalf("items = %v, err = %v", items, err)
+			}
+		})
 	}
 }
 
@@ -141,22 +153,30 @@ func TestMergeRequestFromADeletedForkHasNoHeadRepo(t *testing.T) {
 	}
 }
 
-func TestMergeStatusOfAnOlderGitLabDecidesWhetherTheConflictIsStillBeingChecked(t *testing.T) {
-	for status, want := range map[string]target.Mergeability{
-		"unchecked": target.MergeUnknown, "cannot_be_merged_recheck": target.MergeUnknown, "can_be_merged": target.MergeClean,
+func TestDetailedMergeStatusDecidesWhetherTheConflictIsStillBeingCheckedAndMergeStatusOnlyWithoutIt(t *testing.T) {
+	for name, tc := range map[string]struct {
+		fields string
+		want   target.Mergeability
+	}{
+		"detailed: checking":                                    {`"detailed_merge_status":"checking"`, target.MergeUnknown},
+		"detailed: mergeable":                                   {`"detailed_merge_status":"mergeable"`, target.MergeClean},
+		"detailed が merge_status より勝つ":                          {`"detailed_merge_status":"mergeable","merge_status":"unchecked"`, target.MergeClean},
+		"detailed が無ければ merge_status: unchecked":                {`"merge_status":"unchecked"`, target.MergeUnknown},
+		"detailed が無ければ merge_status: cannot_be_merged_recheck": {`"merge_status":"cannot_be_merged_recheck"`, target.MergeUnknown},
+		"detailed が無ければ merge_status: can_be_merged":            {`"merge_status":"can_be_merged"`, target.MergeClean},
 	} {
-		t.Run(status, func(t *testing.T) {
-			cl := readMergeRequest(t, mergeRequest(`"state":"opened","source_project_id":7,"target_project_id":7,"merge_status":"`+status+`"`))
+		t.Run(name, func(t *testing.T) {
+			cl := readMergeRequest(t, mergeRequest(`"state":"opened","source_project_id":7,"target_project_id":7,`+tc.fields))
 
-			if cl.Mergeable != want {
-				t.Fatalf("Mergeable = %v, want %v", cl.Mergeable, want)
+			if cl.Mergeable != tc.want {
+				t.Fatalf("Mergeable = %v, want %v", cl.Mergeable, tc.want)
 			}
 		})
 	}
 }
 
 func TestMergeRequestThatIsGoneIsReadAsClosed(t *testing.T) {
-	store := gitlab.NewStore(glab{"projects/acme%2Fsub%2Fwidgets/merge_requests/7": {stderr: "glab: 404 Not found (HTTP 404)"}}, project)
+	store := gitlab.NewStore(glab{mergeRequestsEndpoint + "/7": notFound}, project)
 
 	item, err := store.Read(target.Ref{Kind: target.KindCL, Number: 7})
 

@@ -106,11 +106,6 @@ func (m glMR) discussionsJSON() []map[string]any {
 	return out
 }
 
-// singleNote は note 1 つだけの discussion。
-func singleNote(authorID int, resolved bool) glDiscussion {
-	return glDiscussion{notes: []glNote{{authorID: authorID, resolved: resolved}}}
-}
-
 // glabStoreRules は glab が issues と mrs を返す応答 rule の列。merge request の作者と discussion の書き手の access level は、
 // developerID が Developer、reporterID が Reporter。
 func glabStoreRules(issues []glIssue, mrs []glMR) []stubwire.Rule {
@@ -148,30 +143,33 @@ func TestGitLabCLVocabularyIsReadFromTheMergeRequest(t *testing.T) {
 	conflicting, clean := readyMR(1), readyMR(2)
 	conflicting.hasConflicts = true
 	byDeveloper, resolved, byReporter, systemNote := readyMR(3), readyMR(4), readyMR(5), readyMR(6)
-	byDeveloper.discussions = []glDiscussion{singleNote(developerID, false)}
-	resolved.discussions = []glDiscussion{singleNote(developerID, true)}
-	byReporter.discussions = []glDiscussion{singleNote(reporterID, false)}
+	byDeveloper.discussions = []glDiscussion{{notes: []glNote{{authorID: developerID}}}}
+	resolved.discussions = []glDiscussion{{notes: []glNote{{authorID: developerID, resolved: true}}}}
+	byReporter.discussions = []glDiscussion{{notes: []glNote{{authorID: reporterID}}}}
 	systemNote.discussions = []glDiscussion{{notes: []glNote{{authorID: developerID, system: true}}}}
-	// 最初の note で書き手を決める: Reporter が始めて Developer が返信した discussion は数えず、Developer が始めて
-	// 返信が未解決のまま残る discussion は数える
-	reporterThenDeveloper, laterNoteUnresolved := readyMR(11), readyMR(12)
+	// 書き手は最初の note の作者: Reporter が始めて Developer が返信した discussion は数えない
+	reporterThenDeveloper := readyMR(11)
 	reporterThenDeveloper.discussions = []glDiscussion{{notes: []glNote{{authorID: reporterID}, {authorID: developerID}}}}
+	// 後ろの note が未解決なら未解決: 最初の note が解決済みでも、返信が未解決のまま残る discussion は数える
+	laterNoteUnresolved := readyMR(12)
 	laterNoteUnresolved.discussions = []glDiscussion{{notes: []glNote{{authorID: developerID, resolved: true}, {authorID: reporterID}}}}
 	failed, passed := readyMR(7), readyMR(8)
 	failed.pipeline, passed.pipeline = "failed", "success"
 	approved, unapproved := readyMR(9), readyMR(10)
 	approved.approved = true
 	for _, tc := range []struct {
-		vocabulary string
-		mrs        []glMR
-		want       []int
+		name, vocabulary string
+		mrs              []glMR
+		want             []int
 	}{
-		{"conflict", []glMR{conflicting, clean}, []int{1}},
-		{"review_unresolved", []glMR{byDeveloper, resolved, byReporter, systemNote, reporterThenDeveloper, laterNoteUnresolved}, []int{3, 12}},
-		{"ci_failed", []glMR{failed, passed}, []int{7}},
-		{"approved", []glMR{approved, unapproved}, []int{9}},
+		{"conflict", "conflict", []glMR{conflicting, clean}, []int{1}},
+		{"review_unresolved", "review_unresolved", []glMR{byDeveloper, resolved, byReporter, systemNote}, []int{3}},
+		{"review_unresolved の書き手は最初の note の作者", "review_unresolved", []glMR{byDeveloper, reporterThenDeveloper}, []int{3}},
+		{"review_unresolved は後ろの note の未解決も数える", "review_unresolved", []glMR{resolved, laterNoteUnresolved}, []int{12}},
+		{"ci_failed", "ci_failed", []glMR{failed, passed}, []int{7}},
+		{"approved", "approved", []glMR{approved, unapproved}, []int{9}},
 	} {
-		t.Run(tc.vocabulary, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			s := newSandbox(t)
 
 			r := s.dryRunGitLabCL(`

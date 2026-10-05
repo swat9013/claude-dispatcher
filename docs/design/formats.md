@@ -187,7 +187,7 @@ CL の状態の語彙 (system.md §6) は、真偽の key で書く。`true` な
 | `ci_failed` | head の pipeline (`head_pipeline`) の `status` が `failed`。`canceled` は失敗に数えない (人が意図して止めた pipeline に worker を送らない)。pipeline が無ければ失敗ではない |
 | `approved` | merge request の承認 (`/merge_requests/:iid/approvals`) の `approved`。CE では 1 人以上の承認、有償の tier では承認ルールの充足で、どちらも host の判断に従う |
 | `draft` | `draft` |
-| `same_repo` | `source_project_id` と `target_project_id` が同じ |
+| `same_repo` | `source_project_id` と `target_project_id` が同じ。source の fork が消えて `source_project_id` が null なら `false` (§2.4) |
 | `head` | `source_branch` |
 | `author` | issue 側 (§2.2) と同じ線 (access level が Developer 以上) |
 
