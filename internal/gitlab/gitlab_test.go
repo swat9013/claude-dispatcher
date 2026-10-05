@@ -11,7 +11,8 @@ import (
 	"github.com/swat9013/claude-dispatcher/internal/target"
 )
 
-// glab は endpoint (argv の最後) の接頭辞ごとに応答を返す Runner (glab の代役)。どれにも当たらなければ member でない 404。
+// glab は endpoint (argv の最後) ごとに応答を返す Runner (glab の代役)。key が `?` で終われば query string を問わず当てる。
+// どれにも当たらなければ、読んだものが無い 404。
 type glab map[string]response
 
 type response struct {
@@ -21,8 +22,8 @@ type response struct {
 
 func (g glab) Run(args ...string) ([]byte, error) {
 	endpoint := args[len(args)-1]
-	for prefix, r := range g {
-		if strings.HasPrefix(endpoint, prefix) {
+	for key, r := range g {
+		if endpoint == key || strings.HasSuffix(key, "?") && strings.HasPrefix(endpoint, key) {
 			if r.stderr != "" {
 				return nil, &proc.Error{Name: "glab", Args: args, Exit: 1, Stderr: r.stderr}
 			}
@@ -85,6 +86,72 @@ func TestAuthorWhoIsNotAMemberIsNotACollaborator(t *testing.T) {
 
 	if err != nil || item.(target.Issue).AuthorIsCollaborator {
 		t.Fatalf("item = %v, err = %v", item, err)
+	}
+}
+
+const mergeRequestsEndpoint = "projects/acme%2Fsub%2Fwidgets/merge_requests"
+
+// mergeRequest は merge request 7 の本体を fields で返し、承認と discussion を空で返す glab。
+func mergeRequest(fields string) glab {
+	base := mergeRequestsEndpoint + "/7"
+	return glab{
+		base:                               {stdout: `{"iid":7,"author":{"id":1},` + fields + `}`},
+		base + "/approvals":                {stdout: `{"approved":false}`},
+		base + "/discussions?per_page=100": {stdout: `[]`},
+	}
+}
+
+func readMergeRequest(t *testing.T, g glab) target.CL {
+	t.Helper()
+	item, err := gitlab.NewStore(g, project).Read(target.Ref{Kind: target.KindCL, Number: 7})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return item.(target.CL)
+}
+
+func TestMergeRequestIsTerminalOnlyWhenMergedOrClosed(t *testing.T) {
+	for state, terminal := range map[string]bool{"merged": true, "closed": true, "opened": false, "locked": false} {
+		t.Run(state, func(t *testing.T) {
+			cl := readMergeRequest(t, mergeRequest(`"state":"`+state+`","source_project_id":7,"target_project_id":7`))
+
+			if cl.Terminal() != terminal {
+				t.Fatalf("Terminal() = %v, want %v", cl.Terminal(), terminal)
+			}
+		})
+	}
+}
+
+func TestMergeRequestClosedAfterTheListIsLeftOutOfTheOpenOnes(t *testing.T) {
+	g := mergeRequest(`"state":"merged"`)
+	g[mergeRequestsEndpoint+"?"] = response{stdout: `[{"iid":7}]`}
+
+	items, err := gitlab.NewStore(g, project).Open(target.KindCL)
+
+	if err != nil || len(items) != 0 {
+		t.Fatalf("items = %v, err = %v", items, err)
+	}
+}
+
+func TestMergeRequestFromADeletedForkHasNoHeadRepo(t *testing.T) {
+	cl := readMergeRequest(t, mergeRequest(`"state":"opened","source_project_id":null,"target_project_id":7`))
+
+	if cl.HeadRepo != "" || cl.SameRepo {
+		t.Fatalf("HeadRepo = %q, SameRepo = %v", cl.HeadRepo, cl.SameRepo)
+	}
+}
+
+func TestMergeStatusOfAnOlderGitLabDecidesWhetherTheConflictIsStillBeingChecked(t *testing.T) {
+	for status, want := range map[string]target.Mergeability{
+		"unchecked": target.MergeUnknown, "cannot_be_merged_recheck": target.MergeUnknown, "can_be_merged": target.MergeClean,
+	} {
+		t.Run(status, func(t *testing.T) {
+			cl := readMergeRequest(t, mergeRequest(`"state":"opened","source_project_id":7,"target_project_id":7,"merge_status":"`+status+`"`))
+
+			if cl.Mergeable != want {
+				t.Fatalf("Mergeable = %v, want %v", cl.Mergeable, want)
+			}
+		})
 	}
 }
 

@@ -112,7 +112,7 @@ func CurrentProject(glab Runner) (Project, error) {
 // ScopeKey は project の issue 置き場を指す scope key。GitLab の path は大文字と小文字を区別しないので小文字にする。
 func ScopeKey(p Project) string { return strings.ToLower(p.String()) }
 
-// Store は project の issue 置き場を読む部品。
+// Store は project の issue 置き場と CL 置き場 (merge request) を読む部品。
 type Store struct {
 	glab    Runner
 	project Project
@@ -171,6 +171,15 @@ func pages[T any](out []byte) ([]T, error) {
 		}
 		all = append(all, page...)
 	}
+}
+
+// object は `glab api` の出力を JSON の値 1 つとして読む。
+func object[T any](out []byte) (T, error) {
+	var v T
+	if err := json.Unmarshal(out, &v); err != nil {
+		return v, fmt.Errorf("glab api の出力を読めない: %w", err)
+	}
+	return v, nil
 }
 
 // get は REST の endpoint を GET で撃つ。glab は field (-f / -F) を渡すと POST を撃つので、条件は query string に書く。
@@ -236,9 +245,9 @@ func (s Store) issue(iid int) (target.Issue, error) {
 	if err != nil {
 		return target.Issue{}, s.fail(classify(err), err)
 	}
-	var n issueJSON
-	if err := json.Unmarshal(out, &n); err != nil {
-		return target.Issue{}, s.fail(target.Unavailable, fmt.Errorf("glab api の出力を読めない: %w", err))
+	n, err := object[issueJSON](out)
+	if err != nil {
+		return target.Issue{}, s.fail(target.Unavailable, err)
 	}
 	return s.normalize(n, collaborators{})
 }
@@ -297,11 +306,11 @@ func (s Store) collaborator(userID int) (bool, error) {
 	if err != nil {
 		return false, s.fail(classify(err), err)
 	}
-	var member struct {
+	member, err := object[struct {
 		AccessLevel int `json:"access_level"`
-	}
-	if err := json.Unmarshal(out, &member); err != nil {
-		return false, s.fail(target.Unavailable, fmt.Errorf("glab api の出力を読めない: %w", err))
+	}](out)
+	if err != nil {
+		return false, s.fail(target.Unavailable, err)
 	}
 	return member.AccessLevel >= developerAccess, nil
 }
@@ -315,11 +324,12 @@ const (
 	authMarker      = "(HTTP 401)"
 	notFoundMarker  = "(HTTP 404)"
 	rateLimitMarker = "(HTTP 429)"
-	// projectGone は project が見えないときの 404 の文言。issue や member が無いときの 404 (`404 Not found`) と分ける
+	// projectGone は project が見えないときの 404 の文言。issue・merge request・member が無いときの 404 (`404 Not found`)
+	// と分ける
 	projectGone = "Project Not Found"
 )
 
-// gone は、project は見えていて、読んだもの (issue・member) が無いときの 404 か。
+// gone は、project は見えていて、読んだもの (issue・merge request・member) が無いときの 404 か。
 func gone(err error) bool {
 	var failed *proc.Error
 	return errors.As(err, &failed) && strings.Contains(failed.Stderr, notFoundMarker) && !strings.Contains(failed.Stderr, projectGone)

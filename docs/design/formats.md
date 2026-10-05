@@ -182,7 +182,7 @@ CL の状態の語彙 (system.md §6) は、真偽の key で書く。`true` な
 
 | 語彙 / 絞り込み | GitLab の field |
 |---|---|
-| `conflict` | `has_conflicts` が `true` なら conflict を持つ。そうでなく `detailed_merge_status` が `checking` / `unchecked` / `preparing` なら、計算し終えていないので `true` にも `false` にも当たらない (次の tick で見直す)。どちらでもなければ conflict を持たない |
+| `conflict` | `has_conflicts` が `true` なら conflict を持つ。そうでなく `detailed_merge_status` が `checking` / `unchecked` / `preparing` なら、計算し終えていないので `true` にも `false` にも当たらない (次の tick で見直す)。`detailed_merge_status` の無い GitLab (15.6 より前) では、`merge_status` の `unchecked` / `checking` / `cannot_be_merged_recheck` を計算中とする。どちらでもなければ conflict を持たない |
 | `review_unresolved` | 解決できる (resolvable な note を持つ) discussion で、解決されていない (resolvable な note のどれかが未解決) もののうち、最初の note の作者が collaborator のものが 1 本以上ある。最初の note が system note の discussion は数えない |
 | `ci_failed` | head の pipeline (`head_pipeline`) の `status` が `failed`。`canceled` は失敗に数えない (人が意図して止めた pipeline に worker を送らない)。pipeline が無ければ失敗ではない |
 | `approved` | merge request の承認 (`/merge_requests/:iid/approvals`) の `approved`。CE では 1 人以上の承認、有償の tier では承認ルールの充足で、どちらも host の判断に従う |
@@ -191,7 +191,8 @@ CL の状態の語彙 (system.md §6) は、真偽の key で書く。`true` な
 | `head` | `source_branch` |
 | `author` | issue 側 (§2.2) と同じ線 (access level が Developer 以上) |
 
-- `gitlab` の merge request は、open な一覧を読んだ後に 1 本ずつ、merge request 本体・承認・discussion を読み直す (`head_pipeline` は一覧の応答に無いため)。CL 側の trigger を置くと、open な merge request 1 本につき 3 往復の API を毎 tick 撃つ
+- `gitlab` の merge request は、open な一覧を読んだ後に 1 本ずつ、merge request 本体・承認・discussion を読み直す (`head_pipeline` は一覧の応答に無く、承認と discussion は別の endpoint にあるため)。CL 側の trigger を置くと、open な merge request 1 本につき 3 往復の API を毎 tick 撃つ
+- `gitlab` の merge request の終端は `state` が `merged` か `closed`。`locked` (merge の処理中) は終端にしない (merge に失敗すると `opened` に戻る)
 
 ### 2.4 評価の規則
 
@@ -200,7 +201,7 @@ CL の状態の語彙 (system.md §6) は、真偽の key で書く。`true` な
 - **曖昧な CL** (同じ repo の同じ head branch から、open な CL が 2 本以上ある) には、CL 側の trigger を当てない。fork の head branch は、fork ごとに別の branch として数える (fork は GitHub では head の repo の名前、GitLab では `source_project_id` で見分ける)
 - loop は、claim している作業対象 (走っている・止めている・確かめ待ち・再起動待ち) の workspace で checkout されている branch を head に持つ、同じ repo の CL にも CL 側の trigger を当てない (§6 の tick の手順)。試運転 (§5) は claim を持たないので、この除外は掛からない
 - open な一覧は、trigger に現れる種類のものだけを読む (`on: cl` の trigger が 1 つも無ければ CL の一覧を読まず、`on: issue` の trigger が無ければ issue の一覧を読まない)
-- head の repo が消えた fork の CL (GitHub の `headRepository` が null) は、どの fork の branch か分からないので、曖昧さを数えるときに数えない
+- head の repo が消えた fork の CL (GitHub の `headRepository` が null、GitLab の `source_project_id` が null) は、どの fork の branch か分からないので、曖昧さを数えるときに数えない
 
 ### 2.5 `$VAR` による間接参照
 
