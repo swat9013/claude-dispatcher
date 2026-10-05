@@ -33,6 +33,7 @@ workspace は state dir の外、workflow 定義の `workspace.root` の下に�
 
 - **scope key**: issue 置き場の部品が決める、issue 置き場の識別子 (system.md §13)
   - GitHub は `github.com/<owner>/<name>` を小文字にしたもの (GitHub の owner と repo の名前は大文字と小文字を区別しない)
+  - GitLab は `<host>/<path>` を小文字にしたもの (例: `gitlab.example.com/acme/sub/widgets`。GitLab の path は大文字と小文字を区別しない)
 - **`<scope dir>`**: scope key を無害化した綴りに、scope key の短い hash を足した名前
   - 無害化: 小文字にし、`[a-z0-9._-]` 以外の文字を `_` に置き換える
   - hash: scope key の sha256 の hex の先頭 8 文字
@@ -53,8 +54,8 @@ file は YAML の front matter と本文からなる。
 ```markdown
 ---
 tracker:
-  kind: github               # 必須。初版は github だけ
-  repo: acme/widgets         # 必須。issue 置き場 (owner/name)。$VAR で書ける
+  kind: github               # 必須。github か gitlab
+  repo: acme/widgets         # 必須。issue 置き場 (github は owner/name、gitlab は group/…/name)。$VAR で書ける
   token: $WIDGETS_GH_TOKEN   # 任意。gh に GH_TOKEN として渡す。$VAR でだけ書ける
 polling:
   interval: 5m               # 任意。周期。既定 5m
@@ -102,9 +103,10 @@ triggers:                    # 必須。1 つ以上
 
 | key | 型 | 中身 |
 |---|---|---|
-| `tracker.kind` | 文字列 | tracker の種類。`github` だけ |
-| `tracker.repo` | 文字列 | issue 置き場。`<owner>/<name>` |
-| `tracker.token` | 文字列 | gh に環境変数 `GH_TOKEN` として渡す token。`$VAR` でだけ書ける (値そのものを書かない)。省くと、loop を起動した環境の認証を gh がそのまま使う |
+| `tracker.kind` | 文字列 | tracker の種類。`github` (gh で読む) か `gitlab` (glab で読む) |
+| `tracker.host` | 文字列 | `gitlab` でだけ書ける。GitLab の host 名 (`gitlab.example.com`)。既定 `gitlab.com`。`$VAR` で書ける。`github` で書くと未知の key |
+| `tracker.repo` | 文字列 | issue 置き場。`github` は `<owner>/<name>`、`gitlab` は `<group>/<name>` の段数を問わない path (`acme/sub/widgets`)。どの段も `[A-Za-z0-9._-]+` |
+| `tracker.token` | 文字列 | `github` でだけ書ける。gh に環境変数 `GH_TOKEN` として渡す token。`$VAR` でだけ書ける (値そのものを書かない)。省くと、loop を起動した環境の認証を gh がそのまま使う。`gitlab` は glab 自身の認証 (`glab auth login` の結果) を使い、書くと名指しで失敗する |
 | `polling.interval` | 文字列 | 周期。Go の duration の綴り (`90s` / `5m` / `1h30m`) で、1s 以上 24h 以下。短い周期は tracker の rate limit を食う |
 | `workspace.root` | 文字列 | workspace を置く dir。相対 path は workflow 定義の dir から、`~/` は HOME から (HOME が絶対 path でなければ失敗)。`$VAR` で書ける |
 | `hooks.after_create` | 文字列 | workspace を作った直後に撃つ shell script。失敗したら workspace を消し、その attempt は失敗 |
@@ -121,7 +123,7 @@ triggers:                    # 必須。1 つ以上
 | `claude.args` | 文字列の列 | command に、dispatcher の引数 (§6「worker の起動」) より前に渡す引数。既定は空 |
 | `triggers` | 列 | trigger の宣言。宣言順が起動の優先順 (system.md §6) |
 | `triggers[].name` | 文字列 | trigger の名前。`[A-Za-z0-9._-]+`。trigger の間で重複しない |
-| `triggers[].on` | 文字列 | 作業対象の種類。`issue` か `cl` |
+| `triggers[].on` | 文字列 | 作業対象の種類。`issue` か `cl`。`tracker.kind` が `gitlab` なら `issue` だけ (merge request は未対応で、`cl` は名指しで失敗する) |
 | `triggers[].when` | 対応表 | 述語。書いた条件はすべて AND で評価する。書ける key は `on` で変わる (issue は §2.2、CL は §2.3) |
 | `triggers[].action` | 文字列 | worker に渡す prompt の template (§2.7)。空にできない |
 
@@ -134,14 +136,22 @@ triggers:                    # 必須。1 つ以上
 | `labels.all` | 文字列の列 | 列の label をすべて持つ |
 | `labels.any` | 文字列の列 | 列の label のどれかを持つ。空の列は書けない |
 | `labels.none` | 文字列の列 | 列の label をどれも持たない |
-| `assignee` | 文字列 | その login の人が assignee に居る |
+| `assignee` | 文字列 | その login (GitLab は username) の人が assignee に居る |
 | `unassigned` | 真偽 | `true` なら assignee が居ない、`false` なら 1 人以上居る |
-| `author` | 文字列 | `collaborator` なら作者が collaborator (repo の owner・organization の member・collaborator)、`non_collaborator` ならそれ以外 |
+| `author` | 文字列 | `collaborator` なら作者が collaborator、`non_collaborator` ならそれ以外。collaborator の線は tracker ごとに下の表 |
 | `milestone` | 文字列 | その題名の milestone に入っている |
-| `blocked` | 真偽 | `true` なら未解決 (open) の依存先 (blocked by) が 1 つ以上ある、`false` なら無い |
+| `blocked` | 真偽 | `true` なら未解決 (open) の依存先 (blocked by) が 1 つ以上ある、`false` なら無い。`tracker.kind` が `gitlab` なら書けない (下) |
+
+| `tracker.kind` | collaborator と数える作者 |
+|---|---|
+| `github` | repo の owner・organization の member・collaborator (GitHub の `authorAssociation` が `OWNER` / `MEMBER` / `COLLABORATOR`) |
+| `gitlab` | project での access level (group から継承したものを含む) が Developer (30) 以上の member。push できる層に揃える。worker は push 権限を持つので、誰の書き込みで起動してよいかの線を push できる人に引く |
 
 - `assignee` と `unassigned` は一緒に書けない
-- label と login の綴りは、大文字と小文字を区別せずに比べる (GitHub と同じ)
+- label と login の綴りは、tracker によらず大文字と小文字を区別せずに比べる
+  - GitLab の label は大文字と小文字を区別するが、dispatcher の規則として揃える。trigger の評価は正規化した作業対象だけを見る (system.md §13) ので、tracker ごとに比べ方を変えない
+  - 誤って当たるのは、大文字と小文字だけが違う label を 2 つ持つ project に限られる
+- `tracker.kind` が `gitlab` なら `blocked` は書けない (名指しで失敗する)。GitLab の issue の依存 (blocks / is blocked by) は有償の tier の機能で、CE の API は依存を返さない。読むと常に 0 件になり、`blocked: false` が黙って全件に当たる
 
 ### 2.3 CL 側の述語 (`on: cl` の `when`)
 
@@ -229,6 +239,7 @@ action と本文 (共通 prompt) は、worker を起動するたびに Go の te
 - 空の文字列 (空の `assignee` や label を「条件なし」と取り違えないため)
 - 上の表の各項目の制約 (`polling.interval` の範囲・trigger の名前の綴りと重複・`assignee` と `unassigned` の併記・空の `labels.any`・`head` の pattern の綴り・`head` と `same_repo: false` の併記・空の `action`)
 - `$VAR` の未設定と、`tracker.token` に値そのものを書いたこと
+- `tracker.kind` が支えない宣言: `gitlab` での `tracker.token`・`blocked`・`on: cl` (§2.1・§2.2)。`github` での `tracker.host` は未知の key。key を書く順 (`triggers` を `tracker` より前に書くなど) によらず名指しする
 - 同じ key を 1 つの対応表に 2 回書いたこと
 - action と本文の template を描画できないこと (§2.7。綴りの誤り・未知の変数・未知の関数)
 
@@ -276,13 +287,15 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 | exit | 意味 |
 |---|---|
 | 0 | 成功 |
-| 1 | 観測できなかった (gh を起動できない・rate limit・読み切れない・その他の gh の失敗) / 想定外の失敗 |
+| 1 | 観測できなかった (tracker の CLI を起動できない・rate limit・読み切れない・その他の tracker の CLI の失敗) / 想定外の失敗 |
 | 2 | 引数の誤り / workflow 定義の誤り (§2.8) / issue 置き場が見えない (綴りの誤りか、権限が無い) |
 | 3 | 同じ scope key の loop が走っている (§6) |
-| 4 | gh の認証が通らない |
+| 4 | tracker の CLI (`tracker.kind` が `github` なら gh、`gitlab` なら glab) の認証が通らない |
 
 - 観測の失敗は、issue 置き場の部品が 認証 / 見えない / 読み切れない / rate limit に分けて返す (system.md §13)
-  - 読み切れない: 1 往復で読む件数の上限を超えた (issue の label・assignee・依存先、CL の label・review thread が 100 件を超えた)。切り詰めた像から候補を出さない
+  - 読み切れない: 1 往復で読む件数の上限を超えた (GitHub の issue の label・assignee・依存先、CL の label・review thread が 100 件を超えた)。切り詰めた像から候補を出さない
+  - glab は HTTP の失敗をどれも exit 1 で返すので、stderr の `(HTTP 401)` を認証、`(HTTP 404)` を見えない、`(HTTP 429)` を rate limit と見分ける
+  - `gitlab` の `author` の判定は作者の access level を project の member の API で読む。この API は認証が要るので、glab が未認証なら public な project でも認証の失敗になる
 
 ## 4. log.jsonl
 
@@ -359,10 +372,11 @@ claude-dispatcher loop [<workflow の path>]
 | 引数の数と flag | 2 |
 | workflow 定義を読めて、検査に通る (§2.8) | 2 |
 | 事前検査 (§2.9) に通る | 2 |
-| gh と `claude.command` を解決できる (PATH と、よく使われる置き場)。`on: cl` の trigger があれば git も | 1 |
+| tracker の CLI (`tracker.kind` が `github` なら gh、`gitlab` なら glab) と `claude.command` を解決できる (PATH と、よく使われる置き場)。`on: cl` の trigger があれば git も | 1 |
 | state dir を作れる | 1 |
 | 同じ scope key の loop が走っていない (`loop.lock` を取れる) | 3 |
 
+- よく使われる置き場は、claude と git と、gh か glab のどちらかが PATH に無いときだけ PATH の前に足す。使わない方の tracker の CLI が無いことでは PATH を書き換えない (worker と hooks は loop の PATH を継ぐので、足すと worker が撃つ git などが入れ替わりうる)
 - 同じ issue 置き場の 2 本目の loop は、clone や workflow 定義の path が違っても起動時に止まる
 - lock は loop の生存期間だけ持つ。loop が死ねば外れる
 - `loop.lock` を取った loop は、続けて `alive.lock` も生存期間のあいだ持つ。`status` は `alive.lock` だけを確かめるので、`loop.lock` を取り合わない (`alive.lock` を `status` が一瞬持っていれば、外れるまで待つ)
@@ -402,7 +416,9 @@ claude-dispatcher loop [<workflow の path>]
 - 打ち切りは作業対象ごとに memory に持つ。打ち切った作業対象は、どの trigger に当たっても起動しない。loop を起動し直すと消える
 - 打ち切りを解くには、label を外して打ち切ったときの trigger から外し、1 周期待ってから付け直す (外してから付け直すまでが 1 周期に収まると、外れたのを観測できない)。`status` (§7) の打ち切りの行にこの手順を出す
 
-- 作業対象の読み直しで issue が消えていたら (削除・移管。gh が `Could not resolve to an Issue` を返すか、応答に issue が無い)、終端と同じに扱う
+- 作業対象の読み直しで issue が消えていたら (削除・移管)、終端と同じに扱う。消えたと読むのは次のとき
+  - `github`: gh が `Could not resolve to an Issue` を返すか、応答に issue が無い
+  - `gitlab`: glab が `(HTTP 404)` を返し、stderr に `Project Not Found` が無い (project が見えないときは `404 Project Not Found` なので、見えないの失敗として扱う)
 
 **worker の 1 回分**:
 
@@ -560,7 +576,7 @@ loop の今の状態を、表示のためだけに書き出す (system.md §9)�
 claude-dispatcher status [<workflow の path>]
 ```
 
-別の端末から loop の今の状態を見る。workflow 定義を読んで scope key を決め、その state dir の状態 file を描く。**何も書かず、gh も撃たない**。
+別の端末から loop の今の状態を見る。workflow 定義を読んで scope key を決め、その state dir の状態 file を描く。**何も書かず、tracker の CLI も撃たない**。
 
 ```
 ● loop 稼働中  github.com/acme/widgets
@@ -611,7 +627,7 @@ exit: 0 = 描けた / 2 = 引数・workflow 定義の誤り / 1 = 状態 file �
 claude-dispatcher paths --json [<workflow の path>]
 ```
 
-workflow 定義から決まる置き場を JSON で stdout に出す。何も書かず、gh も撃たない。
+workflow 定義から決まる置き場を JSON で stdout に出す。何も書かず、tracker の CLI も撃たない。
 
 ```json
 {"scope_key": "github.com/acme/widgets", "state_dir": "<state dir>", "log": "<state dir>/log.jsonl",
@@ -629,13 +645,22 @@ claude-dispatcher doctor [<workflow の path>]
 
 **`setup`**: 実装 repo の clone を cwd にして撃ち、workflow 定義の雛形 (下) を path (既定 `WORKFLOW.md`) に書く。
 
-- `tracker.repo` は、cwd で `gh repo view --json nameWithOwner` が返す repo で埋める
+- `tracker.kind` は、cwd で `git remote get-url origin` が返す URL の host で決める。host が `github.com` なら `github`、それ以外は `gitlab`
+  - URL は `https://<host>/…`・`ssh://<user>@<host>[:<port>]/…`・`<user>@<host>:…` (scp の綴り) を読む。host は port を除いて小文字にする
+  - `github`: `tracker.repo` を、cwd で `gh repo view --json nameWithOwner` が返す repo で埋める
+  - `gitlab`: `tracker.host` を URL の host で、`tracker.repo` を `glab repo view <URL> --output json` の `path_with_namespace` で埋める。host と path を同じ remote から決める
 - path に file が既にあれば書かない (上書きしない)。そのことを stdout に出して exit 0
 - 書いたら、path と、次に試運転 (§5) を撃つことを stdout に出す
 
-exit: 0 = 書いた・既にある / 2 = 引数の誤り / 1 = repo を決められない (gh の失敗)・書けない。
+exit: 0 = 書いた・既にある / 2 = 引数の誤り / 1 = repo を決められない (git・gh・glab の失敗、URL を読めない)・書けない。
 
-**雛形**: 汎用の action (実装・conflict・review・CI) を置く。action は先頭に skill を書かない文で、plugin の無い環境でも事前検査 (§2.9) に通る。承認済みの CL (`approved: true`) に当てる trigger は置かない (merge を worker に任せるかは利用者が決める)。
+**雛形**: `tracker.kind` ごとに持つ。`github` の雛形を下に置く。
+
+- `gitlab` の雛形は、同じ action を "merge request"・`glab`・`Closes #N` の綴りで書く
+  - `blocked` の述語を書かない (§2.2)
+  - CL 側の trigger (conflict・review・CI) を置かない (merge request は未対応。§2.1)
+
+汎用の action (実装・conflict・review・CI) を置く。action は先頭に skill を書かない文で、plugin の無い環境でも事前検査 (§2.9) に通る。承認済みの CL (`approved: true`) に当てる trigger は置かない (merge を worker に任せるかは利用者が決める)。
 
 ```markdown
 ---
@@ -689,20 +714,22 @@ triggers:
 <共通 prompt: 無人の worker としての作業規約>
 ```
 
-- 上は抜粋 (action の文と本文を略した)。全文は `internal/scaffold/WORKFLOW.md`
+- 上は抜粋 (action の文と本文を略した)。全文は `internal/scaffold/WORKFLOW.md` (`gitlab` は `internal/scaffold/WORKFLOW.gitlab.md`)
 - 実装の worker は `claude-dispatcher/issue-<番号>` の branch で CL を出し、CL 側の trigger は `head: claude-dispatcher/*` で自分の出した CL に絞る
 - CL の worker は head branch を detach で取り出して push する。issue の workspace は issue が閉じるまで残り、その branch を checkout したままで、同じ branch は 2 つの worktree で checkout できないため
 
 **`doctor`**: 導入を確かめる。何も書かない。確かめたことを 1 件 1 行で、`ok` / `NG` / `警告` を頭に付けて stdout に出す。
 
 1. workflow 定義を読めて、検査 (§2.8) に通る。落ちたら以降は確かめない
-2. gh の認証が通り、issue 置き場が見える (open な作業対象を読める)
-3. gh と `claude.command` を解決できる。`on: cl` の trigger があれば git も (loop の起動時の検査と同じ。§6)
+2. tracker の CLI (gh か glab) の認証が通り、issue 置き場が見える (open な作業対象を読める)。issue 置き場は `github` なら `<owner>/<name>`、`gitlab` なら `<host>/<path>` で出す
+3. tracker の CLI と `claude.command` を解決できる。`on: cl` の trigger があれば git も (loop の起動時の検査と同じ。§6)
 4. 事前検査 (§2.9)。落ちた trigger ごとに `NG` の行
 5. 利用者の約束に頼る宣言を `警告` の行に出す (system.md §11)
    - `approved: true` の CL 側の trigger (merge を worker に任せうる)
    - `head`・`labels.all`・`labels.any`・`same_repo: true` のどれも書いていない CL 側の trigger (人の CL や fork の CL に worker を送りうる)
 6. Claude Code の settings (`permissions.allow`) に要りそうな entry を表示する。CLI は settings を書かない (ADR 0004)
+   - `github`: `Bash(gh issue:*)`・`Bash(gh pr:*)`・`Bash(git push:*)`
+   - `gitlab`: `Bash(glab issue:*)`・`Bash(glab mr:*)`・`Bash(git push:*)`
 
 ```
 ok   workflow 定義 /path/to/WORKFLOW.md

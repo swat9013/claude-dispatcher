@@ -234,7 +234,8 @@ SPEC §7・§8・§16 の状態機械を土台にする。
 実装 repo の中に置く (SPEC §5)。path は loop の引数で渡せ、省けば loop を起動した cwd の `WORKFLOW.md` を読む。項目の書式は formats.md が正本。
 
 - **front matter が持つもの**
-  - tracker の種類と adapter の設定
+  - tracker の種類 (`github` / `gitlab`) と adapter の設定
+    - 書ける設定は種類ごとに決まる。種類が支えない設定 (`gitlab` の `blocked` の述語・`tracker.token`・CL 側の trigger) は、検査で名指しして失敗させる。黙って通すと、条件が全件に当たるか、渡したつもりの設定が効かない
   - trigger の列
   - hooks
   - 並列上限・attempt の上限・backoff の上限・stall の上限・worker 1 回分の上限時間 (既定 1 時間。0 で無効)
@@ -290,7 +291,8 @@ SPEC §7・§8・§16 の状態機械を土台にする。
 - **permission posture は workflow 定義の起動引数が決める**
   - 雛形は `--permission-mode auto` を置く
   - permission 層を外すかどうかは利用者が決める
-- **依存 CLI (gh / claude / git) の path は CLI が自分でも解決する**。最小の PATH の shell (ssh 越しなど) から起動されても動くようにする
+- **依存 CLI (tracker の CLI・claude・git) の path は CLI が自分でも解決する**。最小の PATH の shell (ssh 越しなど) から起動されても動くようにする
+  - tracker の CLI は `tracker.kind` で決まる (`github` は gh、`gitlab` は glab)。使わない方の CLI が無いことは、PATH を書き換える理由にしない
 - **試運転**
   - 1 tick 分の読み直し・事前検査・trigger の評価までを通し、起動する直前で止めて、起動するはずの作業対象と trigger を示す
   - state dir に何も書かない
@@ -319,7 +321,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。
 - **特定の plugin には依存しない**
   - action が呼ぶ skill と command は、利用者が入れた plugin・repo の `.claude/`・`~/.claude/` のどれに置いてもよい
   - 事前検査 (§8) は、この 3 か所の skill と command から先頭の `/名前` を探す。plugin は、user scope で入れたものと、この repo に project scope で入れたものを数える (local scope の plugin は commit しない settings で有効になり、worker の workspace では読まれない)
-- **Claude Code の settings は CLI が書かない** (ADR 0004)。`doctor` は、worker が tracker を操作するのに要りそうな entry を表示する
+- **Claude Code の settings は CLI が書かない** (ADR 0004)。`doctor` は、worker が tracker を操作するのに要りそうな entry を、`tracker.kind` の CLI (gh か glab) の綴りで表示する
 - **`doctor` は、利用者の約束に頼る宣言を警告する**
   - `cl.approved` に action を当てている (merge を worker に任せうる)
   - CL 側の trigger に、head branch の pattern・label・同じ repo の branch のどの絞り込みも無い (人の CL や fork の CL に worker を送りうる)
@@ -332,7 +334,8 @@ SPEC §7・§8・§16 の状態機械を土台にする。
 - **loop の監督** (boot 時の起動・落ちた loop の起こし直し): 人が同じコマンドで起動し直す (ADR 0006)
 - **tracker 以外の起点** (定期実行・外部の webhook): SPEC §2.2 の「汎用の workflow engine にしない」に従う
 - **SPEC §13.7 の HTTP API と dashboard**: 観測は loop の画面・状態 file・`status` で足りる
-- **GitHub 以外の tracker / CL host** (GitLab / Jira): tracker の adapter を足す形で広げる (§13)。scope key の粒度は adapter が決める
+- **GitHub と GitLab の issue 側以外の tracker / CL host** (GitLab の merge request / Jira): tracker の adapter を足す形で広げる (§13)。scope key の粒度は adapter が決める
+  - GitLab は、issue 置き場と CL 置き場が同じ host の同じ project にある構成だけを扱う
 
 ## 13. CLI の seam
 
@@ -340,7 +343,7 @@ CLI の中で、呼び出し側から中身を隠す部品と、差し替えの�
 
 | 部品 | 呼び出し側 | 呼び出し側から隠すもの | adapter |
 |---|---|---|---|
-| issue 置き場の部品 | tick / 試運転 / `setup` / `doctor` | tracker の呼び方・応答の綴り・失敗の見分け方・scope key の決め方 | gh / テストの in-memory |
+| issue 置き場の部品 | tick / 試運転 / `setup` / `doctor` | tracker の呼び方・応答の綴り・失敗の見分け方・scope key の決め方 | gh / glab / テストの in-memory |
 | CL 置き場の部品 | tick / 試運転 / `doctor` | CL host の呼び方・応答から CL の状態の語彙への写し方・失敗の見分け方 | gh / テストの in-memory |
 | 起動部 | tick | セッションの起動の形 (argv・process group・stream の読み方・停止・回収) | `claude -p` / テストの fake |
 | hooks の実行 | tick | shell の撃ち方・timeout | (seam を置かない。テストは一時 dir で本物を撃つ) |
@@ -349,7 +352,8 @@ CLI の中で、呼び出し側から中身を隠す部品と、差し替えの�
   - 正規化は SPEC §4.1.1 の Issue を土台にする。CL は、CL の状態の語彙と絞り込みに要る field を持つ
   - issue と CL の紐づけは返さない (ADR 0009)
   - 失敗は 認証 / 見えない / 読み切れない / rate limit に分けて返す (SPEC §11.4)
-  - scope key は issue 置き場の部品が返す。tracker ごとの粒度 (GitHub は owner と repo、Jira は site と project) を部品の外に出さない
+  - scope key は issue 置き場の部品が返す。tracker ごとの粒度 (GitHub は owner と repo、GitLab は host と repo の path、Jira は site と project) を部品の外に出さない
+  - どの adapter で組み立てるかは、workflow 定義の `tracker.kind` で決める
 - **起動部は、1 つの worker の起動・stream の読み取り・停止・回収を 1 つの部品に閉じる** (ADR 0005)
   - stream の event (起動・活動・終了) は中立の形で返す
   - 停止は process group ごと行い、上限時間か停止要求のどちらで止まったかを区別して返す
