@@ -76,7 +76,7 @@ type harness struct {
 	open []int
 	// maxAttempts は attempt の上限。0 なら 1 (1 回目の失敗で打ち切る)
 	maxAttempts int
-	// rereadFailures は、終わった worker の作業対象の読み直しを最初に何回失敗させるか
+	// rereadFailures は、起動した worker の作業対象の読み直しを最初に何回失敗させるか (起動の直前の読み直しは数えない)
 	rereadFailures int
 	// inflight は、起動した worker のうち event を loop が受け取り終えていない数。周期と再起動の予定はそれを待ってから進める
 	inflight int
@@ -189,6 +189,9 @@ func (h *harness) run(t *testing.T) []string {
 				}
 				return issues, nil
 			}, reread: func(ref target.Ref) (target.Item, error) {
+				if !slices.ContainsFunc(h.jobs, func(j worker.Job) bool { return j.Item.Ref() == ref }) {
+					return target.Issue{Number: ref.Number}, nil
+				}
 				h.rereads++
 				if h.rereads <= h.rereadFailures {
 					return nil, errors.New("gh の失敗")

@@ -307,6 +307,11 @@ func (l *loop) tick() {
 		if _, abandoned := l.abandoned[ref]; abandoned {
 			continue
 		}
+		item, ok := l.recheckCandidate(store, c)
+		if !ok {
+			continue
+		}
+		c.Item = item
 		if l.launch(def, c) {
 			launched = append(launched, ref.String())
 		}
@@ -503,6 +508,35 @@ func (l *loop) sweep(store Store, open []target.Item) {
 			l.rec.human(LineNote, "掃除", " %s: 終端の workspace を消した", ref)
 		}
 	}
+}
+
+// reasonUndecided は、起動しようとした作業対象が trigger に当たるかをまだ決められない理由
+const reasonUndecided = "当たるかをまだ決められない"
+
+// recheckCandidate は、起動しようとする候補を置き場から読み直し、起動してよければ読み直した作業対象を返す。open な一覧の検索は
+// 書き込みの直後に古い結果を返しうる (Jira の JQL 検索など) ので、完了した直後の作業対象を起動し直さないよう、終端か、起動
+// しようとした trigger から外れたか、当たるかをまだ決められなければ起動しない。読み直せなければ error の行を残して起動しない。
+// どれも次の tick で候補になれば試み直す。
+func (l *loop) recheckCandidate(store Store, c trigger.Candidate) (target.Item, bool) {
+	ref := c.Item.Ref()
+	item, err := store.Read(ref)
+	if err != nil {
+		l.rec.error(ref, "起動しようとした作業対象を読み直せない (次の tick で試み直す): "+oneLine(err))
+		return nil, false
+	}
+	var reason string
+	switch {
+	case item.Terminal():
+		reason = reasonTerminal
+	case c.Trigger.Undecided(item):
+		reason = reasonUndecided
+	case !c.Trigger.Matches(item):
+		reason = reasonLeftTrigger
+	default:
+		return item, true
+	}
+	l.rec.human(LineNote, "起動しない", " %s (%s): %s (起動の直前に読み直した)", ref, c.Trigger.Name, reason)
+	return nil, false
 }
 
 func (l *loop) launch(def workflow.Definition, c trigger.Candidate) bool {
