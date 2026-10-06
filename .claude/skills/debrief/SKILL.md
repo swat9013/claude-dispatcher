@@ -76,11 +76,13 @@ claim を解く行は formats.md §4 (`completed` と `stopped` の `end`・`rel
 jq -r 'select(.event=="tick" and .result=="error") | .error' F | sort | uniq -c | sort -rn
 jq -r 'select(.event=="tick") | .blocked[]? | [.trigger, .error] | @tsv' F | sort | uniq -c | sort -rn
 jq -r 'select(.event=="tick") | .ambiguous[]? | [.head, (.targets | join(","))] | @tsv' F | sort | uniq -c
-# 候補があるのに何も起動しなかった tick
-jq -r 'select(.event=="tick" and .candidates > 0 and (.launched | length) == 0) | .ts' F
+# 候補があるのに何も起動しなかった tick と、起動の判定に使った値
+jq -r 'select(.event=="tick" and .candidates > 0 and (.launched | length) == 0) | [.ts, .candidates, .running, .waiting_retry, .max_concurrent] | @tsv' F
 ```
 
-候補があるのに起動しなかった tick は、その時刻に走っていた attempt (start と end の間) の数が `limits.max_concurrent` に達していれば正常。並列上限は tick ごとに workflow 定義を読み直して決まり (formats.md §6)、tick 行には載らないので、その時刻の値は `git -C <WORKFLOW.md の dir> log -p -- WORKFLOW.md` の変更時刻と照らして決める。達していないのに起動していなければ、同じ tick の `blocked`・`ambiguous` と、その候補の claim・打ち切りの状態で理由を読む。
+候補があるのに起動しなかった tick は、`running` と `waiting_retry` の和が `max_concurrent` に達していれば正常。手順 7 は、この 2 つと起動した数 (`launched` の数。ここでは 0) の和が `max_concurrent` に達したところで起動をやめる (formats.md §4)。達していないのに起動していなければ、同じ tick の `blocked`・`ambiguous` と、その候補の claim・打ち切りの状態で理由を読む。
+
+`running`・`waiting_retry`・`max_concurrent` の欄が空の行は、この 3 つの key を書かない古い版の log。その行に限り、その時刻に走っていた attempt (start と end の間) を数え、並列上限は `git -C <WORKFLOW.md の dir> log -p -- WORKFLOW.md` の変更時刻と照らして決める (並列上限は tick ごとに workflow 定義を読み直して決まる。formats.md §6)。
 
 **3. 時間**
 
