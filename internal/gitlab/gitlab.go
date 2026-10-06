@@ -85,7 +85,7 @@ func ParsePath(text string) (string, error) {
 func CurrentProject(glab Runner) (Project, error) {
 	out, err := glab.Run("repo", "view", "--output", "json")
 	if err != nil {
-		return Project{}, fmt.Errorf("glab repo view が失敗した: %w", reason(err))
+		return Project{}, fmt.Errorf("glab repo view が失敗した: %w", withoutForbiddenBody(err))
 	}
 	var view struct {
 		PathWithNamespace string `json:"path_with_namespace"`
@@ -317,7 +317,7 @@ func (s Store) collaborator(userID int) (bool, error) {
 }
 
 func (s Store) fail(kind target.FailureKind, err error) *target.Failure {
-	return &target.Failure{Kind: kind, Place: s.project.String(), Err: reason(err)}
+	return &target.Failure{Kind: kind, Place: s.project.String(), Err: withoutForbiddenBody(err)}
 }
 
 // glab は HTTP の失敗をどれも exit 1 で返し、stderr の `(HTTP <status>)` で見分ける
@@ -353,25 +353,23 @@ func classify(err error) target.FailureKind {
 	return target.Unavailable
 }
 
-// glab は HTTP 403 を、glab api では `HTTP 403` (括弧の有無は本文が JSON か HTML かで変わる) で、glab repo view では
-// `<URL>: 403 <本文>` で stderr に出す
-var forbiddenMarkers = []string{"HTTP 403", ": 403 "}
+// forbiddenPattern は glab が stderr に HTTP 403 を出す綴り。glab api は本文が JSON なら `(HTTP 403)` を、HTML なら
+// `glab: HTTP 403` を、glab repo view は `<URL>: 403 <本文>` を出す。status の位置で当て、本文の中の 403 には当てない
+var forbiddenPattern = regexp.MustCompile(`(?m)\(HTTP 403\)|^glab: HTTP 403$|https?://\S+: 403 `)
 
-// errForbidden は HTTP 403 の失敗の理由。403 は手前の proxy の拒否 (接続元のネットワーク) でも GitLab の拒否 (token の
+// forbiddenReason は HTTP 403 の失敗の理由。403 は手前の proxy の拒否 (接続元のネットワーク) でも GitLab の拒否 (token の
 // scope の不足など) でも起き、stderr の本文は proxy の HTML でありうるので、本文の代わりにこれを出す
-var errForbidden = errors.New("HTTP 403 で拒否された (接続元のネットワークか、token の権限)")
+const forbiddenReason = "HTTP 403 で拒否された (接続元のネットワークか、token の権限)"
 
-// reason は glab の失敗を、エラー文に載せる形にする。HTTP 403 なら stderr の代わりに errForbidden を返し、それ以外は err の
-// まま返す。分類 (classify・gone) は差し替える前の err で決める。
-func reason(err error) error {
+// withoutForbiddenBody は glab の失敗が HTTP 403 なら、stderr を forbiddenReason に差し替えた *proc.Error を返す
+// (撃ったコマンドと exit code は残す)。それ以外は err のまま返す。差し替えた後の stderr も 401・404・429 の marker を
+// 含まないので、classify と gone は差し替えの前後で同じ答えを返す。
+func withoutForbiddenBody(err error) error {
 	var failed *proc.Error
-	if !errors.As(err, &failed) {
+	if !errors.As(err, &failed) || !forbiddenPattern.MatchString(failed.Stderr) {
 		return err
 	}
-	for _, marker := range forbiddenMarkers {
-		if strings.Contains(failed.Stderr, marker) {
-			return errForbidden
-		}
-	}
-	return err
+	shortened := *failed
+	shortened.Stderr = forbiddenReason
+	return &shortened
 }

@@ -104,17 +104,6 @@ const (
 
 const forbiddenReason = "HTTP 403 で拒否された (接続元のネットワークか、token の権限)"
 
-// assertForbiddenReason は err の文言が glab の stderr の代わりに 403 の短い理由を出していることを確かめる。
-func assertForbiddenReason(t *testing.T, err error, stderr string) {
-	t.Helper()
-	if err == nil || !strings.Contains(err.Error(), forbiddenReason) {
-		t.Fatalf("err = %v, want %q を含む", err, forbiddenReason)
-	}
-	if strings.Contains(err.Error(), strings.TrimSpace(stderr)) || strings.Contains(err.Error(), "<html>") {
-		t.Fatalf("err に glab の stderr が載った: %v", err)
-	}
-}
-
 func TestForbiddenObservationIsUnavailableWithAShortReasonInsteadOfTheStderr(t *testing.T) {
 	for name, stderr := range map[string]string{"proxy の HTML": apiForbiddenByProxy, "GitLab の JSON": apiForbiddenByGitLab} {
 		t.Run(name, func(t *testing.T) {
@@ -123,10 +112,10 @@ func TestForbiddenObservationIsUnavailableWithAShortReasonInsteadOfTheStderr(t *
 			_, err := store.Read(target.Ref{Kind: target.KindIssue, Number: 7})
 
 			var failure *target.Failure
-			if !errors.As(err, &failure) || failure.Kind != target.Unavailable {
-				t.Fatalf("err = %v, want 読めない (Unavailable)", err)
+			want := "置き場 gitlab.example.com/acme/sub/widgets を観測できない (読めない): glab api --hostname failed (exit 1): " + forbiddenReason
+			if !errors.As(err, &failure) || failure.Kind != target.Unavailable || err.Error() != want {
+				t.Fatalf("err = %v, want %q", err, want)
 			}
-			assertForbiddenReason(t, err, stderr)
 		})
 	}
 }
@@ -136,7 +125,10 @@ func TestForbiddenRepoViewGivesTheShortReasonInsteadOfTheStderr(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			_, err := gitlab.CurrentProject(glab{"json": {stderr: stderr}})
 
-			assertForbiddenReason(t, err, stderr)
+			want := "glab repo view が失敗した: glab repo view failed (exit 1): " + forbiddenReason
+			if err == nil || err.Error() != want {
+				t.Fatalf("err = %v, want %q", err, want)
+			}
 		})
 	}
 }
@@ -147,6 +139,8 @@ func TestOtherFailuresKeepTheirKindAndTheStderr(t *testing.T) {
 		"glab: 404 Project Not Found (HTTP 404)\n":     target.NotVisible,
 		"glab: 429 Too Many Requests (HTTP 429)\n":     target.RateLimit,
 		"glab: 500 Internal Server Error (HTTP 500)\n": target.Unavailable,
+		// 本文の中の 403 は、status の位置にないので 403 と読まない
+		"glab: 502 Bad Gateway (HTTP 502)\nupstream: HTTP 403\n": target.Unavailable,
 	} {
 		t.Run(strings.TrimSpace(stderr), func(t *testing.T) {
 			store := gitlab.NewStore(glab{issuesEndpoint + "/7": {stderr: stderr}}, project)

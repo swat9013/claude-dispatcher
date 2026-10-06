@@ -312,7 +312,8 @@ func TestGitLabSetupShowsAShortReasonWhenRepoViewIsForbiddenByAProxy(t *testing.
 		t.Fatal(err)
 	}
 	s.respond("git", gitlabOrigin)
-	// glab 1.120.0 の実物から写した、proxy が HTML で拒否したときの glab repo view の stderr
+	// glab 1.120.0 の実物から写した、proxy が HTML で拒否したときの glab repo view の stderr (行末の padding の空白は除き、
+	// host は sandbox のものに置き換えた)
 	s.respond("glab", stubwire.Rule{
 		ArgsPrefix: []string{"repo", "view", "--output", "json"},
 		Stderr: "          \n   ERROR  \n          \n" +
