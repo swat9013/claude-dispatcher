@@ -3,6 +3,7 @@ package worker
 import (
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -54,7 +55,7 @@ func TestWorkerWritingOnlyHeartbeatsStallsAfterTheStallTimeout(t *testing.T) {
 		appendAt(t, w, heartbeat, started.Add(time.Duration(s)*time.Second))
 	}
 
-	reason := r.overdue(90*time.Second, w.inactiveFor(started.Add(90*time.Second)))
+	reason := r.overdue(90*time.Second, w.inactiveFor(started.Add(90*time.Second)), w.readError)
 
 	if !strings.Contains(reason, "stall") {
 		t.Fatalf("heartbeat だけが 90s 続いて stall の上限 1m を過ぎたのに止めない: %q", reason)
@@ -70,8 +71,12 @@ func TestWatchStopsAWorkerThatWritesOnlyHeartbeats(t *testing.T) {
 	defer writer.Close()
 	// heartbeat を stall の上限より細かく書き続ける (file は伸び続ける)
 	quit := make(chan struct{})
+	var writing sync.WaitGroup
+	writing.Add(1)
+	defer writing.Wait()
 	defer close(quit)
 	go func() {
+		defer writing.Done()
 		for {
 			select {
 			case <-quit:
@@ -83,7 +88,7 @@ func TestWatchStopsAWorkerThatWritesOnlyHeartbeats(t *testing.T) {
 	}()
 	r := Runner{Definition: workflow.Definition{StallTimeout: 500 * time.Millisecond}}
 	run := &Run{stop: make(chan struct{})}
-	time.AfterFunc(10*time.Second, run.Stop)
+	defer time.AfterFunc(10*time.Second, run.Stop).Stop()
 
 	result, ended := r.watch(make(chan error), run, stream, 0, "/work")
 
@@ -129,5 +134,25 @@ func TestStallClockDoesNotResetWhileTheStreamCannotBeRead(t *testing.T) {
 	}
 	if got := w.inactiveFor(started.Add(30 * time.Second)); got != 20*time.Second {
 		t.Fatalf("活動が途絶えた時間 = %s, want 読めないあいだは戻らず 20s", got)
+	}
+}
+
+func TestStallReasonCarriesWhyTheStreamCannotBeRead(t *testing.T) {
+	r := Runner{Definition: workflow.Definition{StallTimeout: time.Minute, RunTimeout: time.Hour}}
+
+	reason := r.overdue(2*time.Minute, 2*time.Minute, "stream を読めない: 消えた")
+
+	if !strings.Contains(reason, "stall") || !strings.Contains(reason, "stream を読めない: 消えた") {
+		t.Fatalf("理由 = %q, want stall に読めない理由を添える", reason)
+	}
+}
+
+func TestRunTimeoutReasonDoesNotCarryWhyTheStreamCannotBeRead(t *testing.T) {
+	r := Runner{Definition: workflow.Definition{StallTimeout: time.Hour, RunTimeout: time.Minute}}
+
+	reason := r.overdue(2*time.Minute, 2*time.Minute, "stream を読めない: 消えた")
+
+	if strings.Contains(reason, "読めない") {
+		t.Fatalf("理由 = %q, want 上限時間の理由には読めない理由を添えない", reason)
 	}
 }

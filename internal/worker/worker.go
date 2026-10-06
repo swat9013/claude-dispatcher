@@ -220,7 +220,8 @@ type streamWatch struct {
 	active time.Time
 	// summarized は要約した最新の行の終わりの offset。前の attempt の行と、要約済みの行を読み直さない
 	summarized int64
-	// readError は直近に stream の file を読めなかった理由。同じ理由を活動として出し直さない
+	// readError は直近に stream の file を読めなかった理由。読めれば ""。同じ理由を活動として出し直さないためと、
+	// 読めないまま stall で止めたときの理由に添えるために使う
 	readError string
 	// workspace は worker の workspace の path (活動の tool の入力の path を相対にする)
 	workspace string
@@ -330,26 +331,26 @@ func (r Runner) watch(done <-chan error, run *Run, stream *os.File, offset int64
 			if err != nil {
 				return Result{Failure: err.Error()}, false
 			}
-			if grew {
+			// 読めなかった後は、伸びなくても読み直す (読めないあいだに書かれた行で stall の時計を戻し、古い理由を残さない)
+			if grew || w.readError != "" {
 				if summary, ok := w.activity(now); ok {
 					run.setActivity(status.Activity{At: now, Summary: summary})
 				}
 			}
-			if reason := r.overdue(now.Sub(started), w.inactiveFor(now)); reason != "" {
-				// stream を読めないあいだは活動として数える行を見られないので、stall の理由に読めない理由を添える
-				if w.readError != "" {
-					reason += " · " + w.readError
-				}
+			if reason := r.overdue(now.Sub(started), w.inactiveFor(now), w.readError); reason != "" {
 				return Result{Failure: reason}, false
 			}
 		}
 	}
 }
 
-// overdue は stall か上限時間に当たったら、その理由を返す。当たらなければ ""。
-func (r Runner) overdue(running, inactive time.Duration) string {
+// overdue は stall か上限時間に当たったら、その理由を返す。当たらなければ ""。unreadable は stream を読めない理由 (読めれば
+// "")。読めないあいだは活動として数える行を見られないので、stall の理由に添える。
+func (r Runner) overdue(running, inactive time.Duration, unreadable string) string {
 	stall, limit := r.Definition.StallTimeout, r.Definition.RunTimeout
 	switch {
+	case stall > 0 && inactive > stall && unreadable != "":
+		return fmt.Sprintf("stall (活動が %s 途絶えた) · %s", stall, unreadable)
 	case stall > 0 && inactive > stall:
 		return fmt.Sprintf("stall (活動が %s 途絶えた)", stall)
 	case limit > 0 && running > limit:
