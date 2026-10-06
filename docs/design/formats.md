@@ -72,7 +72,7 @@ limits:
   max_concurrent: 1          # 任意。並列上限。既定 1
   max_attempts: 3            # 任意。作業対象 1 件の attempt の上限。既定 3
   max_retry_backoff: 5m      # 任意。backoff の上限。既定 5m
-  stall_timeout: 15m         # 任意。worker の stream が途絶えてから止めるまで。既定 15m。0 で無効
+  stall_timeout: 15m         # 任意。worker の活動が途絶えてから止めるまで。既定 15m。0 で無効
   run_timeout: 1h            # 任意。worker 1 回分の上限時間。既定 1h。0 で無効
 claude:
   command: claude            # 任意。既定 claude
@@ -119,7 +119,7 @@ triggers:                    # 必須。1 つ以上
 | `limits.max_concurrent` | 整数 | 同時に走らせる worker の上限。1 以上。既定 1 |
 | `limits.max_attempts` | 整数 | 作業対象 1 件の attempt の上限。1 以上。既定 3。上限の attempt が失敗したら打ち切る |
 | `limits.max_retry_backoff` | 文字列 | backoff の上限。Go の duration の綴りで、0 より長い。既定 5m |
-| `limits.stall_timeout` | 文字列 | worker の stream (stdout の stream-json) が途絶えてから、止めて失敗とするまでの時間。既定 15m。`0s` で無効。claude は 1 つの tool の実行中は stream に何も書かないので、長い build や test を走らせる repo では長めにする |
+| `limits.stall_timeout` | 文字列 | worker の stream (stdout の stream-json) に活動 (§6) として数える行が書かれなくなってから、止めて失敗とするまでの時間。既定 15m。`0s` で無効。claude は tool の実行中は heartbeat (`tool_progress`) しか書かず、heartbeat は活動として数えないので、長い build や test を走らせる repo では長めにする |
 | `limits.run_timeout` | 文字列 | worker 1 回分の上限時間。起動からの経過が超えたら止めて失敗とする。既定 1h。`0s` で無効 |
 | `claude.command` | 文字列 | worker として起動する command。PATH から探す。既定 `claude` |
 | `claude.args` | 文字列の列 | command に、dispatcher の引数 (§6「worker の起動」) より前に渡す引数。既定は空 |
@@ -506,7 +506,7 @@ claude-dispatcher loop [<workflow の path>]
 
    - `<session>` は、前の attempt で session を始めていれば同じ id で `--resume <uuid>` (止めた session の続きから始まる)、始めていなければ `--session-id <uuid>`
    - action は `--` の後ろに置く (`-` で始まる action を option と読ませない)
-   - stream の file が `limits.stall_timeout` のあいだ伸びないか、起動からの経過が `limits.run_timeout` を超えたら、process group を止めて失敗とする (止め方は 2 回目の停止要求と同じ)。止める判断と停止要求が重なったら、停止要求で止めたことにする
+   - stream に活動 (下の「活動」) として数える行が `limits.stall_timeout` のあいだ書かれないか、起動からの経過が `limits.run_timeout` を超えたら、process group を止めて失敗とする (止め方は 2 回目の停止要求と同じ)。止める判断と停止要求が重なったら、停止要求で止めたことにする
 
 4. 終わったら (止めたときを含む)、worker log からその attempt の最後の `result` を読んで `end` の行に要約を載せ (§4)、`after_run` を撃ち、作業対象を読み直す。終端か、起動した trigger から外れていれば `completed` として claim を解き、当たったままなら `failed` として再起動 (上) に回す
    - 当たるかをまだ決められなければ (conflict を計算中の CL)、読み直せなかったときと同じく、error の行を残して claim を持ったまま次の tick で確かめ直す
@@ -591,7 +591,8 @@ issue#42  implement  1        running  5m10s  Edit internal/status/status.go
 - JSON として読めない行 (項目の型が要約に使う形と合わない行を含む) と、`type` の無い行は、表によらず活動として数えない。改行を含めて 64 KiB を超える行も数えない (stream の file の末尾だけを読む)
 - 前に確かめてから完結した行を新しい側から見て、活動として数える最初の行を要約する。数える行が無ければ活動は変えない
 - 活動は今の attempt が書いた行だけから取る (worker log は attempt を跨いで追記する)。同じ行を活動として出し直さない
-- stream の file を読めなければ、`stream を読めない: <理由>` を活動にする。worker は止めない
+- stream の file を読めなければ、`stream を読めない: <理由>` を活動にする。活動の表示のためには worker を止めない
+- stall (`limits.stall_timeout`) の時計は、活動として数える行を見つけるたびに戻す。要約が直前と同じでも戻す。数えない行・64 KiB を超える行・読めないあいだの stream では戻らないので、その状態が `limits.stall_timeout` 続けば stall で止める。読めないまま stall で止めたときは、失敗の理由に読めない理由を添える
 
 **停止**: SIGINT / SIGTERM / SIGHUP を同じに扱う。
 

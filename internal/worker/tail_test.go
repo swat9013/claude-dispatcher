@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // 活動として数える最新の完結した行の探し方。
@@ -28,7 +29,7 @@ func streamFile(t *testing.T, content string) *os.File {
 func summarizeAfter(t *testing.T, content string, after int64) (summary string, ok bool, w *streamWatch) {
 	t.Helper()
 	w = &streamWatch{file: streamFile(t, content), size: int64(len(content)), summarized: after, workspace: "/work"}
-	summary, ok = w.activity()
+	summary, ok = w.activity(time.Time{})
 	return summary, ok, w
 }
 
@@ -61,7 +62,7 @@ func TestActivityDoesNotReturnALineAlreadySummarized(t *testing.T) {
 	content := text("old") + text("new")
 	_, _, w := summarizeAfter(t, content, 0)
 
-	if summary, ok := w.activity(); ok {
+	if summary, ok := w.activity(time.Time{}); ok {
 		t.Fatalf("要約済みの行を返した: %q", summary)
 	}
 }

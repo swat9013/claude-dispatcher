@@ -121,7 +121,7 @@ Cockburn『ユースケース実践ガイド』(Writing Effective Use Cases) の
 
 **Main Success Scenario**
 
-1. loop が走っている worker ごとに、stream の最後の event からの経過を測る
+1. loop が走っている worker ごとに、活動として数える stream の行が最後に書かれてからの経過を測る
 2. loop が走っている作業対象を外部 store で読み直す
 3. loop が、終端になった作業対象の worker を止め、hooks を撃ってから workspace を消し、claim を解く
 4. loop が、突き合わせの結果を log に残す
