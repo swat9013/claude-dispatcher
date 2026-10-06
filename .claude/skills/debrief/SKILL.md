@@ -42,7 +42,7 @@ jq -c --arg since "<--since の UTC>" 'select(.ts >= $since)' <log> | jq ...
 
 ### 2. log.jsonl から数える (観点 1〜4)
 
-log.jsonl から決定的に数える観点。どれも件数と、該当する行の `ts`・`target` を控える。件数は確度「決定的」で出す。一方、件数を status・WORKFLOW.md (とその履歴) と突き合わせて下す判定 (閉じていない claim の読み分け・起動しなかった tick の正否・上限時間との比べ合わせ) は「解釈」とする。
+log.jsonl から決定的に数える観点。どれも件数と、該当する行の `ts`・`target` を控える。件数と、起動しなかった tick が並列上限に達していたか (tick 行の値だけで決まる) は確度「決定的」で出す。一方、件数を status・WORKFLOW.md (とその履歴) と突き合わせて下す判定 (閉じていない claim の読み分け・上限に達していないのに起動しなかった理由・`running` 等の欄が無い古い行の正否・上限時間との比べ合わせ) は「解釈」とする。
 
 ```sh
 jq -s -r '[length, .[0].ts, .[-1].ts] | @tsv' F     # 読んだ行数と期間
@@ -80,7 +80,7 @@ jq -r 'select(.event=="tick") | .ambiguous[]? | [.head, (.targets | join(","))] 
 jq -r 'select(.event=="tick" and .candidates > 0 and (.launched | length) == 0) | [.ts, .candidates, .running, .waiting_retry, .max_concurrent] | @tsv' F
 ```
 
-候補があるのに起動しなかった tick は、`running` と `waiting_retry` の和が `max_concurrent` に達していれば正常。手順 7 は、この 2 つと起動した数 (`launched` の数。ここでは 0) の和が `max_concurrent` に達したところで起動をやめる (formats.md §4)。達していないのに起動していなければ、同じ tick の `blocked`・`ambiguous` と、その候補の claim・打ち切りの状態で理由を読む。
+候補があるのに起動しなかった tick は、`running` と `waiting_retry` の和が `max_concurrent` に達していれば正常 (起動をやめる規則と 3 つの値の意味は formats.md §4 の tick 行の項)。達していないのに起動していなければ、同じ tick の `blocked`・`ambiguous` と、その候補の claim・打ち切りの状態で理由を読む。
 
 `running`・`waiting_retry`・`max_concurrent` の欄が空の行は、この 3 つの key を書かない古い版の log。その行に限り、その時刻に走っていた attempt (start と end の間) を数え、並列上限は `git -C <WORKFLOW.md の dir> log -p -- WORKFLOW.md` の変更時刻と照らして決める (並列上限は tick ごとに workflow 定義を読み直して決まる。formats.md §6)。
 
