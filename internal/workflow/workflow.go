@@ -40,7 +40,7 @@ type Definition struct {
 	// MaxAttempts は作業対象 1 件の attempt の上限、MaxRetryBackoff は backoff の上限
 	MaxAttempts     int
 	MaxRetryBackoff time.Duration
-	// StallTimeout は worker の出力が途絶えてから止めるまで、RunTimeout は worker 1 回分の上限時間。0 なら見ない
+	// StallTimeout は worker の活動 (活動として数える stream の行) が途絶えてから止めるまで、RunTimeout は worker 1 回分の上限時間。0 なら見ない
 	StallTimeout time.Duration
 	RunTimeout   time.Duration
 	Claude       Claude
