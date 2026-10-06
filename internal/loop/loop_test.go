@@ -76,7 +76,9 @@ type harness struct {
 	open []int
 	// maxAttempts は attempt の上限。0 なら 1 (1 回目の失敗で打ち切る)
 	maxAttempts int
-	// rereadFailures は、起動した worker の作業対象の読み直しを最初に何回失敗させるか (起動の直前の読み直しは数えない)
+	// rereadFailures は、起動した worker の作業対象の読み直しを最初に何回失敗させるか。起動の直前の読み直しを数えないよう、
+	// まだ起動していない作業対象の読み直しを数えない (近似。同じ作業対象を claim を解いてから起動し直す plan では、2 回目の
+	// 起動の直前の読み直しも数える)
 	rereadFailures int
 	// inflight は、起動した worker のうち event を loop が受け取り終えていない数。周期と再起動の予定はそれを待ってから進める
 	inflight int

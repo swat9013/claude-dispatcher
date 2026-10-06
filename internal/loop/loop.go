@@ -99,11 +99,14 @@ const (
 	stoppedByRequest  stopReason = "停止要求"
 )
 
-// 終わった worker の作業対象を読み直したときの理由
+// 作業対象を読み直したときの理由。終わった worker の確かめ・再起動・起動の直前の読み直しで使う
 const (
-	reasonTerminal     = "終端"
-	reasonLeftTrigger  = "trigger から外れた"
-	reasonStillMatches = "trigger に当たったまま"
+	reasonTerminal    = "終端"
+	reasonLeftTrigger = "trigger から外れた"
+	// reasonUndecided と reasonEarlierTrigger は、起動の直前の読み直しだけで使う
+	reasonUndecided      = "当たるかをまだ決められない"
+	reasonEarlierTrigger = "宣言順で先の trigger に当たる"
+	reasonStillMatches   = "trigger に当たったまま"
 )
 
 // outcome は claim を解いたときの終わり方 (formats.md §4)。
@@ -296,10 +299,6 @@ func (l *loop) tick() {
 		if running+waitingRetry+len(launched) >= def.MaxConcurrent {
 			break
 		}
-		if cl, ok := c.Item.(target.CL); ok && v.branchHeld(cl, target.Ref{}) {
-			// claim している作業対象の branch に、CL の worker を重ねない
-			continue
-		}
 		ref := c.Item.Ref()
 		if _, claimed := l.claims[ref]; claimed {
 			continue
@@ -307,8 +306,12 @@ func (l *loop) tick() {
 		if _, abandoned := l.abandoned[ref]; abandoned {
 			continue
 		}
-		item, ok := l.recheckCandidate(store, c)
+		item, ok := l.recheckCandidate(store, l.evaluable(def), c)
 		if !ok {
+			continue
+		}
+		if cl, ok := item.(target.CL); ok && v.branchHeld(cl, target.Ref{}) {
+			// claim している作業対象の branch に、CL の worker を重ねない
 			continue
 		}
 		c.Item = item
@@ -510,33 +513,42 @@ func (l *loop) sweep(store Store, open []target.Item) {
 	}
 }
 
-// reasonUndecided は、起動しようとした作業対象が trigger に当たるかをまだ決められない理由
-const reasonUndecided = "当たるかをまだ決められない"
-
 // recheckCandidate は、起動しようとする候補を置き場から読み直し、起動してよければ読み直した作業対象を返す。open な一覧の検索は
-// 書き込みの直後に古い結果を返しうる (Jira の JQL 検索など) ので、完了した直後の作業対象を起動し直さないよう、終端か、起動
-// しようとした trigger から外れたか、当たるかをまだ決められなければ起動しない。読み直せなければ error の行を残して起動しない。
-// どれも次の tick で候補になれば試み直す。
-func (l *loop) recheckCandidate(store Store, c trigger.Candidate) (target.Item, bool) {
+// 書き込みの直後に古い結果を返しうる (Jira の JQL 検索など) ので、完了した直後の作業対象を起動し直さないよう、当たるかをまだ
+// 決められないか、終端か、起動しようとした trigger から外れたか、評価する trigger (宣言順) のうち先のものに当たるようになって
+// いれば起動しない。読み直せなければ error の行を残して起動しない。どれも次の tick で候補になれば試み直す。
+func (l *loop) recheckCandidate(store Store, triggers []trigger.Trigger, c trigger.Candidate) (target.Item, bool) {
 	ref := c.Item.Ref()
 	item, err := store.Read(ref)
 	if err != nil {
 		l.rec.error(ref, "起動しようとした作業対象を読み直せない (次の tick で試み直す): "+oneLine(err))
 		return nil, false
 	}
-	var reason string
-	switch {
-	case item.Terminal():
-		reason = reasonTerminal
-	case c.Trigger.Undecided(item):
-		reason = reasonUndecided
-	case !c.Trigger.Matches(item):
-		reason = reasonLeftTrigger
-	default:
+	reason := reasonUndecided
+	if !c.Trigger.Undecided(item) {
+		reason = outOfTrigger(*c.Trigger, item)
+	}
+	if reason == "" && matchesEarlier(triggers, *c.Trigger, item) {
+		reason = reasonEarlierTrigger
+	}
+	if reason == "" {
 		return item, true
 	}
-	l.rec.human(LineNote, "起動しない", " %s (%s): %s (起動の直前に読み直した)", ref, c.Trigger.Name, reason)
+	l.rec.human(LineNote, "見送り", " %s (%s): %s (起動の直前に読み直した)", ref, c.Trigger.Name, reason)
 	return nil, false
+}
+
+// matchesEarlier は、作業対象が triggers (宣言順) のうち t より先の trigger に当たるか。
+func matchesEarlier(triggers []trigger.Trigger, t trigger.Trigger, item target.Item) bool {
+	for _, earlier := range triggers {
+		if earlier.Name == t.Name {
+			return false
+		}
+		if earlier.Matches(item) {
+			return true
+		}
+	}
+	return false
 }
 
 func (l *loop) launch(def workflow.Definition, c trigger.Candidate) bool {
@@ -652,11 +664,20 @@ func (l *loop) verify(store Store, ref target.Ref, c *claim) {
 
 // settle は読み直した作業対象が claim を解く状態かを見て、解く理由を返す。終端なら workspace も消す。当たったままなら ""。
 func (l *loop) settle(ref target.Ref, c *claim, item target.Item) string {
+	reason := outOfTrigger(c.trigger, item)
+	if reason == reasonTerminal {
+		l.remove(l.o.Workspaces(l.definitionOf(c)), ref)
+	}
+	return reason
+}
+
+// outOfTrigger は、読み直した作業対象が trigger で走らせる対象から外れた理由を返す。終端か trigger から外れていれば
+// その理由、当たったままなら ""。
+func outOfTrigger(t trigger.Trigger, item target.Item) string {
 	switch {
 	case item.Terminal():
-		l.remove(l.o.Workspaces(l.definitionOf(c)), ref)
 		return reasonTerminal
-	case !c.trigger.Matches(item):
+	case !t.Matches(item):
 		return reasonLeftTrigger
 	}
 	return ""
