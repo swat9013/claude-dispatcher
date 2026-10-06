@@ -210,12 +210,9 @@ func (s *scan) exists(path string) bool {
 func (s *scan) plugins(clone, home string, claudeArgs []string) []plugin {
 	list := s.installed(clone, home)
 	for _, base := range []string{filepath.Join(clone, ".claude", "skills"), filepath.Join(home, ".claude", "skills")} {
-		entries, err := os.ReadDir(base)
-		s.failed(base, err)
-		for _, e := range entries {
-			dir := filepath.Join(base, e.Name())
+		for _, dir := range s.dirsUnder(base) {
 			if s.exists(filepath.Join(dir, ".claude-plugin", "plugin.json")) {
-				list = append(list, s.readPlugin(dir, e.Name()))
+				list = append(list, s.readPlugin(dir, filepath.Base(dir)))
 			}
 		}
 	}
@@ -273,13 +270,30 @@ func (s *scan) installed(clone, home string) []plugin {
 
 // skillsUnder は dir の直下の `<dir>/SKILL.md` の skill。
 func (s *scan) skillsUnder(dir string) []skill {
-	entries, err := os.ReadDir(dir)
-	s.failed(dir, err)
 	var list []skill
-	for _, e := range entries {
-		path := filepath.Join(dir, e.Name())
+	for _, path := range s.dirsUnder(dir) {
 		if s.exists(filepath.Join(path, "SKILL.md")) {
 			list = append(list, s.readSkill(path))
+		}
+	}
+	return list
+}
+
+// dirsUnder は dir の直下の dir (symlink は指す先が dir なら含める)。直下の通常の file (`.DS_Store`・README 等) は skill の
+// dir にも plugin の dir にもなりえないので、読めなかった置き場に数えずに飛ばす。
+func (s *scan) dirsUnder(dir string) []string {
+	entries, err := os.ReadDir(dir)
+	s.failed(dir, err)
+	var list []string
+	for _, e := range entries {
+		path := filepath.Join(dir, e.Name())
+		info, err := os.Stat(path)
+		if err != nil {
+			s.failed(path, err)
+			continue
+		}
+		if info.IsDir() {
+			list = append(list, path)
 		}
 	}
 	return list

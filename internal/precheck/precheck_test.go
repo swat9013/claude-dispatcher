@@ -283,3 +283,75 @@ func TestActionWithoutALeadingSlashIsNotChecked(t *testing.T) {
 
 	p.assertFound(t, "issue #{{ .issue.number }} を実装する。/implement は使わない")
 }
+
+// missingWithoutNote は、何も見つからず読めなかった置き場も無いときの検査の結果。
+const missingWithoutNote = "t: action の先頭の /x が見つからない (plugin・repo の .claude・~/.claude の skill と command)"
+
+func TestFileDirectlyUnderTheSkillsDirectoryIsNotAPlaceThatCouldNotBeRead(t *testing.T) {
+	// Finder が置く .DS_Store・README 等は skill の dir にも plugin の dir にもなりえない
+	p := newPlaces(t)
+	write(t, filepath.Join(p.home, ".claude/skills/.DS_Store"), "\x00")
+	write(t, filepath.Join(p.clone, ".claude/skills/notes.json"), "{}")
+
+	if got := p.check("/x"); got != missingWithoutNote {
+		t.Fatalf("検査 = %q, want %q", got, missingWithoutNote)
+	}
+}
+
+func TestFileDirectlyUnderTheSkillsDirectoryOfAPluginIsNotAPlaceThatCouldNotBeRead(t *testing.T) {
+	p := newPlaces(t)
+	dir := p.installed(t, "tools@market", "tools", "user", "")
+	write(t, filepath.Join(dir, "skills/catalog.json"), "{}")
+	write(t, filepath.Join(dir, "skills/tdd/SKILL.md"), "---\nname: tdd\n---\n")
+
+	if got := p.check("/x"); got != missingWithoutNote {
+		t.Fatalf("検査 = %q, want %q", got, missingWithoutNote)
+	}
+}
+
+func TestSkillDirectoryThatIsASymlinkIsFound(t *testing.T) {
+	p := newPlaces(t)
+	dotfiles := filepath.Join(p.home, "dotfiles/skills/deploy")
+	write(t, filepath.Join(dotfiles, "SKILL.md"), "---\nname: deploy\n---\n")
+	write(t, filepath.Join(p.home, ".claude/skills/.keep"), "")
+	if err := os.Symlink(dotfiles, filepath.Join(p.home, ".claude/skills/deploy")); err != nil {
+		t.Fatal(err)
+	}
+
+	p.assertFound(t, "/deploy")
+}
+
+func TestSkillDirectoryWithoutPermissionIsAPlaceThatCouldNotBeRead(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root は権限に関わらず読める")
+	}
+	p := newPlaces(t)
+	locked := filepath.Join(p.home, ".claude/skills/locked")
+	write(t, filepath.Join(locked, "SKILL.md"), "---\nname: locked\n---\n")
+	if err := os.Chmod(locked, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		// TempDir が片付けられるよう、権限を戻す
+		if err := os.Chmod(locked, 0o755); err != nil {
+			t.Error(err)
+		}
+	})
+
+	got := p.check("/x")
+
+	if !strings.Contains(got, "読めなかった置き場: "+filepath.Join(locked, "SKILL.md")) {
+		t.Fatalf("検査 = %q", got)
+	}
+}
+
+func TestBrokenManifestOfAPluginIsAPlaceThatCouldNotBeRead(t *testing.T) {
+	p := newPlaces(t)
+	dir := p.bundle(t, "{壊れた")
+
+	got := p.check("/x")
+
+	if !strings.Contains(got, "読めなかった置き場: "+filepath.Join(dir, ".claude-plugin/plugin.json")) {
+		t.Fatalf("検査 = %q", got)
+	}
+}
