@@ -290,6 +290,9 @@ action と本文 (共通 prompt) は、worker を起動するたびに Go の te
   - `jira`: `tracker.token`・`author`・`milestone`・`on: cl` の trigger (§2.1・§2.2)。`tracker.host` の欠落は必須の項目の欠落
   - `github` と `gitlab`: `status`・`type` (§2.2)
   - `github`: `tracker.host` は未知の key
+- `jira` の次の誤りは、workflow 定義だけでは確かめられないので、loop の起動時・試運転・`doctor` の issue 置き場の確認 (§6) で名指しする。tick の中では確かめない
+  - acli の認証の site が `tracker.host` と違う (acli は active な account の site を読むため)
+  - `status` の status 名・`type` の issue type 名が実在しない
 - 同じ key を 1 つの対応表に 2 回書いたこと
 - action と本文の template を描画できないこと (§2.7。綴りの誤り・未知の変数・未知の関数)
 
@@ -338,7 +341,7 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 |---|---|
 | 0 | 成功 |
 | 1 | 観測できなかった (tracker の CLI を起動できない・rate limit・読み切れない・その他の tracker の CLI の失敗) / 想定外の失敗 |
-| 2 | 引数の誤り / workflow 定義の誤り (§2.8) / issue 置き場が見えない (綴りの誤りか、権限が無い) |
+| 2 | 引数の誤り / workflow 定義の誤り (§2.8) / issue 置き場が見えない (綴りの誤りか、権限が無い) / `jira` の起動時の確認 (§6) で、acli の認証の site が `tracker.host` と違うか読めない・status 名か issue type 名が実在しない |
 | 3 | 同じ scope key の loop が走っている (§6) |
 | 4 | tracker の CLI (`tracker.kind` が `github` なら gh、`gitlab` なら glab、`jira` なら acli) の認証が通らない |
 

@@ -259,6 +259,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。
   - loop の起動時は、どの検査が落ちても起動を失敗させる。起動時は人が画面の前にいるので、全部を直させる
   - tick の中では、落ちた検査の範囲だけを止める (§7)
   - tracker の設定が組み立てられること
+    - `jira` では、loop の起動時・試運転・`doctor` で、acli の認証の site が workflow 定義の site と同じこと・trigger が書いた status 名と issue type 名が実在することも確かめる。acli は呼び出しごとに site を選べず、active な account の site を読むため。tick の中では確かめない (途中で acli の account を切り替えると、別の site を読みうる)
   - trigger の述語が文法に合うこと
   - 各 trigger の action の template の**先頭の** `/名前` が、呼べる skill か command であること。見つからなければ、その trigger だけを起動しない (§7)
     - 作業対象に依らずに検査できるよう、描画の前の template を見る。先頭を template 変数で始める action は、先頭の `/名前` を確かめられないので、事前検査で名指しして失敗させる
