@@ -181,7 +181,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。
 **tick の手順**。
 
 1. **突き合わせ**
-   - 走っている worker ごとに、stream の最後の event からの経過を見る
+   - 走っている worker ごとに、活動 (formats.md §6) として数える stream の行が最後に書かれてからの経過を見る。heartbeat (`tool_progress`) など活動として数えない行では経過は戻らない
    - stall の上限を超えた worker は止め、失敗として扱う
    - 起動からの経過が worker 1 回分の上限時間 (既定 1 時間。0 で無効) を超えた worker も止め、失敗として扱う。event を出し続けて stall にかからない worker が、並列の枠を塞ぎ続けないようにする
    - 走っている作業対象を外部 store で読み直し、終端になっていれば worker を止めて workspace を消す
