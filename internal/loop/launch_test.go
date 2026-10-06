@@ -111,7 +111,7 @@ func TestCandidateClosedWhenReadAgainIsNotLaunched(t *testing.T) {
 func TestCandidateClosedWhenReadAgainLeavesAPassLine(t *testing.T) {
 	_, out := closedWhenReadAgain().run(t)
 
-	if !strings.Contains(out, "見送り issue#1 (implement): 終端 (起動の直前に読み直した)") {
+	if !strings.Contains(out, "読み直しで起動せず issue#1 (implement): 終端") {
 		t.Fatalf("出力:\n%s", out)
 	}
 }
@@ -132,7 +132,7 @@ func TestCandidateThatLeftTheTriggerWhenReadAgainIsNotLaunched(t *testing.T) {
 func TestCandidateThatLeftTheTriggerWhenReadAgainLeavesAPassLine(t *testing.T) {
 	_, out := leftTheTriggerWhenReadAgain().run(t)
 
-	if !strings.Contains(out, "見送り issue#1 (implement): trigger から外れた (起動の直前に読み直した)") {
+	if !strings.Contains(out, "読み直しで起動せず issue#1 (implement): trigger から外れた") {
 		t.Fatalf("出力:\n%s", out)
 	}
 }
@@ -179,22 +179,32 @@ func TestCandidateCLWhoseConflictIsStillBeingComputedWhenReadAgainIsNotLaunched(
 func TestCandidateCLWhoseConflictIsStillBeingComputedWhenReadAgainLeavesAPassLine(t *testing.T) {
 	_, out := conflictStillBeingComputedWhenReadAgain().run(t)
 
-	if !strings.Contains(out, "見送り cl#7 (fix-conflict): 当たるかをまだ決められない (起動の直前に読み直した)") {
+	if !strings.Contains(out, "読み直しで起動せず cl#7 (fix-conflict): 当たるかをまだ決められない") {
 		t.Fatalf("出力:\n%s", out)
 	}
 }
 
-func TestCandidateThatMatchesAnEarlierTriggerWhenReadAgainIsNotLaunched(t *testing.T) {
+func matchesAnEarlierTriggerWhenReadAgain() oneTick {
 	review := trigger.Trigger{Name: "review", On: target.KindIssue, Issue: trigger.IssuePredicate{LabelsAll: []string{"needs-review"}}}
-	tick := oneTick{triggers: []trigger.Trigger{review, readyTrigger}, open: []target.Item{readyIssue(1)},
+	return oneTick{triggers: []trigger.Trigger{review, readyTrigger}, open: []target.Item{readyIssue(1)},
 		read: func(ref target.Ref) (target.Item, error) {
 			return target.Issue{Number: ref.Number, Labels: []string{"ready", "needs-review"}}, nil
 		}}
+}
 
-	jobs, out := tick.run(t)
+func TestCandidateThatMatchesAnEarlierTriggerWhenReadAgainIsNotLaunched(t *testing.T) {
+	jobs, out := matchesAnEarlierTriggerWhenReadAgain().run(t)
 
 	if len(jobs) != 0 {
 		t.Fatalf("起動 = %+v, want 後ろの implement で起動しない。出力:\n%s", jobs, out)
+	}
+}
+
+func TestCandidateThatMatchesAnEarlierTriggerWhenReadAgainLeavesAPassLine(t *testing.T) {
+	_, out := matchesAnEarlierTriggerWhenReadAgain().run(t)
+
+	if !strings.Contains(out, "読み直しで起動せず issue#1 (implement): 宣言順で先の trigger に当たる") {
+		t.Fatalf("出力:\n%s", out)
 	}
 }
 

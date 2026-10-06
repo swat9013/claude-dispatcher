@@ -463,9 +463,9 @@ claude-dispatcher loop [<workflow の path>]
 6. 再起動: backoff の明けた再起動待ちの claim を、次の「再起動」の規則で起動する
 7. trigger を評価し (§2.4)、候補のうち claim も打ち切りもされていないものを、`limits.max_concurrent` から走っている worker と再起動待ちの claim を引いた数だけ起動する (確かめ待ちの claim と、事前検査に落ちた trigger の再起動待ちの claim は数えない)
    - 起動の直前に、候補を 1 件ずつ読み直す (open な一覧の検索は、書き込みの直後に古い結果を返しうるため)。tracker の種類を問わず読み直す。次のときはその tick では起動せず、起動しなかった分の空きを次の候補に回す。次の tick で候補になれば試み直す
-     - 当たるかをまだ決められない (conflict を計算中の CL。§2.3)・終端になっている・起動しようとした trigger から外れている・宣言順で先の trigger に当たるようになっている。人が読む行に `見送り` を出す
+     - 当たるかをまだ決められない (conflict を計算中の CL。§2.3)・終端になっている・起動しようとした trigger から外れている・宣言順で先の trigger に当たるようになっている。人が読む行に `読み直しで起動せず` を出す
      - 読み直せない。error の行を残す
-   - 読み直した CL は、claim している作業対象の workspace で checkout されている branch を head に持つもの (同じ repo の CL) なら起動しない。branch は workspace を cwd にして `git symbolic-ref --short -q HEAD` で読む。workspace が無い・git の作業ツリーでない・detached HEAD なら branch は無いとする
+   - CL は、claim している作業対象の workspace で checkout されている branch を head に持つもの (同じ repo の CL) なら起動しない。一覧の CL で当たれば読み直さずに外し、読み直した CL でも確かめ直す。branch は workspace を cwd にして `git symbolic-ref --short -q HEAD` で読む。workspace が無い・git の作業ツリーでない・detached HEAD なら branch は無いとする
    - branch をそれ以外の理由で読めなければ、error の行を残し、その tick は CL の候補を起動しない (同じ branch に worker を重ねないため)
    - 起動した worker には、読み直した作業対象を渡す
 
@@ -528,7 +528,7 @@ claude-dispatcher loop [<workflow の path>]
 <時刻> tick ok · 候補 1: implement issue #42 · 起動しない trigger: implement (action の先頭の /playbook が見つからない …)
 <時刻> tick error · <理由>
 <時刻> 起動 issue#42 (implement, attempt 1, session <uuid>)
-<時刻> 見送り issue#42 (implement): trigger から外れた (起動の直前に読み直した)
+<時刻> 読み直しで起動せず issue#42 (implement): trigger から外れた
 <時刻> 活動 issue#42: Bash go test ./...
 <時刻> 終了 issue#42 (implement): completed — trigger から外れた
 <時刻> 再起動を予定 issue#42 (implement, attempt 2, 10s 後)
