@@ -176,7 +176,8 @@ triggers:                    # 必須。1 つ以上
 - `jira` の作業対象は、project の全種類の issue (subtask・epic を含む)。絞るなら `type` を書く
 - `jira` の終端は、status の区分 (`status.statusCategory.key`) が `done` であること。Wontfix のような done 区分の status も終端
 - `status` と `type` の名前が実在するかは、loop の起動時・試運転・`doctor` で確かめる (§6・§5・§7.4)。tick の中では確かめない
-  - status 名は `project = <project key> AND status = "<名前>"` の検索の件数 (`--count`) を撃ち、JQL の失敗で見分ける。acli は project の status の一覧を返さないので、JQL の値の検証による site の単位の検査にとどまる。他の project にだけある status 名は検査を通る
+  - status 名は `project = "<project key>" AND status = "<名前>"` の検索の件数 (`--count`) を撃ち、JQL の失敗で見分ける (認証の失敗は §3 の分類で認証として返す)。acli は project の status の一覧を返さないので、JQL の値の検証による site の単位の検査にとどまる。他の project にだけある status 名は検査を通る
+  - JQL には project key と名前を `"` で囲んで書く (project key が JQL の予約語と重なっても読めるように)
   - issue type 名は project の issue type (`acli jira project view --key <project key> --json` の `issueTypes`) と比べる
 - `blocked` を書いた trigger があると、tick ごとに open な一覧に加えて、依存を持つ open な issue を検索し (`issueLinkType = "is blocked by"`)、当たった issue を 1 件ずつ読み直して依存先の status の区分を見る
 
@@ -439,9 +440,9 @@ claude-dispatcher loop [<workflow の path>]
 - 同じ issue 置き場の 2 本目の loop は、clone や workflow 定義の path が違っても起動時に止まる
 - `jira` の issue 置き場の確認は、次の順に撃ち、最初に落ちたもので終わる。試運転 (§5) と `doctor` (§7.4) も同じ確認を通す
   1. acli の認証の site: `acli jira auth status` が通り (落ちれば認証の失敗、exit 4)、出力の `Site:` の行の site が `tracker.host` と同じ (大文字と小文字を区別しない)。違うか `Site:` の行を読めなければ exit 2。acli は呼び出しごとに site を指定できず、active な account の site を読むため
-  2. open な一覧 (`project = <project key> AND statusCategory != Done`) を読める。落ちたら §3 の acli の分類で、認証 (exit 4) か見えない (exit 2)
-  3. trigger の `status` に書いた status 名が実在する (§2.2)。無い名前を trigger と一緒に名指しして exit 2
-  4. trigger の `type` に書いた issue type 名が project にある (§2.2)。無い名前を trigger と一緒に名指しして exit 2。project の issue type を読めなければ exit 1
+  2. open な一覧 (`project = "<project key>" AND statusCategory != Done`) を読める。落ちたら §3 の acli の分類で、認証 (exit 4) か見えない (exit 2)
+  3. trigger の `status` に書いた status 名が実在する (§2.2)。無い名前を trigger と一緒に名指しして exit 2。検索が落ちたら §3 の acli の分類で、認証なら exit 4。それ以外は名前の誤りと読み、acli の理由を添えて名指しする
+  4. trigger の `type` に書いた issue type 名が project にある (§2.2)。無い名前を trigger と一緒に名指しして exit 2。project の issue type を読めなければ §3 の acli の分類で、認証 (exit 4) か見えない (exit 2)
 - lock は loop の生存期間だけ持つ。loop が死ねば外れる
 - `loop.lock` を取った loop は、続けて `alive.lock` も生存期間のあいだ持つ。`status` は `alive.lock` だけを確かめるので、`loop.lock` を取り合わない (`alive.lock` を `status` が一瞬持っていれば、外れるまで待つ)
 
@@ -807,7 +808,7 @@ triggers:
 6. Claude Code の settings (`permissions.allow`) に要りそうな entry を表示する。CLI は settings を書かない (ADR 0004)
    - `github`: `Bash(gh issue:*)`・`Bash(gh pr:*)`・`Bash(git push:*)`
    - `gitlab`: `Bash(glab issue:*)`・`Bash(glab mr:*)`・`Bash(git push:*)`
-   - `jira`: `Bash(acli jira workitem:*)`・`Bash(git push:*)` と、「CL を開く CLI (`gh pr` / `glab mr`) の entry も足す」の 1 行。CL を開く CLI は workflow 定義から決められない (CL 置き場の宣言は #114)
+   - `jira`: `Bash(acli jira workitem:*)`・`Bash(git push:*)` と、entry の列の後に「CL を開く CLI (gh pr / glab mr) の entry も足す」の 1 行 (entry と取り違えて settings に写されないよう、字下げしない)。CL を開く CLI は workflow 定義から決められない (CL 置き場の宣言は #114)
 
 ```
 ok   workflow 定義 /path/to/WORKFLOW.md

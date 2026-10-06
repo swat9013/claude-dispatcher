@@ -146,13 +146,9 @@ func (e environment) store(def workflow.Definition) loop.Store {
 	return github.NewStore(e.gh(def.Tracker.Token), def.Tracker.Repo)
 }
 
-// jiraStore は jira の issue 置き場の部品。依存先は、どれかの trigger が blocked を書いているときだけ読む。
+// jiraStore は jira の issue 置き場の部品。
 func (e environment) jiraStore(def workflow.Definition) jira.Store {
-	store := jira.NewStore(e.acli(), def.Tracker.JiraProject)
-	if slices.ContainsFunc(def.Triggers, func(t trigger.Trigger) bool { return t.Issue.Blocked != nil }) {
-		return store.ReadingBlockers()
-	}
-	return store
+	return jira.NewStore(e.acli(), def.Tracker.JiraProject, def.Triggers)
 }
 
 // confirmPlace は起動時の issue 置き場の確認 (formats.md §6)。jira だけが持ち、他の種類は何もしない。
@@ -160,16 +156,7 @@ func (e environment) confirmPlace(def workflow.Definition) error {
 	if def.Tracker.Kind != workflow.Jira {
 		return nil
 	}
-	var names jira.Names
-	for _, t := range def.Triggers {
-		for _, s := range append(slices.Clone(t.Issue.StatusAny), t.Issue.StatusNone...) {
-			names.Statuses = append(names.Statuses, jira.Name{Trigger: t.Name, Value: s})
-		}
-		for _, s := range append(slices.Clone(t.Issue.TypeAny), t.Issue.TypeNone...) {
-			names.Types = append(names.Types, jira.Name{Trigger: t.Name, Value: s})
-		}
-	}
-	return e.jiraStore(def).Confirm(names)
+	return e.jiraStore(def).Confirm(jira.NamesOf(def.Triggers))
 }
 
 // trackerCommand は workflow 定義の tracker.kind の CLI。

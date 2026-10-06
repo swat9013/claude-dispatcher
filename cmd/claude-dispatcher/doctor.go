@@ -20,8 +20,13 @@ import (
 var settingsEntries = map[workflow.TrackerKind][]string{
 	workflow.GitHub: {"Bash(gh issue:*)", "Bash(gh pr:*)", "Bash(git push:*)"},
 	workflow.GitLab: {"Bash(glab issue:*)", "Bash(glab mr:*)", "Bash(git push:*)"},
-	// jira は CL を開く CLI を workflow 定義から決められない (CL 置き場の宣言は #114) ので、足すよう 1 行で示す
-	workflow.Jira: {"Bash(acli jira workitem:*)", "Bash(git push:*)", "(CL を開く CLI (gh pr / glab mr) の entry も足す)"},
+	workflow.Jira:   {"Bash(acli jira workitem:*)", "Bash(git push:*)"},
+}
+
+// settingsNotes は entry の列の後に出す注記。jira は CL を開く CLI を workflow 定義から決められない (CL 置き場の宣言は
+// #114) ので、足すよう示す。entry と取り違えて settings に写されないよう、字下げせずに出す
+var settingsNotes = map[workflow.TrackerKind]string{
+	workflow.Jira: "CL を開く CLI (gh pr / glab mr) の entry も足す",
 }
 
 // runDoctor は `doctor [<workflow の path>]` を撃つ (formats.md §7.4)。何も書かない。確かめたことを 1 件 1 行で出し、
@@ -58,6 +63,9 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintln(stdout, "settings の permissions.allow に要りそうな entry (CLI は書かない):")
 	for _, entry := range settingsEntries[def.Tracker.Kind] {
 		fmt.Fprintf(stdout, "  %s\n", entry)
+	}
+	if note, ok := settingsNotes[def.Tracker.Kind]; ok {
+		fmt.Fprintln(stdout, note)
 	}
 	if failed {
 		return exitFailed

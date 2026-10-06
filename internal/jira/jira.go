@@ -3,12 +3,11 @@
 package jira
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -16,6 +15,7 @@ import (
 	"github.com/swat9013/claude-dispatcher/internal/deps"
 	"github.com/swat9013/claude-dispatcher/internal/proc"
 	"github.com/swat9013/claude-dispatcher/internal/target"
+	"github.com/swat9013/claude-dispatcher/internal/trigger"
 )
 
 // Runner は acli を 1 回撃ち、stdout を返す。失敗は *proc.Error。
@@ -79,17 +79,15 @@ func ScopeKey(p Project) string { return strings.ToLower(p.String()) }
 type Store struct {
 	acli    Runner
 	project Project
-	// blockers は open な一覧で依存先 (blocked) を読むか
+	// blockers は open な一覧で依存先 (blocked) を読むか。どれかの trigger が blocked を書いているときだけ読む
+	// (依存を持つ issue 1 件ごとに読み直しが要るので、要るときだけ撃つ)
 	blockers bool
 }
 
-func NewStore(acli Runner, project Project) Store { return Store{acli: acli, project: project} }
-
-// ReadingBlockers は、open な一覧でも依存先を読む Store を返す。どれかの trigger が blocked を書いているときに使う
-// (依存を持つ issue 1 件ごとに読み直しが要るので、要るときだけ撃つ)。
-func (s Store) ReadingBlockers() Store {
-	s.blockers = true
-	return s
+// NewStore は triggers を評価するための issue 置き場の部品を組み立てる。
+func NewStore(acli Runner, project Project, triggers []trigger.Trigger) Store {
+	blockers := slices.ContainsFunc(triggers, func(t trigger.Trigger) bool { return t.Issue.Blocked != nil })
+	return Store{acli: acli, project: project, blockers: blockers}
 }
 
 func (s Store) ScopeKey() string { return ScopeKey(s.project) }
@@ -128,15 +126,15 @@ func (s Store) Read(ref target.Ref) (target.Item, error) {
 	if kind := s.classify(err, target.Unavailable); kind != target.Unavailable {
 		return nil, s.fail(kind, err)
 	}
-	// 認証は通っている。消えた issue と見えなくなった issue は view では見分けられないので、open な一覧に無ければ終端とする
-	open, listErr := s.openIssues()
+	// 認証は通っている。消えた issue と見えなくなった issue は view では見分けられないので、open な一覧に無ければ終端とする。
+	// 依存先は要らないので、一覧の検索だけを撃つ
+	open, listErr := s.search(s.openJQL())
 	if listErr != nil {
 		return nil, s.fail(s.classify(listErr, target.Unavailable), listErr)
 	}
-	for _, issue := range open {
-		if issue.Number == ref.Number {
-			return nil, s.fail(target.Unavailable, err)
-		}
+	key := s.project.IssueKey(ref.Number)
+	if slices.ContainsFunc(open, func(n issueJSON) bool { return strings.EqualFold(n.Key, key) }) {
+		return nil, s.fail(target.Unavailable, err)
 	}
 	return target.Issue{Number: ref.Number, Closed: true}, nil
 }
@@ -144,9 +142,12 @@ func (s Store) Read(ref target.Ref) (target.Item, error) {
 // fields は acli の一覧が受け付ける field のうち読むもの。key は field でなく常に返る (key だけを渡すと null の列が返る)
 const fields = "summary,issuetype,assignee,status,labels"
 
+// projectJQL は project を指す JQL の条件。key は JQL の予約語 (SET など) と重なりうるので、文字列として囲む
+func (s Store) projectJQL() string { return "project = " + quote(s.project.Key) }
+
 // openJQL は project の open な issue の JQL (formats.md §2.2)。
 func (s Store) openJQL() string {
-	return "project = " + s.project.Key + " AND statusCategory != Done"
+	return s.projectJQL() + " AND statusCategory != Done"
 }
 
 // openIssues は project の open な issue を全件読み、正規化して返す。失敗は分類前の error。
@@ -211,26 +212,21 @@ func (s Store) view(key string) (issueJSON, error) {
 	return n, nil
 }
 
-// pages は `--paginate` の出力を要素の列として読む。1 つの配列で返るが、page ごとの配列を連ねた形も配列の列として読む。
+// pages は `--paginate` の出力 (全 page を 1 つにした配列) を読む。
 func pages(out []byte) ([]issueJSON, error) {
-	var all []issueJSON
-	decoder := json.NewDecoder(bytes.NewReader(out))
-	for {
-		var page []*issueJSON
-		err := decoder.Decode(&page)
-		if errors.Is(err, io.EOF) {
-			return all, nil
-		}
-		if err != nil {
-			return nil, fmt.Errorf("acli の出力を読めない: %w", err)
-		}
-		for _, n := range page {
-			if n == nil || n.Key == "" {
-				return nil, errors.New("acli の出力に key の無い issue がある")
-			}
-			all = append(all, *n)
-		}
+	var list []*issueJSON
+	if err := json.Unmarshal(out, &list); err != nil {
+		return nil, fmt.Errorf("acli の出力を読めない: %w", err)
 	}
+	all := make([]issueJSON, 0, len(list))
+	for _, n := range list {
+		// field に key だけを渡すと null の列が返る。読めない要素を黙って捨てない
+		if n == nil || n.Key == "" {
+			return nil, errors.New("acli の出力に key の無い issue がある")
+		}
+		all = append(all, *n)
+	}
+	return all, nil
 }
 
 // number は key の番号。key が project のものでなければ false。
@@ -358,6 +354,27 @@ type Names struct {
 	Types    []Name
 }
 
+// NamesOf は triggers の status と type の述語に書かれた名前を、trigger ごとに重ねずに集める (大文字と小文字を区別しない)。
+func NamesOf(triggers []trigger.Trigger) Names {
+	var names Names
+	for _, t := range triggers {
+		names.Statuses = appendNames(names.Statuses, t.Name, t.Issue.StatusAny, t.Issue.StatusNone)
+		names.Types = appendNames(names.Types, t.Name, t.Issue.TypeAny, t.Issue.TypeNone)
+	}
+	return names
+}
+
+func appendNames(names []Name, triggerName string, lists ...[]string) []Name {
+	for _, list := range lists {
+		for _, value := range list {
+			if !slices.ContainsFunc(names, func(n Name) bool { return n.Trigger == triggerName && strings.EqualFold(n.Value, value) }) {
+				names = append(names, Name{Trigger: triggerName, Value: value})
+			}
+		}
+	}
+	return names
+}
+
 // Unknown は、trigger が書いた status 名か issue type 名が実在しないこと。1 件 1 行の Problems で名指しする。
 type Unknown struct {
 	Problems []string
@@ -387,25 +404,30 @@ func (s Store) Confirm(names Names) error {
 		return s.fail(s.classify(err, target.NotVisible), err)
 	}
 	var problems []string
-	seen := map[string]bool{}
+	// 同じ名前 (大文字と小文字を区別しない) は 1 度だけ問い合わせ、書いた trigger ごとに名指しする
+	statusErrors := map[string]error{}
 	for _, n := range names.Statuses {
-		if seen[strings.ToLower(n.Value)] {
-			continue
+		name := strings.ToLower(n.Value)
+		err, asked := statusErrors[name]
+		if !asked {
+			_, err = s.acli.Run("jira", "workitem", "search", "--jql", s.projectJQL()+" AND status = "+quote(n.Value), "--count")
+			if err != nil && s.classify(err, target.Unavailable) == target.Auth {
+				return s.fail(target.Auth, err)
+			}
+			statusErrors[name] = err
 		}
-		seen[strings.ToLower(n.Value)] = true
-		jql := "project = " + s.project.Key + " AND status = " + quote(n.Value)
-		// issue 置き場の確認が先に通っているので、ここでの失敗は status 名の誤りと読む
-		if _, err := s.acli.Run("jira", "workitem", "search", "--jql", jql, "--count"); err != nil {
-			problems = append(problems, fmt.Sprintf("trigger %s: status %q が site %s に無い", n.Trigger, n.Value, s.project.Site))
+		// issue 置き場の確認が先に通り、認証も通っているので、ここでの失敗は status 名の誤りと読む。acli の理由も添える
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("trigger %s: status %q が site %s に無い (%v)", n.Trigger, n.Value, s.project.Site, err))
 		}
 	}
 	if len(names.Types) > 0 {
 		types, err := s.issueTypes()
 		if err != nil {
-			return s.fail(target.Unavailable, err)
+			return s.fail(s.classify(err, target.NotVisible), err)
 		}
 		for _, n := range names.Types {
-			if !containsFold(types, n.Value) {
+			if !slices.ContainsFunc(types, func(t string) bool { return strings.EqualFold(t, n.Value) }) {
 				problems = append(problems, fmt.Sprintf("trigger %s: issue type %q が project %s に無い (%s)", n.Trigger, n.Value, s.project.Key, strings.Join(types, " / ")))
 			}
 		}
@@ -435,15 +457,6 @@ func (s Store) issueTypes() ([]string, error) {
 		names[i] = t.Name
 	}
 	return names, nil
-}
-
-func containsFold(list []string, s string) bool {
-	for _, l := range list {
-		if strings.EqualFold(l, s) {
-			return true
-		}
-	}
-	return false
 }
 
 // quote は JQL の文字列の値を `"` で囲む。`"` と `\` は `\` で escape する。

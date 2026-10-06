@@ -24,7 +24,7 @@ const (
 	jiraKey      = "WIDGETS"
 	jiraScopeKey = "acme.atlassian.net/widgets"
 	// jiraOpenJQL は open な一覧の JQL
-	jiraOpenJQL = "project = WIDGETS AND statusCategory != Done"
+	jiraOpenJQL = `project = "WIDGETS" AND statusCategory != Done`
 	// jiraBlockedJQL は依存を持つ open な issue の JQL
 	jiraBlockedJQL = jiraOpenJQL + ` AND issueLinkType = "is blocked by"`
 	readyStatus    = "Ready for Agent"
@@ -62,6 +62,8 @@ type jiraIssue struct {
 	blockers []bool
 	// gone は消えたか見えなくなった issue (view が失敗し、一覧にも出ない)
 	gone bool
+	// viewFails は view だけが失敗する issue (一覧には出る。一時的な失敗の代役)
+	viewFails bool
 }
 
 // readyJiraIssue は Ready for Agent の task。
@@ -129,7 +131,7 @@ var jiraKnownStatuses = []string{readyStatus, "In Review", "Needs Triage"}
 func jiraRules(issues ...jiraIssue) []stubwire.Rule {
 	rules := []stubwire.Rule{jiraAuthStatus(jiraSite)}
 	for _, name := range jiraKnownStatuses {
-		rules = append(rules, stubwire.Rule{ArgsPrefix: jiraSearch(`project = WIDGETS AND status = "` + name + `"`), Stdout: "✓ Number of work items in the search: 1\n"})
+		rules = append(rules, stubwire.Rule{ArgsPrefix: jiraSearch(`project = "WIDGETS" AND status = "` + name + `"`), Stdout: "✓ Number of work items in the search: 1\n"})
 	}
 	rules = append(rules, stubwire.Rule{
 		ArgsPrefix: []string{"jira", "project", "view", "--key", jiraKey, "--json"},
@@ -138,7 +140,7 @@ func jiraRules(issues ...jiraIssue) []stubwire.Rule {
 	open, blocked := []map[string]any{}, []map[string]any{}
 	for _, i := range issues {
 		view := stubwire.Rule{ArgsPrefix: []string{"jira", "workitem", "view", i.key()}}
-		if i.gone {
+		if i.gone || i.viewFails {
 			view.Stderr, view.Exit = "✗ Error: 課題は存在しないか、表示できる権限がありません。\n", 1
 		} else {
 			raw, _ := json.Marshal(i.json(true))
@@ -400,6 +402,25 @@ func TestJiraIssueThatVanishesIsTreatedAsTerminal(t *testing.T) {
 	}
 }
 
+func TestJiraIssueThatFailsToBeViewedButIsStillOpenIsNotTreatedAsTerminal(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflowWithCommands(s.jiraWorkerWorkflow())
+	s.setJiraIssues(readyJiraIssue(42))
+	unreadable := readyJiraIssue(42)
+	unreadable.viewFails = true
+	s.onClaude(stubwire.Rule{Writes: []stubwire.FileWrite{s.jiraResponses(unreadable)}})
+
+	loop := s.startLoop()
+
+	loop.waitForOutput(regexp.MustCompile(`issue#42.*終わった worker の作業対象を読み直せない`))
+	if strings.Contains(loop.stdout.String(), "終了 issue#42") {
+		t.Fatalf("読み直せないのに終わり方を決めた:\n%s", loop.stdout.String())
+	}
+	if _, err := os.Stat(s.mark("before_remove-42")); err == nil {
+		t.Fatal("open な issue の workspace を消した")
+	}
+}
+
 func TestJiraIssueMovedToAnotherProjectIsTreatedAsTerminal(t *testing.T) {
 	s := newSandbox(t)
 	s.writeWorkflowWithCommands(s.jiraWorkerWorkflow())
@@ -461,7 +482,7 @@ func TestJiraDoctorNamesThePlaceAndTheAcliEntries(t *testing.T) {
 		"ok   acli " + filepath.Join(s.binDir, "acli") + "\n",
 		"  Bash(acli jira workitem:*)\n",
 		"  Bash(git push:*)\n",
-		"gh pr / glab mr",
+		"\nCL を開く CLI (gh pr / glab mr) の entry も足す\n",
 	} {
 		if !strings.Contains(r.stdout, want) {
 			t.Errorf("stdout に %q が無い:\n%s", want, r.stdout)
