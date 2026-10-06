@@ -349,6 +349,9 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 - 観測の失敗は、issue 置き場の部品が 認証 / 見えない / 読み切れない / rate limit に分けて返す (system.md §13)
   - 読み切れない: 1 往復で読む件数の上限を超えた (GitHub の issue の label・assignee・依存先、CL の label・review thread が 100 件を超えた)。切り詰めた像から候補を出さない
   - glab は HTTP の失敗をどれも exit 1 で返すので、stderr の `(HTTP 401)` を認証、`(HTTP 404)` を見えない、`(HTTP 429)` を rate limit と見分ける
+  - glab の HTTP 403 はその他の失敗 (読めない) に置き、理由には glab の stderr の代わりに `HTTP 403 で拒否された (接続元のネットワークか、token の権限)` を出す。tick の error・`doctor` の理由・`setup` (§7.4) のエラー文のどれも同じ
+    - 403 は、GitLab の手前の reverse proxy の拒否 (IP の許可リスト・VPN 必須など) でも、GitLab の拒否 (token の scope の不足など) でも起きる。どちらかの分類に寄せると、もう一方で誤った手当てを示すので分類を増やさない。proxy は HTML の本文を返し、glab はそれを stderr に載せるので、本文を出さない
+    - stderr の綴りは経路で違う。`glab api` は `HTTP 403` (GitLab の JSON の本文なら `403 Forbidden (HTTP 403)`、proxy の HTML の本文なら括弧の無い `HTTP 403`) を、`setup` の `glab repo view` は `<URL>: 403 <本文>` を出す。どちらも 403 と見分ける
   - `gitlab` の `author` の判定は作者の access level を project の member の API で読む。この API は認証が要るので、glab が未認証なら public な project でも認証の失敗になる
   - acli はどの失敗も exit 1 で返し、文言は Jira の言語の設定で訳されるので、文言では分けない。読み出しが落ちたら `acli jira auth status` を撃ち、落ちれば認証の失敗とする。通れば、起動時の issue 置き場の確認 (§5・§6・§7.4) では見えない (exit 2)、tick の中ではその他の失敗 (tick の error) とする
     - rate limit は見分けられず、その他の失敗に入る。tick の error として残り、次の周期で読み直す

@@ -85,6 +85,82 @@ func TestIssueOfAProjectThatIsNotVisibleFailsAsNotVisible(t *testing.T) {
 	}
 }
 
+// glab の HTTP 403 の stderr。glab 1.120.0 を、403 だけを返すローカルの HTTP server に向けて撃ち、出たものを逐語で写した。
+// proxy は HTML の本文で、GitLab は JSON の本文で拒否する
+const (
+	apiForbiddenByProxy  = "glab: HTTP 403\n"
+	apiForbiddenByGitLab = "glab: 403 Forbidden (HTTP 403)\n"
+	viewForbiddenByProxy = "          \n   ERROR  \n          \n" +
+		"  Get http://127.0.0.1:8403/api/v4/projects/acme%2Fw: 403 failed to parse unknown error format: <html>                \n" +
+		"  <head><title>403 Forbidden</title></head>                                                                           \n" +
+		"  <body>                                                                                                              \n" +
+		"  <center><h1>403 Forbidden</h1></center>                                                                             \n" +
+		"  </body>                                                                                                             \n" +
+		"  </html>                                                                                                             \n" +
+		"  .                                                                                                                   \n\n"
+	viewForbiddenByGitLab = "          \n   ERROR  \n          \n" +
+		"  Get http://127.0.0.1:8403/api/v4/projects/json%2Fw: 403 {message: 403 Forbidden}.                                   \n\n"
+)
+
+const forbiddenReason = "HTTP 403 で拒否された (接続元のネットワークか、token の権限)"
+
+// assertForbiddenReason は err の文言が glab の stderr の代わりに 403 の短い理由を出していることを確かめる。
+func assertForbiddenReason(t *testing.T, err error, stderr string) {
+	t.Helper()
+	if err == nil || !strings.Contains(err.Error(), forbiddenReason) {
+		t.Fatalf("err = %v, want %q を含む", err, forbiddenReason)
+	}
+	if strings.Contains(err.Error(), strings.TrimSpace(stderr)) || strings.Contains(err.Error(), "<html>") {
+		t.Fatalf("err に glab の stderr が載った: %v", err)
+	}
+}
+
+func TestForbiddenObservationIsUnavailableWithAShortReasonInsteadOfTheStderr(t *testing.T) {
+	for name, stderr := range map[string]string{"proxy の HTML": apiForbiddenByProxy, "GitLab の JSON": apiForbiddenByGitLab} {
+		t.Run(name, func(t *testing.T) {
+			store := gitlab.NewStore(glab{issuesEndpoint + "/7": {stderr: stderr}}, project)
+
+			_, err := store.Read(target.Ref{Kind: target.KindIssue, Number: 7})
+
+			var failure *target.Failure
+			if !errors.As(err, &failure) || failure.Kind != target.Unavailable {
+				t.Fatalf("err = %v, want 読めない (Unavailable)", err)
+			}
+			assertForbiddenReason(t, err, stderr)
+		})
+	}
+}
+
+func TestForbiddenRepoViewGivesTheShortReasonInsteadOfTheStderr(t *testing.T) {
+	for name, stderr := range map[string]string{"proxy の HTML": viewForbiddenByProxy, "GitLab の JSON": viewForbiddenByGitLab} {
+		t.Run(name, func(t *testing.T) {
+			_, err := gitlab.CurrentProject(glab{"json": {stderr: stderr}})
+
+			assertForbiddenReason(t, err, stderr)
+		})
+	}
+}
+
+func TestOtherFailuresKeepTheirKindAndTheStderr(t *testing.T) {
+	for stderr, kind := range map[string]target.FailureKind{
+		"glab: 401 Unauthorized (HTTP 401)\n":          target.Auth,
+		"glab: 404 Project Not Found (HTTP 404)\n":     target.NotVisible,
+		"glab: 429 Too Many Requests (HTTP 429)\n":     target.RateLimit,
+		"glab: 500 Internal Server Error (HTTP 500)\n": target.Unavailable,
+	} {
+		t.Run(strings.TrimSpace(stderr), func(t *testing.T) {
+			store := gitlab.NewStore(glab{issuesEndpoint + "/7": {stderr: stderr}}, project)
+
+			_, err := store.Read(target.Ref{Kind: target.KindIssue, Number: 7})
+
+			var failure *target.Failure
+			if !errors.As(err, &failure) || failure.Kind != kind || !strings.Contains(err.Error(), strings.TrimSpace(stderr)) {
+				t.Fatalf("err = %v, want %v で stderr を含む", err, kind)
+			}
+		})
+	}
+}
+
 func TestAuthorWhoIsNotAMemberIsNotACollaborator(t *testing.T) {
 	store := gitlab.NewStore(glab{issuesEndpoint + "/7": {stdout: issueJSON(7)}, nonMember: notFound}, project)
 

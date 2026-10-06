@@ -279,6 +279,61 @@ func TestGitLabObservationFailuresAreClassified(t *testing.T) {
 	}
 }
 
+// glabForbiddenReason は glab が HTTP 403 で落ちたときに、glab の stderr の代わりに出す理由
+const glabForbiddenReason = "HTTP 403 で拒否された (接続元のネットワークか、token の権限)"
+
+// glab api の HTTP 403 の stderr (glab 1.120.0 の実物から写した)。proxy は HTML の本文で、GitLab は JSON の本文で拒否する
+var glabAPIForbidden = map[string]string{
+	"proxy の HTML":  "glab: HTTP 403\n",
+	"GitLab の JSON": "glab: 403 Forbidden (HTTP 403)\n",
+}
+
+func TestGitLabForbiddenObservationIsUnavailableWithAShortReasonInDoctor(t *testing.T) {
+	for name, stderr := range glabAPIForbidden {
+		t.Run(name, func(t *testing.T) {
+			s := newSandbox(t)
+			s.writeWorkflowWithCommands(gitlabWorkflow)
+			s.respond("glab", stubwire.Rule{ArgsPrefix: []string{"api"}, Stderr: stderr, Exit: 1})
+
+			r := s.run("doctor")
+
+			assertExit(t, r, 1)
+			out := r.stdout + r.stderr
+			if !strings.Contains(out, glabForbiddenReason) || strings.Contains(out, strings.TrimSpace(stderr)) {
+				t.Fatalf("doctor の理由が %q でないか、glab の stderr %q が載った:\n%s", glabForbiddenReason, stderr, out)
+			}
+		})
+	}
+}
+
+func TestGitLabSetupShowsAShortReasonWhenRepoViewIsForbiddenByAProxy(t *testing.T) {
+	s := newSandbox(t)
+	if err := os.Remove(s.workflowFile()); err != nil {
+		t.Fatal(err)
+	}
+	s.respond("git", gitlabOrigin)
+	// glab 1.120.0 の実物から写した、proxy が HTML で拒否したときの glab repo view の stderr
+	s.respond("glab", stubwire.Rule{
+		ArgsPrefix: []string{"repo", "view", "--output", "json"},
+		Stderr: "          \n   ERROR  \n          \n" +
+			"  Get https://" + gitlabHost + "/api/v4/projects/acme%2Fw: 403 failed to parse unknown error format: <html>\n" +
+			"  <head><title>403 Forbidden</title></head>\n" +
+			"  <body>\n" +
+			"  <center><h1>403 Forbidden</h1></center>\n" +
+			"  </body>\n" +
+			"  </html>\n" +
+			"  .\n\n",
+		Exit: 1,
+	})
+
+	r := s.run("setup")
+
+	assertExit(t, r, 1)
+	if !strings.Contains(r.stderr, glabForbiddenReason) || strings.Contains(r.stderr, "<html>") {
+		t.Fatalf("setup の理由が %q でないか、proxy の HTML が載った:\n%s", glabForbiddenReason, r.stderr)
+	}
+}
+
 func TestGitLabLoopLaunchesAWorkerAndCompletesWhenTheIssueLeavesTheTrigger(t *testing.T) {
 	s := newSandbox(t)
 	s.writeWorkflowWithCommands(strings.Replace(s.workerWorkflow(""), "tracker:\n  kind: github\n  repo: acme/widgets\n", gitlabTracker, 1))
