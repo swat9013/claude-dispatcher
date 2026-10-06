@@ -121,7 +121,12 @@ func TestForbiddenObservationIsUnavailableWithAShortReasonInsteadOfTheStderr(t *
 }
 
 func TestForbiddenRepoViewGivesTheShortReasonInsteadOfTheStderr(t *testing.T) {
-	for name, stderr := range map[string]string{"proxy の HTML": viewForbiddenByProxy, "GitLab の JSON": viewForbiddenByGitLab} {
+	for name, stderr := range map[string]string{
+		"proxy の HTML":  viewForbiddenByProxy,
+		"GitLab の JSON": viewForbiddenByGitLab,
+		// 本文の無い 403 (実物から写したものではない)。403 の直後が改行になる
+		"本文なし": "          \n   ERROR  \n          \n  Get http://127.0.0.1:8403/api/v4/projects/acme%2Fw: 403\n\n",
+	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := gitlab.CurrentProject(glab{"json": {stderr: stderr}})
 
@@ -141,6 +146,7 @@ func TestOtherFailuresKeepTheirKindAndTheStderr(t *testing.T) {
 		"glab: 500 Internal Server Error (HTTP 500)\n": target.Unavailable,
 		// 本文の中の 403 は、status の位置にないので 403 と読まない
 		"glab: 502 Bad Gateway (HTTP 502)\nupstream: HTTP 403\n": target.Unavailable,
+		"glab: upstream said (HTTP 403) (HTTP 502)\n":            target.Unavailable,
 	} {
 		t.Run(strings.TrimSpace(stderr), func(t *testing.T) {
 			store := gitlab.NewStore(glab{issuesEndpoint + "/7": {stderr: stderr}}, project)
@@ -152,6 +158,16 @@ func TestOtherFailuresKeepTheirKindAndTheStderr(t *testing.T) {
 				t.Fatalf("err = %v, want %v で stderr を含む", err, kind)
 			}
 		})
+	}
+}
+
+func TestRepoViewFailureOtherThanForbiddenKeepsTheStderrEvenIfTheBodyMentions403(t *testing.T) {
+	stderr := "  Get https://gitlab.example.com/api/v4/projects/acme%2Fw: 502 see https://status.example.com: 403 errors\n"
+
+	_, err := gitlab.CurrentProject(glab{"json": {stderr: stderr}})
+
+	if err == nil || !strings.Contains(err.Error(), strings.TrimSpace(stderr)) {
+		t.Fatalf("err = %v, want stderr %q を含む", err, stderr)
 	}
 }
 
