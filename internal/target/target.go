@@ -25,6 +25,11 @@ type Issue struct {
 	Milestone string
 	// OpenBlockers は未解決 (open) の依存先 (blocked by) の数
 	OpenBlockers int
+	// Key は tracker の issue の key (Jira の `WIDGETS-123`)。番号だけで指す tracker では ""
+	Key string
+	// Status は status の名前、Type は issue type の名前 (Jira)。持たない tracker では ""
+	Status string
+	Type   string
 }
 
 // CL は open な CL 1 件。CL host の綴りは adapter が CL の状態の語彙へ写し終えている (system.md §6)。

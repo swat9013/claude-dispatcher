@@ -1,4 +1,4 @@
-// Package deps は依存 CLI (tracker の CLI (gh / glab)・claude・git) の path を解決する。loop は起動した shell の PATH を
+// Package deps は依存 CLI (tracker の CLI (gh / glab / acli)・claude・git) の path を解決する。loop は起動した shell の PATH を
 // 継ぐが、最小の PATH の shell (ssh 越し等) から撃たれても動くように、よく使われる置き場も探す (system.md §9)。
 package deps
 

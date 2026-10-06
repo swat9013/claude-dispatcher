@@ -11,7 +11,14 @@ var (
 	github string
 	//go:embed WORKFLOW.gitlab.md
 	gitlab string
+	//go:embed WORKFLOW.jira.md
+	jira string
 )
+
+// Jira は site を tracker.host に、project key を tracker.repo に埋めた jira の雛形。
+func Jira(site, key string) string {
+	return strings.NewReplacer("{{HOST}}", site, "{{REPO}}", key).Replace(jira)
+}
 
 // GitHub は repo (owner/name) を tracker.repo に埋めた github の雛形。
 func GitHub(repo string) string {

@@ -11,23 +11,40 @@ import (
 	"github.com/swat9013/claude-dispatcher/internal/deps"
 	"github.com/swat9013/claude-dispatcher/internal/github"
 	"github.com/swat9013/claude-dispatcher/internal/gitlab"
+	"github.com/swat9013/claude-dispatcher/internal/jira"
 	"github.com/swat9013/claude-dispatcher/internal/proc"
 	"github.com/swat9013/claude-dispatcher/internal/scaffold"
 )
 
-// runSetup は `setup [<workflow の path>]` を撃つ (formats.md §7.4): cwd の clone の origin から tracker.kind と issue 置き場を
-// 決め、その種類の雛形を書く。既にある file は上書きしない。
+// runSetup は `setup [--kind jira --host <site> --repo <project key>] [<workflow の path>]` を撃つ (formats.md §7.4):
+// flag があれば jira の雛形を、無ければ cwd の clone の origin から tracker.kind と issue 置き場を決めて、その種類の雛形を書く。
+// 既にある file は上書きしない。
 func runSetup(args []string, stdout, stderr io.Writer) int {
-	path, ok := workflowArg(args, nil, stderr)
+	flags, rest, err := setupFlags(args)
+	if err != nil {
+		return usageError(stderr, "%v", err)
+	}
+	path, ok := workflowArg(rest, nil, stderr)
 	if !ok {
 		return exitUsage
+	}
+	// flag の綴りは、file の有無に依らず確かめる
+	var jiraProject *jira.Project
+	if flags.kind != "" {
+		p, err := flags.jiraProject()
+		if err != nil {
+			return usageError(stderr, "%v", err)
+		}
+		jiraProject = &p
 	}
 	if _, err := os.Stat(path); err == nil {
 		fmt.Fprintf(stdout, "%s は既にあるので書かない\n", path)
 		return 0
 	}
-	template, place, err := scaffoldFromOrigin()
-	if err != nil {
+	var template, place string
+	if jiraProject != nil {
+		template, place = scaffold.Jira(jiraProject.Site, jiraProject.Key), jiraProject.String()
+	} else if template, place, err = scaffoldFromOrigin(); err != nil {
 		fmt.Fprintf(stderr, "issue 置き場を決められない: %v\n", err)
 		return exitFailed
 	}
@@ -47,6 +64,63 @@ func runSetup(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "%s に workflow 定義の雛形を書いた (issue 置き場: %s)。project に合わせて直し、`claude-dispatcher loop --dry-run` で試運転する\n", path, place)
 	return 0
+}
+
+// setupOptions は setup の flag (`--kind jira --host <site> --repo <project key>`)。
+type setupOptions struct {
+	kind, host, repo string
+}
+
+// setupFlags は args から setup の flag を抜き出し、残りの引数を返す。`--name value` と `--name=value` を読む。
+func setupFlags(args []string) (setupOptions, []string, error) {
+	var o setupOptions
+	var rest []string
+	targets := map[string]*string{"--kind": &o.kind, "--host": &o.host, "--repo": &o.repo}
+	for i := 0; i < len(args); i++ {
+		name, value, inline := strings.Cut(args[i], "=")
+		target, known := targets[name]
+		if !known {
+			rest = append(rest, args[i])
+			continue
+		}
+		if !inline {
+			if i+1 >= len(args) {
+				return o, nil, fmt.Errorf("%s に値が要る", name)
+			}
+			i++
+			value = args[i]
+		}
+		if *target != "" {
+			return o, nil, fmt.Errorf("%s を 2 回書いている", name)
+		}
+		if value == "" {
+			return o, nil, fmt.Errorf("%s の値が空", name)
+		}
+		*target = value
+	}
+	if o.kind == "" && (o.host != "" || o.repo != "") {
+		return o, nil, errors.New("--host と --repo は --kind jira と一緒にだけ書ける")
+	}
+	return o, rest, nil
+}
+
+// jiraProject は --kind jira の flag から Jira の project を読む。
+func (o setupOptions) jiraProject() (jira.Project, error) {
+	if o.kind != "jira" {
+		return jira.Project{}, fmt.Errorf("--kind は jira だけを受ける (%q)", o.kind)
+	}
+	if o.host == "" || o.repo == "" {
+		return jira.Project{}, errors.New("--kind jira には --host <site> と --repo <project key> が要る")
+	}
+	site, err := jira.ParseSite(o.host)
+	if err != nil {
+		return jira.Project{}, fmt.Errorf("--host %q: %w", o.host, err)
+	}
+	key, err := jira.ParseKey(o.repo)
+	if err != nil {
+		return jira.Project{}, fmt.Errorf("--repo %q: %w", o.repo, err)
+	}
+	return jira.Project{Site: site, Key: key}, nil
 }
 
 // scaffoldFromOrigin は cwd の clone の origin の host で tracker.kind を決め、issue 置き場を埋めたその種類の雛形と、issue 置き場の

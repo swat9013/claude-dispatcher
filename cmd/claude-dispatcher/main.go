@@ -18,6 +18,7 @@ import (
 	"github.com/swat9013/claude-dispatcher/internal/deps"
 	"github.com/swat9013/claude-dispatcher/internal/github"
 	"github.com/swat9013/claude-dispatcher/internal/gitlab"
+	"github.com/swat9013/claude-dispatcher/internal/jira"
 	"github.com/swat9013/claude-dispatcher/internal/loop"
 	"github.com/swat9013/claude-dispatcher/internal/precheck"
 	"github.com/swat9013/claude-dispatcher/internal/printable"
@@ -44,7 +45,7 @@ const usage = `usage:
   claude-dispatcher loop --dry-run [<workflow の path>]
   claude-dispatcher status [<workflow の path>]
   claude-dispatcher paths --json [<workflow の path>]
-  claude-dispatcher setup [<workflow の path>]
+  claude-dispatcher setup [--kind jira --host <site> --repo <project key>] [<workflow の path>]
   claude-dispatcher doctor [<workflow の path>]
   claude-dispatcher --version
 `
@@ -112,7 +113,7 @@ func definitionEnvironment(def workflow.Definition) environment {
 
 func (e environment) getenv(key string) string { return deps.Getenv(e.env, key) }
 
-// commandTimeout は外部 CLI (gh / glab / git) の 1 回の呼び出しの上限
+// commandTimeout は外部 CLI (gh / glab / acli / git) の 1 回の呼び出しの上限
 const commandTimeout = 120 * time.Second
 
 // gh は gh の撃ち方。token (workflow 定義の tracker.token) があれば gh に GH_TOKEN として渡す。
@@ -129,18 +130,42 @@ func (e environment) glab() gitlab.Exec {
 	return gitlab.Exec{Env: e.env, Timeout: commandTimeout}
 }
 
+// acli は acli の撃ち方。認証は acli 自身のもの (acli jira auth login の結果) を使う。
+func (e environment) acli() jira.Exec {
+	return jira.Exec{Env: e.env, Timeout: commandTimeout}
+}
+
 // store は workflow 定義の tracker.kind の adapter で置き場の部品を組み立てる。
 func (e environment) store(def workflow.Definition) loop.Store {
-	if def.Tracker.Kind == workflow.GitLab {
+	switch def.Tracker.Kind {
+	case workflow.GitLab:
 		return gitlab.NewStore(e.glab(), def.Tracker.Project)
+	case workflow.Jira:
+		return e.jiraStore(def)
 	}
 	return github.NewStore(e.gh(def.Tracker.Token), def.Tracker.Repo)
 }
 
+// jiraStore は jira の issue 置き場の部品。
+func (e environment) jiraStore(def workflow.Definition) jira.Store {
+	return jira.NewStore(e.acli(), def.Tracker.JiraProject, def.Triggers)
+}
+
+// confirmPlace は起動時の issue 置き場の確認 (formats.md §6)。jira だけが持ち、他の種類は何もしない。
+func (e environment) confirmPlace(def workflow.Definition) error {
+	if def.Tracker.Kind != workflow.Jira {
+		return nil
+	}
+	return e.jiraStore(def).Confirm(jira.NamesOf(def.Triggers))
+}
+
 // trackerCommand は workflow 定義の tracker.kind の CLI。
 func trackerCommand(def workflow.Definition) string {
-	if def.Tracker.Kind == workflow.GitLab {
+	switch def.Tracker.Kind {
+	case workflow.GitLab:
 		return "glab"
+	case workflow.Jira:
+		return "acli"
 	}
 	return "gh"
 }
@@ -168,6 +193,10 @@ func (e environment) stateDir(def workflow.Definition) (scopeKey, dir string) {
 
 // failureExit は観測の失敗の exit code (formats.md §3)。
 func failureExit(err error) int {
+	var unknown *jira.Unknown
+	if errors.As(err, &unknown) {
+		return exitUsage
+	}
 	var f *target.Failure
 	if errors.As(err, &f) {
 		switch f.Kind {
@@ -223,6 +252,10 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 	if dryRun {
+		if err := e.confirmPlace(def); err != nil {
+			fmt.Fprintln(stderr, err)
+			return failureExit(err)
+		}
 		return dryRunOnce(e, def, stdout, stderr)
 	}
 
@@ -232,6 +265,10 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, err)
 			return exitFailed
 		}
+	}
+	if err := e.confirmPlace(def); err != nil {
+		fmt.Fprintln(stderr, err)
+		return failureExit(err)
 	}
 	scopeKey, dir := e.stateDir(def)
 	lock, err := state.Lock(dir, scopeKey)

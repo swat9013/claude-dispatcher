@@ -75,7 +75,7 @@ func TestErrorsNameTheItem(t *testing.T) {
 		{"入れ子の未知の key", strings.Replace(valid, "all: [ready-for-agent]", "al: [ready-for-agent]", 1), []string{"triggers[0].when.labels.al"}},
 		{"trigger の未知の key", strings.Replace(valid, "    action: |", "    acton: x\n    action: |", 1), []string{"triggers[0].acton"}},
 		{"必須の項目の欠落", strings.Replace(valid, "  repo: acme/widgets\n", "", 1), []string{"tracker.repo"}},
-		{"未知の tracker", strings.Replace(valid, "kind: github", "kind: jira", 1), []string{"tracker.kind", "jira"}},
+		{"未知の tracker", strings.Replace(valid, "kind: github", "kind: linear", 1), []string{"tracker.kind", "linear"}},
 		{"repo の綴りの誤り", strings.Replace(valid, "repo: acme/widgets", "repo: widgets", 1), []string{"tracker.repo", "widgets"}},
 		{"未知の作業対象の種類", strings.Replace(valid, "on: issue", "on: pr", 1), []string{"triggers[0].on", "pr"}},
 		{"空白だけの action", strings.Replace(valid, "    action: |\n      /implement\n", "    action: \" \"\n", 1), []string{"triggers[0].action"}},
