@@ -283,3 +283,93 @@ func TestActionWithoutALeadingSlashIsNotChecked(t *testing.T) {
 
 	p.assertFound(t, "issue #{{ .issue.number }} を実装する。/implement は使わない")
 }
+
+// assertNoUnreadablePlace は、action の先頭の名前が見つからず、見つからない理由の後ろに注記 (` · ` で始まる読めなかった
+// 置き場) が添えられていないことを確かめる。
+func (p places) assertNoUnreadablePlace(t *testing.T, action string) {
+	t.Helper()
+	if got := p.check(action); !strings.Contains(got, "見つからない") || strings.Contains(got, " · ") {
+		t.Fatalf("%q の検査 = %q, want 読めなかった置き場の無い 見つからない", action, got)
+	}
+}
+
+func TestFileDirectlyUnderTheSkillsDirectoryIsNotAPlaceThatCouldNotBeRead(t *testing.T) {
+	// Finder が置く .DS_Store・README 等は skill の dir にも plugin の dir にもなりえない
+	p := newPlaces(t)
+	write(t, filepath.Join(p.home, ".claude/skills/.DS_Store"), "\x00")
+	write(t, filepath.Join(p.clone, ".claude/skills/notes.json"), "{}")
+
+	p.assertNoUnreadablePlace(t, "/x")
+}
+
+func TestFileDirectlyUnderTheSkillsDirectoryOfAPluginIsNotAPlaceThatCouldNotBeRead(t *testing.T) {
+	p := newPlaces(t)
+	dir := p.installed(t, "tools@market", "tools", "user", "")
+	write(t, filepath.Join(dir, "skills/catalog.json"), "{}")
+	write(t, filepath.Join(dir, "skills/tdd/SKILL.md"), "---\nname: tdd\n---\n")
+
+	p.assertNoUnreadablePlace(t, "/x")
+}
+
+func TestSkillDirectoryThatIsASymlinkIsFound(t *testing.T) {
+	p := newPlaces(t)
+	dotfiles := filepath.Join(p.home, "dotfiles/skills/deploy")
+	write(t, filepath.Join(dotfiles, "SKILL.md"), "---\nname: deploy\n---\n")
+	write(t, filepath.Join(p.home, ".claude/skills/.keep"), "")
+	if err := os.Symlink(dotfiles, filepath.Join(p.home, ".claude/skills/deploy")); err != nil {
+		t.Fatal(err)
+	}
+
+	p.assertFound(t, "/deploy")
+}
+
+func TestSkillDirectoryWithoutPermissionIsAPlaceThatCouldNotBeRead(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root は権限に関わらず読める")
+	}
+	p := newPlaces(t)
+	locked := filepath.Join(p.home, ".claude/skills/locked")
+	write(t, filepath.Join(locked, "SKILL.md"), "---\nname: locked\n---\n")
+	if err := os.Chmod(locked, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		// TempDir が片付けられるよう、権限を戻す
+		if err := os.Chmod(locked, 0o755); err != nil {
+			t.Error(err)
+		}
+	})
+
+	got := p.check("/x")
+
+	if !strings.Contains(got, "読めなかった置き場: ") || !strings.Contains(got, filepath.Join(locked, "SKILL.md")+" (") {
+		t.Fatalf("検査 = %q", got)
+	}
+}
+
+func TestBrokenManifestOfAPluginIsAPlaceThatCouldNotBeRead(t *testing.T) {
+	p := newPlaces(t)
+	dir := p.bundle(t, "{壊れた")
+
+	got := p.check("/x")
+
+	if !strings.Contains(got, "読めなかった置き場: ") || !strings.Contains(got, filepath.Join(dir, ".claude-plugin/plugin.json")+" (") {
+		t.Fatalf("検査 = %q", got)
+	}
+}
+
+func TestSymlinkUnderTheSkillsDirectoryThatCannotBeFollowedIsShownOnce(t *testing.T) {
+	// skill と plugin は同じ置き場を別々に探すが、同じ失敗を 2 度並べない
+	p := newPlaces(t)
+	loop := filepath.Join(p.home, ".claude/skills/loop")
+	write(t, filepath.Join(p.home, ".claude/skills/.keep"), "")
+	if err := os.Symlink(loop, loop); err != nil {
+		t.Fatal(err)
+	}
+
+	got := p.check("/x")
+
+	if n := strings.Count(got, loop+" ("); n != 1 {
+		t.Fatalf("%s が %d 回載る: %q", loop, n, got)
+	}
+}
