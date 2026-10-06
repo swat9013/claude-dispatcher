@@ -99,11 +99,17 @@ const (
 	stoppedByRequest  stopReason = "停止要求"
 )
 
-// 終わった worker の作業対象を読み直したときの理由
+// 作業対象を読み直したときの理由。終わった worker の確かめ・再起動・起動の直前の読み直しで使う
 const (
 	reasonTerminal     = "終端"
 	reasonLeftTrigger  = "trigger から外れた"
 	reasonStillMatches = "trigger に当たったまま"
+)
+
+// 起動の直前の読み直しだけで使う理由
+const (
+	reasonUndecided      = "当たるかをまだ決められない"
+	reasonEarlierTrigger = "宣言順で先の trigger に当たる"
 )
 
 // outcome は claim を解いたときの終わり方 (formats.md §4)。
@@ -284,7 +290,8 @@ func (l *loop) tick() {
 		return
 	}
 	// 事前検査に落ちた trigger は評価から外す。その trigger に当たる作業対象は、宣言順で後ろの trigger に当たれば起動する
-	candidates, ambiguous := trigger.Evaluate(l.evaluable(def), open)
+	triggers := l.evaluable(def)
+	candidates, ambiguous := trigger.Evaluate(triggers, open)
 	v := &view{open: open, ambiguous: trigger.AmbiguousRefs(ambiguous), branches: l.claimedBranches()}
 	l.sweep(store, open)
 	l.clearAbandoned(def, v)
@@ -296,10 +303,6 @@ func (l *loop) tick() {
 		if running+waitingRetry+len(launched) >= def.MaxConcurrent {
 			break
 		}
-		if cl, ok := c.Item.(target.CL); ok && v.branchHeld(cl, target.Ref{}) {
-			// claim している作業対象の branch に、CL の worker を重ねない
-			continue
-		}
 		ref := c.Item.Ref()
 		if _, claimed := l.claims[ref]; claimed {
 			continue
@@ -307,6 +310,19 @@ func (l *loop) tick() {
 		if _, abandoned := l.abandoned[ref]; abandoned {
 			continue
 		}
+		// claim している作業対象の branch に、CL の worker を重ねない。一覧の CL で外せるものは読み直さずに外し、読み直した
+		// CL でも確かめ直す
+		if cl, isCL := c.Item.(target.CL); isCL && v.branchHeld(cl, target.Ref{}) {
+			continue
+		}
+		item, ok := l.recheckCandidate(store, triggers, c)
+		if !ok {
+			continue
+		}
+		if cl, isCL := item.(target.CL); isCL && v.branchHeld(cl, target.Ref{}) {
+			continue
+		}
+		c.Item = item
 		if l.launch(def, c) {
 			launched = append(launched, ref.String())
 		}
@@ -505,6 +521,45 @@ func (l *loop) sweep(store Store, open []target.Item) {
 	}
 }
 
+// recheckCandidate は、起動しようとする候補を置き場から読み直し、起動してよければ読み直した作業対象を返す。open な一覧の検索は
+// 書き込みの直後に古い結果を返しうる (Jira の JQL 検索など) ので、完了した直後の作業対象を起動し直さないよう、当たるかをまだ
+// 決められないか、終端か、起動しようとした trigger から外れたか、評価する trigger (宣言順) のうち先のものに当たるようになって
+// いれば起動しない。読み直せなければ error の行を残して起動しない。どれも次の tick で候補になれば試み直す。
+func (l *loop) recheckCandidate(store Store, triggers []trigger.Trigger, c trigger.Candidate) (target.Item, bool) {
+	ref := c.Item.Ref()
+	item, err := store.Read(ref)
+	if err != nil {
+		l.rec.error(ref, "起動しようとした作業対象を読み直せない (次の tick で試み直す): "+oneLine(err))
+		return nil, false
+	}
+	var reason string
+	switch out := outOfTrigger(*c.Trigger, item); {
+	case c.Trigger.Undecided(item):
+		reason = reasonUndecided
+	case out != "":
+		reason = out
+	case matchesEarlier(triggers, *c.Trigger, item):
+		reason = reasonEarlierTrigger
+	default:
+		return item, true
+	}
+	l.rec.human(LineNote, "読み直しで起動せず", " %s (%s): %s", ref, c.Trigger.Name, reason)
+	return nil, false
+}
+
+// matchesEarlier は、作業対象が triggers (宣言順) のうち t より先の trigger に当たるか。
+func matchesEarlier(triggers []trigger.Trigger, t trigger.Trigger, item target.Item) bool {
+	for _, earlier := range triggers {
+		if earlier.Name == t.Name {
+			return false
+		}
+		if earlier.Matches(item) {
+			return true
+		}
+	}
+	return false
+}
+
 func (l *loop) launch(def workflow.Definition, c trigger.Candidate) bool {
 	ref := c.Item.Ref()
 	sessionID, err := l.o.NewSessionID()
@@ -618,11 +673,19 @@ func (l *loop) verify(store Store, ref target.Ref, c *claim) {
 
 // settle は読み直した作業対象が claim を解く状態かを見て、解く理由を返す。終端なら workspace も消す。当たったままなら ""。
 func (l *loop) settle(ref target.Ref, c *claim, item target.Item) string {
+	if item.Terminal() {
+		l.remove(l.o.Workspaces(l.definitionOf(c)), ref)
+	}
+	return outOfTrigger(c.trigger, item)
+}
+
+// outOfTrigger は、読み直した作業対象が trigger で走らせる対象から外れた理由を返す。終端か trigger から外れていれば
+// その理由、当たったままなら ""。
+func outOfTrigger(t trigger.Trigger, item target.Item) string {
 	switch {
 	case item.Terminal():
-		l.remove(l.o.Workspaces(l.definitionOf(c)), ref)
 		return reasonTerminal
-	case !c.trigger.Matches(item):
+	case !t.Matches(item):
 		return reasonLeftTrigger
 	}
 	return ""
