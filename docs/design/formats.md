@@ -34,6 +34,8 @@ workspace は state dir の外、workflow 定義の `workspace.root` の下に�
 - **scope key**: issue 置き場の部品が決める、issue 置き場の識別子 (system.md §13)
   - GitHub は `github.com/<owner>/<name>` を小文字にしたもの (GitHub の owner と repo の名前は大文字と小文字を区別しない)
   - GitLab は `<host>/<path>` を小文字にしたもの (例: `gitlab.example.com/acme/sub/widgets`。GitLab の path は大文字と小文字を区別しない)
+  - Jira は `<site>/<project key>` を小文字にしたもの (例: `acme.atlassian.net/widgets`)。1 つの Jira project は 1 本の loop で回す (同じ project の 2 本目の loop は lock で止まる)。project key を改名したら scope key が変わるので、workflow 定義を書き換えて loop を起動し直す
+- `jira` の作業対象の番号は、issue の key (`WIDGETS-123`) の数字の部分 (`123`)。`<作業対象>` の綴り・log.jsonl の `target` (§4)・hooks の `CLAUDE_DISPATCHER_NUMBER` (§2.6) は他の kind と同じく番号で書く (ADR 0010)
 - **`<scope dir>`**: scope key を無害化した綴りに、scope key の短い hash を足した名前
   - 無害化: 小文字にし、`[a-z0-9._-]` 以外の文字を `_` に置き換える
   - hash: scope key の sha256 の hex の先頭 8 文字
@@ -54,8 +56,8 @@ file は YAML の front matter と本文からなる。
 ```markdown
 ---
 tracker:
-  kind: github               # 必須。github か gitlab
-  repo: acme/widgets         # 必須。issue 置き場 (github は owner/name、gitlab は group/…/name)。$VAR で書ける
+  kind: github               # 必須。github・gitlab・jira のどれか
+  repo: acme/widgets         # 必須。issue 置き場 (github は owner/name、gitlab は group/…/name、jira は project key)。$VAR で書ける
   token: $WIDGETS_GH_TOKEN   # 任意。gh に GH_TOKEN として渡す。$VAR でだけ書ける
 polling:
   interval: 5m               # 任意。周期。既定 5m
@@ -103,10 +105,10 @@ triggers:                    # 必須。1 つ以上
 
 | key | 型 | 中身 |
 |---|---|---|
-| `tracker.kind` | 文字列 | tracker の種類。`github` (gh で読む) か `gitlab` (glab で読む) |
-| `tracker.host` | 文字列 | `gitlab` でだけ書ける。GitLab の host 名 (`gitlab.example.com`)。既定 `gitlab.com`。`$VAR` で書ける。`github` で書くと未知の key |
-| `tracker.repo` | 文字列 | issue 置き場。`github` は `<owner>/<name>`、`gitlab` は `<group>/<name>` の段数を問わない path (`acme/sub/widgets`)。どの段も `[A-Za-z0-9._-]+` |
-| `tracker.token` | 文字列 | `github` でだけ書ける。gh に環境変数 `GH_TOKEN` として渡す token。`$VAR` でだけ書ける (値そのものを書かない)。省くと、loop を起動した環境の認証を gh がそのまま使う。`gitlab` は glab 自身の認証 (`glab auth login` の結果) を使い、書くと名指しで失敗する |
+| `tracker.kind` | 文字列 | tracker の種類。`github` (gh で読む)・`gitlab` (glab で読む)・`jira` (acli で読む。Jira Cloud) のどれか |
+| `tracker.host` | 文字列 | `gitlab` と `jira` でだけ書ける。`$VAR` で書ける。`github` で書くと未知の key<br>- `gitlab`: GitLab の host 名 (`gitlab.example.com`)。既定 `gitlab.com`<br>- `jira`: Jira Cloud の site (`acme.atlassian.net`)。既定を持たず必須。綴りは `[A-Za-z0-9.-]+` |
+| `tracker.repo` | 文字列 | issue 置き場。`github` は `<owner>/<name>`、`gitlab` は `<group>/<name>` の段数を問わない path (`acme/sub/widgets`。どの段も `[A-Za-z0-9._-]+`)、`jira` は Jira の project key (`WIDGETS`。`[A-Za-z][A-Za-z0-9_]*`。大文字に揃えて読む) |
+| `tracker.token` | 文字列 | `github` でだけ書ける。gh に環境変数 `GH_TOKEN` として渡す token。`$VAR` でだけ書ける (値そのものを書かない)。省くと、loop を起動した環境の認証を gh がそのまま使う。`gitlab` は glab 自身の認証 (`glab auth login` の結果)、`jira` は acli 自身の認証 (`acli jira auth login` の結果) を使い、書くと名指しで失敗する |
 | `polling.interval` | 文字列 | 周期。Go の duration の綴り (`90s` / `5m` / `1h30m`) で、1s 以上 24h 以下。短い周期は tracker の rate limit を食う |
 | `workspace.root` | 文字列 | workspace を置く dir。相対 path は workflow 定義の dir から、`~/` は HOME から (HOME が絶対 path でなければ失敗)。`$VAR` で書ける |
 | `hooks.after_create` | 文字列 | workspace を作った直後に撃つ shell script。失敗したら workspace を消し、その attempt は失敗 |
@@ -123,7 +125,7 @@ triggers:                    # 必須。1 つ以上
 | `claude.args` | 文字列の列 | command に、dispatcher の引数 (§6「worker の起動」) より前に渡す引数。既定は空 |
 | `triggers` | 列 | trigger の宣言。宣言順が起動の優先順 (system.md §6) |
 | `triggers[].name` | 文字列 | trigger の名前。`[A-Za-z0-9._-]+`。trigger の間で重複しない |
-| `triggers[].on` | 文字列 | 作業対象の種類。`issue` か `cl` (`gitlab` では merge request) |
+| `triggers[].on` | 文字列 | 作業対象の種類。`issue` か `cl` (`gitlab` では merge request)。`jira` では `issue` だけを書ける (`cl` は名指しで失敗する。issue 置き場と別の CL 置き場の宣言は #114) |
 | `triggers[].when` | 対応表 | 述語。書いた条件はすべて AND で評価する。書ける key は `on` で変わる (issue は §2.2、CL は §2.3) |
 | `triggers[].action` | 文字列 | worker に渡す prompt の template (§2.7)。空にできない |
 
@@ -141,11 +143,14 @@ triggers:                    # 必須。1 つ以上
 | `author` | 文字列 | `collaborator` なら作者が collaborator、`non_collaborator` ならそれ以外。collaborator の線は tracker ごとに下の表 |
 | `milestone` | 文字列 | その題名の milestone に入っている |
 | `blocked` | 真偽 | `true` なら未解決 (open) の依存先 (blocked by) が 1 つ以上ある、`false` なら無い。`tracker.kind` が `gitlab` なら書けない (下) |
+| `status.any` / `status.none` | 文字列の列 | `jira` でだけ書ける。status 名が列のどれかである / どれでもない。`any` の空の列は書けない |
+| `type.any` / `type.none` | 文字列の列 | `jira` でだけ書ける。issue type 名 (subtask・epic を含む) が列のどれかである / どれでもない。`any` の空の列は書けない |
 
 | `tracker.kind` | collaborator と数える作者 |
 |---|---|
 | `github` | repo の owner・organization の member・collaborator (GitHub の `authorAssociation` が `OWNER` / `MEMBER` / `COLLABORATOR`) |
 | `gitlab` | project での access level (group から継承したものを含む) が Developer (30) 以上の member。push できる層に揃える。worker は push 権限を持つので、誰の書き込みで起動してよいかの線を push できる人に引く |
+| `jira` | `author` は書けない (下) |
 
 - `assignee` と `unassigned` は一緒に書けない
 - label と login の綴りは、tracker によらず大文字と小文字を区別せずに比べる
@@ -153,6 +158,27 @@ triggers:                    # 必須。1 つ以上
   - 誤って当たるのは、大文字と小文字だけが違う label を 2 つ持つ project に限られる
 - `tracker.kind` が `gitlab` なら、作業対象は種類が issue のものだけ (`issue_type` が `issue`)。同じ一覧に出る task・incident・test case は読まない
 - `tracker.kind` が `gitlab` なら `blocked` は書けない (名指しで失敗する)。GitLab の issue の依存 (blocks / is blocked by) は有償の tier の機能で、CE の API は依存を返さない。読むと常に 0 件になり、`blocked: false` が黙って全件に当たる
+- `status` と `type` は `jira` でだけ書ける (他の kind で書くと名指しで失敗する)
+
+`tracker.kind` が `jira` のときの述語の意味:
+
+| key | `jira` での意味 |
+|---|---|
+| `labels` | Jira の label。他の kind と同じく大文字と小文字を区別せずに比べる |
+| `assignee` | 担当者の accountId (Jira Cloud の user は accountId でしか一意に識別できない) |
+| `unassigned` | 担当者が居ない / 居る |
+| `author` | 書けない (名指しで失敗する)。worker を誰の書き込みで起動してよいかの線を、Jira の権限 (repo の push 権限と別の線) に引けない |
+| `milestone` | 書けない (名指しで失敗する)。sprint は無いことがあり、fixVersions は acli の一覧で読めない |
+| `blocked` | link type `Blocks` の inward ("is blocked by") の link のうち、相手の status の区分 (`statusCategory.key`) が `done` でないものが 1 つ以上あれば `true` |
+| `status` | status 名 (`fields.status.name`)。大文字と小文字を区別せずに比べる |
+| `type` | issue type 名 (`fields.issuetype.name`)。大文字と小文字を区別せずに比べる |
+
+- `jira` の作業対象は、project の全種類の issue (subtask・epic を含む)。絞るなら `type` を書く
+- `jira` の終端は、status の区分 (`status.statusCategory.key`) が `done` であること。Wontfix のような done 区分の status も終端
+- `status` と `type` の名前が実在するかは、loop の起動時・試運転・`doctor` で確かめる (§6・§5・§7.4)。tick の中では確かめない
+  - status 名は `project = <project key> AND status = "<名前>"` の検索の件数 (`--count`) を撃ち、JQL の失敗で見分ける。acli は project の status の一覧を返さないので、JQL の値の検証による site の単位の検査にとどまる。他の project にだけある status 名は検査を通る
+  - issue type 名は project の issue type (`acli jira project view --key <project key> --json` の `issueTypes`) と比べる
+- `blocked` を書いた trigger があると、tick ごとに open な一覧に加えて、依存を持つ open な issue を検索し (`issueLinkType = "is blocked by"`)、当たった issue を 1 件ずつ読み直して依存先の status の区分を見る
 
 ### 2.3 CL 側の述語 (`on: cl` の `when`)
 
@@ -198,6 +224,7 @@ CL の状態の語彙 (system.md §6) は、真偽の key で書く。`true` な
 
 - 作業対象ごとに trigger を宣言順に評価し、最初に当たった 1 つだけを採る。issue には `on: issue` の trigger だけを、CL には `on: cl` の trigger だけを当てる
 - 候補は、trigger の宣言順を先に、同じ trigger の中では作業対象の作成日時の古い順に並べる。作成日時が同じなら番号の小さい順
+  - `jira` では、作成日時の代わりに番号の小さい順に並べる。acli の一覧は作成日時を返さない (ADR 0010)
 - **曖昧な CL** (同じ repo の同じ head branch から、open な CL が 2 本以上ある) には、CL 側の trigger を当てない。fork の head branch は、fork ごとに別の branch として数える (fork は GitHub では head の repo の名前、GitLab では `source_project_id` で見分ける)
 - loop は、claim している作業対象 (走っている・止めている・確かめ待ち・再起動待ち) の workspace で checkout されている branch を head に持つ、同じ repo の CL にも CL 側の trigger を当てない (§6 の tick の手順)。試運転 (§5) は claim を持たないので、この除外は掛からない
 - open な一覧は、trigger に現れる種類のものだけを読む (`on: cl` の trigger が 1 つも無ければ CL の一覧を読まず、`on: issue` の trigger が無ければ issue の一覧を読まない)
@@ -232,6 +259,7 @@ action と本文 (共通 prompt) は、worker を起動するたびに Go の te
 | `.issue.title` | 題名 |
 | `.issue.url` | URL |
 | `.issue.labels` | label の綴りの列 |
+| `.issue.key` | issue の key (`WIDGETS-123`)。`tracker.kind` が `jira` のときだけある |
 | `.cl.number` | CL の番号 |
 | `.cl.title` | 題名 |
 | `.cl.url` | URL |
@@ -242,6 +270,7 @@ action と本文 (共通 prompt) は、worker を起動するたびに Go の te
 | `.workspace` | workspace の絶対 path |
 
 - `.issue` は issue の worker にだけ、`.cl` は CL の worker にだけある
+- `jira` の `.issue.url` は `https://<site>/browse/<key>`、`.issue.labels` は Jira の label の綴りのまま。`.issue.key` を他の kind で書くと、未知の変数として検査 (§2.8) で落ちる
 - 未知の変数 (`.issue.body` など、CL の worker の `.issue`) と未知の関数は、描画の失敗にする。描画に失敗した attempt は失敗
 - workflow 定義の検査 (§2.8) で、action と本文を見本の変数 (どれも空でない値) で描画してみる。action はその trigger の種類の見本で、本文はどの worker にも渡るので、trigger に現れる種類すべての見本で描画する。描画できなければ検査で落とすので、作業対象を読んでから描画に失敗するのは、見本では通った分岐だけになる
 - 例: `/swat-skills:playbook-implementation issue #{{ .issue.number }} ({{ .issue.url }})`
@@ -254,9 +283,13 @@ action と本文 (共通 prompt) は、worker を起動するたびに Go の te
 - 未知の key (ADR 0009「未知の key は失敗させる」)
 - 型の誤り・必須の項目の欠落・未知の値 (`tracker.kind`・`triggers[].on`・`author`)
 - 空の文字列 (空の `assignee` や label を「条件なし」と取り違えないため)
-- 上の表の各項目の制約 (`polling.interval` の範囲・trigger の名前の綴りと重複・`assignee` と `unassigned` の併記・空の `labels.any`・`head` の pattern の綴り・`head` と `same_repo: false` の併記・空の `action`)
+- 上の表の各項目の制約 (`polling.interval` の範囲・trigger の名前の綴りと重複・`assignee` と `unassigned` の併記・空の `labels.any` / `status.any` / `type.any`・`head` の pattern の綴り・`head` と `same_repo: false` の併記・空の `action`)
 - `$VAR` の未設定と、`tracker.token` に値そのものを書いたこと
-- `tracker.kind` が支えない宣言: `gitlab` での `tracker.token`・`blocked` (§2.1・§2.2)。`github` での `tracker.host` は未知の key。key を書く順 (`triggers` を `tracker` より前に書くなど) によらず名指しする
+- `tracker.kind` が支えない宣言。key を書く順 (`triggers` を `tracker` より前に書くなど) によらず名指しする
+  - `gitlab`: `tracker.token`・`blocked` (§2.1・§2.2)
+  - `jira`: `tracker.token`・`author`・`milestone`・`on: cl` の trigger (§2.1・§2.2)。`tracker.host` の欠落は必須の項目の欠落
+  - `github` と `gitlab`: `status`・`type` (§2.2)
+  - `github`: `tracker.host` は未知の key
 - 同じ key を 1 つの対応表に 2 回書いたこと
 - action と本文の template を描画できないこと (§2.7。綴りの誤り・未知の変数・未知の関数)
 
@@ -307,12 +340,15 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 | 1 | 観測できなかった (tracker の CLI を起動できない・rate limit・読み切れない・その他の tracker の CLI の失敗) / 想定外の失敗 |
 | 2 | 引数の誤り / workflow 定義の誤り (§2.8) / issue 置き場が見えない (綴りの誤りか、権限が無い) |
 | 3 | 同じ scope key の loop が走っている (§6) |
-| 4 | tracker の CLI (`tracker.kind` が `github` なら gh、`gitlab` なら glab) の認証が通らない |
+| 4 | tracker の CLI (`tracker.kind` が `github` なら gh、`gitlab` なら glab、`jira` なら acli) の認証が通らない |
 
 - 観測の失敗は、issue 置き場の部品が 認証 / 見えない / 読み切れない / rate limit に分けて返す (system.md §13)
   - 読み切れない: 1 往復で読む件数の上限を超えた (GitHub の issue の label・assignee・依存先、CL の label・review thread が 100 件を超えた)。切り詰めた像から候補を出さない
   - glab は HTTP の失敗をどれも exit 1 で返すので、stderr の `(HTTP 401)` を認証、`(HTTP 404)` を見えない、`(HTTP 429)` を rate limit と見分ける
   - `gitlab` の `author` の判定は作者の access level を project の member の API で読む。この API は認証が要るので、glab が未認証なら public な project でも認証の失敗になる
+  - acli はどの失敗も exit 1 で返し、文言は Jira の言語の設定で訳されるので、文言では分けない。読み出しが落ちたら `acli jira auth status` を撃ち、落ちれば認証の失敗とする。通れば、起動時の issue 置き場の確認 (§5・§6・§7.4) では見えない (exit 2)、tick の中ではその他の失敗 (tick の error) とする
+    - rate limit は見分けられず、その他の失敗に入る。tick の error として残り、次の周期で読み直す
+    - `acli jira auth status` は server に問い合わせる。network が落ちていると、これも落ちて認証の失敗になる
 
 ## 4. log.jsonl
 
@@ -370,7 +406,8 @@ fix-ci	cl	#51	ログインの失敗を記録する
 ```
 
 - 列はタブで区切る: trigger の名前・作業対象の種類 (`issue` / `cl`)・参照・題名
-- 参照は tracker の綴りで書く: issue と GitHub の CL は `#<番号>`、GitLab の CL (merge request) は `!<番号>`。GitLab では issue と merge request が別々に番号を振るので、同じ番号が両方にありうる
+- 参照は tracker の綴りで書く: issue と GitHub の CL は `#<番号>`、GitLab の CL (merge request) は `!<番号>`、Jira の issue は key (`WIDGETS-123`)。GitLab では issue と merge request が別々に番号を振るので、同じ番号が両方にありうる
+- `jira` では、snapshot を作る前に issue 置き場を確かめる (§6 の「起動時の検査」の `jira` の行と同じもの)
 - 題名の制御文字 (タブ・改行・ESC など) は空白に置き換える
 
 失敗したら、stdout に何も出さず、stderr に理由を出して §3 の exit code で終わる。workflow 定義の誤りは 1 件 1 行で出す。
@@ -390,12 +427,18 @@ claude-dispatcher loop [<workflow の path>]
 | 引数の数と flag | 2 |
 | workflow 定義を読めて、検査に通る (§2.8) | 2 |
 | 事前検査 (§2.9) に通る | 2 |
-| tracker の CLI (`tracker.kind` が `github` なら gh、`gitlab` なら glab) と `claude.command` を解決できる (PATH と、よく使われる置き場)。`on: cl` の trigger があれば git も | 1 |
+| tracker の CLI (`tracker.kind` が `github` なら gh、`gitlab` なら glab、`jira` なら acli) と `claude.command` を解決できる (PATH と、よく使われる置き場)。`on: cl` の trigger があれば git も | 1 |
+| `jira` だけ: issue 置き場の確認 (下) | 下 |
 | state dir を作れる | 1 |
 | 同じ scope key の loop が走っていない (`loop.lock` を取れる) | 3 |
 
 - よく使われる置き場は、workflow 定義が撃つ依存 CLI (`tracker.kind` の CLI・claude・git) のどれかが PATH に無いときだけ PATH の前に足す。使わない方の tracker の CLI が無いことでは PATH を書き換えない (worker と hooks は loop の PATH を継ぐので、足すと worker が撃つ git などが入れ替わりうる)
 - 同じ issue 置き場の 2 本目の loop は、clone や workflow 定義の path が違っても起動時に止まる
+- `jira` の issue 置き場の確認は、次の順に撃ち、最初に落ちたもので終わる。試運転 (§5) と `doctor` (§7.4) も同じ確認を通す
+  1. acli の認証の site: `acli jira auth status` が通り (落ちれば認証の失敗、exit 4)、出力の `Site:` の行の site が `tracker.host` と同じ (大文字と小文字を区別しない)。違うか `Site:` の行を読めなければ exit 2。acli は呼び出しごとに site を指定できず、active な account の site を読むため
+  2. open な一覧 (`project = <project key> AND statusCategory != Done`) を読める。落ちたら §3 の acli の分類で、認証 (exit 4) か見えない (exit 2)
+  3. trigger の `status` に書いた status 名が実在する (§2.2)。無い名前を trigger と一緒に名指しして exit 2
+  4. trigger の `type` に書いた issue type 名が project にある (§2.2)。無い名前を trigger と一緒に名指しして exit 2。project の issue type を読めなければ exit 1
 - lock は loop の生存期間だけ持つ。loop が死ねば外れる
 - `loop.lock` を取った loop は、続けて `alive.lock` も生存期間のあいだ持つ。`status` は `alive.lock` だけを確かめるので、`loop.lock` を取り合わない (`alive.lock` を `status` が一瞬持っていれば、外れるまで待つ)
 
@@ -437,6 +480,11 @@ claude-dispatcher loop [<workflow の path>]
 - 作業対象の読み直しで issue が消えていたら (削除・移管)、終端と同じに扱う。消えたと読むのは次のとき
   - `github`: gh が `Could not resolve to an Issue` を返すか、応答に issue が無い
   - `gitlab`: glab が `(HTTP 404)` を返し、stderr に `Project Not Found` が無い (project が見えないときは `404 Project Not Found` なので、見えないの失敗として扱う)
+  - `jira`: 次の手順で読み直す。issue を消した・別の project へ移した (旧 key が転送されてもされなくても)・権限を外して見えなくなった、のどれも終端として扱う
+    1. `acli jira workitem view <key> --json` で読む。返った key の project key が `tracker.repo` と違えば (別の project へ移した) 終端
+    2. 読み出しが落ちたら `acli jira auth status` を撃つ。落ちれば認証の失敗
+    3. 通れば open な一覧を読む。読めればその中に key が無ければ終端、あれば読み直せない失敗。一覧を読めなければ、その失敗
+    - 1 件の読み直しを JQL の `key = …` で撃たない。存在しない key を JQL に書くと検索ごと失敗し、消えた issue と見えない issue を区別できない
 
 **worker の 1 回分**:
 
@@ -657,13 +705,16 @@ exit: 0 / 2 = 引数・workflow 定義の誤り / 1 = workflow 定義の path �
 ### 7.4 `setup` / `doctor`
 
 ```
-claude-dispatcher setup [<workflow の path>]
+claude-dispatcher setup [--kind jira --host <site> --repo <project key>] [<workflow の path>]
 claude-dispatcher doctor [<workflow の path>]
 ```
 
 **`setup`**: 実装 repo の clone を cwd にして撃ち、workflow 定義の雛形 (下) を path (既定 `WORKFLOW.md`) に書く。
 
-- `tracker.kind` は、cwd で `git remote get-url origin` が返す URL の host で決める。host が `github.com` なら `github`、それ以外は `gitlab`
+- `--kind jira` を渡したら、`jira` の雛形を書き、`tracker.host` を `--host`、`tracker.repo` を `--repo` で埋める。git も tracker の CLI も撃たない
+  - `--kind` の値は `jira` だけを受ける。`--kind jira` には `--host` と `--repo` の両方が要り、`--host` と `--repo` は `--kind jira` と一緒にだけ書ける。綴りは `tracker.host` と `tracker.repo` と同じ (§2.1)。外れたら引数の誤り (exit 2)
+  - flag は `--kind jira` の形でも `--kind=jira` の形でも書ける
+- flag が無ければ、`tracker.kind` を、cwd で `git remote get-url origin` が返す URL の host で決める。host が `github.com` なら `github`、それ以外は `gitlab`
   - URL は `https://<host>/…`・`ssh://<user>@<host>[:<port>]/…`・`<user>@<host>:…` (scp の綴り) を読む。host は port を除いて小文字にする
   - `github`: `tracker.repo` を、cwd で `gh repo view --json nameWithOwner` が返す repo で埋める
   - `gitlab`: cwd で `glab repo view --output json` が返す project で、`tracker.host` を `web_url` の host (port を含む) で、`tracker.repo` を `path_with_namespace` で埋める。origin の URL の host は ssh の host (alias・ssh 専用の host) でありうるので、`tracker.host` に使わず、glab にも渡さない (渡すと glab がその host の API を撃つ。URL が認証情報を含むときに argv へ載せないためでもある)
@@ -677,6 +728,10 @@ exit: 0 = 書いた・既にある / 2 = 引数の誤り / 1 = repo を決めら
 - `gitlab` の雛形は、同じ trigger と action を "merge request"・`glab`・`Closes #N` の綴りで書く
   - `blocked` の述語を書かない (§2.2)
   - CL 側の trigger (conflict・review・CI) は `github` と同じ述語と絞り込みで置く
+- `jira` の雛形は、issue 側の trigger `implement` だけを置く (CL 側の trigger は書けない。§2.1)
+  - `status: { any: [Ready for Agent] }` に当てる。status 名は project ごとに違い、acli は project の status の一覧を返さないので並べない。雛形の comment に「project の status 名に合わせて書き換える」と書く (site に無い名前は起動時の確認が名指しする)
+  - action は、issue `{{ .issue.key }}` を実装し、branch `claude-dispatcher/{{ .issue.key }}` で CL を出し、CL の題名に key を入れ、acli で status を Ready for Agent から移す旨。branch と CL の題名に key を入れるのは、Jira と GitHub / GitLab の連携を入れた project で、issue に branch と CL が出るため
+  - `type` の trigger は置かない (issue type は project ごとに違う)
 
 汎用の action (実装・conflict・review・CI) を置く。action は先頭に skill を書かない文で、plugin の無い環境でも事前検査 (§2.9) に通る。承認済みの CL (`approved: true`) に当てる trigger は置かない (merge を worker に任せるかは利用者が決める)。
 
@@ -732,14 +787,15 @@ triggers:
 <共通 prompt: 無人の worker としての作業規約>
 ```
 
-- 上は抜粋 (action の文と本文を略した)。全文は `internal/scaffold/WORKFLOW.md` (`gitlab` は `internal/scaffold/WORKFLOW.gitlab.md`)
+- 上は抜粋 (action の文と本文を略した)。全文は `internal/scaffold/WORKFLOW.md` (`gitlab` は `internal/scaffold/WORKFLOW.gitlab.md`、`jira` は `internal/scaffold/WORKFLOW.jira.md`)
 - 実装の worker は `claude-dispatcher/issue-<番号>` の branch で CL を出し、CL 側の trigger は `head: claude-dispatcher/*` で自分の出した CL に絞る
 - CL の worker は head branch を detach で取り出して push する。issue の workspace は issue が閉じるまで残り、その branch を checkout したままで、同じ branch は 2 つの worktree で checkout できないため
 
 **`doctor`**: 導入を確かめる。何も書かない。確かめたことを 1 件 1 行で、`ok` / `NG` / `警告` を頭に付けて stdout に出す。
 
 1. workflow 定義を読めて、検査 (§2.8) に通る。落ちたら以降は確かめない
-2. tracker の CLI (gh か glab) の認証が通り、issue 置き場が見える (open な作業対象を読める)。issue 置き場は `github` なら `<owner>/<name>`、`gitlab` なら `<host>/<path>` で出す
+2. tracker の CLI (gh・glab・acli) の認証が通り、issue 置き場が見える (open な作業対象を読める)。issue 置き場は `github` なら `<owner>/<name>`、`gitlab` なら `<host>/<path>`、`jira` なら `<site>/<project key>` で出す
+   - `jira` は loop の起動時と同じ issue 置き場の確認 (§6) を通す。落ちたら理由を `NG` の行に出す (存在しない status 名と issue type 名は、1 つ 1 行で trigger と一緒に名指しする)
 3. tracker の CLI と `claude.command` を解決できる。`on: cl` の trigger があれば git も (loop の起動時の検査と同じ。§6)
 4. 事前検査 (§2.9)。落ちた trigger ごとに `NG` の行
 5. 利用者の約束に頼る宣言を `警告` の行に出す (system.md §11)
@@ -748,6 +804,7 @@ triggers:
 6. Claude Code の settings (`permissions.allow`) に要りそうな entry を表示する。CLI は settings を書かない (ADR 0004)
    - `github`: `Bash(gh issue:*)`・`Bash(gh pr:*)`・`Bash(git push:*)`
    - `gitlab`: `Bash(glab issue:*)`・`Bash(glab mr:*)`・`Bash(git push:*)`
+   - `jira`: `Bash(acli jira workitem:*)`・`Bash(git push:*)` と、「CL を開く CLI (`gh pr` / `glab mr`) の entry も足す」の 1 行。CL を開く CLI は workflow 定義から決められない (CL 置き場の宣言は #114)
 
 ```
 ok   workflow 定義 /path/to/WORKFLOW.md

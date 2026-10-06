@@ -59,7 +59,7 @@ Cockburn『ユースケース実践ガイド』(Writing Effective Use Cases) の
 
 **Main Success Scenario**
 
-1. loop が候補を trigger の宣言順と作成日時の順に並べ、空いている分だけ選んで claim する
+1. loop が候補を trigger の宣言順と作成日時の順 (`jira` では番号の順) に並べ、空いている分だけ選んで claim する
 2. loop が作業対象の workspace を用意する (無ければ作って hooks を撃つ)
 3. loop が action と共通 prompt を描画し、worker を子 process として起動する
 4. loop が worker の stream を読み、画面と状態 file に進行を出す
@@ -143,14 +143,14 @@ Cockburn『ユースケース実践ガイド』(Writing Effective Use Cases) の
 - **Scope**: dispatcher (機械システム)
 - **Level**: user-goal (sea)
 - **Trigger**: 新しい project で dispatcher を使い始める
-- **事前条件**: claude-dispatcher・Claude Code と、`tracker.kind` に応じた tracker の CLI (`github` なら gh、`gitlab` なら glab) が導入され、その CLI と claude が認証済み
+- **事前条件**: claude-dispatcher・Claude Code と、`tracker.kind` に応じた tracker の CLI (`github` なら gh、`gitlab` なら glab、`jira` なら acli) が導入され、その CLI と claude が認証済み
 - **成功保証**: 誤った workflow 定義で起動が始まっていない。試運転で worker が起動していない。loop が回り始めている
 
 **Main Success Scenario**
 
 1. 導入者が実装 repo の clone で `setup` を実行し、CLI が汎用の action を入れた workflow 定義の雛形を置く
 2. 導入者が workflow 定義の issue 置き場・trigger・action・hooks・並列上限を自分の project に合わせて書き、repo に commit する
-3. CLI が workflow 定義を検査し、issue 置き場が見えること・述語が文法に合うこと・各 action の先頭の skill が呼べることを確かめる
+3. CLI が workflow 定義を検査し、issue 置き場が見えること・述語が文法に合うこと (`jira` では status 名と issue type 名が実在すること)・各 action の先頭の skill が呼べることを確かめる
 4. CLI が試運転で、起動するはずの作業対象と trigger を示す。何も起動せず、何も書かない
 5. 導入者が `doctor` で、Claude Code の settings に要る entry を確かめて自分で足す
 6. 導入者が clone で loop を起動し、画面で最初の tick が回ったことを確かめる
@@ -164,7 +164,7 @@ Cockburn『ユースケース実践ガイド』(Writing Effective Use Cases) の
 - **6b.** 同じ issue 置き場の loop が既に走っている
   - 6b1. CLI は 2 本目の loop を起動時に拒む。導入者は走っている loop の画面を見る
 - **6c.** tick が認証の失敗で止まる (起動した環境から認証を取れない。ssh 越しの session など)
-  - 6c1. 導入者は認証を環境変数で渡して loop を起動し直す
+  - 6c1. 導入者は認証を環境変数で渡して loop を起動し直す (`jira` は token を渡せないので、acli が認証を読めるようにしてから起動し直す。README の「前提」)
 
 ## UC-6 loop を止める
 

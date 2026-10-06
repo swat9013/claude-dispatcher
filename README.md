@@ -24,7 +24,11 @@ issue tracker の issue と CL (pull request) を周期ごとに読み、project
 
 - macOS か Linux
 - [Claude Code](https://docs.claude.com/en/docs/claude-code) と、その認証
-- tracker の CLI と、その認証。tracker が GitHub なら [gh](https://cli.github.com/) (`gh auth login`)、GitLab なら [glab](https://gitlab.com/gitlab-org/cli) (`glab auth login`)。GitLab は issue 置き場と merge request の置き場が同じ project の構成を扱う。対象の GitLab は、GitLab が security 修正を出している版 ([maintenance policy](https://docs.gitlab.com/policy/maintenance/) の、最新の minor から 3 つ)
+- tracker の CLI と、その認証。tracker が GitHub なら [gh](https://cli.github.com/) (`gh auth login`)、GitLab なら [glab](https://gitlab.com/gitlab-org/cli) (`glab auth login`)、Jira Cloud なら [acli](https://developer.atlassian.com/cloud/acli/) (`acli jira auth login`)。GitLab は issue 置き場と merge request の置き場が同じ project の構成を扱う。対象の GitLab は、GitLab が security 修正を出している版 ([maintenance policy](https://docs.gitlab.com/policy/maintenance/) の、最新の minor から 3 つ)
+- Jira は Jira Cloud の 1 つの project を issue 置き場にする (Data Center / Server は扱わない)。CL は worker が action の中で GitHub か GitLab に開くので、その CLI (gh か glab) も worker が撃てるようにしておく
+  - 1 つの Jira project は 1 本の loop と 1 つの実装 repo で回す。component や JQL で 1 つの project を複数の repo に分けて回すことはできない (同じ project の 2 本目の loop は起動時に止まる)
+  - acli の active な account の site を、workflow 定義の `tracker.host` にしておく。acli は呼び出しごとに site を選べないので、loop は起動時に site が違えば止まる (`acli jira auth switch --site <site>` で切り替える)
+  - acli は macOS では資格情報を keychain に置く。ssh 越しの shell では keychain が unlock されておらず、acli が認証を読めないことがある。そのときは `security unlock-keychain` を撃ってから loop を起動するか、API token で `acli jira auth login` をし直す
 - git (workspace を worktree で作る hooks と、CL 側の trigger で使う)
 - action の先頭に書く skill と command (`/swat-skills:playbook-implementation` など) を、worker が呼べる場所 (plugin・repo の `.claude/`・`~/.claude/`) に入れておく。特定の plugin には依存しない。呼べない名前は起動の前の事前検査で名指しされる
 
@@ -64,11 +68,12 @@ binary は署名していない。macOS でブラウザから取った archive �
 
 実装 repo の clone を cwd にして撃つ。流れの正本は [`docs/design/usecases.md`](docs/design/usecases.md) の UC-5、各コマンドの形式は [`docs/design/formats.md`](docs/design/formats.md) §5・§7.4。
 
-1. **雛形を置く**: `setup` が cwd に `WORKFLOW.md` の雛形を書く。origin の host が `github.com` なら GitHub の雛形で、`tracker.repo` は `gh repo view` が返す repo で埋まる。それ以外の host なら GitLab の雛形で、`tracker.host` と `tracker.repo` は cwd で撃った `glab repo view` が返す project の web の host と path で埋まる。既にある file は上書きしない
+1. **雛形を置く**: `setup` が cwd に `WORKFLOW.md` の雛形を書く。origin の host が `github.com` なら GitHub の雛形で、`tracker.repo` は `gh repo view` が返す repo で埋まる。それ以外の host なら GitLab の雛形で、`tracker.host` と `tracker.repo` は cwd で撃った `glab repo view` が返す project の web の host と path で埋まる。Jira を issue 置き場にするなら、site と project key を flag で渡す。既にある file は上書きしない
 
    ```sh
    cd ~/src/widgets
    claude-dispatcher setup
+   claude-dispatcher setup --kind jira --host acme.atlassian.net --repo WIDGETS   # Jira の issue 置き場
    ```
 
 2. **自分の project に合わせて書く**: trigger の述語 (どの label・どの head branch に当てるか)・action (worker に何をさせるか)・hooks (workspace の作り方)・並列上限を直し、repo に commit する。書ける項目は [`docs/design/formats.md`](docs/design/formats.md) §2、この repo 自身の例は [`WORKFLOW.md`](WORKFLOW.md)
@@ -81,7 +86,7 @@ binary は署名していない。macOS でブラウザから取った archive �
    claude-dispatcher loop --dry-run
    ```
 
-4. **導入を確かめる**: `doctor` が workflow 定義・issue 置き場・依存 CLI (gh か glab・claude・git)・事前検査を確かめ、利用者の約束に頼る宣言 (承認済みの CL への action・絞り込みの無い CL 側の trigger) を警告する。Claude Code の settings に要りそうな entry も示すので、自分で足す (CLI は settings を書かない)
+4. **導入を確かめる**: `doctor` が workflow 定義・issue 置き場・依存 CLI (gh・glab・acli のどれか・claude・git)・事前検査を確かめ、利用者の約束に頼る宣言 (承認済みの CL への action・絞り込みの無い CL 側の trigger) を警告する。Claude Code の settings に要りそうな entry も示すので、自分で足す (CLI は settings を書かない)
 
    ```sh
    claude-dispatcher doctor
