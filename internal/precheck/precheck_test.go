@@ -284,10 +284,11 @@ func TestActionWithoutALeadingSlashIsNotChecked(t *testing.T) {
 	p.assertFound(t, "issue #{{ .issue.number }} を実装する。/implement は使わない")
 }
 
-// assertNoUnreadablePlace は、action の先頭の名前が見つからず、読めなかった置き場が添えられていないことを確かめる。
+// assertNoUnreadablePlace は、action の先頭の名前が見つからず、見つからない理由の後ろに注記 (` · ` で始まる読めなかった
+// 置き場) が添えられていないことを確かめる。
 func (p places) assertNoUnreadablePlace(t *testing.T, action string) {
 	t.Helper()
-	if got := p.check(action); !strings.Contains(got, "見つからない") || strings.Contains(got, "読めなかった置き場") {
+	if got := p.check(action); !strings.Contains(got, "見つからない") || strings.Contains(got, " · ") {
 		t.Fatalf("%q の検査 = %q, want 読めなかった置き場の無い 見つからない", action, got)
 	}
 }
