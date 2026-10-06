@@ -61,10 +61,14 @@ func (s *scan) add(names ...string) {
 	}
 }
 
-// failed は、読めなかった置き場を覚える。無い (ErrNotExist) のは失敗に数えない。
+// failed は、読めなかった置き場を覚える。無い (ErrNotExist) のは失敗に数えない。skill と plugin は同じ置き場を別々に探すので、
+// 同じ失敗は 1 度だけ覚える。
 func (s *scan) failed(path string, err error) {
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		s.unreadable = append(s.unreadable, fmt.Sprintf("%s (%v)", path, err))
+	if err == nil || errors.Is(err, fs.ErrNotExist) {
+		return
+	}
+	if note := fmt.Sprintf("%s (%v)", path, err); !slices.Contains(s.unreadable, note) {
+		s.unreadable = append(s.unreadable, note)
 	}
 }
 
