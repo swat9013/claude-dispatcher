@@ -62,6 +62,12 @@ type IssuePredicate struct {
 	Milestone string
 	// Blocked が nil でなければ、未解決の依存先がある (true) / 無い (false) issue に当たる
 	Blocked *bool
+	// StatusAny が空でなければ status の名前がどれかである issue に、StatusNone の名前のどれでもない issue に当たる
+	StatusAny  []string
+	StatusNone []string
+	// TypeAny と TypeNone は issue type の名前の条件 (StatusAny / StatusNone と同じ読み方)
+	TypeAny  []string
+	TypeNone []string
 }
 
 // Matches は issue が述語に当たるかを返す。
@@ -79,8 +85,16 @@ func (p IssuePredicate) Matches(issue target.Issue) bool {
 		return false
 	case p.Blocked != nil && *p.Blocked != (issue.OpenBlockers > 0):
 		return false
+	case !nameMatches(p.StatusAny, p.StatusNone, issue.Status), !nameMatches(p.TypeAny, p.TypeNone, issue.Type):
+		return false
 	}
 	return true
+}
+
+// nameMatches は名前の any / none の条件に name が当たるか。大文字と小文字を区別せずに比べる。
+func nameMatches(anyOf, noneOf []string, name string) bool {
+	is := func(n string) bool { return strings.EqualFold(n, name) }
+	return (len(anyOf) == 0 || slices.ContainsFunc(anyOf, is)) && !slices.ContainsFunc(noneOf, is)
 }
 
 // CLPredicate は CL 側の述語。CL の状態の語彙と絞り込みを、すべて AND で評価する。書かれていない条件は何にでも当たる。

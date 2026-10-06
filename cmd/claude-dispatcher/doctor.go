@@ -1,12 +1,14 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
 	"strings"
 
 	"github.com/swat9013/claude-dispatcher/internal/deps"
+	"github.com/swat9013/claude-dispatcher/internal/jira"
 	"github.com/swat9013/claude-dispatcher/internal/loop"
 	"github.com/swat9013/claude-dispatcher/internal/printable"
 	"github.com/swat9013/claude-dispatcher/internal/target"
@@ -18,6 +20,8 @@ import (
 var settingsEntries = map[workflow.TrackerKind][]string{
 	workflow.GitHub: {"Bash(gh issue:*)", "Bash(gh pr:*)", "Bash(git push:*)"},
 	workflow.GitLab: {"Bash(glab issue:*)", "Bash(glab mr:*)", "Bash(git push:*)"},
+	// jira は CL を開く CLI を workflow 定義から決められない (CL 置き場の宣言は #114) ので、足すよう 1 行で示す
+	workflow.Jira: {"Bash(acli jira workitem:*)", "Bash(git push:*)", "(CL を開く CLI (gh pr / glab mr) の entry も足す)"},
 }
 
 // runDoctor は `doctor [<workflow の path>]` を撃つ (formats.md §7.4)。何も書かない。確かめたことを 1 件 1 行で出し、
@@ -61,8 +65,20 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// checkStore は issue 置き場を読めるかを確かめる。
+// checkStore は issue 置き場を読めるかを確かめる。jira は loop の起動時と同じ確認 (formats.md §6) を通し、実在しない
+// status 名と issue type 名を 1 つ 1 行で名指しする。
 func checkStore(e environment, def workflow.Definition, stdout io.Writer) bool {
+	if err := e.confirmPlace(def); err != nil {
+		var unknown *jira.Unknown
+		if errors.As(err, &unknown) {
+			for _, p := range unknown.Problems {
+				fmt.Fprintf(stdout, "NG   %s\n", printable.Line(p))
+			}
+			return false
+		}
+		fmt.Fprintf(stdout, "NG   issue 置き場 %s: %s\n", def.Tracker.Place(), printable.Line(err.Error()))
+		return false
+	}
 	if _, err := loop.OpenItems(e.store(def), def); err != nil {
 		fmt.Fprintf(stdout, "NG   issue 置き場 %s: %s\n", def.Tracker.Place(), printable.Line(err.Error()))
 		return false

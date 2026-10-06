@@ -48,10 +48,26 @@ func TestUnknownFunctionFailsToRender(t *testing.T) {
 }
 
 func TestCheckFindsUnknownVariablesInsideConditions(t *testing.T) {
-	err := render.Check("本文", "{{ if .issue.labels }}{{ .issue.body }}{{ end }}", target.KindIssue)
+	err := render.Check("本文", "{{ if .issue.labels }}{{ .issue.body }}{{ end }}", render.Sample(target.KindIssue))
 
 	if err == nil {
 		t.Fatal("条件の中の未知の変数を見落とした")
+	}
+}
+
+func TestIssueKeyIsRenderedForAnIssueThatHasAKey(t *testing.T) {
+	got, err := render.Render("action", "{{ .issue.key }}", render.Vars{Item: target.Issue{Number: 123, Key: "WIDGETS-123"}})
+
+	if err != nil || got != "WIDGETS-123" {
+		t.Fatalf("描画 = %q (%v), want WIDGETS-123", got, err)
+	}
+}
+
+func TestIssueKeyFailsToRenderForAnIssueWithoutAKey(t *testing.T) {
+	_, err := render.Render("action", "{{ .issue.key }}", vars)
+
+	if err == nil {
+		t.Fatal("key を持たない issue の .issue.key を描画できてしまった")
 	}
 }
 
