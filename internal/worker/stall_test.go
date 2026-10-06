@@ -37,7 +37,7 @@ func appendAt(t *testing.T, w *streamWatch, line string, now time.Time) {
 // observeAt は now の時点で w に stream の file を確かめさせ、活動を返す。活動が変わらなければ ok が false。
 func observeAt(t *testing.T, w *streamWatch, now time.Time) (summary string, ok bool) {
 	t.Helper()
-	grew, err := w.observe(now)
+	grew, err := w.observe()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,6 +58,37 @@ func TestWorkerWritingOnlyHeartbeatsStallsAfterTheStallTimeout(t *testing.T) {
 
 	if !strings.Contains(reason, "stall") {
 		t.Fatalf("heartbeat だけが 90s 続いて stall の上限 1m を過ぎたのに止めない: %q", reason)
+	}
+}
+
+func TestWatchStopsAWorkerThatWritesOnlyHeartbeats(t *testing.T) {
+	stream := streamFile(t, "")
+	writer, err := os.OpenFile(stream.Name(), os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	// heartbeat を stall の上限より細かく書き続ける (file は伸び続ける)
+	quit := make(chan struct{})
+	defer close(quit)
+	go func() {
+		for {
+			select {
+			case <-quit:
+				return
+			case <-time.After(20 * time.Millisecond):
+				_, _ = writer.WriteString(heartbeat)
+			}
+		}
+	}()
+	r := Runner{Definition: workflow.Definition{StallTimeout: 500 * time.Millisecond}}
+	run := &Run{stop: make(chan struct{})}
+	time.AfterFunc(10*time.Second, run.Stop)
+
+	result, ended := r.watch(make(chan error), run, stream, 0, "/work")
+
+	if ended || !strings.Contains(result.Failure, "stall") {
+		t.Fatalf("watch = %+v, ended %v; want heartbeat だけが続くので stall で止める", result, ended)
 	}
 }
 

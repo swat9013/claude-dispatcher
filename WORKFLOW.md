@@ -14,7 +14,7 @@ limits:
   max_concurrent: 1
   # 実装の playbook は 2 軸レビューを 2 回通すので 1 時間に収まらないことがある。止められても次の attempt が同じ session を続ける
   run_timeout: 3h
-  # go test -race は数分 stream に何も書かない
+  # go test -race の数分は heartbeat しか書かず、heartbeat は活動として数えない
   stall_timeout: 30m
 claude:
   args: [--permission-mode, auto]

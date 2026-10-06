@@ -588,7 +588,7 @@ issue#42  implement  1        running  5m10s  Edit internal/status/status.go
 - 前に確かめてから完結した行を新しい側から見て、活動として数える最初の行を要約する。数える行が無ければ活動は変えない
 - 活動は今の attempt が書いた行だけから取る (worker log は attempt を跨いで追記する)。同じ行を活動として出し直さない
 - stream の file を読めなければ、`stream を読めない: <理由>` を活動にする。活動の表示のためには worker を止めない
-- stall (`limits.stall_timeout`) の時計は、活動として数える行を見つけるたびに戻す。要約が直前と同じでも戻す。数えない行・64 KiB を超える行・読めないあいだの stream では戻らないので、その状態が `limits.stall_timeout` 続けば stall で止める
+- stall (`limits.stall_timeout`) の時計は、活動として数える行を見つけるたびに戻す。要約が直前と同じでも戻す。数えない行・64 KiB を超える行・読めないあいだの stream では戻らないので、その状態が `limits.stall_timeout` 続けば stall で止める。読めないまま stall で止めたときは、失敗の理由に読めない理由を添える
 
 **停止**: SIGINT / SIGTERM / SIGHUP を同じに扱う。
 

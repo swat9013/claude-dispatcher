@@ -87,7 +87,7 @@ type Runner struct {
 // stopGrace は停止のときに SIGTERM から SIGKILL までに待つ時間
 const stopGrace = 5 * time.Second
 
-// watchInterval は stream の file の伸び (活動・stall) と上限時間を確かめる間隔
+// watchInterval は stream の file の伸び (活動) と、stall・上限時間を確かめる間隔
 const watchInterval = 250 * time.Millisecond
 
 // Run は走っている worker 1 回分。
@@ -226,8 +226,8 @@ type streamWatch struct {
 	workspace string
 }
 
-// observe は now の時点の file の大きさを見て、伸びていれば grew を true で返す。file を読めなければ、その失敗を返す。
-func (w *streamWatch) observe(now time.Time) (grew bool, err error) {
+// observe は file の大きさを見て、伸びていれば grew を true で返す。file を読めなければ、その失敗を返す。
+func (w *streamWatch) observe() (grew bool, err error) {
 	info, err := w.file.Stat()
 	if err != nil {
 		return false, fmt.Errorf("stream の file を読めない: %w", err)
@@ -326,7 +326,7 @@ func (r Runner) watch(done <-chan error, run *Run, stream *os.File, offset int64
 		case <-run.stop:
 			return Result{Stopped: true}, false
 		case now := <-ticker.C:
-			grew, err := w.observe(now)
+			grew, err := w.observe()
 			if err != nil {
 				return Result{Failure: err.Error()}, false
 			}
@@ -336,6 +336,10 @@ func (r Runner) watch(done <-chan error, run *Run, stream *os.File, offset int64
 				}
 			}
 			if reason := r.overdue(now.Sub(started), w.inactiveFor(now)); reason != "" {
+				// stream を読めないあいだは活動として数える行を見られないので、stall の理由に読めない理由を添える
+				if w.readError != "" {
+					reason += " · " + w.readError
+				}
 				return Result{Failure: reason}, false
 			}
 		}
