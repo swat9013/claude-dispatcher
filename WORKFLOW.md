@@ -11,7 +11,7 @@ hooks:
   after_create: git -C "$CLAUDE_DISPATCHER_CLONE" fetch origin && git -C "$CLAUDE_DISPATCHER_CLONE" worktree add --detach "$CLAUDE_DISPATCHER_WORKSPACE" origin/main
   before_remove: git -C "$CLAUDE_DISPATCHER_CLONE" worktree remove --force "$CLAUDE_DISPATCHER_WORKSPACE"
 limits:
-  max_concurrent: 1
+  max_concurrent: 3
   # 実装の playbook は 2 軸レビューを 2 回通すので 1 時間に収まらないことがある。止められても次の attempt が同じ session を続ける
   run_timeout: 3h
   # go test -race の数分は heartbeat しか書かず、heartbeat は活動として数えない
