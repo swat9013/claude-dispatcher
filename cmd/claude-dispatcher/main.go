@@ -78,7 +78,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	case "--version":
 		// workflow 定義も state dir も読まない。不具合の報告に版を貼れるよう、導入が壊れていても撃てる
-		fmt.Fprintf(stdout, "claude-dispatcher %s\n", version.Line())
+		fmt.Fprintf(stdout, "claude-dispatcher %s\n", version.Current())
 		return 0
 	}
 	return usageError(stderr, "未知の subcommand: %s", args[0])
@@ -312,6 +312,7 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 		NewSessionID: worker.NewSessionID,
 		Publish:      publish,
 		Workflow:     abs,
+		Build:        version.Current(),
 		ScopeKey:     scopeKey,
 		Log:          logFile,
 		Output:       output,

@@ -49,12 +49,13 @@ func TestStatusShowsTheRunningWorker(t *testing.T) {
 	s.writeWorkflowWithCommands(s.workerWorkflow(""))
 	s.setIssues(readyIssue(42))
 	s.onClaude(stubwire.Rule{ReleaseFile: s.releaseFile()})
+	version, _ := s.buildOf()
 	s.startLoop()
 	s.waitEvents("start", 1)
 
 	out := s.waitStatusRow("issue#42", "implement", "1", "running")
 
-	if !strings.HasPrefix(out, "● loop 稼働中  github.com/acme/widgets\n") {
+	if !strings.HasPrefix(out, "● loop 稼働中  github.com/acme/widgets · "+version+"\n") {
 		t.Fatalf("status の見出し:\n%s", out)
 	}
 }

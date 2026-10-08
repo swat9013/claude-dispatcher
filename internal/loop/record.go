@@ -64,6 +64,12 @@ type recorder struct {
 // event は log.jsonl に 1 行書き、同じことを人が読む行で出す。log.jsonl に書けなければ、そのことを人が読む行に出して
 // 続ける (loop は log を書けないことでは止まらない)。
 func (r recorder) event(event string, fields map[string]any, kind LineKind, label, format string, a ...any) {
+	r.write(event, fields)
+	r.human(kind, label, format, a...)
+}
+
+// write は log.jsonl に 1 行だけ書き、人が読む行を出さない。書けなければ、そのことを人が読む行に出して続ける。
+func (r recorder) write(event string, fields map[string]any) {
 	fields["ts"] = r.now().UTC().Format(time.RFC3339)
 	fields["scope"] = r.scope
 	fields["event"] = event
@@ -74,7 +80,6 @@ func (r recorder) event(event string, fields map[string]any, kind LineKind, labe
 	if err != nil {
 		r.human(LineError, "log.jsonl", " に %s の行を書けない: %v", event, err)
 	}
-	r.human(kind, label, format, a...)
 }
 
 func (r recorder) tickError(message string) {

@@ -58,6 +58,35 @@ func TestStoppedLoopShowsOnlyItsHeading(t *testing.T) {
 	}
 }
 
+func TestHeadingOfALiveLoopShowsTheVersionThatWroteTheStatusFile(t *testing.T) {
+	s := status.Snapshot{Scope: "github.com/acme/widgets", Version: "v0.3.0", Commit: "0123abc"}
+
+	got := status.Render(s, status.LoopAlive, base, time.UTC, pipe)
+
+	// commit は見出しに出さない
+	if !strings.HasPrefix(got, "● loop 稼働中  github.com/acme/widgets · v0.3.0\n") {
+		t.Fatalf("描画:\n%s", got)
+	}
+}
+
+func TestHeadingOfAStatusFileWithoutAVersionLeavesTheVersionOut(t *testing.T) {
+	// 版を足す前の版が書いた状態 file
+	got := status.Render(status.Snapshot{Scope: "s"}, status.LoopAlive, base, time.UTC, pipe)
+
+	if !strings.HasPrefix(got, "● loop 稼働中  s\n") {
+		t.Fatalf("描画:\n%s", got)
+	}
+}
+
+func TestHeadingOfAStoppedLoopLeavesTheVersionOut(t *testing.T) {
+	// 状態 file の版は止まった loop のもの
+	got := status.Render(status.Snapshot{Scope: "s", Version: "v0.3.0", Commit: "0123abc"}, status.LoopGone, base, time.UTC, pipe)
+
+	if got != "○ loop なし  s\n" {
+		t.Fatalf("描画 = %q", got)
+	}
+}
+
 func TestUnrecordedHeadingFollowsTheLoop(t *testing.T) {
 	if got := status.Unrecorded("s", status.LoopAlive, pipe); got != "● loop 稼働中  s\n記録なし\n" {
 		t.Fatalf("見出し = %q", got)

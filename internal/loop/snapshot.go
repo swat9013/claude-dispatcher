@@ -48,7 +48,7 @@ var phases = map[phase]status.Phase{
 // snapshot は状態 file の中身 (formats.md §7.1)。作業対象は種類と番号の順に並べる。
 func (l *loop) snapshot() status.Snapshot {
 	s := status.Snapshot{
-		Scope: l.o.ScopeKey, Workflow: l.o.Workflow, StartedAt: l.board.startedAt, UpdatedAt: l.o.Now(),
+		Scope: l.o.ScopeKey, Workflow: l.o.Workflow, StartedAt: l.board.startedAt, Version: l.o.Build.Version, Commit: l.o.Build.Commit, UpdatedAt: l.o.Now(),
 		Stopping: l.stopping > 0, LastTick: l.board.lastTick,
 		Workers: []status.Worker{}, Abandoned: []status.Abandoned{}, Ambiguous: []status.Ambiguous{}, Blocked: []status.Blocked{},
 	}
