@@ -285,7 +285,7 @@ func TestActionWithoutALeadingSlashIsNotChecked(t *testing.T) {
 }
 
 // assertNoUnreadablePlace は、action の先頭の名前が見つからず、見つからない理由の後ろに注記 (` · ` で始まる読めなかった
-// 置き場) が添えられていないことを確かめる。
+// 置き場か設定の誤り) が添えられていないことを確かめる。
 func (p places) assertNoUnreadablePlace(t *testing.T, action string) {
 	t.Helper()
 	if got := p.check(action); !strings.Contains(got, "見つからない") || strings.Contains(got, " · ") {
@@ -323,11 +323,12 @@ func TestSkillDirectoryThatIsASymlinkIsFound(t *testing.T) {
 	p.assertFound(t, "/deploy")
 }
 
-func TestSkillDirectoryWithoutPermissionIsAPlaceThatCouldNotBeRead(t *testing.T) {
+// lockedSkill は ~/.claude/skills/locked に skill を置いて権限を外し、その dir を返す。root は権限に関わらず読めるので skip する。
+func (p places) lockedSkill(t *testing.T) string {
+	t.Helper()
 	if os.Getuid() == 0 {
 		t.Skip("root は権限に関わらず読める")
 	}
-	p := newPlaces(t)
 	locked := filepath.Join(p.home, ".claude/skills/locked")
 	write(t, filepath.Join(locked, "SKILL.md"), "---\nname: locked\n---\n")
 	if err := os.Chmod(locked, 0o000); err != nil {
@@ -339,12 +340,62 @@ func TestSkillDirectoryWithoutPermissionIsAPlaceThatCouldNotBeRead(t *testing.T)
 			t.Error(err)
 		}
 	})
+	return locked
+}
+
+func TestSkillDirectoryWithoutPermissionIsAPlaceThatCouldNotBeRead(t *testing.T) {
+	p := newPlaces(t)
+	locked := p.lockedSkill(t)
 
 	got := p.check("/x")
 
 	if !strings.Contains(got, "読めなかった置き場: ") || !strings.Contains(got, filepath.Join(locked, "SKILL.md")+" (") {
 		t.Fatalf("検査 = %q", got)
 	}
+}
+
+func TestSkillDirectoryWithoutPermissionIsShownOnce(t *testing.T) {
+	// skills の置き場の dir は skill の dir でも plugin の dir でもありうるが、同じ原因の失敗を別の path で並べない
+	p := newPlaces(t)
+	locked := p.lockedSkill(t)
+
+	got := p.check("/x")
+
+	_, note, _ := strings.Cut(got, "読めなかった置き場: ")
+	n := 0
+	for _, place := range strings.Split(note, ", ") {
+		if strings.HasPrefix(place, locked+string(filepath.Separator)) {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("%s の下の失敗が %d 件載る: %q", locked, n, got)
+	}
+}
+
+func TestPluginWhoseSkillFileCannotBeFollowedIsFound(t *testing.T) {
+	// SKILL.md だけが辿れない (輪になった symlink) dir は、plugin.json を確かめられるので plugin の dir として数える
+	p := newPlaces(t)
+	dir := p.bundle(t, `{"name": "bundle"}`)
+	write(t, filepath.Join(dir, "skills/foo/SKILL.md"), "---\nname: foo\n---\n")
+	loop := filepath.Join(dir, "SKILL.md")
+	if err := os.Symlink(loop, loop); err != nil {
+		t.Fatal(err)
+	}
+
+	p.assertFound(t, "/bundle:foo")
+}
+
+func TestDirectoryWithBothASkillAndAManifestIsASkillAndAPlugin(t *testing.T) {
+	p := newPlaces(t)
+	dir := p.bundle(t, `{"name": "bundle", "commands": ["./cmds/run.md"]}`)
+	// front matter に name の無い SKILL.md は、plugin の skill としては `bundle:bundle` でだけ呼べる。素の `bundle` は skill の
+	// dir として数えたときだけ呼べる
+	write(t, filepath.Join(dir, "SKILL.md"), "手順")
+	write(t, filepath.Join(dir, "cmds/run.md"), "走る")
+
+	p.assertFound(t, "/bundle")
+	p.assertFound(t, "/bundle:run")
 }
 
 func TestBrokenManifestOfAPluginIsAPlaceThatCouldNotBeRead(t *testing.T) {
@@ -359,7 +410,7 @@ func TestBrokenManifestOfAPluginIsAPlaceThatCouldNotBeRead(t *testing.T) {
 }
 
 func TestSymlinkUnderTheSkillsDirectoryThatCannotBeFollowedIsShownOnce(t *testing.T) {
-	// skill と plugin は同じ置き場を別々に探すが、同じ失敗を 2 度並べない
+	// 辿れない symlink の失敗は、skill の置き場としても plugin の置き場としても 1 度だけ並べる
 	p := newPlaces(t)
 	loop := filepath.Join(p.home, ".claude/skills/loop")
 	write(t, filepath.Join(p.home, ".claude/skills/.keep"), "")
@@ -372,4 +423,62 @@ func TestSymlinkUnderTheSkillsDirectoryThatCannotBeFollowedIsShownOnce(t *testin
 	if n := strings.Count(got, loop+" ("); n != 1 {
 		t.Fatalf("%s が %d 回載る: %q", loop, n, got)
 	}
+}
+
+// assertMisconfigured は、action `/x` が見つからず、見つからない理由の後ろに設定の誤りとして file の path だけが 1 度添えられる
+// (読めなかった置き場には載らない) ことを確かめる。
+func (p places) assertMisconfigured(t *testing.T, file string, args ...string) {
+	t.Helper()
+	got := p.check("/x", args...)
+	want := "t: action の先頭の /x が見つからない (plugin・repo の .claude・~/.claude の skill と command) · 設定の誤り (dir でなく file を指す): " + file
+	if got != want {
+		t.Fatalf("検査 = %q, want %q", got, want)
+	}
+}
+
+func TestMisconfigurationIsShownBeforeThePlacesThatCouldNotBeRead(t *testing.T) {
+	p := newPlaces(t)
+	installed := filepath.Join(p.home, ".claude/plugins/installed_plugins.json")
+	write(t, installed, "{壊れた")
+	write(t, filepath.Join(p.clone, "plugins/local"), "{}")
+
+	got := p.check("/x", "--plugin-dir", "plugins/local")
+
+	want := "t: action の先頭の /x が見つからない (plugin・repo の .claude・~/.claude の skill と command)" +
+		" · 設定の誤り (dir でなく file を指す): " + filepath.Join(p.clone, "plugins/local") +
+		" · 読めなかった置き場: " + installed + " ("
+	if !strings.HasPrefix(got, want) {
+		t.Fatalf("検査 = %q, want %q で始まる", got, want)
+	}
+}
+
+func TestSkillPathOfTheManifestThatIsAFileIsAMisconfiguration(t *testing.T) {
+	p := newPlaces(t)
+	dir := p.bundle(t, `{"name": "bundle", "skills": "./SKILL.md"}`)
+	write(t, filepath.Join(dir, "SKILL.md"), "---\nname: bundle\n---\n")
+
+	p.assertMisconfigured(t, filepath.Join(dir, "SKILL.md"))
+}
+
+func TestPluginDirectoryGivenToClaudeThatIsAFileIsAMisconfiguration(t *testing.T) {
+	p := newPlaces(t)
+	write(t, filepath.Join(p.clone, "plugins/local"), "{}")
+
+	p.assertMisconfigured(t, filepath.Join(p.clone, "plugins/local"), "--plugin-dir", "plugins/local")
+}
+
+func TestClaudePluginDirectoryOfAPluginUnderTheSkillsDirectoryThatIsAFileIsAMisconfiguration(t *testing.T) {
+	p := newPlaces(t)
+	dir := filepath.Join(p.home, ".claude/skills/bundle")
+	write(t, filepath.Join(dir, ".claude-plugin"), `{"name": "bundle"}`)
+
+	p.assertMisconfigured(t, filepath.Join(dir, ".claude-plugin"))
+}
+
+func TestClaudePluginDirectoryOfAPluginGivenToClaudeThatIsAFileIsAMisconfiguration(t *testing.T) {
+	p := newPlaces(t)
+	dir := filepath.Join(p.clone, "plugins/local")
+	write(t, filepath.Join(dir, ".claude-plugin"), `{"name": "local"}`)
+
+	p.assertMisconfigured(t, filepath.Join(dir, ".claude-plugin"), "--plugin-dir", "plugins/local")
 }
