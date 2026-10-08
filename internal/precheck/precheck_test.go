@@ -285,7 +285,7 @@ func TestActionWithoutALeadingSlashIsNotChecked(t *testing.T) {
 }
 
 // assertNoUnreadablePlace は、action の先頭の名前が見つからず、見つからない理由の後ろに注記 (` · ` で始まる読めなかった
-// 置き場) が添えられていないことを確かめる。
+// 置き場か設定の誤り) が添えられていないことを確かめる。
 func (p places) assertNoUnreadablePlace(t *testing.T, action string) {
 	t.Helper()
 	if got := p.check(action); !strings.Contains(got, "見つからない") || strings.Contains(got, " · ") {
@@ -404,4 +404,46 @@ func TestSymlinkUnderTheSkillsDirectoryThatCannotBeFollowedIsShownOnce(t *testin
 	if n := strings.Count(got, loop+" ("); n != 1 {
 		t.Fatalf("%s が %d 回載る: %q", loop, n, got)
 	}
+}
+
+// assertMisconfigured は、action `/x` が見つからず、見つからない理由の後ろに設定の誤りとして file の path だけが 1 度添えられる
+// (読めなかった置き場には載らない) ことを確かめる。
+func (p places) assertMisconfigured(t *testing.T, file string, args ...string) {
+	t.Helper()
+	got := p.check("/x", args...)
+	want := "t: action の先頭の /x が見つからない (plugin・repo の .claude・~/.claude の skill と command) · 設定の誤り (dir でなく file を指す): " + file
+	if got != want {
+		t.Fatalf("検査 = %q, want %q", got, want)
+	}
+}
+
+func TestSkillPathOfTheManifestThatIsAFileIsAMisconfiguration(t *testing.T) {
+	p := newPlaces(t)
+	dir := p.bundle(t, `{"name": "bundle", "skills": "./SKILL.md"}`)
+	write(t, filepath.Join(dir, "SKILL.md"), "---\nname: bundle\n---\n")
+
+	p.assertMisconfigured(t, filepath.Join(dir, "SKILL.md"))
+}
+
+func TestPluginDirectoryGivenToClaudeThatIsAFileIsAMisconfiguration(t *testing.T) {
+	p := newPlaces(t)
+	write(t, filepath.Join(p.clone, "plugins/local"), "{}")
+
+	p.assertMisconfigured(t, filepath.Join(p.clone, "plugins/local"), "--plugin-dir", "plugins/local")
+}
+
+func TestClaudePluginDirectoryOfAPluginUnderTheSkillsDirectoryThatIsAFileIsAMisconfiguration(t *testing.T) {
+	p := newPlaces(t)
+	dir := filepath.Join(p.home, ".claude/skills/bundle")
+	write(t, filepath.Join(dir, ".claude-plugin"), `{"name": "bundle"}`)
+
+	p.assertMisconfigured(t, filepath.Join(dir, ".claude-plugin"))
+}
+
+func TestClaudePluginDirectoryOfAPluginGivenToClaudeThatIsAFileIsAMisconfiguration(t *testing.T) {
+	p := newPlaces(t)
+	dir := filepath.Join(p.clone, "plugins/local")
+	write(t, filepath.Join(dir, ".claude-plugin"), `{"name": "local"}`)
+
+	p.assertMisconfigured(t, filepath.Join(dir, ".claude-plugin"), "--plugin-dir", "plugins/local")
 }

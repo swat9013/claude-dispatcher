@@ -321,6 +321,7 @@ trigger ごとに、action の先頭の skill か command が呼べるかを確�
 - 先頭が `/` でも template 変数でもない action は、確かめない
 - 誤りは trigger を名指しして 1 件 1 行で出す
 - 置き場を読めなかったとき (無いのではなく、読み出しか解析に失敗したとき) は、見つからない理由の後ろに ` · 読めなかった置き場: <path> (<理由>), …` を足す
+- 置き場を探す path の途中か置き場そのものが、dir であるはずなのに file のとき (`plugin.json` の `skills` が file を指す・`--plugin-dir` が file を指す・plugin の `.claude-plugin` が file 等。OS の返す理由は not a directory) は、読み出しの失敗ではなく設定の誤りとして、読めなかった置き場に載せず、見つからない理由の後ろに ` · 設定の誤り (dir でなく file を指す): <path>, …` を足す。`<path>` は file になっている path (`--plugin-dir` なら workflow 定義の dir から解いた path) で、その下の path を何通り探しても 1 度だけ載せる。両方あるときは設定の誤りを先に足す
 
 ```
 trigger implement: action の先頭の /playbook が見つからない (plugin・repo の .claude・~/.claude の skill と command)
