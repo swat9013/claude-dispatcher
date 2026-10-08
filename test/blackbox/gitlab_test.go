@@ -302,6 +302,9 @@ func TestGitLabForbiddenObservationIsUnavailableWithAShortReasonInDoctor(t *test
 			if !strings.Contains(out, glabForbiddenReason) || strings.Contains(out, strings.TrimSpace(stderr)) {
 				t.Fatalf("doctor の理由が %q でないか、glab の stderr %q が載った:\n%s", glabForbiddenReason, stderr, out)
 			}
+			if !strings.Contains(out, "glab api") || !strings.Contains(out, "exit 1") {
+				t.Fatalf("doctor の理由に撃ったコマンドと exit code が無い:\n%s", out)
+			}
 		})
 	}
 }
@@ -332,6 +335,42 @@ func TestGitLabSetupShowsAShortReasonWhenRepoViewIsForbiddenByAProxy(t *testing.
 	assertExit(t, r, 1)
 	if !strings.Contains(r.stderr, glabForbiddenReason) || strings.Contains(r.stderr, "<html>") {
 		t.Fatalf("setup の理由が %q でないか、proxy の HTML が載った:\n%s", glabForbiddenReason, r.stderr)
+	}
+	// 拒否した host を読めるよう、撃った要求は残す
+	for _, want := range []string{"Get https://" + gitlabHost + "/api/v4/projects/acme%2Fw", "glab repo view", "exit 1"} {
+		if !strings.Contains(r.stderr, want) {
+			t.Fatalf("setup のエラー文に %q が無い:\n%s", want, r.stderr)
+		}
+	}
+}
+
+func TestGitLabSetupLeavesOutTheHTMLBodyWhateverTheStatus(t *testing.T) {
+	s := newSandbox(t)
+	if err := os.Remove(s.workflowFile()); err != nil {
+		t.Fatal(err)
+	}
+	s.respond("git", gitlabOrigin)
+	s.respond("glab", stubwire.Rule{
+		ArgsPrefix: []string{"repo", "view", "--output", "json"},
+		Stderr: "          \n   ERROR  \n          \n" +
+			"  Get https://" + gitlabHost + "/api/v4/projects/acme%2Fw: 502 failed to parse unknown error format: <html>\n" +
+			"  <head><title>502 Bad Gateway</title></head>\n" +
+			"  <body><h1>502 Bad Gateway</h1></body>\n" +
+			"  </html>\n" +
+			"  .\n\n",
+		Exit: 1,
+	})
+
+	r := s.run("setup")
+
+	assertExit(t, r, 1)
+	if strings.Contains(r.stderr, "<html>") || strings.Contains(r.stderr, "<h1>") {
+		t.Fatalf("setup のエラー文に HTML の本文が載った:\n%s", r.stderr)
+	}
+	for _, want := range []string{"glab repo view", "exit 1", "Get https://" + gitlabHost + "/api/v4/projects/acme%2Fw: 502"} {
+		if !strings.Contains(r.stderr, want) {
+			t.Fatalf("setup のエラー文に %q が無い:\n%s", want, r.stderr)
+		}
 	}
 }
 

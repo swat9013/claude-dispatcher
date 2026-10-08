@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -20,15 +21,43 @@ type Command struct {
 
 // Error は外部 CLI の失敗。起動できなかった / timeout なら Exit は -1。
 type Error struct {
-	Name   string
-	Args   []string
-	Exit   int
+	Name string
+	Args []string
+	Exit int
+	// Stderr は CLI が出した stderr の全体。失敗の分類はこれを読む
 	Stderr string
+	// Summary は空でなければ、エラー文に Stderr の代わりに載せる。stderr を読んだ呼び出し側が、本文を除いて短くしたもの
+	Summary string
 }
 
+// Error は撃ったコマンド・exit code と Detail を返す。
 func (e *Error) Error() string {
 	head := strings.Join(e.Args[:min(2, len(e.Args))], " ")
-	return fmt.Sprintf("%s %s failed (exit %d): %s", e.Name, head, e.Exit, strings.TrimSpace(e.Stderr))
+	return fmt.Sprintf("%s %s failed (exit %d): %s", e.Name, head, e.Exit, e.Detail())
+}
+
+// Detail はエラー文に載せる失敗の中身。Summary があればそれ、無ければ stderr から HTML の本文を落としたもの (formats.md §3)。
+// 撃ったコマンドを自分の言葉で名指す呼び出し側 (hook) は、Error の代わりにこれを使う。
+func (e *Error) Detail() string {
+	if e.Summary != "" {
+		return e.Summary
+	}
+	return withoutHTMLBody(e.Stderr)
+}
+
+// htmlBody は stderr の中の HTML の本文の始まり。reverse proxy・SSO・load balancer は status に依らず HTML のページを
+// 返すことがあり、CLI はそれを stderr に載せうる
+// (`<head>`・`<body>` は git の usage の `[<head>]` などにも現れるので、本文の始まりとして見ない)
+var htmlBody = regexp.MustCompile(`(?i)<!doctype html|<html[\s>]`)
+
+// withoutHTMLBody は stderr から HTML の本文 (始まりから後) を落とし、落としたことを書き添える。HTML が無ければ前後の
+// 空白を除いただけで返す。
+func withoutHTMLBody(stderr string) string {
+	loc := htmlBody.FindStringIndex(stderr)
+	if loc == nil {
+		return strings.TrimSpace(stderr)
+	}
+	return strings.TrimSpace(strings.TrimSpace(stderr[:loc[0]]) + " <HTML の本文を省いた>")
 }
 
 // Output は args で撃ち、stdout を返す。exit 0 以外は *Error。timeout を超えたら process group ごと止める。

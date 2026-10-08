@@ -4,7 +4,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/workspace"
@@ -77,6 +79,31 @@ func TestWorkspaceInsideAnotherRepoHasNoBranchOfItsOwn(t *testing.T) {
 
 	if err != nil || branch != "" {
 		t.Fatalf("branch = %q (%v), want 親の repo の branch を返さない", branch, err)
+	}
+}
+
+func TestHookFailureLeavesOutAnHTMLBodyButKeepsTheHookAndTheExitCode(t *testing.T) {
+	m := manager(t, t.TempDir())
+	// curl などが proxy の HTML のページを stderr に出して落ちた hook
+	m.Hooks = workspace.Hooks{
+		BeforeRun: `printf 'curl: (22) The requested URL returned error: 502\n<!DOCTYPE html>\n<html><body><h1>502 Bad Gateway</h1></body></html>\n' >&2; exit 22`,
+		Timeout:   5 * time.Second,
+	}
+
+	_, err := m.Prepare(ref)
+
+	if err == nil {
+		t.Fatal("err = nil")
+	}
+	for _, want := range []string{"before_run", "exit 22", "returned error: 502"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("%q を含まない: %v", want, err)
+		}
+	}
+	for _, body := range []string{"<html>", "<h1>", "<!DOCTYPE"} {
+		if strings.Contains(err.Error(), body) {
+			t.Errorf("HTML の本文 %q が載った: %v", body, err)
+		}
 	}
 }
 
