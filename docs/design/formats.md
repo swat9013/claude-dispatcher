@@ -371,6 +371,7 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 | `release` | 再起動を待つ claim を、起動せずに解いた | `target`・`trigger`・`attempt`・`session_id`・`reason` (`終端` / `trigger から外れた` / `trigger が workflow 定義から消えた` / `曖昧な CL`) |
 | `abandon` | attempt の上限で打ち切った | `target`・`trigger`・`attempt`・`session_id` |
 | `wait_slot` | backoff が明けた再起動が、並列上限に空きが無くて待ち始めた (1 回の待ちにつき 1 行) | `target`・`trigger`・`next_attempt`・`max_concurrent` |
+| `recheck_skip` | 起動しようとした候補を起動の直前に読み直し (§6 の tick の手順 7)、起動しなかった (候補 1 件につき 1 行。読み直せなかった候補は `error` の行で残し、この行は書かない) | `target`・`trigger`・`reason` (`当たるかをまだ決められない` / `終端` / `trigger から外れた` / `宣言順で先の trigger に当たる`) |
 | `unabandon` | 打ち切りを解いた (打ち切ったときの trigger から外れたのを観測した) | `target`・`trigger` |
 | `error` | 処理は続けるが、運用者が知るべき失敗 | `target` (あれば)・`error` |
 
@@ -467,7 +468,7 @@ claude-dispatcher loop [<workflow の path>]
 6. 再起動: backoff の明けた再起動待ちの claim を、次の「再起動」の規則で起動する
 7. trigger を評価し (§2.4)、候補のうち claim も打ち切りもされていないものを、`limits.max_concurrent` から走っている worker と再起動待ちの claim を引いた数だけ起動する (確かめ待ちの claim と、事前検査に落ちた trigger の再起動待ちの claim は数えない)
    - 起動の直前に、候補を 1 件ずつ読み直す (open な一覧の検索は、書き込みの直後に古い結果を返しうるため)。tracker の種類を問わず読み直す。次のときはその tick では起動せず、起動しなかった分の空きを次の候補に回す。次の tick で候補になれば試み直す
-     - 当たるかをまだ決められない (conflict を計算中の CL。§2.3)・終端になっている・起動しようとした trigger から外れている・宣言順で先の trigger に当たるようになっている。人が読む行に `読み直しで起動せず` を出す
+     - 当たるかをまだ決められない (conflict を計算中の CL。§2.3)・終端になっている・起動しようとした trigger から外れている・宣言順で先の trigger に当たるようになっている。log.jsonl に `recheck_skip` の行 (§4) を書き、人が読む行に `読み直しで起動せず` を出す
      - 読み直せない。error の行を残す
    - CL は、claim している作業対象の workspace で checkout されている branch を head に持つもの (同じ repo の CL) なら起動しない。一覧の CL で当たれば読み直さずに外し、読み直した CL でも確かめ直す。branch は workspace を cwd にして `git symbolic-ref --short -q HEAD` で読む。workspace が無い・git の作業ツリーでない・detached HEAD なら branch は無いとする
    - branch をそれ以外の理由で読めなければ、error の行を残し、その tick は CL の候補を起動しない (同じ branch に worker を重ねないため)
