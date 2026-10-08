@@ -53,13 +53,15 @@ func (l *loop) fail(ref target.Ref, c *claim) {
 }
 
 // arm は、最も早い再起動の予定に届く wake を置く。もっと早い予定の wake が既にあれば置き直さない。停止要求の後は置かない。
+// retry が直近に見渡した時刻までに予定の明けた claim には置かない。その時に試みて起動できなかった claim は、tick と worker
+// の終わりに試み直す (置き直すと、tick の外では起動できない CL の claim などで wake が回り続ける)。
 func (l *loop) arm() {
 	if l.stopping > 0 {
 		return
 	}
 	var earliest time.Time
 	for _, c := range l.claims {
-		if l.restartable(c) && (earliest.IsZero() || c.retryAt.Before(earliest)) {
+		if l.restartable(c) && c.retryAt.After(l.retriedAt) && (earliest.IsZero() || c.retryAt.Before(earliest)) {
 			earliest = c.retryAt
 		}
 	}
@@ -79,6 +81,7 @@ func (l *loop) arm() {
 // は同じ trigger で続ける。system.md §7)。CL の再起動は、曖昧さと branch を確かめられる tick の中でだけ試みる。
 func (l *loop) retry(store Store, v *view) {
 	now := l.o.Now()
+	l.retriedAt = now
 	for ref, c := range l.claims {
 		if c.phase != phaseWaitingRetry || now.Before(c.retryAt) {
 			continue
