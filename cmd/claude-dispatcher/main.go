@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -300,14 +301,15 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	output.Show(loop.Line{At: time.Now(), Label: "loop を始めた", Rest: fmt.Sprintf(": scope %s · state dir %s · workflow %s", scopeKey, dir, abs)})
+	hookLock := &sync.Mutex{}
 	return loop.Run(loop.Options{
 		Load:       load,
 		Definition: def,
 		Precheck:   e.precheck,
 		Store:      e.store,
-		Workspaces: func(def workflow.Definition) loop.Workspaces { return e.workspaces(def) },
+		Workspaces: func(def workflow.Definition) loop.Workspaces { return e.workspaces(def, hookLock) },
 		Launch: func(def workflow.Definition, job worker.Job, events chan<- worker.Event) loop.Worker {
-			return worker.Runner{Workspaces: e.workspaces(def), Definition: def, Env: e.env, StateDir: dir}.Start(job, events)
+			return worker.Runner{Workspaces: e.workspaces(def, hookLock), Definition: def, Env: e.env, StateDir: dir}.Start(job, events)
 		},
 		NewSessionID: worker.NewSessionID,
 		Publish:      publish,
@@ -322,10 +324,11 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 	})
 }
 
-// workspaces は workflow 定義の workspace の置き場と hooks。hooks には loop の環境を渡す。
-func (e environment) workspaces(def workflow.Definition) workspace.Manager {
+// workspaces は workflow 定義の workspace の置き場と hooks。hooks には loop の環境を渡す。hookLock は loop が 1 つ
+// 持つ、after_create と before_remove を直列に撃つ lock。
+func (e environment) workspaces(def workflow.Definition, hookLock *sync.Mutex) workspace.Manager {
 	h := def.Hooks
-	return workspace.Manager{Root: def.WorkspaceRoot, Clone: def.Dir, Env: e.env, Hooks: workspace.Hooks{
+	return workspace.Manager{Root: def.WorkspaceRoot, Clone: def.Dir, Env: e.env, HookLock: hookLock, Hooks: workspace.Hooks{
 		AfterCreate: h.AfterCreate, BeforeRun: h.BeforeRun, AfterRun: h.AfterRun, BeforeRemove: h.BeforeRemove, Timeout: h.Timeout,
 	}}
 }

@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -21,7 +22,7 @@ func manager(t *testing.T, root string) workspace.Manager {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Fatal("git が無い (git は CL 側の trigger で loop が撃つ依存)")
 	}
-	return workspace.Manager{Root: root, Env: []string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir()}}
+	return workspace.Manager{Root: root, Env: []string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir()}, HookLock: &sync.Mutex{}}
 }
 
 func git(t *testing.T, dir string, args ...string) {
