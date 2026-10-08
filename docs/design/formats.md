@@ -316,6 +316,7 @@ trigger ごとに、action の先頭の skill か command が呼べるかを確�
   - plugin の command は、plugin の `commands/`。`plugin.json` に `commands` があれば `commands/` を置き換える: path (か path の列) ならその path の command、対応表なら key が command の名前
   - `plugin.json` の空の path は置き場にしない
   - skill と plugin の dir を探す置き場 (`.claude/skills/`・plugin の `skills/`・`plugin.json` の `skills` が挙げる path) の直下は、dir (指す先が dir の symlink を含む) だけを skill か plugin の dir とみなす。直下の通常の file (`.DS_Store`・README 等) は飛ばし、読めなかった置き場に数えない
+  - repo の `.claude/skills/` と `~/.claude/skills/` は 1 度だけ読み、直下の dir ごとに skill の dir (`SKILL.md` を持つ) か plugin の dir (`.claude-plugin/plugin.json` を持つ) かを確かめる (両方を持つ dir は両方に数える)。dir の中を確かめられない (権限が無い等) ときは、その dir の失敗を 1 件だけ読めなかった置き場に数え、その dir を飛ばす
 - action の先頭を template 変数で始める (前の空白を除いて `{{` で始まる) と、先頭の `/名前` を確かめられないので、その trigger を失敗させる
 - 先頭が `/` でも template 変数でもない action は、確かめない
 - 誤りは trigger を名指しして 1 件 1 行で出す

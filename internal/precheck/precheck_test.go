@@ -347,6 +347,38 @@ func TestSkillDirectoryWithoutPermissionIsAPlaceThatCouldNotBeRead(t *testing.T)
 	}
 }
 
+func TestSkillDirectoryWithoutPermissionIsShownOnce(t *testing.T) {
+	// skills の置き場の dir は skill の dir か plugin の dir かを 1 度に確かめるので、同じ原因の失敗を別の path で並べない
+	if os.Getuid() == 0 {
+		t.Skip("root は権限に関わらず読める")
+	}
+	p := newPlaces(t)
+	locked := filepath.Join(p.home, ".claude/skills/locked")
+	write(t, filepath.Join(locked, "SKILL.md"), "---\nname: locked\n---\n")
+	if err := os.Chmod(locked, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		// TempDir が片付けられるよう、権限を戻す
+		if err := os.Chmod(locked, 0o755); err != nil {
+			t.Error(err)
+		}
+	})
+
+	got := p.check("/x")
+
+	_, note, _ := strings.Cut(got, "読めなかった置き場: ")
+	n := 0
+	for _, place := range strings.Split(note, ", ") {
+		if strings.HasPrefix(place, locked+string(filepath.Separator)) {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("%s の下の失敗が %d 件載る: %q", locked, n, got)
+	}
+}
+
 func TestBrokenManifestOfAPluginIsAPlaceThatCouldNotBeRead(t *testing.T) {
 	p := newPlaces(t)
 	dir := p.bundle(t, "{壊れた")
@@ -359,7 +391,7 @@ func TestBrokenManifestOfAPluginIsAPlaceThatCouldNotBeRead(t *testing.T) {
 }
 
 func TestSymlinkUnderTheSkillsDirectoryThatCannotBeFollowedIsShownOnce(t *testing.T) {
-	// skill と plugin は同じ置き場を別々に探すが、同じ失敗を 2 度並べない
+	// 辿れない symlink の失敗は、skill の置き場としても plugin の置き場としても 1 度だけ並べる
 	p := newPlaces(t)
 	loop := filepath.Join(p.home, ".claude/skills/loop")
 	write(t, filepath.Join(p.home, ".claude/skills/.keep"), "")

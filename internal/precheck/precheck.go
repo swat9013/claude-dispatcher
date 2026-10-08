@@ -61,8 +61,8 @@ func (s *scan) add(names ...string) {
 	}
 }
 
-// failed は、読めなかった置き場を覚える。無い (ErrNotExist) のは失敗に数えない。skill と plugin は同じ置き場を別々に探すので、
-// 同じ失敗は 1 度だけ覚える。
+// failed は、読めなかった置き場を覚える。無い (ErrNotExist) のは失敗に数えない。同じ dir に複数の経路から届くことがある
+// (installed_plugins.json と --plugin-dir が同じ plugin を挙げる等) ので、同じ失敗は 1 度だけ覚える。
 func (s *scan) failed(path string, err error) {
 	if err == nil || errors.Is(err, fs.ErrNotExist) {
 		return
@@ -83,13 +83,17 @@ func (s *scan) unreadableNote() string {
 // available は呼べる skill と command の名前を探す。
 func available(clone, home string, claudeArgs []string) *scan {
 	s := &scan{names: map[string]bool{}}
+	plugins := s.installed(clone, home)
 	for _, base := range []string{filepath.Join(clone, ".claude"), filepath.Join(home, ".claude")} {
-		for _, k := range s.skillsUnder(filepath.Join(base, "skills")) {
+		skills, placed := s.skillsPlace(filepath.Join(base, "skills"))
+		for _, k := range skills {
 			s.add(k.name)
 		}
+		plugins = append(plugins, placed...)
 		s.add(s.commandsUnder(filepath.Join(base, "commands"))...)
 	}
-	for _, p := range s.plugins(clone, home, claudeArgs) {
+	plugins = append(plugins, s.pluginDirs(clone, claudeArgs)...)
+	for _, p := range plugins {
 		for _, k := range s.pluginSkills(p) {
 			s.add(p.name + ":" + k.name)
 			if k.named {
@@ -210,16 +214,33 @@ func (s *scan) exists(path string) bool {
 	return err == nil
 }
 
-// plugins は事前検査が探す plugin: installed_plugins.json が挙げるもの・skills の dir に置いたもの・--plugin-dir。
-func (s *scan) plugins(clone, home string, claudeArgs []string) []plugin {
-	list := s.installed(clone, home)
-	for _, base := range []string{filepath.Join(clone, ".claude", "skills"), filepath.Join(home, ".claude", "skills")} {
-		for _, dir := range s.dirsUnder(base) {
-			if s.exists(filepath.Join(dir, ".claude-plugin", "plugin.json")) {
-				list = append(list, s.readPlugin(dir, filepath.Base(dir)))
-			}
+// skillsPlace は skills の置き場 (repo の `.claude/skills`・`~/.claude/skills`) を 1 度だけ読み、直下の dir ごとに skill の
+// dir (`SKILL.md` を持つ) か plugin の dir (`.claude-plugin/plugin.json` を持つ) かに分ける。両方を持つ dir は両方に数える。
+// dir の中を確かめられなければ (権限が無い等)、その失敗を 1 件だけ覚えて dir を飛ばす: 続けて plugin.json を確かめても、
+// 同じ原因の失敗が別の path で並ぶだけになる。
+func (s *scan) skillsPlace(dir string) ([]skill, []plugin) {
+	var skills []skill
+	var plugins []plugin
+	for _, path := range s.dirsUnder(dir) {
+		skillFile := filepath.Join(path, "SKILL.md")
+		_, err := os.Stat(skillFile)
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			s.failed(skillFile, err)
+			continue
+		}
+		if err == nil {
+			skills = append(skills, s.readSkill(path))
+		}
+		if s.exists(filepath.Join(path, ".claude-plugin", "plugin.json")) {
+			plugins = append(plugins, s.readPlugin(path, filepath.Base(path)))
 		}
 	}
+	return skills, plugins
+}
+
+// pluginDirs は claude に渡す --plugin-dir の plugin。相対 path は clone から。
+func (s *scan) pluginDirs(clone string, claudeArgs []string) []plugin {
+	var list []plugin
 	for i, arg := range claudeArgs {
 		var dir string
 		switch {
