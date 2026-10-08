@@ -1,6 +1,7 @@
 package blackbox_test
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -43,6 +44,53 @@ func TestLoopNamesItsScopeKeyAndStateDirWhenItStarts(t *testing.T) {
 	}
 	if info, err := os.Stat(s.defaultStateDir()); err != nil || !info.IsDir() {
 		t.Fatalf("loop が state dir を作っていない: %v", err)
+	}
+}
+
+// buildOf は `--version` が出す版と commit。
+func (s *sandbox) buildOf() (version, commit string) {
+	s.t.Helper()
+	r := s.run("--version")
+	m := versionLine.FindStringSubmatch(r.stdout)
+	if m == nil {
+		s.t.Fatalf("--version: stdout = %q, stderr = %q", r.stdout, r.stderr)
+	}
+	return m[1], m[2]
+}
+
+func TestLoopRecordsTheVersionOfItsBinaryBeforeTheFirstTick(t *testing.T) {
+	s := newSandbox(t)
+	version, commit := s.buildOf()
+
+	s.startLoop()
+
+	s.waitEvents("tick", 1)
+	lines := s.logLines()
+	if lines[0]["event"] != "loop_start" || lines[0]["version"] != version || lines[0]["commit"] != commit {
+		t.Fatalf("log.jsonl の最初の行 = %v, want loop_start (version %s, commit %s)", lines[0], version, commit)
+	}
+	if starts := s.events("loop_start"); len(starts) != 1 {
+		t.Fatalf("loop_start の行 = %d 行, want 1 行", len(starts))
+	}
+}
+
+func TestStatusFileCarriesTheVersionOfTheLoop(t *testing.T) {
+	s := newSandbox(t)
+	version, commit := s.buildOf()
+
+	s.startLoop()
+
+	s.waitEvents("tick", 1)
+	raw, err := os.ReadFile(filepath.Join(s.defaultStateDir(), "status.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("状態 file を読めない: %v\n%s", err, raw)
+	}
+	if got["version"] != version || got["commit"] != commit {
+		t.Fatalf("状態 file の version = %v, commit = %v, want %s, %s", got["version"], got["commit"], version, commit)
 	}
 }
 

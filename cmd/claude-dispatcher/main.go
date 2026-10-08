@@ -300,6 +300,7 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	output.Show(loop.Line{At: time.Now(), Label: "loop を始めた", Rest: fmt.Sprintf(": scope %s · state dir %s · workflow %s", scopeKey, dir, abs)})
+	build := version.Current()
 	return loop.Run(loop.Options{
 		Load:       load,
 		Definition: def,
@@ -312,6 +313,8 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 		NewSessionID: worker.NewSessionID,
 		Publish:      publish,
 		Workflow:     abs,
+		Version:      build.Version,
+		Commit:       build.Commit,
 		ScopeKey:     scopeKey,
 		Log:          logFile,
 		Output:       output,

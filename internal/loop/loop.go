@@ -70,7 +70,10 @@ type Options struct {
 	Publish func(status.Snapshot) error
 	// Workflow は workflow 定義の path (状態 file に載せる)
 	Workflow string
-	Now      func() time.Time
+	// Version と Commit は loop の binary の版と commit (`--version` と同じ値)。log.jsonl の loop_start 行と状態 file に載せる
+	Version string
+	Commit  string
+	Now     func() time.Time
 	// After は d 後に届く channel を返す (time.After。テストは差し替える)
 	After func(d time.Duration) <-chan time.Time
 	// Refresh は走っている worker の活動を確かめる周期 (1s) に届く。nil なら確かめない
@@ -181,6 +184,8 @@ func Run(o Options) int {
 		rec: recorder{log: o.Log, output: o.Output, now: o.Now, scope: o.ScopeKey}, board: board{startedAt: o.Now()},
 	}
 	var next <-chan time.Time
+	// どの版の binary が書いた log かを後から読めるよう、起動を 1 行残す。人が読む起動の行は呼び出し側が出している
+	l.rec.write("loop_start", map[string]any{"version": o.Version, "commit": o.Commit})
 	// 前の loop が残した状態 file を、最初の tick の前に今の loop の状態で書き換える
 	l.publish()
 	l.tick()

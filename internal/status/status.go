@@ -21,6 +21,10 @@ type Snapshot struct {
 	Scope     string    `json:"scope"`
 	Workflow  string    `json:"workflow"`
 	StartedAt time.Time `json:"started_at"`
+	// Version と Commit は状態 file を書いた loop の binary の版と commit (`--version` と同じ値)。版を足す前の版が書いた
+	// 状態 file を読むと空
+	Version   string    `json:"version"`
+	Commit    string    `json:"commit"`
 	UpdatedAt time.Time `json:"updated_at"`
 	// Stopping は停止要求を受けて、worker の終了を待っているか
 	Stopping bool `json:"stopping"`
@@ -168,9 +172,14 @@ func Render(s Snapshot, loop Liveness, now time.Time, loc *time.Location, d Disp
 
 func clock(t time.Time, loc *time.Location) string { return t.In(loc).Format("15:04:05") }
 
-// Heading は見出し: loop の状態と scope key の行と、次の tick と直近の tick の行 (出す欄が無ければ出さない)。
+// Heading は見出し: loop の状態と scope key と版の行と、次の tick と直近の tick の行 (出す欄が無ければ出さない)。
+// 版は loop が生きていて、状態 file が版を持つときだけ出す (止まった loop の状態 file の版は、今の loop のものでない)。
 func Heading(s Snapshot, loop Liveness, loc *time.Location, d Display) string {
-	head := d.Line(state(loop, s.Stopping), Span{Plain, "  "}, Span{Bold, s.Scope}) + "\n"
+	first := []Span{state(loop, s.Stopping), {Plain, "  "}, {Bold, s.Scope}}
+	if loop != LoopGone && s.Version != "" {
+		first = append(first, Span{Gray, " · "}, Span{Plain, s.Version})
+	}
+	head := d.Line(first...) + "\n"
 	var ticks [][]Span
 	switch {
 	case loop == LoopGone:
