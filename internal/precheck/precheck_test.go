@@ -417,6 +417,22 @@ func (p places) assertMisconfigured(t *testing.T, file string, args ...string) {
 	}
 }
 
+func TestMisconfigurationIsShownBeforeThePlacesThatCouldNotBeRead(t *testing.T) {
+	p := newPlaces(t)
+	installed := filepath.Join(p.home, ".claude/plugins/installed_plugins.json")
+	write(t, installed, "{壊れた")
+	write(t, filepath.Join(p.clone, "plugins/local"), "{}")
+
+	got := p.check("/x", "--plugin-dir", "plugins/local")
+
+	want := "t: action の先頭の /x が見つからない (plugin・repo の .claude・~/.claude の skill と command)" +
+		" · 設定の誤り (dir でなく file を指す): " + filepath.Join(p.clone, "plugins/local") +
+		" · 読めなかった置き場: " + installed + " ("
+	if !strings.HasPrefix(got, want) {
+		t.Fatalf("検査 = %q, want %q で始まる", got, want)
+	}
+}
+
 func TestSkillPathOfTheManifestThatIsAFileIsAMisconfiguration(t *testing.T) {
 	p := newPlaces(t)
 	dir := p.bundle(t, `{"name": "bundle", "skills": "./SKILL.md"}`)

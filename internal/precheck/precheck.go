@@ -64,7 +64,7 @@ func (s *scan) add(names ...string) {
 	}
 }
 
-// failed は、読めなかった置き場を覚える。無い (ErrNotExist) のは失敗に数えない。同じ dir に複数の経路から届くことがある
+// failed は、置き場の失敗を読めなかった置き場か設定の誤りとして覚える。無い (ErrNotExist) のは失敗に数えない。同じ dir に複数の経路から届くことがある
 // (installed_plugins.json と --plugin-dir が同じ plugin を挙げる等) ので、同じ失敗は 1 度だけ覚える。
 //
 // path の途中か path そのものが file で失敗した (ENOTDIR) のは、読み出しの失敗ではなく設定の誤り (plugin.json の skills・
@@ -241,7 +241,7 @@ func (s *scan) paths(p plugin, key string, raw json.RawMessage) []string {
 	return slices.DeleteFunc(list, func(path string) bool { return path == "" })
 }
 
-// exists は path があるかを確かめる。無い以外の失敗は failed に渡す (権限などは読めなかった置き場、途中が file なら設定の誤り)。
+// exists は path があるかを確かめる。無い以外の失敗は failed に渡す。
 func (s *scan) exists(path string) bool {
 	_, err := os.Stat(path)
 	s.failed(path, err)
