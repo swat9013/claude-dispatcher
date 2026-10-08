@@ -521,10 +521,8 @@ func (l *loop) sweep(store Store, open []target.Item) {
 	}
 }
 
-// recheckCandidate は、起動しようとする候補を置き場から読み直し、起動してよければ読み直した作業対象を返す。open な一覧の検索は
-// 書き込みの直後に古い結果を返しうる (Jira の JQL 検索など) ので、完了した直後の作業対象を起動し直さないよう、当たるかをまだ
-// 決められないか、終端か、起動しようとした trigger から外れたか、評価する trigger (宣言順) のうち先のものに当たるようになって
-// いれば、recheck_skip の行を残して起動しない。読み直せなければ error の行を残して起動しない。どれも次の tick で候補になれば
+// recheckCandidate は、起動しようとする候補を RecheckCandidate で読み直し、起動してよければ読み直した作業対象を返す。
+// 起動しない理由があれば recheck_skip の行を、読み直せなければ error の行を残して起動しない。どれも次の tick で候補になれば
 // 試み直す。
 func (l *loop) recheckCandidate(store Store, triggers []trigger.Trigger, c trigger.Candidate) (target.Item, bool) {
 	ref := c.Item.Ref()
@@ -541,8 +539,9 @@ func (l *loop) recheckCandidate(store Store, triggers []trigger.Trigger, c trigg
 	return nil, false
 }
 
-// RecheckCandidate は、候補を置き場から読み直して起動してよいかを決める (formats.md §6 の tick の手順 7)。loop の起動と
-// 試運転 (formats.md §5) が同じ判定を使う。起動してよければ読み直した作業対象と "" を、起動しなければその理由 (当たるかを
+// RecheckCandidate は、候補を置き場から読み直して起動してよいかを決める (formats.md §6 の tick の手順 7)。open な一覧の
+// 検索は書き込みの直後に古い結果を返しうる (Jira の JQL 検索など) ので、完了した直後の作業対象を起動し直さないために読み
+// 直す。loop の起動と試運転 (formats.md §5) が同じ判定を使う。起動してよければ読み直した作業対象と "" を、起動しなければその理由 (当たるかを
 // まだ決められない・終端・起動しようとした trigger から外れた・triggers (宣言順) のうち先のものに当たる) を返す。読み直せ
 // なければ error。再起動はこの判定を使わない (宣言順で先の trigger を確かめないため。retry を見る)。
 func RecheckCandidate(store Store, triggers []trigger.Trigger, c trigger.Candidate) (target.Item, string, error) {

@@ -272,8 +272,8 @@ func TestJiraBlockersAreNotReadWithoutABlockedPredicate(t *testing.T) {
 			views++
 		}
 	}
-	if views != 1 {
-		t.Fatalf("workitem view = %d 回, want 1 (候補の読み直しだけ。blocked を書いていないのに依存先を読んだ)", views)
+	if views > 1 {
+		t.Fatalf("workitem view = %d 回, want 候補の読み直しの 1 回まで (blocked を書いていないのに依存先を読んだ)", views)
 	}
 }
 

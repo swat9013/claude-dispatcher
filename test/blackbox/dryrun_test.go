@@ -2,6 +2,7 @@ package blackbox_test
 
 import (
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -125,7 +126,7 @@ func TestDryRunPrintsNothingWhenNoIssueMatches(t *testing.T) {
 // setStaleList は gh の open な一覧に listed を載せ、1 件の読み直しには read を返すようにする (一覧の検索が古い)。
 func (s *sandbox) setStaleList(listed []issue, read ...stubwire.Rule) {
 	s.t.Helper()
-	rules := append(read, stubwire.Rule{ArgsPrefix: []string{"api", "graphql"}, ArgsContain: []string{issueListQuery}, Stdout: issuePages(listed...)})
+	rules := append(slices.Clone(read), stubwire.Rule{ArgsPrefix: []string{"api", "graphql"}, ArgsContain: []string{issueListQuery}, Stdout: issuePages(listed...)})
 	s.respondAll("gh", rules)
 }
 
@@ -145,6 +146,26 @@ func TestDryRunDoesNotListACandidateThatLeftTheTriggerWhenReadAgain(t *testing.T
 	unlabeled := readyIssue(1)
 	unlabeled.labels = nil
 	s.setStaleList([]issue{readyIssue(1)}, readRule(unlabeled))
+
+	r := s.dryRun()
+
+	assertCandidates(t, r)
+}
+
+func TestDryRunDoesNotListACandidateThatMatchesAnEarlierTriggerWhenReadAgain(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflowWithCommands(workflowWithTriggers(`
+  - name: review
+    on: issue
+    when: {labels: {all: [review]}}
+    action: /review
+  - name: implement
+    on: issue
+    when: {labels: {all: [ready-for-agent]}}
+    action: /implement`))
+	both := readyIssue(1)
+	both.labels = append(both.labels, "review")
+	s.setStaleList([]issue{readyIssue(1)}, readRule(both))
 
 	r := s.dryRun()
 
