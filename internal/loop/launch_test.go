@@ -73,15 +73,11 @@ func (o oneTick) recheckSkips(t *testing.T) []map[string]any {
 	return skips
 }
 
-// assertOneRecheckSkip は、recheck_skip の行が 1 行だけで、formats.md §4 が決める key (ts・scope・event を除く) の値が
-// want と同じことを確かめる。
+// assertOneRecheckSkip は、recheck_skip の行が 1 行だけで、その target・trigger・reason の値が want と同じことを確かめる
+// (ほかの key は見ない)。
 func assertOneRecheckSkip(t *testing.T, skips []map[string]any, want map[string]any) {
 	t.Helper()
-	if len(skips) != 1 {
-		t.Fatalf("recheck_skip の行 = %v, want %v を 1 行", skips, want)
-	}
-	got := map[string]any{"target": skips[0]["target"], "trigger": skips[0]["trigger"], "reason": skips[0]["reason"]}
-	if !maps.Equal(got, want) {
+	if len(skips) != 1 || !maps.Equal(map[string]any{"target": skips[0]["target"], "trigger": skips[0]["trigger"], "reason": skips[0]["reason"]}, want) {
 		t.Fatalf("recheck_skip の行 = %v, want %v を 1 行", skips, want)
 	}
 }
