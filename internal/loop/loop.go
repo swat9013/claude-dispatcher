@@ -294,7 +294,7 @@ func (l *loop) tick() {
 	candidates, ambiguous := trigger.Evaluate(triggers, open)
 	v := &view{open: open, ambiguous: trigger.AmbiguousRefs(ambiguous), branches: l.claimedBranches()}
 	l.sweep(store, open)
-	l.clearAbandoned(def, v)
+	l.clearAbandoned(store, def, v)
 	l.retry(store, v)
 	// 起動を始める前の数を tick の行にも載せる。起動した worker は走っている worker に加わるので、launched の数を足して判定する
 	running, waitingRetry := l.running(), l.waitingRetry()
@@ -521,32 +521,43 @@ func (l *loop) sweep(store Store, open []target.Item) {
 	}
 }
 
-// recheckCandidate は、起動しようとする候補を置き場から読み直し、起動してよければ読み直した作業対象を返す。open な一覧の検索は
-// 書き込みの直後に古い結果を返しうる (Jira の JQL 検索など) ので、完了した直後の作業対象を起動し直さないよう、当たるかをまだ
-// 決められないか、終端か、起動しようとした trigger から外れたか、評価する trigger (宣言順) のうち先のものに当たるようになって
-// いれば、recheck_skip の行を残して起動しない。読み直せなければ error の行を残して起動しない。どれも次の tick で候補になれば
+// recheckCandidate は、起動しようとする候補を RecheckCandidate で読み直し、起動してよければ読み直した作業対象を返す。
+// 起動しない理由があれば recheck_skip の行を、読み直せなければ error の行を残して起動しない。どれも次の tick で候補になれば
 // 試み直す。
 func (l *loop) recheckCandidate(store Store, triggers []trigger.Trigger, c trigger.Candidate) (target.Item, bool) {
 	ref := c.Item.Ref()
-	item, err := store.Read(ref)
+	item, reason, err := RecheckCandidate(store, triggers, c)
 	if err != nil {
 		l.rec.error(ref, "起動しようとした作業対象を読み直せない (次の tick で試み直す): "+oneLine(err))
 		return nil, false
 	}
-	var reason string
-	switch out := outOfTrigger(*c.Trigger, item); {
-	case c.Trigger.Undecided(item):
-		reason = reasonUndecided
-	case out != "":
-		reason = out
-	case matchesEarlier(triggers, *c.Trigger, item):
-		reason = reasonEarlierTrigger
-	default:
+	if reason == "" {
 		return item, true
 	}
 	l.rec.event("recheck_skip", map[string]any{"target": ref.String(), "trigger": c.Trigger.Name, "reason": reason},
 		LineNote, "読み直しで起動せず", " %s (%s): %s", ref, c.Trigger.Name, reason)
 	return nil, false
+}
+
+// RecheckCandidate は、候補を置き場から読み直して起動してよいかを決める (formats.md §6 の tick の手順 7)。open な一覧の
+// 検索は書き込みの直後に古い結果を返しうる (Jira の JQL 検索など) ので、完了した直後の作業対象を起動し直さないために読み
+// 直す。loop の起動と試運転 (formats.md §5) が同じ判定を使う。起動してよければ読み直した作業対象と "" を、起動しなければその理由 (当たるかを
+// まだ決められない・終端・起動しようとした trigger から外れた・triggers (宣言順) のうち先のものに当たる) を返す。読み直せ
+// なければ error。再起動はこの判定を使わない (宣言順で先の trigger を確かめないため。retry を見る)。
+func RecheckCandidate(store Store, triggers []trigger.Trigger, c trigger.Candidate) (target.Item, string, error) {
+	item, err := store.Read(c.Item.Ref())
+	if err != nil {
+		return nil, "", err
+	}
+	switch out := outOfTrigger(*c.Trigger, item); {
+	case c.Trigger.Undecided(item):
+		return nil, reasonUndecided, nil
+	case out != "":
+		return nil, out, nil
+	case matchesEarlier(triggers, *c.Trigger, item):
+		return nil, reasonEarlierTrigger, nil
+	}
+	return item, "", nil
 }
 
 // matchesEarlier は、作業対象が triggers (宣言順) のうち t より先の trigger に当たるか。

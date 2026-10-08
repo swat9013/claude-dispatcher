@@ -114,14 +114,10 @@ func (s Store) Read(ref target.Ref) (target.Item, error) {
 	if ref.Kind != target.KindIssue {
 		return nil, fmt.Errorf("作業対象の種類 %q は Jira の issue 置き場に無い", ref.Kind)
 	}
-	n, err := s.view(s.project.IssueKey(ref.Number))
+	key := s.project.IssueKey(ref.Number)
+	n, err := s.view(key)
 	if err == nil {
-		number, ok := s.number(n.Key)
-		if !ok {
-			// 別の project へ移した (旧 key の転送で、移った先の issue が返った)
-			return target.Issue{Number: ref.Number, Closed: true}, nil
-		}
-		return s.normalize(n, number, countBlockers(n.Fields.IssueLinks)), nil
+		return s.itemFromView(ref, n), nil
 	}
 	if kind := s.classify(err, target.Unavailable); kind != target.Unavailable {
 		return nil, s.fail(kind, err)
@@ -132,11 +128,29 @@ func (s Store) Read(ref target.Ref) (target.Item, error) {
 	if listErr != nil {
 		return nil, s.fail(s.classify(listErr, target.Unavailable), listErr)
 	}
-	key := s.project.IssueKey(ref.Number)
 	if slices.ContainsFunc(open, func(n issueJSON) bool { return strings.EqualFold(n.Key, key) }) {
 		return nil, s.fail(target.Unavailable, err)
 	}
+	// 一覧の検索は書き込みの直後に古い結果を返しうるので、一覧に無いことだけでは終端としない。view の失敗が一時的だった
+	// なら読めるので、もう 1 回撃ち、また落ちたときだけ終端とする (formats.md §6)。2 回目が認証の失敗なら終端としない
+	n, err = s.view(key)
+	if err == nil {
+		return s.itemFromView(ref, n), nil
+	}
+	if kind := s.classify(err, target.Unavailable); kind != target.Unavailable {
+		return nil, s.fail(kind, err)
+	}
 	return target.Issue{Number: ref.Number, Closed: true}, nil
+}
+
+// itemFromView は view で読めた issue を作業対象にする。返った key が別の project のもの (旧 key の転送で、移った先の
+// issue が返った) なら終端とする。
+func (s Store) itemFromView(ref target.Ref, n issueJSON) target.Item {
+	number, ok := s.number(n.Key)
+	if !ok {
+		return target.Issue{Number: ref.Number, Closed: true}
+	}
+	return s.normalize(n, number, countBlockers(n.Fields.IssueLinks))
 }
 
 // fields は acli の一覧が受け付ける field のうち読むもの。key は field でなく常に返る (key だけを渡すと null の列が返る)

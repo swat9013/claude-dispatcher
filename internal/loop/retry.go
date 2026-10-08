@@ -74,10 +74,13 @@ func (l *loop) arm() {
 }
 
 // retry は backoff の明けた再起動待ちの claim を起動する。v は tick が読んだ view (tick の外からなら outsideTick) で、
-// open な一覧に無い作業対象だけを 1 件ずつ読み直す。空きが無いか、作業対象を読み直せないか、当たるかをまだ決められない
-// か、CL の head branch を別の claim が checkout していれば、attempt を進めずに待ち直す (空きは worker が終わったとき、
-// それ以外は次の tick で試み直す)。作業対象が終端か、trigger から外れたか、曖昧な CL になっていれば、起動せずに claim を
-// 解く。CL の再起動は、曖昧さと branch を確かめられる tick の中でだけ試みる。
+// CL の曖昧さと branch を確かめるのに使う。作業対象は tick の中でも一覧を使わず、置き場から 1 件ずつ読み直す (一覧の
+// 検索は古い結果を返しうる。formats.md §6 の再起動)。空きが
+// 無いか、作業対象を読み直せないか、当たるかをまだ決められないか、CL の head branch を別の claim が checkout していれば、
+// attempt を進めずに待ち直す (空きは worker が終わったとき、それ以外は次の tick で試み直す)。作業対象が終端か、trigger
+// から外れたか、曖昧な CL になっていれば、起動せずに claim を解く (release の行を残す)。宣言順で先の trigger に当たる
+// ようになったかは確かめない (再起動は同じ trigger で続ける。system.md §7)。CL の再起動は、曖昧さと branch を確かめ
+// られる tick の中でだけ試みる。
 func (l *loop) retry(store Store, v *view) {
 	now := l.o.Now()
 	for ref, c := range l.claims {
@@ -100,7 +103,7 @@ func (l *loop) retry(store Store, v *view) {
 		if ref.Kind == target.KindCL && v == outsideTick {
 			continue
 		}
-		item, err := reread(store, v, ref)
+		item, err := store.Read(ref)
 		if err != nil {
 			l.rec.error(ref, "再起動を待つ作業対象を読み直せない (次の tick で読み直す): "+oneLine(err))
 			continue
@@ -130,16 +133,6 @@ func (l *loop) retry(store Store, v *view) {
 		c.attempt++
 		l.start(c)
 	}
-}
-
-// reread は作業対象を読み直す。tick の open な一覧にあればそれを使い、無ければ置き場から 1 件読む。
-func reread(store Store, v *view, ref target.Ref) (target.Item, error) {
-	if v != outsideTick {
-		if item, ok := findItem(v.open, ref); ok {
-			return item, nil
-		}
-	}
-	return store.Read(ref)
 }
 
 // findItem は open な一覧から作業対象を探す。
@@ -188,11 +181,12 @@ func (l *loop) waitingRetry() int {
 	return n
 }
 
-// clearAbandoned は、打ち切った作業対象のうち、打ち切ったときの trigger の述語に当たらなくなったものの打ち切りを解く。
-// open な一覧に無いもの (終端)・曖昧な CL になったもの・trigger が workflow 定義から消えたものも解く。
-func (l *loop) clearAbandoned(def workflow.Definition, v *view) {
+// clearAbandoned は、打ち切った作業対象のうち、終端になったか、打ち切ったときの trigger の述語に当たらなくなったものの
+// 打ち切りを解く。trigger が workflow 定義から消えたものも解く。曖昧な CL になったことでは解かない (formats.md §6 の
+// tick の手順 5)。
+func (l *loop) clearAbandoned(store Store, def workflow.Definition, v *view) {
 	for ref, name := range l.abandoned {
-		if stillMatches(def, v, ref, name) {
+		if l.stillAbandoned(store, def, v, ref, name) {
 			continue
 		}
 		delete(l.abandoned, ref)
@@ -201,13 +195,31 @@ func (l *loop) clearAbandoned(def workflow.Definition, v *view) {
 	}
 }
 
-// stillMatches は打ち切った作業対象が、打ち切ったときの trigger に当たったままか。当たるかをまだ決められなければ、当たったまま
-// とする (外れたのを観測するまで打ち切りを解かない)。
-func stillMatches(def workflow.Definition, v *view, ref target.Ref, triggerName string) bool {
+// stillAbandoned は打ち切りを保つか。open な一覧で打ち切ったときの trigger に当たったまま (か当たるかをまだ決められない)
+// なら保つ。一覧に無いか一覧で外れて見えれば、一覧は古い結果を返しうるので置き場から 1 件読み直し、終端か外れたのを確かめて
+// から解く。読み直せないか、当たるかをまだ決められなければ保つ (外れたのを観測するまで解かない。次の tick で確かめ直す)。
+func (l *loop) stillAbandoned(store Store, def workflow.Definition, v *view, ref target.Ref, triggerName string) bool {
 	t, ok := triggerNamed(def, triggerName)
-	if !ok || v.ambiguous[ref] {
+	if !ok {
 		return false
 	}
-	item, ok := findItem(v.open, ref)
-	return ok && (t.Matches(item) || t.Undecided(item))
+	if item, listed := findItem(v.open, ref); listed && matchesAbandoned(t, item) {
+		return true
+	}
+	item, err := store.Read(ref)
+	if err != nil {
+		l.rec.error(ref, "打ち切った作業対象を読み直せない (打ち切りを保ち、次の tick で確かめ直す): "+oneLine(err))
+		return true
+	}
+	return matchesAbandoned(t, item)
+}
+
+// matchesAbandoned は、作業対象が打ち切ったときの trigger t に当たったままか。終端なら当たっていない (merge した CL は
+// conflict を計算しないので、当たるかを決められないままになりうる)。終端でなく、当たるかをまだ決められなければ当たった
+// ままとする。
+func matchesAbandoned(t trigger.Trigger, item target.Item) bool {
+	if item.Terminal() {
+		return false
+	}
+	return t.Undecided(item) || outOfTrigger(t, item) == ""
 }
