@@ -367,8 +367,9 @@ func TestWaitingRetryOfACLThatBecameAmbiguousIsReleased(t *testing.T) {
 	}
 }
 
-func TestEndedCLWorkerIsNotCompletedWhileItsConflictIsBeingComputed(t *testing.T) {
-	// conflict: true の CL の worker が終わったとき、GitHub が conflict を計算し直している (UNKNOWN) なら、外れたとは数えない
+func TestEndedCLWorkerWaitsForVerificationWithoutAnErrorWhileItsConflictIsBeingComputed(t *testing.T) {
+	// conflict: true の CL の worker が終わったとき、GitHub が conflict を計算し直している (UNKNOWN) なら、外れたとは数えず、
+	// 失敗ではない確かめ待ちとして tick ごとに verify_wait の行を書く
 	s := newSandbox(t)
 	s.writeWorkflowWithCommands(s.clWorkflow("{conflict: true}"))
 	conflicting := readyCL(5)
@@ -378,18 +379,29 @@ func TestEndedCLWorkerIsNotCompletedWhileItsConflictIsBeingComputed(t *testing.T
 	s.setStore(nil, []cl{conflicting})
 	s.onClaude(stubwire.Rule{Writes: []stubwire.FileWrite{s.clResponses(computing)}})
 
-	s.startLoop()
+	loop := s.startLoop()
 
-	waitFor(t, func() bool {
-		for _, e := range s.events("error") {
-			if e["target"] == "cl#5" && strings.Contains(asString(e["error"]), "conflict を計算中") {
-				return true
+	waits := s.waitEvents("verify_wait", 2)
+	start := s.waitEvents("start", 1)[0]
+	for _, w := range waits {
+		want := map[string]any{"target": "cl#5", "trigger": "fix", "attempt": float64(1), "session_id": start["session_id"], "reason": "当たるかをまだ決められない"}
+		for key, value := range want {
+			if w[key] != value {
+				t.Fatalf("verify_wait の行 = %v, want %s = %v", w, key, value)
 			}
 		}
-		return false
-	}, "終わり方を決められないことが error の行に残らない")
+	}
 	if ends := s.events("end"); len(ends) != 0 {
 		t.Fatalf("conflict を計算中なのに終わり方を決めた: %v", ends)
+	}
+	for _, e := range s.events("error") {
+		if e["target"] == "cl#5" {
+			t.Fatalf("確かめ待ちを error の行に書いた: %v", e)
+		}
+	}
+	out := loop.stdout.String()
+	if !strings.Contains(out, "確かめ待ち cl#5 (fix, attempt 1): 当たるかをまだ決められない") || strings.Contains(out, "error cl#5") {
+		t.Fatalf("人が読む行に確かめ待ちが失敗でない形で出ていない:\n%s", out)
 	}
 }
 

@@ -378,6 +378,7 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 | `abandon` | attempt の上限で打ち切った | `target`・`trigger`・`attempt`・`session_id` |
 | `wait_slot` | backoff が明けた再起動が、並列上限に空きが無くて待ち始めた (1 回の待ちにつき 1 行) | `target`・`trigger`・`next_attempt`・`max_concurrent` |
 | `recheck_skip` | 起動しようとした候補を起動の直前に読み直し (§6 の tick の手順 7)、`reason` のどれかに当たって起動しなかった (tick ごとに、候補 1 件につき 1 行。同じ候補が次の tick でも当たれば、また 1 行書く。読み直せなかった候補は `error` の行で残し、この行は書かない) | `target`・`trigger`・`reason` (`当たるかをまだ決められない` / `終端` / `trigger から外れた` / `宣言順で先の trigger に当たる`) |
+| `verify_wait` | worker が終わった後の確かめ (§6 の「worker の 1 回分」の手順 4) で、作業対象が trigger に当たるかをまだ決められず、claim を持ったまま次の tick で確かめ直す (確かめ直すたびに 1 行。失敗ではないので `error` の行は書かない。読み直せなかったときは `error` の行で残し、この行は書かない) | `target`・`trigger`・`attempt`・`session_id`・`reason` (`当たるかをまだ決められない`) |
 | `unabandon` | 打ち切りを解いた (打ち切ったときの trigger から外れたのを観測した) | `target`・`trigger` |
 | `error` | 処理は続けるが、運用者が知るべき失敗 | `target` (あれば)・`error` |
 
@@ -527,7 +528,7 @@ claude-dispatcher loop [<workflow の path>]
    - stream に活動 (下の「活動」) として数える行が `limits.stall_timeout` のあいだ書かれないか、起動からの経過が `limits.run_timeout` を超えたら、process group を止めて失敗とする (止め方は 2 回目の停止要求と同じ)。止める判断と停止要求が重なったら、停止要求で止めたことにする
 
 4. 終わったら (止めたときを含む)、worker log からその attempt の最後の `result` を読んで `end` の行に要約を載せ (§4)、`after_run` を撃ち、作業対象を読み直す。終端か、起動した trigger から外れていれば `completed` として claim を解き、当たったままなら `failed` として再起動 (上) に回す
-   - 当たるかをまだ決められなければ (conflict を計算中の CL)、読み直せなかったときと同じく、error の行を残して claim を持ったまま次の tick で確かめ直す
+   - 当たるかをまだ決められなければ (conflict を計算中の CL)、完了とも失敗とも数えない。log.jsonl に `verify_wait` の行 (§4) を書き、人が読む行に `確かめ待ち` を出して、claim を持ったまま次の tick で確かめ直す
    - workspace を消すときは、worker を最初に起動したときの `workspace.root` と、消す時点の workflow 定義の hooks を使う
 
 **画面**: loop の stdout が端末かどうかで形を変える。どちらも、状態 file (§7) と同じ中身を描く。
@@ -549,6 +550,7 @@ claude-dispatcher loop [<workflow の path>]
 <時刻> 読み直しで起動せず issue#42 (implement): trigger から外れた
 <時刻> 活動 issue#42: Bash go test ./...
 <時刻> 終了 issue#42 (implement): completed — trigger から外れた
+<時刻> 確かめ待ち cl#52 (fix-conflict, attempt 1): 当たるかをまだ決められない
 <時刻> 再起動を予定 issue#42 (implement, attempt 2, 10s 後)
 <時刻> 再起動せずに解いた issue#42 (implement): trigger から外れた
 <時刻> 再起動を待つ issue#42 (implement, attempt 2): 並列上限 1 に空きが出るまで待つ

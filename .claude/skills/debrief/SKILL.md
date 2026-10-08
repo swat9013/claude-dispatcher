@@ -60,7 +60,7 @@ jq -r 'select(.target) | [.target, .ts, .event, (.attempt // .next_attempt // ""
 # attempt 1 回分の所要時間 (分)
 jq -s -r 'map(select(.event=="start" or .event=="end")) | group_by([.session_id, .attempt])[] | select(length==2) | [.[0].target, .[0].trigger, .[0].attempt, (((.[1].ts|fromdateiso8601) - (.[0].ts|fromdateiso8601))/60 | floor), .[1].outcome] | @tsv' F
 # 閉じていない claim (最後の行が claim を持ったままの event である作業対象)
-jq -s -r 'map(select(.target)) | group_by(.target)[] | last | select(.event=="start" or .event=="retry" or .event=="wait_slot" or (.event=="end" and .outcome=="failed")) | [.target, .event, .ts] | @tsv' F
+jq -s -r 'map(select(.target)) | group_by(.target)[] | last | select(.event=="start" or .event=="retry" or .event=="wait_slot" or .event=="verify_wait" or (.event=="end" and .outcome=="failed")) | [.target, .event, .ts] | @tsv' F
 ```
 
 claim を解く行は formats.md §4 (`completed` と `stopped` の `end`・`release`・`abandon`) が正本。停止要求で捨てた再起動待ちの claim は、最後の行が `error` になる (§6 の停止要求)。そのため上の jq は `error` の行も含めて最後の行を見る。
@@ -68,7 +68,7 @@ claim を解く行は formats.md §4 (`completed` と `stopped` の `end`・`rel
 閉じていない claim は、`scripts/claude-dispatcher-dev.sh status <WORKFLOW.md の path>` が示す今の loop の worker と突き合わせる。claim は loop の memory にしか無いので、loop が居なければすべて消えている。本体の記録の欠けの候補は次の 2 つ。
 
 - loop が走っているのに worker に居ないもの
-- loop が居ないのに最後の行が `start`・`retry`・`wait_slot` のもの (end や停止の行を書く前に loop が落ちた)
+- loop が居ないのに最後の行が `start`・`retry`・`wait_slot`・`verify_wait` のもの (end や停止の行を書く前に loop が落ちた。`verify_wait` なら確かめ待ちのまま落ちた)
 
 **2. tick**
 
@@ -95,7 +95,11 @@ jq -r 'select(.event=="recheck_skip" or .event=="tick") | [.ts, .event, (.target
 ```sh
 jq -r 'select(.event=="retry") | [.target, .next_attempt, .backoff] | @tsv' F
 jq -r 'select(.event=="wait_slot") | .target' F | sort | uniq -c | sort -rn
+# worker が終わった後の確かめ待ち。attempt 1 回分 (session_id と attempt の組) ごとに、件数と最初・最後の ts
+jq -s -r 'map(select(.event=="verify_wait")) | group_by([.session_id, .attempt])[] | [.[0].target, .[0].trigger, .[0].attempt, length, .[0].ts, .[-1].ts] | @tsv' F
 ```
+
+`verify_wait` は確かめ直すたびに (tick ごとに) 書かれる。最初と最後の `ts` の間が周期の何倍にも及べば、CL の conflict の計算が終わらず確かめ待ちが続いている (確度「解釈」)。
 
 stall と上限時間の超過は、観点 1 の `reason` に文で載る。WORKFLOW.md の `limits.stall_timeout`・`limits.run_timeout` (省けば formats.md §2.1 の既定) と、観点 1 の所要時間を並べて読む。
 
