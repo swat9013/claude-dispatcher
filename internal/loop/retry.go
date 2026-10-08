@@ -182,7 +182,8 @@ func (l *loop) waitingRetry() int {
 }
 
 // clearAbandoned は、打ち切った作業対象のうち、終端になったか、打ち切ったときの trigger の述語に当たらなくなったものの
-// 打ち切りを解く。曖昧な CL になったもの・trigger が workflow 定義から消えたものも解く。
+// 打ち切りを解く。trigger が workflow 定義から消えたものも解く。曖昧な CL になったことでは解かない (曖昧さは一覧でしか
+// 決まらず、古い一覧で曖昧に見えただけで解けるため。曖昧な間はどの trigger でも起動しないので、保っても失うものが無い)。
 func (l *loop) clearAbandoned(store Store, def workflow.Definition, v *view) {
 	for ref, name := range l.abandoned {
 		if l.stillAbandoned(store, def, v, ref, name) {
@@ -199,7 +200,7 @@ func (l *loop) clearAbandoned(store Store, def workflow.Definition, v *view) {
 // から解く。読み直せないか、当たるかをまだ決められなければ保つ (外れたのを観測するまで解かない。次の tick で確かめ直す)。
 func (l *loop) stillAbandoned(store Store, def workflow.Definition, v *view, ref target.Ref, triggerName string) bool {
 	t, ok := triggerNamed(def, triggerName)
-	if !ok || v.ambiguous[ref] {
+	if !ok {
 		return false
 	}
 	if item, listed := findItem(v.open, ref); listed && matchesAbandoned(t, item) {

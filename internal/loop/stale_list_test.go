@@ -270,6 +270,27 @@ func asText(v any) string {
 	return s
 }
 
+func TestAbandonmentOfACLIsKeptWhenAStaleListMakesItLookAmbiguous(t *testing.T) {
+	fixCI := trigger.Trigger{Name: "fix-ci", On: target.KindCL}
+	abandoned := target.CL{Number: 7, Head: "feature", HeadRepo: "acme/widgets", SameRepo: true}
+	// 同じ head branch の #8 は close 済みだが、古い一覧はまだ open で返す
+	closedSibling := target.CL{Number: 8, Head: "feature", HeadRepo: "acme/widgets", SameRepo: true}
+	s := staleTicks{triggers: []trigger.Trigger{fixCI}, maxAttempts: 1, ticks: 2,
+		open: func(tick int) []target.Item {
+			if tick == 2 {
+				return []target.Item{abandoned, closedSibling}
+			}
+			return []target.Item{abandoned}
+		},
+		read: func(int) target.Item { return abandoned }}
+
+	_, lines := s.run(t)
+
+	if abandons, unabandons := eventsNamed(lines, "abandon"), eventsNamed(lines, "unabandon"); len(abandons) != 1 || len(unabandons) != 0 {
+		t.Fatalf("abandon の行 = %v, unabandon の行 = %v, want cl#7 を打ち切ったまま (古い一覧で曖昧に見えただけで解いた)", abandons, unabandons)
+	}
+}
+
 func TestAbandonmentIsLiftedWhenTheIssueReadAgainLeftTheTrigger(t *testing.T) {
 	_, lines := abandonedThenListed([]target.Item{unlabeledIssue(1)}, unlabeledIssue(1)).run(t)
 
