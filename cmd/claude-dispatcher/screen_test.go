@@ -90,7 +90,7 @@ func TestScreenTellsHowToStopWhileTheLoopWaitsForWorkers(t *testing.T) {
 	}
 }
 
-func TestScreenHeadingShowsTheVersionOfTheLoopWhileItWaitsForWorkers(t *testing.T) {
+func TestScreenHeadingOfAStoppingLoopShowsItsVersion(t *testing.T) {
 	var out bytes.Buffer
 	sc := newScreen(&out, pipe)
 
