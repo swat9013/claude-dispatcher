@@ -69,8 +69,18 @@ func TestLoopRecordsTheVersionOfItsBinaryBeforeTheFirstTick(t *testing.T) {
 	if lines[0]["event"] != "loop_start" || lines[0]["version"] != version || lines[0]["commit"] != commit {
 		t.Fatalf("log.jsonl の最初の行 = %v, want loop_start (version %s, commit %s)", lines[0], version, commit)
 	}
+}
+
+func TestLoopRecordsItsStartOnceNotEveryTick(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflowWithCommands(s.workerWorkflow("")) // 周期 1s
+	s.setIssues()
+
+	s.startLoop()
+
+	s.waitEvents("tick", 2)
 	if starts := s.events("loop_start"); len(starts) != 1 {
-		t.Fatalf("loop_start の行 = %d 行, want 1 行", len(starts))
+		t.Fatalf("tick 2 回の後の loop_start の行 = %d 行, want 1 行", len(starts))
 	}
 }
 

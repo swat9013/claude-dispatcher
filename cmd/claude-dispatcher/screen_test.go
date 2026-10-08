@@ -90,6 +90,17 @@ func TestScreenTellsHowToStopWhileTheLoopWaitsForWorkers(t *testing.T) {
 	}
 }
 
+func TestScreenHeadingShowsTheVersionOfTheLoopWhileItWaitsForWorkers(t *testing.T) {
+	var out bytes.Buffer
+	sc := newScreen(&out, pipe)
+
+	sc.showStatus(status.Snapshot{Scope: "github.com/acme/widgets", Version: "v0.3.0", Commit: "0123abc", Stopping: true})
+
+	if got := lastFrame(&out); !strings.HasPrefix(got, "● loop 停止待ち  github.com/acme/widgets · v0.3.0\n") {
+		t.Fatalf("画面:\n%s", got)
+	}
+}
+
 func TestScreenStopsTellingHowToStopOnceTheWorkersAreBeingStopped(t *testing.T) {
 	// 2 回目の停止要求の後は、走っている worker が止めている段階へ移る
 	var out bytes.Buffer

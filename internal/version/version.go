@@ -15,17 +15,14 @@ type Build struct {
 	Commit  string
 }
 
-// String は `--version` と doctor の版の行に出す形 (`<版> (<commit>)`)。
+// String は `--version` の行に出す形 (`<版> (<commit>)`)。
 func (b Build) String() string { return b.Version + " (" + b.Commit + ")" }
 
-// Current は今の binary の版と commit を返す。`--version`・doctor・loop (log.jsonl の loop_start 行と状態 file) が同じ値を使う。
+// Current は今の binary の版と commit を返す。`--version` と loop (log.jsonl の loop_start 行と状態 file) が同じ値を使う。
 func Current() Build {
 	built, _ := debug.ReadBuildInfo()
 	return describe(version, commit, built)
 }
-
-// Line は `--version` と doctor の版の行に出す 1 行 (`<版> (<commit>)`) を返す。
-func Line() string { return Current().String() }
 
 // describe は ldflags の値を優先し、空なら build 情報 (built。無ければ nil) から引く:
 // 版は module の版 (go install <module>@<版> ならその版、git の作業ツリーでの go build なら Go が刻む pseudo-version)、
