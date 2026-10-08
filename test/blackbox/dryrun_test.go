@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/swat9013/claude-dispatcher/test/blackbox/stubwire"
 )
 
 // 試運転 `loop --dry-run` (formats.md §5)。述語の 1 つずつの意味は internal/trigger の単体テストが持ち、ここでは
@@ -117,6 +119,48 @@ func TestDryRunPrintsNothingWhenNoIssueMatches(t *testing.T) {
 	assertExit(t, r, 0)
 	if r.stdout != "" || r.stderr != "" {
 		t.Fatalf("stdout = %q, stderr = %q, want 両方とも空", r.stdout, r.stderr)
+	}
+}
+
+// setStaleList は gh の open な一覧に listed を載せ、1 件の読み直しには read を返すようにする (一覧の検索が古い)。
+func (s *sandbox) setStaleList(listed []issue, read ...stubwire.Rule) {
+	s.t.Helper()
+	rules := append(read, stubwire.Rule{ArgsPrefix: []string{"api", "graphql"}, ArgsContain: []string{issueListQuery}, Stdout: issuePages(listed...)})
+	s.respondAll("gh", rules)
+}
+
+func TestDryRunDoesNotListACandidateThatIsClosedWhenReadAgain(t *testing.T) {
+	s := newSandbox(t)
+	closed := readyIssue(1)
+	closed.closed = true
+	s.setStaleList([]issue{readyIssue(1), readyIssue(2)}, readRule(closed), readRule(readyIssue(2)))
+
+	r := s.dryRun()
+
+	assertCandidates(t, r, candidate("implement", 2))
+}
+
+func TestDryRunDoesNotListACandidateThatLeftTheTriggerWhenReadAgain(t *testing.T) {
+	s := newSandbox(t)
+	unlabeled := readyIssue(1)
+	unlabeled.labels = nil
+	s.setStaleList([]issue{readyIssue(1)}, readRule(unlabeled))
+
+	r := s.dryRun()
+
+	assertCandidates(t, r)
+}
+
+func TestDryRunFailsWithoutPrintingCandidatesWhenACandidateCannotBeReadAgain(t *testing.T) {
+	s := newSandbox(t)
+	unreadable := stubwire.Rule{ArgsPrefix: []string{"api", "graphql"}, ArgsContain: []string{issueReadQuery, "number=2"}, Stderr: "HTTP 401: Bad credentials", Exit: 1}
+	s.setStaleList([]issue{readyIssue(1), readyIssue(2)}, readRule(readyIssue(1)), unreadable)
+
+	r := s.dryRun()
+
+	assertExit(t, r, 4)
+	if r.stdout != "" || !strings.Contains(r.stderr, "#2") {
+		t.Fatalf("stdout = %q, stderr = %q, want stdout は空で stderr に #2", r.stdout, r.stderr)
 	}
 }
 

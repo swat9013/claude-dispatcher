@@ -407,7 +407,9 @@ claude-dispatcher loop --dry-run [<workflow の path>]
 
 workflow 定義を読んで検査し、事前検査 (§2.9) を通し、snapshot を作って trigger を評価し、起動するはずの作業対象を示して終わる。**何も書かない** (state dir を作らず、lock も取らない)。
 
-成功したら、候補を 1 件 1 行で、評価の順 (§2.4) に stdout へ出す。候補が無ければ何も出さない。
+候補は、loop の起動の直前と同じ読み直し (§6 の tick の手順 7) を 1 件ずつ掛け、loop が起動しない候補は出さない (open な一覧の検索は、書き込みの直後に古い結果を返しうるため)。読み直しで起動しない理由は §6 と同じで、出さなかったことはどこにも示さない。候補が `limits.max_concurrent` より多くても、どれも読み直す。候補を 1 件でも読み直せなければ、open な一覧を読めなかったときと同じく失敗する (下)。
+
+成功したら、読み直した候補を 1 件 1 行で、評価の順 (§2.4) に stdout へ出す。題名は読み直した作業対象のもの。候補が無ければ何も出さない。
 
 ```
 implement	issue	#42	ログインの失敗を記録する
@@ -480,7 +482,8 @@ claude-dispatcher loop [<workflow の path>]
 - backoff が明けたら、tick を待たずに再起動を試みる (tick の途中なら、その tick の手順 6 で試みる)
   - 走っている worker が `limits.max_concurrent` に達していれば、attempt を進めずに待ち直す。worker が終わって空きが出たときに試み直す
   - 起動した trigger が workflow 定義から消えていれば、claim を解く (`release`)
-  - 作業対象を読み直す。終端なら `before_remove` を撃って workspace を消し、trigger から外れていれば、claim を解く (`release`)。読み直せなければ次の tick で試み直す
+  - 作業対象を置き場から 1 件読み直す。tick の中で試みるときも、tick の open な一覧は使わない (一覧の検索は、書き込みの直後に古い結果を返しうるため)。終端なら `before_remove` を撃って workspace を消し、終端か起動した trigger から外れていれば、claim を解く (`release`)。読み直せなければ次の tick で試み直す
+  - 読み直しで確かめるのは、終端か、起動した trigger から外れたか (と、下の当たるかをまだ決められないか) だけ。宣言順で先の trigger に当たるようになったかは確かめない (再起動は同じ trigger で続ける。system.md §7)。起動の直前の読み直し (tick の手順 7) と違って `recheck_skip` の行は書かず、claim を解くときは `release` の行で残す
   - CL は、tick の中でだけ再起動を試みる (曖昧さと branch は tick が読んだ一覧で確かめるため)。曖昧な CL になっていれば claim を解き (`release`)、head branch を別の claim の workspace が checkout しているか、その branch を読めなければ、attempt を進めずに次の tick で試み直す
   - 当たるかをまだ決められなければ (conflict を計算中の CL。§2.3)、attempt を進めずに次の tick で試み直す
   - 当たったままなら、attempt を 1 つ進め、同じ trigger・同じ session id・同じ workspace で起動する

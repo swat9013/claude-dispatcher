@@ -74,10 +74,12 @@ func (l *loop) arm() {
 }
 
 // retry は backoff の明けた再起動待ちの claim を起動する。v は tick が読んだ view (tick の外からなら outsideTick) で、
-// open な一覧に無い作業対象だけを 1 件ずつ読み直す。空きが無いか、作業対象を読み直せないか、当たるかをまだ決められない
-// か、CL の head branch を別の claim が checkout していれば、attempt を進めずに待ち直す (空きは worker が終わったとき、
-// それ以外は次の tick で試み直す)。作業対象が終端か、trigger から外れたか、曖昧な CL になっていれば、起動せずに claim を
-// 解く。CL の再起動は、曖昧さと branch を確かめられる tick の中でだけ試みる。
+// CL の曖昧さと branch を確かめるのに使う。作業対象は tick の中でも一覧を使わず、置き場から 1 件ずつ読み直す。空きが
+// 無いか、作業対象を読み直せないか、当たるかをまだ決められないか、CL の head branch を別の claim が checkout していれば、
+// attempt を進めずに待ち直す (空きは worker が終わったとき、それ以外は次の tick で試み直す)。作業対象が終端か、trigger
+// から外れたか、曖昧な CL になっていれば、起動せずに claim を解く (release の行を残す)。宣言順で先の trigger に当たる
+// ようになったかは確かめない (再起動は同じ trigger で続ける。system.md §7)。CL の再起動は、曖昧さと branch を確かめ
+// られる tick の中でだけ試みる。
 func (l *loop) retry(store Store, v *view) {
 	now := l.o.Now()
 	for ref, c := range l.claims {
@@ -100,7 +102,9 @@ func (l *loop) retry(store Store, v *view) {
 		if ref.Kind == target.KindCL && v == outsideTick {
 			continue
 		}
-		item, err := reread(store, v, ref)
+		// tick の open な一覧は使わない。一覧の検索は書き込みの直後に古い結果を返しうる (Jira の JQL 検索など) ので、
+		// 完了した直後の作業対象を再起動しないよう、置き場から 1 件読む
+		item, err := store.Read(ref)
 		if err != nil {
 			l.rec.error(ref, "再起動を待つ作業対象を読み直せない (次の tick で読み直す): "+oneLine(err))
 			continue
@@ -130,16 +134,6 @@ func (l *loop) retry(store Store, v *view) {
 		c.attempt++
 		l.start(c)
 	}
-}
-
-// reread は作業対象を読み直す。tick の open な一覧にあればそれを使い、無ければ置き場から 1 件読む。
-func reread(store Store, v *view, ref target.Ref) (target.Item, error) {
-	if v != outsideTick {
-		if item, ok := findItem(v.open, ref); ok {
-			return item, nil
-		}
-	}
-	return store.Read(ref)
 }
 
 // findItem は open な一覧から作業対象を探す。

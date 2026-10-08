@@ -330,17 +330,29 @@ func (e environment) workspaces(def workflow.Definition) workspace.Manager {
 	}}
 }
 
-// dryRunOnce は試運転 (formats.md §5): snapshot を作って trigger を評価し、候補を 1 件 1 行で出す。何も書かない。
+// dryRunOnce は試運転 (formats.md §5): snapshot を作って trigger を評価し、候補を loop の起動の直前と同じく 1 件ずつ
+// 読み直して、loop が起動する候補だけを 1 件 1 行で出す。候補を 1 件でも読み直せなければ、何も出さずに失敗する。何も書かない。
 func dryRunOnce(e environment, def workflow.Definition, stdout, stderr io.Writer) int {
-	open, err := loop.OpenItems(e.store(def), def)
+	store := e.store(def)
+	open, err := loop.OpenItems(store, def)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return failureExit(err)
 	}
 	candidates, _ := trigger.Evaluate(def.Triggers, open)
+	var lines strings.Builder
 	for _, c := range candidates {
-		fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", c.Trigger.Name, c.Trigger.On, def.Tracker.Reference(c.Item.Ref()), printable.Line(c.Item.Heading()))
+		item, skip, err := loop.RecheckCandidate(store, def.Triggers, c)
+		if err != nil {
+			fmt.Fprintf(stderr, "候補 %s を読み直せない: %v\n", def.Tracker.Reference(c.Item.Ref()), err)
+			return failureExit(err)
+		}
+		if skip != "" {
+			continue
+		}
+		fmt.Fprintf(&lines, "%s\t%s\t%s\t%s\n", c.Trigger.Name, c.Trigger.On, def.Tracker.Reference(item.Ref()), printable.Line(item.Heading()))
 	}
+	fmt.Fprint(stdout, lines.String())
 	return 0
 }
 

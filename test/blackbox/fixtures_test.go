@@ -154,8 +154,7 @@ func ghRules(issues []issue, cls []cl) []stubwire.Rule {
 	var rules []stubwire.Rule
 	var open []issue
 	for _, i := range issues {
-		single, _ := json.Marshal(map[string]any{"data": map[string]any{"repository": map[string]any{"issue": i.node()}}})
-		rules = append(rules, stubwire.Rule{ArgsPrefix: []string{"api", "graphql"}, ArgsContain: []string{issueReadQuery, "number=" + strconv.Itoa(i.number)}, Stdout: string(single)})
+		rules = append(rules, readRule(i))
 		if !i.closed {
 			open = append(open, i)
 		}
@@ -172,6 +171,12 @@ func ghRules(issues []issue, cls []cl) []stubwire.Rule {
 		stubwire.Rule{ArgsPrefix: []string{"api", "graphql"}, ArgsContain: []string{issueListQuery}, Stdout: issuePages(open...)},
 		stubwire.Rule{ArgsPrefix: []string{"api", "graphql"}, ArgsContain: []string{clListQuery}, Stdout: pages("pullRequests", openCLs)},
 	)
+}
+
+// readRule は issue 1 件の読み直しに i を返す gh の応答 rule。
+func readRule(i issue) stubwire.Rule {
+	single, _ := json.Marshal(map[string]any{"data": map[string]any{"repository": map[string]any{"issue": i.node()}}})
+	return stubwire.Rule{ArgsPrefix: []string{"api", "graphql"}, ArgsContain: []string{issueReadQuery, "number=" + strconv.Itoa(i.number)}, Stdout: string(single)}
 }
 
 // ghResponses は ghRules を gh の応答 file の中身にしたもの。
