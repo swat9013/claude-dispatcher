@@ -18,10 +18,16 @@ var (
 	issue2 = target.Ref{Kind: target.KindIssue, Number: 2}
 )
 
-// overlapDetector は、同じ dir を渡した他の hook と重なって走ると exit 1 で落ち、重なりの印を残す script を返す。
-// 走っている間は dir/busy を持ち、0.3s 待ってから手放す。
+// overlapDetector は、issue1 と issue2 の hook が重なって走ると重なりの印を残して exit 1 で落ちる script を返す。
+// 始めに in-<番号>、終わりに out-<番号> の印を置き、その間に相手の in を最長 2s 待つ。相手の in があって out が
+// まだ無ければ重なっている。重なると、少なくとも片方は相手の out より先に相手の in を見るので、窓の長さに依らずに検出する。
 func overlapDetector(dir string) string {
-	return `mkdir '` + dir + `/busy' 2>/dev/null || { touch '` + dir + `/overlap'; exit 1; }; sleep 0.3; rmdir '` + dir + `/busy'`
+	return `n=$CLAUDE_DISPATCHER_NUMBER; o=$((3 - n)); d='` + dir + `'
+touch "$d/in-$n"
+i=0
+while [ ! -e "$d/in-$o" ] && [ "$i" -lt 20 ]; do sleep 0.1; i=$((i + 1)); done
+if [ -e "$d/in-$o" ] && [ ! -e "$d/out-$o" ]; then touch "$d/overlap"; exit 1; fi
+touch "$d/out-$n"`
 }
 
 // rendezvous は、issue1 と issue2 の hook が互いに相手の到着を待つ script を返す。相手が 5s 来なければ exit 1 で落ちる。
@@ -85,6 +91,28 @@ func TestAfterCreateDoesNotOverlapBeforeRemoveOfAnotherWorkspace(t *testing.T) {
 	errPrepare, errRemove := together(prepare(worker, issue1), func() error { return loop.Remove(issue2) })
 
 	assertNoOverlap(t, dir, errPrepare, errRemove)
+}
+
+func TestRemovingWithoutABeforeRemoveHookDoesNotWaitForAnotherAfterCreate(t *testing.T) {
+	m := loopManager(t, workspace.Hooks{AfterCreate: "exit 0"})
+	if err := os.MkdirAll(m.Path(issue2), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// 他の workspace の after_create が走っている間
+	m.HookLock.Lock()
+	defer m.HookLock.Unlock()
+	removed := make(chan error, 1)
+
+	go func() { removed <- m.Remove(issue2) }()
+
+	select {
+	case err := <-removed:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("撃つ hook が無いのに、他の after_create の終わりを待った")
+	}
 }
 
 func TestBeforeRunOfTwoWorkspacesCanRunAtOnce(t *testing.T) {

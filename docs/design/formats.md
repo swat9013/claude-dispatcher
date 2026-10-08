@@ -111,10 +111,10 @@ triggers:                    # 必須。1 つ以上
 | `tracker.token` | 文字列 | `github` でだけ書ける。gh に環境変数 `GH_TOKEN` として渡す token。`$VAR` でだけ書ける (値そのものを書かない)。省くと、loop を起動した環境の認証を gh がそのまま使う。`gitlab` は glab 自身の認証 (`glab auth login` の結果)、`jira` は acli 自身の認証 (`acli jira auth login` の結果) を使い、書くと名指しで失敗する |
 | `polling.interval` | 文字列 | 周期。Go の duration の綴り (`90s` / `5m` / `1h30m`) で、1s 以上 24h 以下。短い周期は tracker の rate limit を食う |
 | `workspace.root` | 文字列 | workspace を置く dir。相対 path は workflow 定義の dir から、`~/` は HOME から (HOME が絶対 path でなければ失敗)。`$VAR` で書ける |
-| `hooks.after_create` | 文字列 | workspace を作った直後に撃つ shell script。失敗したら workspace を消し、その attempt は失敗。loop は `after_create` と `before_remove` を合わせて直列に撃つ (作業対象を跨いで同時に 1 本まで)。workspace は 1 つの clone を共有しうるので、clone の ref の lock (`git fetch`・`git worktree add`) が競合して attempt を失わないようにする。遅い `after_create` は、同じ loop の他の workspace の用意と削除を待たせる |
-| `hooks.before_run` | 文字列 | worker を起動する前に毎回撃つ。失敗したら、その attempt は失敗。直列にしない: 作業対象を跨いで並列に走りうる (clone を触るなら、hook の中で排他する) |
-| `hooks.after_run` | 文字列 | worker が終わった後 (止めたときも) に毎回撃つ。失敗は log に残して続ける。直列にしない: 作業対象を跨いで並列に走りうる (clone を触るなら、hook の中で排他する) |
-| `hooks.before_remove` | 文字列 | workspace を消す前に撃つ。失敗は log に残して続ける。`after_create` と合わせて直列に撃つ (`hooks.after_create` の行) |
+| `hooks.after_create` | 文字列 | workspace を作った直後に撃つ shell script。失敗したら workspace を消し、その attempt は失敗。`before_remove` と合わせて、作業対象を跨いで直列に撃つ (同時に 1 本まで。system.md §7) |
+| `hooks.before_run` | 文字列 | worker を起動する前に毎回撃つ。失敗したら、その attempt は失敗。作業対象を跨いで並列に走りうる |
+| `hooks.after_run` | 文字列 | worker が終わった後 (止めたときも) に毎回撃つ。失敗は log に残して続ける。作業対象を跨いで並列に走りうる |
+| `hooks.before_remove` | 文字列 | workspace を消す前に撃つ。失敗は log に残して続ける。`after_create` と合わせて、作業対象を跨いで直列に撃つ |
 | `hooks.timeout` | 文字列 | hook 1 回の上限時間。既定 60s。超えたら process group ごと止め、失敗として扱う |
 | `limits.max_concurrent` | 整数 | 同時に走らせる worker の上限。1 以上。既定 1 |
 | `limits.max_attempts` | 整数 | 作業対象 1 件の attempt の上限。1 以上。既定 3。上限の attempt が失敗したら打ち切る |

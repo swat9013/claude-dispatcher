@@ -536,6 +536,27 @@ func TestFailingAfterCreateHookRemovesTheWorkspaceAndFails(t *testing.T) {
 	}
 }
 
+func TestAfterCreateOfTwoWorkersLaunchedInTheSameTickDoesNotOverlap(t *testing.T) {
+	s := newSandbox(t)
+	// 始めに in-<番号>、終わりに out-<番号> の印を置き、その間に相手の in を待つ (sandbox の PATH は stub だけなので、
+	// sleep の代わりに回数で待つ)。相手の in があって out がまだ無ければ、重なりの印を残して落ちる
+	detector := `n=$CLAUDE_DISPATCHER_NUMBER; o=$((85 - n)); d="` + s.marksDir() + `"; : > "$d/in-$n"; i=0; ` +
+		`while [ ! -e "$d/in-$o" ] && [ "$i" -lt 100000 ]; do i=$((i + 1)); done; ` +
+		`if [ -e "$d/in-$o" ] && [ ! -e "$d/out-$o" ]; then : > "$d/overlap"; exit 1; fi; : > "$d/out-$n"`
+	s.writeWorkflowWithCommands(regexp.MustCompile(`(?m)^  after_create: .*$`).ReplaceAllLiteralString(
+		s.workerWorkflow("limits:\n  max_concurrent: 2\n"), "  after_create: '"+detector+"'"))
+	s.setIssues(readyIssue(42), readyIssue(43))
+	s.onClaude(stubwire.Rule{ReleaseFile: s.releaseFile()})
+
+	s.startLoop()
+
+	exists := func(name string) bool { _, err := os.Stat(s.mark(name)); return err == nil }
+	waitFor(t, func() bool { return exists("overlap") || exists("out-42") && exists("out-43") }, "2 件の after_create が終わらない")
+	if exists("overlap") {
+		t.Fatalf("2 件の worker の after_create が重なって走った (end の行 = %v)", s.events("end"))
+	}
+}
+
 func TestFailingAfterRunHookIsLoggedAndTheWorkerStillEnds(t *testing.T) {
 	s := newSandbox(t)
 	s.writeWorkflowWithCommands(regexp.MustCompile(`(?m)^  after_run: .*$`).ReplaceAllString(s.workerWorkflow(""), "  after_run: exit 5"))

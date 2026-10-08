@@ -125,8 +125,11 @@ func (m Manager) Branch(ref target.Ref) (string, error) {
 }
 
 // runSerially は HookLock を持って hook を撃つ。clone を書き換える hook (after_create と before_remove) 同士が
-// 作業対象を跨いで重なると、clone の ref の lock が競合して失敗する。
+// 作業対象を跨いで重なると、clone の ref の lock が競合して失敗する。空の hook は撃たないので、lock も待たない。
 func (m Manager) runSerially(name, script string, ref target.Ref) error {
+	if script == "" {
+		return nil
+	}
 	m.HookLock.Lock()
 	defer m.HookLock.Unlock()
 	return m.run(name, script, ref)

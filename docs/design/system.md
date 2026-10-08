@@ -237,8 +237,10 @@ SPEC §7・§8・§16 の状態機械を土台にする。
   - issue なら branch を切った worktree、CL なら head を detach で checkout した worktree、など
   - 雛形は `git worktree add` の例を置く
 - **`after_create` と `before_remove` は、loop が直列に撃つ** (作業対象を跨いで、この 2 つを合わせて同時に 1 本まで)
-  - workspace は 1 つの clone の worktree として作るので、hook が clone を共有すること自体は解消できない。clone の ref を書き換える hook (`git fetch`・`git worktree add`・`git worktree remove`) が同時に走ると ref の lock が競合し、一時的な競合で attempt を 1 つ失う。残った共有を直列化で守る
-  - 遅い `after_create` は、同じ loop の他の workspace の用意と削除を待たせる。これは受け入れる
+  - workspace は 1 つの clone の worktree として作るので、hook が clone を共有すること自体は解消できない。clone の ref を書き換える hook (`git fetch`・`git worktree add`・`git worktree remove`) が同時に走ると ref の lock が競合し、一時的な競合で attempt を 1 つ失う。残った共有のうち、この 2 つの hook 同士の重なりを直列化で守る
+  - 守るのは、1 つの loop が撃つこの 2 つの hook 同士だけ。worker 自身が workspace の中で撃つ git の操作 (`fetch`・`push` 等)・`before_run` と `after_run`・同じ clone を使う別の loop や人の手の git の操作とは、今どおり重なりうる
+  - 撃つ hook が空なら待たない
+  - 遅い `after_create` は、同じ loop の他の workspace の用意と削除を待たせる。workspace の削除は loop 自身が撃つので、その間は loop も待つ (停止要求・worker の終わりの処理・tick が遅れる。最長で待つ hook の数 × `hooks.timeout`)。これは受け入れる
   - `before_run` と `after_run` は直列にしない。workspace の中の処理が主で長く走りうるので、直列にすると起動が詰まる。作業対象を跨いで並列に走りうるので、clone を触るなら hook の中で排他する
 
 ## 8. workflow 定義
