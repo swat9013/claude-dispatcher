@@ -294,7 +294,7 @@ func (l *loop) tick() {
 	candidates, ambiguous := trigger.Evaluate(triggers, open)
 	v := &view{open: open, ambiguous: trigger.AmbiguousRefs(ambiguous), branches: l.claimedBranches()}
 	l.sweep(store, open)
-	l.clearAbandoned(def, v)
+	l.clearAbandoned(store, def, v)
 	l.retry(store, v)
 	// 起動を始める前の数を tick の行にも載せる。起動した worker は走っている worker に加わるので、launched の数を足して判定する
 	running, waitingRetry := l.running(), l.waitingRetry()

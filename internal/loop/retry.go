@@ -181,11 +181,11 @@ func (l *loop) waitingRetry() int {
 	return n
 }
 
-// clearAbandoned は、打ち切った作業対象のうち、打ち切ったときの trigger の述語に当たらなくなったものの打ち切りを解く。
-// open な一覧に無いもの (終端)・曖昧な CL になったもの・trigger が workflow 定義から消えたものも解く。
-func (l *loop) clearAbandoned(def workflow.Definition, v *view) {
+// clearAbandoned は、打ち切った作業対象のうち、終端になったか、打ち切ったときの trigger の述語に当たらなくなったものの
+// 打ち切りを解く。曖昧な CL になったもの・trigger が workflow 定義から消えたものも解く。
+func (l *loop) clearAbandoned(store Store, def workflow.Definition, v *view) {
 	for ref, name := range l.abandoned {
-		if stillMatches(def, v, ref, name) {
+		if l.stillAbandoned(store, def, v, ref, name) {
 			continue
 		}
 		delete(l.abandoned, ref)
@@ -194,13 +194,21 @@ func (l *loop) clearAbandoned(def workflow.Definition, v *view) {
 	}
 }
 
-// stillMatches は打ち切った作業対象が、打ち切ったときの trigger に当たったままか。当たるかをまだ決められなければ、当たったまま
-// とする (外れたのを観測するまで打ち切りを解かない)。
-func stillMatches(def workflow.Definition, v *view, ref target.Ref, triggerName string) bool {
+// stillAbandoned は打ち切りを保つか。open な一覧で打ち切ったときの trigger に当たったまま (か当たるかをまだ決められない)
+// なら保つ。一覧に無いか一覧で外れて見えれば、一覧は古い結果を返しうるので置き場から 1 件読み直し、終端か外れたのを確かめて
+// から解く。読み直せないか、当たるかをまだ決められなければ保つ (外れたのを観測するまで解かない。次の tick で確かめ直す)。
+func (l *loop) stillAbandoned(store Store, def workflow.Definition, v *view, ref target.Ref, triggerName string) bool {
 	t, ok := triggerNamed(def, triggerName)
 	if !ok || v.ambiguous[ref] {
 		return false
 	}
-	item, ok := findItem(v.open, ref)
-	return ok && (t.Matches(item) || t.Undecided(item))
+	if item, listed := findItem(v.open, ref); listed && (t.Matches(item) || t.Undecided(item)) {
+		return true
+	}
+	item, err := store.Read(ref)
+	if err != nil {
+		l.rec.error(ref, "打ち切った作業対象を読み直せない (打ち切りを保ち、次の tick で読み直す): "+oneLine(err))
+		return true
+	}
+	return !item.Terminal() && (t.Matches(item) || t.Undecided(item))
 }

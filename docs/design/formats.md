@@ -388,7 +388,7 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 | `failed` | worker が終わった後も作業対象が trigger に当たったままで、worker が失敗した (異常終了・hook の失敗・描画の失敗・起動できない・stall・上限時間の超過) か、正常に終わった。claim は解かず、`retry` か `abandon` の行が続く |
 | `stopped` | loop が止めた (作業対象が終端になった・2 回目の停止要求) |
 
-- `error` の行を書く場面: `after_run` と `before_remove` の失敗・workspace を消せない (次の tick の掃除で消し直す)・終わった worker の作業対象を読み直せない (claim を持ったまま次の tick で読み直す)・起動しようとした作業対象を読み直せない (その tick は起動せず、次の tick で候補になれば試み直す)・止める worker の process group に signal を送れない・worker log から attempt の最後の `result` を読めない (項目の型が違うときを含む)
+- `error` の行を書く場面: `after_run` と `before_remove` の失敗・workspace を消せない (次の tick の掃除で消し直す)・終わった worker の作業対象を読み直せない (claim を持ったまま次の tick で読み直す)・起動しようとした作業対象を読み直せない (その tick は起動せず、次の tick で候補になれば試み直す)・打ち切った作業対象を読み直せない (打ち切りを保ち、次の tick で確かめ直す)・止める worker の process group に signal を送れない・worker log から attempt の最後の `result` を読めない (項目の型が違うときを含む)
 - log.jsonl に行を書けなければ、そのことを stdout に出して続ける
 - `attempt` は、その行が指す claim の最後に起動した (起動しようとした) attempt
 - `end` の行の attempt の最後の `result` の要約: worker log (stream-json。§1) のうち、その attempt が追記した完結した行 (改行で終わる行) から、最後の `type: result` の行を読む。worker log は attempt を跨いで追記するので、前の attempt の `result` は読まない
@@ -466,7 +466,9 @@ claude-dispatcher loop [<workflow の path>]
 2. 終わった worker のうち、作業対象を読み直せなかったものを読み直す
 3. workflow 定義を読み直し、事前検査 (§2.9) を通して snapshot を作る。事前検査に落ちた trigger は、手順 6 で再起動せず、手順 7 の評価から外す
 4. 掃除: workspace root の下の `issue-<番号>` と `cl-<番号>` のうち、claim が無く open な一覧にも無いものを読み直し、終端になっていれば `before_remove` を撃って消す。起動の直後の tick が起動時の掃除を兼ね、以後の tick が、claim を解いた後に終端になったものと消し損ねたものを拾う
-5. 打ち切りを解く: 打ち切った作業対象のうち、snapshot に無いか、打ち切ったときの trigger の述語に当たらなくなったもの (その trigger が workflow 定義から消えたもの・曖昧な CL になったものを含む) の打ち切りを解く。conflict を計算中の CL は、外れたとは数えない
+5. 打ち切りを解く: 打ち切った作業対象のうち、終端になったか、打ち切ったときの trigger の述語に当たらなくなったもの (その trigger が workflow 定義から消えたもの・曖昧な CL になったものを含む) の打ち切りを解く。conflict を計算中の CL は、外れたとは数えない
+   - snapshot に無いか、snapshot で当たらなくなって見えるものは、置き場から 1 件読み直して確かめてから解く (open な一覧の検索は、書き込みの直後に古い結果を返しうるため)。読み直しても当たったままなら解かない。読み直せなければ error の行を残して解かず、次の tick で確かめ直す
+   - snapshot で当たったままのものは読み直さない
 6. 再起動: backoff の明けた再起動待ちの claim を、次の「再起動」の規則で起動する
 7. trigger を評価し (§2.4)、候補のうち claim も打ち切りもされていないものを、`limits.max_concurrent` から走っている worker と再起動待ちの claim を引いた数だけ起動する (確かめ待ちの claim と、事前検査に落ちた trigger の再起動待ちの claim は数えない)
    - 起動の直前に、候補を 1 件ずつ読み直す (open な一覧の検索は、書き込みの直後に古い結果を返しうるため)。tracker の種類を問わず読み直す。次のときはその tick では起動せず、起動しなかった分の空きを次の候補に回す。次の tick で候補になれば試み直す
