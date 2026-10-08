@@ -504,11 +504,12 @@ const (
 	statusRateLimit = 429
 )
 
-// gh が stderr に出す失敗の綴り。message の行は印 (下の 3 つ) で始まり、印の無い行は message として読まない。
-//   - gh api は、本文の JSON に message があれば `gh: <message> (HTTP <status>)` の 1 行を出す。GraphQL のエラーは
-//     `gh: <message>` (status は付かない。エラーが複数なら 2 つ目からは印の無い行に続く)。本文が JSON でない (手前の proxy の
-//     HTML など) と `gh: HTTP <status>` だけを出し、本文は stdout へ出す。message の無いこの形は、status があっても分類に
-//     使わない
+// gh が stderr に出す失敗の綴り。message は印 (`gh: `・`GraphQL: `・`HTTP <status>: `) で始まる塊で、印の前の行は message
+// として読まない。
+//   - gh api は、本文の JSON の message と errors を改行でつなぎ、`gh: ` を前に付けて出す (2 つ目からの message は印の無い
+//     続きの行)。HTTP の失敗なら塊の最後の行末に ` (HTTP <status>)` を付ける (塊はそこで終わる)。GraphQL のエラーは status
+//     を付けない。本文が JSON でない (手前の proxy の HTML など) と `gh: HTTP <status>` だけを出し、本文は stdout へ出す。
+//     message の無いこの形は、status があっても分類に使わない
 //   - gh のほかのコマンドは GraphQL のエラーを `GraphQL: <message> (<path>)`、API client の失敗を
 //     `HTTP <status>: <message> (<URL>)` の行頭に出す
 var (
@@ -521,7 +522,7 @@ type ghFailure struct {
 	exit int
 	// status は message とともに出た HTTP status。message の無い応答と、status の無い失敗 (GraphQL のエラー) は 0
 	status int
-	// messages は印で始まる行の message (印と、行末の `(HTTP <status>)` を除いたもの)
+	// messages は message の塊の各行 (印と、塊の末尾の ` (HTTP <status>)` を除いたもの)
 	messages []string
 }
 
@@ -533,22 +534,36 @@ func readFailure(err error) (ghFailure, bool) {
 		return ghFailure{}, false
 	}
 	f := ghFailure{exit: failed.Exit}
+	inBlock := false // gh api の message の塊の続きの行を読んでいるか
 	for _, line := range strings.Split(failed.Stderr, "\n") {
 		line = strings.TrimSpace(line)
 		if message, ok := strings.CutPrefix(line, "gh: "); ok {
-			if m := apiStatusPattern.FindStringSubmatch(message); m != nil {
-				message = m[apiStatusPattern.SubexpIndex("message")]
-				f.keepFirstStatus(m[apiStatusPattern.SubexpIndex("status")])
-			}
-			f.messages = append(f.messages, message)
+			inBlock = f.addAPIMessage(message)
 		} else if message, ok := strings.CutPrefix(line, "GraphQL: "); ok {
-			f.messages = append(f.messages, message)
+			f.messages, inBlock = append(f.messages, message), false
 		} else if m := clientStatusPattern.FindStringSubmatch(line); m != nil {
 			f.keepFirstStatus(m[clientStatusPattern.SubexpIndex("status")])
-			f.messages = append(f.messages, m[clientStatusPattern.SubexpIndex("message")])
+			f.messages, inBlock = append(f.messages, m[clientStatusPattern.SubexpIndex("message")]), false
+		} else if inBlock && line != "" {
+			inBlock = f.addAPIMessage(line)
+		} else {
+			inBlock = false
 		}
 	}
 	return f, true
+}
+
+// addAPIMessage は gh api の message の塊の 1 行を足す。行末に ` (HTTP <status>)` があれば status を読み、塊が終わったとして
+// false を返す。続きの行がありうれば true。
+func (f *ghFailure) addAPIMessage(line string) bool {
+	m := apiStatusPattern.FindStringSubmatch(line)
+	if m == nil {
+		f.messages = append(f.messages, line)
+		return true
+	}
+	f.keepFirstStatus(m[apiStatusPattern.SubexpIndex("status")])
+	f.messages = append(f.messages, m[apiStatusPattern.SubexpIndex("message")])
+	return false
 }
 
 // keepFirstStatus は、まだ status を読んでいなければ status に text を読む。

@@ -196,13 +196,29 @@ func TestRereadIssueIsNotClosedWhenTheMissingIssueIsOnlyMentionedInsideAMessage(
 }
 
 func TestRereadIssueOfARepositoryThatGhCannotResolveIsNotVisibleRatherThanClosed(t *testing.T) {
-	stderr := "gh: Could not resolve to a Repository with the name 'acme/widgets'.\nCould not resolve to an Issue with the number of 42.\n"
+	// gh api は GraphQL のエラーが複数なら、2 つ目からを印の無い続きの行に出す
+	for _, stderr := range []string{
+		"gh: Could not resolve to a Repository with the name 'acme/widgets'.\nCould not resolve to an Issue with the number of 42.\n",
+		"gh: Could not resolve to an Issue with the number of 42.\nCould not resolve to a Repository with the name 'acme/widgets'.\n",
+	} {
+		t.Run(stderr, func(t *testing.T) {
+			_, err := reread(t, ghFailed(stderr))
 
-	_, err := reread(t, ghFailed(stderr))
+			var failure *target.Failure
+			if !errors.As(err, &failure) || failure.Kind != target.NotVisible {
+				t.Fatalf("err = %v, want 見えない (消えた issue と読まない)", err)
+			}
+		})
+	}
+}
 
-	var failure *target.Failure
-	if !errors.As(err, &failure) || failure.Kind != target.NotVisible {
-		t.Fatalf("err = %v, want 見えない (消えた issue と読まない)", err)
+func TestRereadIssueThatGhCannotResolveInALaterGraphQLErrorIsClosed(t *testing.T) {
+	stderr := "gh: Something went wrong while executing your query.\nCould not resolve to an Issue with the number of 42.\n"
+
+	issue, err := reread(t, ghFailed(stderr))
+
+	if err != nil || !issue.Closed {
+		t.Fatalf("issue = %+v (%v), want 消えた issue は終端", issue, err)
 	}
 }
 
@@ -221,7 +237,13 @@ func TestGhFailuresAreClassifiedByTheStatusPositionAndTheMessage(t *testing.T) {
 		"gh: Bad Gateway (HTTP 502)\nupstream: HTTP 401\n": target.Unavailable,
 		// 印の無い行は message として読まない
 		"gh: Bad Gateway (HTTP 502)\nupstream: rate limit service unavailable\n": target.Unavailable,
+		// message の書き出しの Bad credentials は認証
 		"GraphQL: Bad credentials\n": target.Auth,
+		// `gh auth login` の案内は exit 4 とともに出るので、文言では認証と読まない
+		"To get started with GitHub CLI, please run:  gh auth login\n": target.Unavailable,
+		// message が複数なら、status は塊の最後の行末に付く
+		"gh: Not Found\nThe repository is archived (HTTP 404)\n":              target.NotVisible,
+		"gh: Something went wrong.\nAPI rate limit exceeded for user ID 1.\n": target.RateLimit,
 		// message の無い応答 (手前の proxy の HTML などでありうる) は status に依らず分類しない
 		"gh: HTTP 401\n": target.Unavailable,
 		"gh: HTTP 429\n": target.Unavailable,
