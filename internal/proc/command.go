@@ -30,14 +30,19 @@ type Error struct {
 	Summary string
 }
 
-// Error は撃ったコマンド・exit code と、Summary か stderr を返す。stderr の HTML の本文は載せない (formats.md §3)。
+// Error は撃ったコマンド・exit code と Detail を返す。
 func (e *Error) Error() string {
 	head := strings.Join(e.Args[:min(2, len(e.Args))], " ")
-	detail := e.Summary
-	if detail == "" {
-		detail = withoutHTMLBody(e.Stderr)
+	return fmt.Sprintf("%s %s failed (exit %d): %s", e.Name, head, e.Exit, e.Detail())
+}
+
+// Detail はエラー文に載せる失敗の中身。Summary があればそれ、無ければ stderr から HTML の本文を落としたもの (formats.md §3)。
+// 撃ったコマンドを自分の言葉で名指す呼び出し側 (hook) は、Error の代わりにこれを使う。
+func (e *Error) Detail() string {
+	if e.Summary != "" {
+		return e.Summary
 	}
-	return fmt.Sprintf("%s %s failed (exit %d): %s", e.Name, head, e.Exit, detail)
+	return withoutHTMLBody(e.Stderr)
 }
 
 // htmlBody は stderr の中の HTML の本文の始まり。reverse proxy・SSO・load balancer は status に依らず HTML のページを

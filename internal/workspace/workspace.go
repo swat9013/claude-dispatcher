@@ -135,7 +135,7 @@ func (m Manager) run(name, script string, ref target.Ref) error {
 	_, err := proc.Command{Path: "/bin/sh", Env: env, Dir: path, Timeout: m.Hooks.Timeout}.Output("-c", script)
 	var failed *proc.Error
 	if errors.As(err, &failed) {
-		return fmt.Errorf("%s の失敗 (exit %d): %s", name, failed.Exit, strings.TrimSpace(failed.Stderr))
+		return fmt.Errorf("%s の失敗 (exit %d): %s", name, failed.Exit, failed.Detail())
 	}
 	if err != nil {
 		return fmt.Errorf("%s の失敗: %w", name, err)
