@@ -351,20 +351,42 @@ func TestCLListIsNotReadWithoutACLTrigger(t *testing.T) {
 	}
 }
 
-func TestWaitingRetryOfACLThatBecameAmbiguousIsReleased(t *testing.T) {
+func TestWaitingRetryOfACLThatLooksAmbiguousIsKeptAndRestartedWithTheNextAttemptOnceItIsNot(t *testing.T) {
+	// 曖昧さは一覧でしか決まらないので、close 直後の兄弟 CL を open のまま返す古い一覧でも曖昧に見える
 	s := newSandbox(t)
 	s.writeWorkflowWithCommands(strings.Replace(s.clWorkflow("{}"), "triggers:\n", fastRetry+"triggers:\n", 1))
 	s.setStore(nil, []cl{readyCL(5)})
+	// CL の workspace は head を detach で checkout する (-q の symbolic-ref は何も出さずに 1 で終わる)
+	s.respond("git", stubwire.Rule{ArgsPrefix: []string{"symbolic-ref"}, Exit: 1})
 	s.onClaude(stubwire.Rule{})
 	s.startLoop()
+	first := s.waitEvents("start", 1)[0]
 	s.waitEvents("retry", 1)
-
 	s.setStore(nil, []cl{readyCL(5), {number: 6, head: readyCL(5).head}})
-
-	release := s.waitEvents("release", 1)[0]
-	if release["target"] != "cl#5" || release["reason"] != "曖昧な CL" {
-		t.Fatalf("release の行 = %v, want cl#5 を曖昧な CL として解く", release)
+	// backoff (1s) が明けた後の tick を、曖昧に見えたまま 2 回は通す
+	waitFor(t, func() bool { return len(ambiguousTicks(s)) >= 3 }, "曖昧な CL を数えた tick の行が 3 行にならない")
+	if releases, starts := s.events("release"), s.startsOf("cl#5"); len(releases) != 0 || len(starts) != 1 {
+		t.Fatalf("release の行 = %v, cl#5 の start の行 = %v, want 曖昧に見える間は claim を解かず起動もしない", releases, starts)
 	}
+
+	s.setStore(nil, []cl{readyCL(5)})
+
+	waitStart(t, s, "cl#5", 2)
+	second := s.startsOf("cl#5")[1]
+	if second["attempt"] != float64(2) || second["session_id"] != first["session_id"] {
+		t.Fatalf("2 本目の start の行 = %v, want attempt 2 で session id %v を続ける", second, first["session_id"])
+	}
+}
+
+// ambiguousTicks は log.jsonl の tick の行のうち、曖昧な CL を数えた行を返す。
+func ambiguousTicks(s *sandbox) []map[string]any {
+	var found []map[string]any
+	for _, line := range s.events("tick") {
+		if heads, _ := line["ambiguous"].([]any); len(heads) > 0 {
+			found = append(found, line)
+		}
+	}
+	return found
 }
 
 func TestEndedCLWorkerIsNotCompletedWhileItsConflictIsBeingComputed(t *testing.T) {
