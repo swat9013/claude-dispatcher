@@ -423,6 +423,38 @@ func TestJiraIssueThatFailsToBeViewedButIsStillOpenIsNotTreatedAsTerminal(t *tes
 	}
 }
 
+// staleListAfterOneFailedView は、worker の後に acli が返すようになる応答 file の中身。open な一覧は古く WIDGETS-42 を
+// 載せない。WIDGETS-42 の view は 1 回だけ落ち、落ちたときに応答を「view は読める (一覧は古いまま)」に書き換える。
+func (s *sandbox) staleListAfterOneFailedView() stubwire.FileWrite {
+	staleList := stubwire.Rule{ArgsPrefix: jiraSearch(jiraOpenJQL), Stdout: "[]"}
+	encode := func(rules []stubwire.Rule) string {
+		raw, err := json.Marshal(rules)
+		if err != nil {
+			s.t.Fatal(err)
+		}
+		return string(raw)
+	}
+	responses := stubwire.ResponsesFile(s.stubRoot, "acli")
+	readable := encode(append([]stubwire.Rule{staleList}, jiraRules(readyJiraIssue(42))...))
+	failOnce := stubwire.Rule{ArgsPrefix: []string{"jira", "workitem", "view", "WIDGETS-42"}, Stderr: "✗ Error: request failed\n", Exit: 1,
+		Writes: []stubwire.FileWrite{{Path: responses, Content: readable}}}
+	return stubwire.FileWrite{Path: responses, Content: encode(append([]stubwire.Rule{failOnce, staleList}, jiraRules(readyJiraIssue(42))...))}
+}
+
+func TestJiraIssueWhoseViewFailsOnceWhileTheListIsStaleIsNotTreatedAsTerminal(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflowWithCommands(s.jiraWorkerWorkflow())
+	s.setJiraIssues(readyJiraIssue(42))
+	s.onClaude(stubwire.Rule{Writes: []stubwire.FileWrite{s.staleListAfterOneFailedView()}})
+
+	loop := s.startLoop()
+
+	loop.waitForOutput(regexp.MustCompile(` 終了 issue#42 \(implement\): `))
+	if out := loop.stdout.String(); !strings.Contains(out, "終了 issue#42 (implement): failed — trigger に当たったまま") {
+		t.Fatalf("view が 1 回落ちて一覧が古いだけで終端と読んだ:\n%s", out)
+	}
+}
+
 func TestJiraIssueMovedToAnotherProjectIsTreatedAsTerminal(t *testing.T) {
 	s := newSandbox(t)
 	s.writeWorkflowWithCommands(s.jiraWorkerWorkflow())
