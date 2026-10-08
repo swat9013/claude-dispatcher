@@ -371,7 +371,7 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 | `release` | 再起動を待つ claim を、起動せずに解いた | `target`・`trigger`・`attempt`・`session_id`・`reason` (`終端` / `trigger から外れた` / `trigger が workflow 定義から消えた` / `曖昧な CL`) |
 | `abandon` | attempt の上限で打ち切った | `target`・`trigger`・`attempt`・`session_id` |
 | `wait_slot` | backoff が明けた再起動が、並列上限に空きが無くて待ち始めた (1 回の待ちにつき 1 行) | `target`・`trigger`・`next_attempt`・`max_concurrent` |
-| `recheck_skip` | 起動しようとした候補を起動の直前に読み直し (§6 の tick の手順 7)、起動しなかった (候補 1 件につき 1 行。読み直せなかった候補は `error` の行で残し、この行は書かない) | `target`・`trigger`・`reason` (`当たるかをまだ決められない` / `終端` / `trigger から外れた` / `宣言順で先の trigger に当たる`) |
+| `recheck_skip` | 起動しようとした候補を起動の直前に読み直し (§6 の tick の手順 7)、`reason` のどれかに当たって起動しなかった (tick ごとに、候補 1 件につき 1 行。同じ候補が次の tick でも当たれば、また 1 行書く。読み直せなかった候補は `error` の行で残し、この行は書かない) | `target`・`trigger`・`reason` (`当たるかをまだ決められない` / `終端` / `trigger から外れた` / `宣言順で先の trigger に当たる`) |
 | `unabandon` | 打ち切りを解いた (打ち切ったときの trigger から外れたのを観測した) | `target`・`trigger` |
 | `error` | 処理は続けるが、運用者が知るべき失敗 | `target` (あれば)・`error` |
 
