@@ -524,7 +524,8 @@ func (l *loop) sweep(store Store, open []target.Item) {
 // recheckCandidate は、起動しようとする候補を置き場から読み直し、起動してよければ読み直した作業対象を返す。open な一覧の検索は
 // 書き込みの直後に古い結果を返しうる (Jira の JQL 検索など) ので、完了した直後の作業対象を起動し直さないよう、当たるかをまだ
 // 決められないか、終端か、起動しようとした trigger から外れたか、評価する trigger (宣言順) のうち先のものに当たるようになって
-// いれば起動しない。読み直せなければ error の行を残して起動しない。どれも次の tick で候補になれば試み直す。
+// いれば、recheck_skip の行を残して起動しない。読み直せなければ error の行を残して起動しない。どれも次の tick で候補になれば
+// 試み直す。
 func (l *loop) recheckCandidate(store Store, triggers []trigger.Trigger, c trigger.Candidate) (target.Item, bool) {
 	ref := c.Item.Ref()
 	item, err := store.Read(ref)
@@ -543,7 +544,8 @@ func (l *loop) recheckCandidate(store Store, triggers []trigger.Trigger, c trigg
 	default:
 		return item, true
 	}
-	l.rec.human(LineNote, "読み直しで起動せず", " %s (%s): %s", ref, c.Trigger.Name, reason)
+	l.rec.event("recheck_skip", map[string]any{"target": ref.String(), "trigger": c.Trigger.Name, "reason": reason},
+		LineNote, "読み直しで起動せず", " %s (%s): %s", ref, c.Trigger.Name, reason)
 	return nil, false
 }
 

@@ -2,8 +2,10 @@ package loop_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"io"
+	"maps"
 	"os"
 	"strings"
 	"syscall"
@@ -50,6 +52,39 @@ func (b branchWorkspaces) Branch(ref target.Ref) (string, error) { return b[ref]
 // run は tick を 1 回だけ回し、起動した worker と人が読む行を返す。
 func (o oneTick) run(t *testing.T) ([]worker.Job, string) {
 	t.Helper()
+	return o.runLogging(t, io.Discard)
+}
+
+// recheckSkips は tick を 1 回だけ回し、log.jsonl に書いた recheck_skip の行を返す。
+func (o oneTick) recheckSkips(t *testing.T) []map[string]any {
+	t.Helper()
+	var log bytes.Buffer
+	o.runLogging(t, &log)
+	var skips []map[string]any
+	for line := range strings.Lines(log.String()) {
+		var fields map[string]any
+		if err := json.Unmarshal([]byte(line), &fields); err != nil {
+			t.Fatalf("log.jsonl の行 %q: %v", line, err)
+		}
+		if fields["event"] == "recheck_skip" {
+			skips = append(skips, fields)
+		}
+	}
+	return skips
+}
+
+// assertOneRecheckSkip は、recheck_skip の行が 1 行だけで、その target・trigger・reason の値が want と同じことを確かめる
+// (ほかの key は見ない)。
+func assertOneRecheckSkip(t *testing.T, skips []map[string]any, want map[string]any) {
+	t.Helper()
+	if len(skips) != 1 || !maps.Equal(map[string]any{"target": skips[0]["target"], "trigger": skips[0]["trigger"], "reason": skips[0]["reason"]}, want) {
+		t.Fatalf("recheck_skip の行 = %v, want %v を 1 行", skips, want)
+	}
+}
+
+// runLogging は tick を 1 回だけ回し、log.jsonl の行を log に書く。
+func (o oneTick) runLogging(t *testing.T, log io.Writer) ([]worker.Job, string) {
+	t.Helper()
 	def := workflow.Definition{Interval: time.Minute, MaxConcurrent: max(o.maxConcurrent, 1), MaxAttempts: 1, MaxRetryBackoff: 5 * time.Minute, Triggers: o.triggers}
 	var stdout bytes.Buffer
 	var jobs []worker.Job
@@ -79,7 +114,7 @@ func (o oneTick) run(t *testing.T) ([]worker.Job, string) {
 		},
 		NewSessionID: func() (string, error) { return "session-1", nil },
 		ScopeKey:     startScope,
-		Log:          io.Discard,
+		Log:          log,
 		Output:       loop.Appender{W: &stdout},
 		Publish:      func(status.Snapshot) error { return nil },
 		Signals:      signals,
@@ -116,6 +151,12 @@ func TestCandidateClosedWhenReadAgainLeavesAPassLine(t *testing.T) {
 	}
 }
 
+func TestCandidateClosedWhenReadAgainLeavesARecheckSkipEvent(t *testing.T) {
+	skips := closedWhenReadAgain().recheckSkips(t)
+
+	assertOneRecheckSkip(t, skips, map[string]any{"target": "issue#1", "trigger": "implement", "reason": "終端"})
+}
+
 func leftTheTriggerWhenReadAgain() oneTick {
 	return oneTick{triggers: []trigger.Trigger{readyTrigger}, open: []target.Item{readyIssue(1)},
 		read: func(ref target.Ref) (target.Item, error) { return target.Issue{Number: ref.Number}, nil }}
@@ -137,6 +178,12 @@ func TestCandidateThatLeftTheTriggerWhenReadAgainLeavesAPassLine(t *testing.T) {
 	}
 }
 
+func TestCandidateThatLeftTheTriggerWhenReadAgainLeavesARecheckSkipEvent(t *testing.T) {
+	skips := leftTheTriggerWhenReadAgain().recheckSkips(t)
+
+	assertOneRecheckSkip(t, skips, map[string]any{"target": "issue#1", "trigger": "implement", "reason": "trigger から外れた"})
+}
+
 func cannotBeReadAgain() oneTick {
 	return oneTick{triggers: []trigger.Trigger{readyTrigger}, open: []target.Item{readyIssue(1)},
 		read: func(target.Ref) (target.Item, error) { return nil, errors.New("gh の失敗") }}
@@ -155,6 +202,14 @@ func TestCandidateThatCannotBeReadAgainLeavesAnErrorLine(t *testing.T) {
 
 	if !strings.Contains(out, "error issue#1: 起動しようとした作業対象を読み直せない (次の tick で試み直す): gh の失敗") {
 		t.Fatalf("出力:\n%s", out)
+	}
+}
+
+func TestCandidateThatCannotBeReadAgainLeavesNoRecheckSkipEvent(t *testing.T) {
+	skips := cannotBeReadAgain().recheckSkips(t)
+
+	if len(skips) != 0 {
+		t.Fatalf("recheck_skip の行 = %v, want 無し (error の行だけ)", skips)
 	}
 }
 
@@ -184,6 +239,12 @@ func TestCandidateCLWhoseConflictIsStillBeingComputedWhenReadAgainLeavesAPassLin
 	}
 }
 
+func TestCandidateCLWhoseConflictIsStillBeingComputedWhenReadAgainLeavesARecheckSkipEvent(t *testing.T) {
+	skips := conflictStillBeingComputedWhenReadAgain().recheckSkips(t)
+
+	assertOneRecheckSkip(t, skips, map[string]any{"target": "cl#7", "trigger": "fix-conflict", "reason": "当たるかをまだ決められない"})
+}
+
 func matchesAnEarlierTriggerWhenReadAgain() oneTick {
 	review := trigger.Trigger{Name: "review", On: target.KindIssue, Issue: trigger.IssuePredicate{LabelsAll: []string{"needs-review"}}}
 	return oneTick{triggers: []trigger.Trigger{review, readyTrigger}, open: []target.Item{readyIssue(1)},
@@ -206,6 +267,12 @@ func TestCandidateThatMatchesAnEarlierTriggerWhenReadAgainLeavesAPassLine(t *tes
 	if !strings.Contains(out, "読み直しで起動せず issue#1 (implement): 宣言順で先の trigger に当たる") {
 		t.Fatalf("出力:\n%s", out)
 	}
+}
+
+func TestCandidateThatMatchesAnEarlierTriggerWhenReadAgainLeavesARecheckSkipEvent(t *testing.T) {
+	skips := matchesAnEarlierTriggerWhenReadAgain().recheckSkips(t)
+
+	assertOneRecheckSkip(t, skips, map[string]any{"target": "issue#1", "trigger": "implement", "reason": "宣言順で先の trigger に当たる"})
 }
 
 func TestCandidateCLWhoseHeadIsHeldByAClaimWhenReadAgainIsNotLaunched(t *testing.T) {
