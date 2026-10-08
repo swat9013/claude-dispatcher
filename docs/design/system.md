@@ -294,7 +294,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。
   - worker は loop の子なので、loop が死ねば worker も止まる。止まった worker の作業対象は、trigger に当たったままなら、次に起動した loop が再び拾う
 - **loop の画面が第一の観測点**
   - 見出し・`workers`・`要対処`・`ログ` のセクションに分けて描き直す
-  - 見出しは loop の状態 (稼働中・停止待ち) と scope key、次の tick の時刻、直近の tick の結果と error
+  - 見出しは loop の状態 (稼働中・停止待ち) と scope key と loop の binary の版、次の tick の時刻、直近の tick の結果と error
   - `workers` は claim の表 (作業対象・trigger・attempt・段階・経過・stream の最新の活動)。最新の活動は表の列で見るので、`ログ` には活動の行を出さない
   - `要対処` は人の手当てを待つもの (打ち切り・曖昧な CL・起動しない trigger)。無ければ出さない
   - stdout が端末のときだけ色を付ける。`status` も同じ描画を使う

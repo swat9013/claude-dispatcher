@@ -370,6 +370,7 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 
 | `event` | いつ | ほかの key |
 |---|---|---|
+| `loop_start` | loop を起動した (起動時の検査に通り、最初の tick の前。1 回の起動につき 1 行) | `version`・`commit` (loop を書いた binary の版と commit。値は `--version` (§8) と同じ) |
 | `tick` | tick の終わり | `result` (`ok` / `error`)・`candidates` (候補の数)・`launched` (起動した作業対象の列)・`ambiguous` (曖昧な CL。`{"head": <head branch>, "targets": [<作業対象>…]}` の列)・`blocked` (事前検査 (§2.9) に落ちて起動しない trigger。`{"trigger": <名前>, "error": <理由>}` の列)・`running`・`waiting_retry`・`max_concurrent` (起動の判定に使った値。`result` が `ok` のとき)・`error` (`result` が `error` のとき) |
 | `start` | worker を起動した | `target`・`trigger`・`attempt`・`session_id`・`workspace`・`pid` |
 | `end` | worker 1 回分の終わり方を決めた | `target`・`trigger`・`attempt`・`session_id`・`outcome`・`reason`・`exit_code` (process が自分で終わったときだけ。signal で止まったら載せない)・`is_error`・`num_turns`・`permission_denial_count` (attempt の最後の `result` の要約。下の箇条) |
@@ -562,7 +563,7 @@ claude-dispatcher loop [<workflow の path>]
 端末の画面 (停止待ち):
 
 ```
-● loop 停止待ち  github.com/acme/widgets
+● loop 停止待ち  github.com/acme/widgets · v0.3.0
 次の tick なし · 直近の tick 00:05:00 ok · 候補 1
 走っている worker 1 本の終了を待っている。もう一度 Ctrl+C で worker を止めて終える
 
@@ -637,6 +638,8 @@ loop の今の状態を、表示のためだけに書き出す (system.md §9)�
   "scope": "github.com/acme/widgets",
   "workflow": "/path/to/WORKFLOW.md",
   "started_at": "2026-10-01T00:00:00Z",
+  "version": "v0.3.0",
+  "commit": "<commit の hash>",
   "updated_at": "2026-10-01T00:05:00Z",
   "stopping": false,
   "next_tick_at": "2026-10-01T00:10:00Z",
@@ -653,6 +656,7 @@ loop の今の状態を、表示のためだけに書き出す (system.md §9)�
 
 | key | 中身 |
 |---|---|
+| `version`・`commit` | 状態 file を書いた loop の binary の版と commit。値は `--version` (§8) と同じ。この 2 つを足す前の版が書いた状態 file には無い |
 | `stopping` | 停止要求を受けて、worker の終了を待っている |
 | `next_tick_at` | 次の tick の予定。停止要求の後は `null` |
 | `last_tick` | 直近の tick。`result` が `error` なら `error` に理由 (事前検査の失敗 — workflow 定義の誤り・scope key の食い違い・観測の失敗 — を含む)。まだ tick が無ければ `null` |
@@ -673,7 +677,7 @@ claude-dispatcher status [<workflow の path>]
 別の端末から loop の今の状態を見る。workflow 定義を読んで scope key を決め、その state dir の状態 file を描く。**何も書かず、tracker の CLI も撃たない**。
 
 ```
-● loop 稼働中  github.com/acme/widgets
+● loop 稼働中  github.com/acme/widgets · v0.3.0
 次の tick 00:10:00 · 直近の tick 00:05:00 ok · 候補 1
 
 workers 2 ────────────────────────────────────────────
@@ -687,7 +691,7 @@ issue#44  implement  2        waiting_retry  00:06:40 に再起動
 起動しない trigger fix-ci: action の先頭の /fix が見つからない (plugin・repo の .claude・~/.claude の skill と command)
 ```
 
-- 見出しは 2 行。1 行目は loop の状態と scope key: loop が生きていれば `● loop 稼働中` (停止要求の後は `● loop 停止待ち`)、`alive.lock` を取れれば `○ loop なし`
+- 見出しは 2 行。1 行目は loop の状態と scope key と版: loop が生きていれば `● loop 稼働中` (停止要求の後は `● loop 停止待ち`)、`alive.lock` を取れれば `○ loop なし`。版は scope key に続けて ` · <version>` (状態 file の `version`) を出す。commit は出さない (状態 file と log.jsonl で読める)。`○ loop なし` のとき (状態 file の版は止まった loop のもの) と、状態 file に `version` が無いとき (版を足す前の版が書いた状態 file) は出さない
 - 2 行目は `次の tick <時刻>` (停止要求の後は `次の tick なし`)・`直近の tick <時刻> ok · 候補 <n>` を ` · ` で繋ぐ。直近の tick が error なら `直近の tick <時刻> error: <理由>`。`loop なし` のときは次の tick の欄を出さない。出す欄が無ければ 2 行目を出さない
 - `loop なし` のときは見出しだけを出す (状態 file が残っていても、worker と打ち切りは loop の memory と一緒に消えている)
 - 状態 file が無ければ、見出しの 2 行目は `記録なし`
