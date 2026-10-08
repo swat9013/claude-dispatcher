@@ -74,7 +74,8 @@ func (l *loop) arm() {
 }
 
 // retry は backoff の明けた再起動待ちの claim を起動する。v は tick が読んだ view (tick の外からなら outsideTick) で、
-// CL の曖昧さと branch を確かめるのに使う。作業対象は tick の中でも一覧を使わず、置き場から 1 件ずつ読み直す。空きが
+// CL の曖昧さと branch を確かめるのに使う。作業対象は tick の中でも一覧を使わず、置き場から 1 件ずつ読み直す (一覧の
+// 検索は古い結果を返しうる。formats.md §6 の再起動)。空きが
 // 無いか、作業対象を読み直せないか、当たるかをまだ決められないか、CL の head branch を別の claim が checkout していれば、
 // attempt を進めずに待ち直す (空きは worker が終わったとき、それ以外は次の tick で試み直す)。作業対象が終端か、trigger
 // から外れたか、曖昧な CL になっていれば、起動せずに claim を解く (release の行を残す)。宣言順で先の trigger に当たる
@@ -102,8 +103,6 @@ func (l *loop) retry(store Store, v *view) {
 		if ref.Kind == target.KindCL && v == outsideTick {
 			continue
 		}
-		// tick の open な一覧は使わない。一覧の検索は書き込みの直後に古い結果を返しうる (Jira の JQL 検索など) ので、
-		// 完了した直後の作業対象を再起動しないよう、置き場から 1 件読む
 		item, err := store.Read(ref)
 		if err != nil {
 			l.rec.error(ref, "再起動を待つ作業対象を読み直せない (次の tick で読み直す): "+oneLine(err))

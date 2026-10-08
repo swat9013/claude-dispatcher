@@ -262,18 +262,12 @@ func TestJiraBlockersAreNotReadWithoutABlockedPredicate(t *testing.T) {
 
 	assertCandidates(t, s.dryRun(), jiraCandidate("implement", 10))
 
-	// 候補は起動の直前と同じく 1 回だけ読み直す (formats.md §5)。依存先を読むなら、同じ view をもう 1 回撃つ
-	views := 0
+	// 依存先は、依存を持つ issue の検索に当たったものだけを読む。候補の読み直し (formats.md §5) も同じ workitem view を
+	// 撃つので、view ではなく検索で見る
 	for _, c := range s.calls("acli") {
 		if slices.Contains(c.Argv, jiraBlockedJQL) {
 			t.Fatalf("blocked を書いていないのに依存を検索した: %q", c.Argv[1:])
 		}
-		if slices.Equal(c.Argv[1:min(4, len(c.Argv))], []string{"jira", "workitem", "view"}) {
-			views++
-		}
-	}
-	if views > 1 {
-		t.Fatalf("workitem view = %d 回, want 候補の読み直しの 1 回まで (blocked を書いていないのに依存先を読んだ)", views)
 	}
 }
 
