@@ -85,7 +85,7 @@ const (
 	phaseRunning phase = iota
 	// phaseStopping は loop が worker を止めている
 	phaseStopping
-	// phaseAwaitingVerification は worker が終わったが、作業対象を読み直せず終わり方を確かめ待ち
+	// phaseAwaitingVerification は worker が終わったが、作業対象を読み直せないか trigger に当たるかをまだ決められず、終わり方を確かめ待ち
 	phaseAwaitingVerification
 	// phaseWaitingRetry は失敗した worker の次の attempt を、backoff が明けるか空きが出るまで待っている
 	phaseWaitingRetry
@@ -106,11 +106,11 @@ const (
 	reasonStillMatches = "trigger に当たったまま"
 )
 
+// 当たるかをまだ決められない理由。終わった worker の確かめ (verify_wait) と起動の直前の読み直し (recheck_skip) で使う
+const reasonUndecided = "当たるかをまだ決められない"
+
 // 起動の直前の読み直しだけで使う理由
-const (
-	reasonUndecided      = "当たるかをまだ決められない"
-	reasonEarlierTrigger = "宣言順で先の trigger に当たる"
-)
+const reasonEarlierTrigger = "宣言順で先の trigger に当たる"
 
 // outcome は claim を解いたときの終わり方 (formats.md §4)。
 type outcome string
@@ -484,7 +484,7 @@ func (l *loop) stop(c *claim, reason stopReason) {
 	c.run.Stop()
 }
 
-// recheck は、終わったが作業対象を読み直せなかった worker を確かめ直す。
+// recheck は、終わり方を確かめ待ちの worker (phaseAwaitingVerification) を確かめ直す。
 func (l *loop) recheck(store Store) {
 	for ref, c := range l.claims {
 		if c.phase == phaseAwaitingVerification {
@@ -657,8 +657,8 @@ func (l *loop) claimOf(ref target.Ref) (*claim, bool) {
 	return c, ok
 }
 
-// verify は終わった worker の作業対象を読み直し、終わり方を決める。完了なら claim を解き、失敗なら再起動に回す。読み直せなければ
-// claim を持ったまま次の tick で確かめ直す (完了とも失敗とも数えない)。作業対象が終端か trigger から外れていれば、worker 自身の
+// verify は終わった worker の作業対象を読み直し、終わり方を決める。完了なら claim を解き、失敗なら再起動に回す。読み直せないか
+// trigger に当たるかをまだ決められなければ、claim を持ったまま次の tick で確かめ直す (完了とも失敗とも数えない)。作業対象が終端か trigger から外れていれば、worker 自身の
 // 失敗に関わらず完了とする。
 func (l *loop) verify(store Store, ref target.Ref, c *claim) {
 	item, err := store.Read(ref)
@@ -668,7 +668,11 @@ func (l *loop) verify(store Store, ref target.Ref, c *claim) {
 	}
 	result := *c.ended
 	if c.trigger.Undecided(item) {
-		l.rec.error(ref, "終わった worker の作業対象が trigger に当たるかをまだ決められない (CL の conflict を計算中。次の tick で確かめ直す)")
+		// 失敗ではない正常な待ちなので、error ではなく verify_wait の行で残す
+		l.rec.event("verify_wait", map[string]any{
+			"target": ref.String(), "trigger": c.trigger.Name, "attempt": c.attempt,
+			"session_id": c.sessionID, "reason": reasonUndecided,
+		}, LineNote, "確かめ待ち", " %s (%s, attempt %d): %s", ref, c.trigger.Name, c.attempt, reasonUndecided)
 		return
 	}
 	if settled := l.settle(ref, c, item); settled != "" {

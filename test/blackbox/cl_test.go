@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -367,9 +368,9 @@ func TestWaitingRetryOfACLThatBecameAmbiguousIsReleased(t *testing.T) {
 	}
 }
 
-func TestEndedCLWorkerIsNotCompletedWhileItsConflictIsBeingComputed(t *testing.T) {
-	// conflict: true の CL の worker が終わったとき、GitHub が conflict を計算し直している (UNKNOWN) なら、外れたとは数えない
-	s := newSandbox(t)
+// startLoopWithEndedCLWorkerWhileItsConflictIsBeingComputed は、conflict: true の CL の worker が、GitHub が conflict を
+// 計算し直している (UNKNOWN) 間に終わる loop を起動する。
+func (s *sandbox) startLoopWithEndedCLWorkerWhileItsConflictIsBeingComputed() *backgroundRun {
 	s.writeWorkflowWithCommands(s.clWorkflow("{conflict: true}"))
 	conflicting := readyCL(5)
 	conflicting.mergeable = "CONFLICTING"
@@ -377,19 +378,44 @@ func TestEndedCLWorkerIsNotCompletedWhileItsConflictIsBeingComputed(t *testing.T
 	computing.mergeable = "UNKNOWN"
 	s.setStore(nil, []cl{conflicting})
 	s.onClaude(stubwire.Rule{Writes: []stubwire.FileWrite{s.clResponses(computing)}})
+	return s.startLoop()
+}
 
-	s.startLoop()
+func TestEndedCLWorkerWaitsForVerificationWithoutAnErrorWhileItsConflictIsBeingComputed(t *testing.T) {
+	// 外れたとは数えず、失敗ではない確かめ待ちとして tick ごとに verify_wait の行を書く
+	s := newSandbox(t)
 
-	waitFor(t, func() bool {
-		for _, e := range s.events("error") {
-			if e["target"] == "cl#5" && strings.Contains(asString(e["error"]), "conflict を計算中") {
-				return true
+	s.startLoopWithEndedCLWorkerWhileItsConflictIsBeingComputed()
+
+	waits := s.waitEvents("verify_wait", 2)
+	start := s.waitEvents("start", 1)[0]
+	for _, w := range waits {
+		want := map[string]any{"target": "cl#5", "trigger": "fix", "attempt": float64(1), "session_id": start["session_id"], "reason": "当たるかをまだ決められない"}
+		for key, value := range want {
+			if w[key] != value {
+				t.Fatalf("verify_wait の行 = %v, want %s = %v", w, key, value)
 			}
 		}
-		return false
-	}, "終わり方を決められないことが error の行に残らない")
+	}
 	if ends := s.events("end"); len(ends) != 0 {
 		t.Fatalf("conflict を計算中なのに終わり方を決めた: %v", ends)
+	}
+	for _, e := range s.events("error") {
+		if e["target"] == "cl#5" {
+			t.Fatalf("確かめ待ちを error の行に書いた: %v", e)
+		}
+	}
+}
+
+func TestEndedCLWorkerWaitingForVerificationIsShownAsAWaitNotAnErrorWhileItsConflictIsBeingComputed(t *testing.T) {
+	s := newSandbox(t)
+
+	loop := s.startLoopWithEndedCLWorkerWhileItsConflictIsBeingComputed()
+
+	loop.waitForOutput(regexp.MustCompile(`確かめ待ち cl#5 \(fix, attempt 1\): 当たるかをまだ決められない$`))
+	s.waitEvents("verify_wait", 2)
+	if out := loop.stdout.String(); strings.Contains(out, "error cl#5") {
+		t.Fatalf("確かめ待ちを人が読む行に error として出した:\n%s", out)
 	}
 }
 
