@@ -15,13 +15,9 @@ import (
 // baseBackoff は 1 回目の失敗の後の backoff
 const baseBackoff = 10 * time.Second
 
-// 再起動を待つ claim を、起動せずに解く理由
-const (
-	// reasonTriggerRemoved は、再起動を待つ間に起動した trigger が workflow 定義から消えた
-	reasonTriggerRemoved = "trigger が workflow 定義から消えた"
-	// reasonAmbiguous は、再起動を待つ間に CL が曖昧になった (同じ head branch から別の CL が開いた)
-	reasonAmbiguous = "曖昧な CL"
-)
+// reasonTriggerRemoved は、再起動を待つ claim を起動せずに解く理由のうち、起動した trigger が workflow 定義から消えた
+// こと (ほかの理由は settle が返す)
+const reasonTriggerRemoved = "trigger が workflow 定義から消えた"
 
 // backoff は attempt 回目が失敗した後に待つ時間: min(10s × 2^(attempt−1), limit)。
 func backoff(attempt int, limit time.Duration) time.Duration {
@@ -57,13 +53,15 @@ func (l *loop) fail(ref target.Ref, c *claim) {
 }
 
 // arm は、最も早い再起動の予定に届く wake を置く。もっと早い予定の wake が既にあれば置き直さない。停止要求の後は置かない。
+// retry が直近に見渡した時刻までに予定の明けた claim には置かない。その時に試みて起動できなかった claim は、tick と worker
+// の終わりに試み直す (置き直すと、tick の外では起動できない CL の claim などで wake が回り続ける)。
 func (l *loop) arm() {
 	if l.stopping > 0 {
 		return
 	}
 	var earliest time.Time
 	for _, c := range l.claims {
-		if l.restartable(c) && (earliest.IsZero() || c.retryAt.Before(earliest)) {
+		if l.restartable(c) && c.retryAt.After(l.retriedAt) && (earliest.IsZero() || c.retryAt.Before(earliest)) {
 			earliest = c.retryAt
 		}
 	}
@@ -76,13 +74,14 @@ func (l *loop) arm() {
 // retry は backoff の明けた再起動待ちの claim を起動する。v は tick が読んだ view (tick の外からなら outsideTick) で、
 // CL の曖昧さと branch を確かめるのに使う。作業対象は tick の中でも一覧を使わず、置き場から 1 件ずつ読み直す (一覧の
 // 検索は古い結果を返しうる。formats.md §6 の再起動)。空きが
-// 無いか、作業対象を読み直せないか、当たるかをまだ決められないか、CL の head branch を別の claim が checkout していれば、
-// attempt を進めずに待ち直す (空きは worker が終わったとき、それ以外は次の tick で試み直す)。作業対象が終端か、trigger
-// から外れたか、曖昧な CL になっていれば、起動せずに claim を解く (release の行を残す)。宣言順で先の trigger に当たる
-// ようになったかは確かめない (再起動は同じ trigger で続ける。system.md §7)。CL の再起動は、曖昧さと branch を確かめ
-// られる tick の中でだけ試みる。
+// 無いか、作業対象を読み直せないか、当たるかをまだ決められないか、CL が tick の一覧で曖昧に見えるか、CL の head branch
+// を別の claim が checkout していれば、attempt を進めずに待ち直す (空きは worker が終わったとき、それ以外は次の tick で
+// 試み直す)。曖昧に見えても claim は解かない (理由は formats.md §6 の再起動)。作業対象が終端か、trigger から外れて
+// いれば、起動せずに claim を解く (release の行を残す)。宣言順で先の trigger に当たるようになったかは確かめない (再起動
+// は同じ trigger で続ける。system.md §7)。CL の再起動は、曖昧さと branch を確かめられる tick の中でだけ試みる。
 func (l *loop) retry(store Store, v *view) {
 	now := l.o.Now()
+	l.retriedAt = now
 	for ref, c := range l.claims {
 		if c.phase != phaseWaitingRetry || now.Before(c.retryAt) {
 			continue
@@ -117,11 +116,7 @@ func (l *loop) retry(store Store, v *view) {
 			continue
 		}
 		if cl, isCL := item.(target.CL); isCL {
-			if v.ambiguous[ref] {
-				l.releaseWaiting(ref, c, reasonAmbiguous)
-				continue
-			}
-			if v.branchHeld(cl, ref) {
+			if v.ambiguous[ref] || v.branchHeld(cl, ref) {
 				continue
 			}
 		}

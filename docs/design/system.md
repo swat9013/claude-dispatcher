@@ -217,7 +217,10 @@ SPEC §7・§8・§16 の状態機械を土台にする。
 - **attempt を 1 つ進め、backoff して再起動を待つ**
   - backoff の式は SPEC §8.4 のまま: `min(10s × 2^(attempt−1), 上限)`。上限の既定は 5 分
   - 再起動の前に作業対象を読み直す。終端になっていれば claim を解き、trigger から外れていれば完了として claim を解く
+  - backoff が明けたら、tick を待たずに試みる。明けたときに起動できなかった claim は、次の tick か worker が終わったときに試み直し、tick の外で試み直し続けない (CL は tick の中でだけ再起動するので、続けると次の tick まで空回りする)
   - 空きが無ければ、attempt を進めずに待ち直す (ADR 0009「空きを待つ間は attempt を進めない」)
+  - CL が tick の一覧で曖昧な CL (§6) に見えても claim を解かず、attempt を進めずに次の tick で試み直す。曖昧さは一覧でしか決まらず、古い一覧が close 直後の兄弟 CL を open のまま返すと曖昧に見える。そこで claim を解くと、次の tick で attempt 1 から数え直して起動しうる (attempt の上限をすり抜ける)
+  - 曖昧な間も claim は再起動待ちとして残り、並列の枠を 1 つ使い続ける。曖昧な CL は `status` に出るので、人が片方を close すれば解ける
   - 再起動は同じ trigger で続ける。宣言順で先の trigger に当たるようになっていても、その評価は claim が解けた後の tick で行う
 - **attempt が上限に達したら打ち切る**
   - 打ち切りは memory に持ち、log と `status` に出す。tracker には書かない

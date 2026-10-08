@@ -169,6 +169,8 @@ type loop struct {
 	// wake は最も早い再起動の予定に届く channel、wakeAt はその時刻。予定が無ければ nil
 	wake   <-chan time.Time
 	wakeAt time.Time
+	// retriedAt は retry が直近に再起動待ちの claim を見渡した時刻。予定がこれ以前の claim はその時に試みている
+	retriedAt time.Time
 	// blocked は、採っている workflow 定義で事前検査に落ちた trigger。起動も再起動もしない
 	blocked []precheck.Problem
 	// board は状態 file にだけ使う状態。loop の判断には使わない
@@ -635,17 +637,17 @@ func (l *loop) handle(ev worker.Event) {
 				l.rec.error(ev.Target, message)
 			}
 		}
+		store := l.o.Store(l.def)
 		if result.Stopped {
 			if c.stopReason == stoppedAtTerminal {
 				l.remove(l.o.Workspaces(l.definitionOf(c)), ev.Target)
 			}
 			l.end(ev.Target, c, stopped, string(c.stopReason), result)
 			delete(l.claims, ev.Target)
-			return
+		} else {
+			c.phase, c.ended = phaseAwaitingVerification, &result
+			l.verify(store, ev.Target, c)
 		}
-		c.phase, c.ended = phaseAwaitingVerification, &result
-		store := l.o.Store(l.def)
-		l.verify(store, ev.Target, c)
 		if l.stopping == 0 {
 			// 空いた枠で、空きを待っていた再起動を試みる
 			l.retry(store, outsideTick)
