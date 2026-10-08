@@ -42,7 +42,8 @@ func (e *Error) Error() string {
 
 // htmlBody は stderr の中の HTML の本文の始まり。reverse proxy・SSO・load balancer は status に依らず HTML のページを
 // 返すことがあり、CLI はそれを stderr に載せうる
-var htmlBody = regexp.MustCompile(`(?i)<!doctype html|<(?:html|head|body)[\s>]`)
+// (`<head>`・`<body>` は git の usage の `[<head>]` などにも現れるので、本文の始まりとして見ない)
+var htmlBody = regexp.MustCompile(`(?i)<!doctype html|<html[\s>]`)
 
 // withoutHTMLBody は stderr から HTML の本文 (始まりから後) を落とし、落としたことを書き添える。HTML が無ければ前後の
 // 空白を除いただけで返す。

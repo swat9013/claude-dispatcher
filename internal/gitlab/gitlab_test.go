@@ -196,9 +196,9 @@ func TestOtherFailuresKeepTheirKindAndTheStderr(t *testing.T) {
 		// 401・404・429 も status の位置でだけ読む
 		"glab: 502 Bad Gateway (HTTP 502)\nupstream said (HTTP 401)\n": target.Unavailable,
 		"glab: upstream said (HTTP 429) (HTTP 502)\n":                  target.Unavailable,
-		// HTML の本文の応答 (手前の proxy などで、GitLab の答えでない) は status に依らず分類しない
+		// 本文の message の無い応答 (手前の proxy の HTML などでありうる) は status に依らず分類しない。404 は
+		// TestHTMLNotFoundFromInFrontOfGitLabDoesNotReadTheIssueAsGone が確かめる
 		"glab: HTTP 401\n": target.Unavailable,
-		"glab: HTTP 404\n": target.Unavailable,
 		"glab: HTTP 429\n": target.Unavailable,
 	} {
 		t.Run(strings.TrimSpace(stderr), func(t *testing.T) {
