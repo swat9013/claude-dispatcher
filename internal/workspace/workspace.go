@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/swat9013/claude-dispatcher/internal/deps"
@@ -34,6 +35,9 @@ type Manager struct {
 	Hooks Hooks
 	// Env は hooks に渡す環境 (loop の環境)
 	Env []string
+	// HookLock は after_create と before_remove を作業対象を跨いで直列に撃つ lock。loop が 1 つ作り、loop と worker が
+	// 使う Manager のすべてで同じものを指す (system.md §7 の workspace)
+	HookLock *sync.Mutex
 }
 
 // Path は作業対象の workspace の path。root の外へは出ない (種類と番号だけから作る)。
@@ -48,7 +52,7 @@ func (m Manager) Prepare(ref target.Ref) (string, error) {
 		if err := os.MkdirAll(path, 0o755); err != nil {
 			return "", fmt.Errorf("workspace を作れない (%s): %w", path, err)
 		}
-		if err := m.run("after_create", m.Hooks.AfterCreate, ref); err != nil {
+		if err := m.runSerially("after_create", m.Hooks.AfterCreate, ref); err != nil {
 			if rmErr := os.RemoveAll(path); rmErr != nil {
 				return "", fmt.Errorf("%w (作りかけの workspace も消せない: %v)", err, rmErr)
 			}
@@ -68,7 +72,7 @@ func (m Manager) AfterRun(ref target.Ref) error { return m.run("after_run", m.Ho
 
 // Remove は before_remove を撃ってから workspace を消す。before_remove が失敗しても消す。返す error はどちらの失敗も含む。
 func (m Manager) Remove(ref target.Ref) error {
-	hookErr := m.run("before_remove", m.Hooks.BeforeRemove, ref)
+	hookErr := m.runSerially("before_remove", m.Hooks.BeforeRemove, ref)
 	if err := os.RemoveAll(m.Path(ref)); err != nil {
 		return errors.Join(hookErr, fmt.Errorf("workspace を消せない (%s): %w", m.Path(ref), err))
 	}
@@ -118,6 +122,17 @@ func (m Manager) Branch(ref target.Ref) (string, error) {
 		return "", fmt.Errorf("workspace の branch を読めない (%s): %w", path, err)
 	}
 	return strings.TrimSpace(out), nil
+}
+
+// runSerially は HookLock を持って hook を撃つ。clone を書き換える hook (after_create と before_remove) 同士が
+// 作業対象を跨いで重なると、clone の ref の lock が競合して失敗する。空の hook は撃たないので、lock も待たない。
+func (m Manager) runSerially(name, script string, ref target.Ref) error {
+	if script == "" {
+		return nil
+	}
+	m.HookLock.Lock()
+	defer m.HookLock.Unlock()
+	return m.run(name, script, ref)
 }
 
 // run は hook の script を workspace を cwd にして `sh -c` で撃つ。空なら撃たない。
