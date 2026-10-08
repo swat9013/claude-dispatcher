@@ -349,10 +349,10 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 
 - 観測の失敗は、issue 置き場の部品が 認証 / 見えない / 読み切れない / rate limit に分けて返す (system.md §13)
   - 読み切れない: 1 往復で読む件数の上限を超えた (GitHub の issue の label・assignee・依存先、CL の label・review thread が 100 件を超えた)。切り詰めた像から候補を出さない
-  - 外部 CLI (gh・glab・acli) と workspace の hooks (§2.6) の失敗のエラー文は、撃ったコマンド (hook はその名前)・exit code・stderr を載せる。stderr に HTML の本文 (`<!doctype html` か `<html` から後) があれば、status に依らずそこから後を落とし、落としたことを書き添える。reverse proxy・SSO・load balancer は HTML のページを返しうるので、tick の error・`doctor` の理由・`setup` (§7.4) のエラー文にページを丸ごと載せない
-  - gh は、exit 4・status 401・`gh auth login` の案内を認証、status 404・GraphQL の message `Could not resolve to a Repository` を見えない、status 429・message の `rate limit` を rate limit と見分ける
-    - status は gh が status を出す位置 (`gh api` の `gh: <message> (HTTP <status>)` の行末、gh の API client の `HTTP <status>: <message>` の行頭) でだけ読み、message の中の `HTTP 404` などには当てない。message の無い応答 (`gh api` は `gh: HTTP <status>` だけを出し、本文を stdout へ出す) は、glab と同じ理由で status に依らずその他の失敗に置く
-    - GraphQL の message は行頭 (`gh: `・`GraphQL: ` の印の後) で当て、message の途中で触れただけのものには当てない
+  - 外部 CLI (gh・glab・acli) と workspace の hooks (§2.6) の失敗のエラー文は、撃ったコマンド (hook はその名前)・exit code・stderr を載せる。stderr に HTML の本文 (`<!doctype html` か `<html` から後) があれば、status に依らずそこから後を落とし、落としたことを書き添える。reverse proxy・SSO・load balancer は HTML のページを返しうるので、tick の error・`doctor` の理由・`setup` (§7.4) のエラー文・log.jsonl (§4) の `end` の `reason`・`error` の `error` (hook の失敗の行き先) にページを丸ごと載せない
+  - gh は、exit 4・status 401・message の `Bad credentials` を認証、status 404・message の `Could not resolve to a Repository` を見えない、status 429・message の `rate limit` を rate limit と見分ける
+    - status は gh が status を出す位置でだけ読み、message の中の `HTTP 404` などには当てない。message は gh が印を付けて出す行だけを読み、message の書き出しで当てる語 (`Bad credentials`・`Could not resolve to …`) は message の途中で触れただけのものには当てない。綴りの詳細は gh の版で変わりうるので、internal/github の apiStatusPattern のコメントが持つ
+    - message の無い応答 (`gh api` は本文が JSON でないと status だけを出し、本文を stdout へ出す) は、status に依らずその他の失敗に置く。この応答は GitHub の手前の proxy・SSO の HTML でありうるので、その 401・404 を認証・見えないと読むと、token や repo の綴りという誤った手当てを示す
   - glab は HTTP の失敗をどれも exit 1 で返すので、stderr の status から、401 を認証、404 を見えない、429 を rate limit と見分ける。分けるのは `glab api` が本文の message (GitLab の JSON) とともに出した status だけで、message の無い応答 (`glab api` は status だけを出す) は status に依らずその他の失敗 (読めない) に置く。message の無い応答は GitLab の手前の proxy・load balancer の HTML でありうる。その 404 を issue が消えたと読むと、開いている issue を終端として扱ってしまう
     - 読むのは glab が status を出す位置だけで、本文の中の `(HTTP 401)`・`403` などには当てない。位置は経路で違う (`glab api` は `glab:` で始まる行、`setup` の `glab repo view` は `<METHOD> <URL>: <status>` の形。綴りの詳細は glab の版で変わりうるので、internal/gitlab の statusPattern のコメントが持つ)
   - glab の HTTP 403 はその他の失敗 (読めない) に置き、理由には glab の stderr の代わりに `HTTP 403 で拒否された (接続元のネットワークか、token の権限)` を出す (撃った glab のコマンドと exit code は残す)。stderr が撃った要求を含む経路 (`setup` の `glab repo view`) では、その `<METHOD> <URL>` (本文の前まで) を理由に添えて、拒否した host を読めるようにする。stderr が URL を含まない経路 (`glab api`。tick の error・`doctor` の理由) は理由だけを出す
@@ -494,7 +494,7 @@ claude-dispatcher loop [<workflow の path>]
 - 打ち切りを解くには、label を外して打ち切ったときの trigger から外し、1 周期待ってから付け直す (外してから付け直すまでが 1 周期に収まると、外れたのを観測できない)。`status` (§7) の打ち切りの行にこの手順を出す
 
 - 作業対象の読み直しで issue が消えていたら (削除・移管)、終端と同じに扱う。消えたと読むのは次のとき
-  - `github`: gh が GraphQL の message の行頭に `Could not resolve to an Issue` を返すか (§3)、応答に issue が無い
+  - `github`: gh が GraphQL の message の書き出しに `Could not resolve to an Issue` を返すか (§3。repo が見えないという message も並べば見えないの失敗)、応答に issue が無い
   - `gitlab`: glab が `(HTTP 404)` を返し、stderr に `Project Not Found` が無い (project が見えないときは `404 Project Not Found` なので、見えないの失敗として扱う)
   - `jira`: 次の手順で読み直す。issue を消した・別の project へ移した (旧 key が転送されてもされなくても)・権限を外して見えなくなった、のどれも終端として扱う
     1. `acli jira workitem view <key> --json` で読む。返った key の project key が `tracker.repo` と違えば (別の project へ移した) 終端

@@ -490,10 +490,10 @@ func (s Store) fail(kind target.FailureKind, err error) *target.Failure {
 }
 
 const (
-	// authExit は認証が要るときの gh の exit code
+	// authExit は認証が要るときの gh の exit code (未認証のとき、gh は `gh auth login` の案内を出してこれで終わる)
 	authExit = 4
-	// authLogin は未認証のときに gh が出す案内の文言
-	authLogin = "gh auth login"
+	// badCredentials は token が通らないときの GitHub の message の書き出し
+	badCredentials = "Bad credentials"
 	// repoGone は repo が見えないときの GraphQL の message の書き出し
 	repoGone = "Could not resolve to a Repository"
 	// rateLimit は rate limit を超えたときの message の文言 (GraphQL の rate limit は status を伴わない)
@@ -504,44 +504,58 @@ const (
 	statusRateLimit = 429
 )
 
-// statusPattern は gh が stderr の status の位置に出す HTTP status。message の中の `HTTP 404`・`(HTTP 401)` には当てない。
-//   - gh api は、本文の JSON に message があれば `gh: <message> (HTTP <status>)` の行末に出す (apiStatus)。本文が JSON で
-//     ない (手前の proxy の HTML など) と `gh: HTTP <status>` だけを出し、本文は stdout へ出す。message の無いこの形は、
-//     status があっても分類に使わない
-//   - gh の API client の失敗は `HTTP <status>: <message>` の行頭に出す (clientStatus)
-var statusPattern = regexp.MustCompile(`(?m)^gh: .*\(HTTP (?P<apiStatus>\d{3})\)[ \t]*$|^HTTP (?P<clientStatus>\d{3}): \S`)
-
-// messagePrefix は gh が message の行頭に付ける印
-var messagePrefix = regexp.MustCompile(`^(?:gh|GraphQL): `)
+// gh が stderr に出す失敗の綴り。message の行は印 (下の 3 つ) で始まり、印の無い行は message として読まない。
+//   - gh api は、本文の JSON に message があれば `gh: <message> (HTTP <status>)` の 1 行を出す。GraphQL のエラーは
+//     `gh: <message>` (status は付かない。エラーが複数なら 2 つ目からは印の無い行に続く)。本文が JSON でない (手前の proxy の
+//     HTML など) と `gh: HTTP <status>` だけを出し、本文は stdout へ出す。message の無いこの形は、status があっても分類に
+//     使わない
+//   - gh のほかのコマンドは GraphQL のエラーを `GraphQL: <message> (<path>)`、API client の失敗を
+//     `HTTP <status>: <message> (<URL>)` の行頭に出す
+var (
+	apiStatusPattern    = regexp.MustCompile(`^(?P<message>.*) \(HTTP (?P<status>\d{3})\)$`)
+	clientStatusPattern = regexp.MustCompile(`^HTTP (?P<status>\d{3}): (?P<message>.+)$`)
+)
 
 // ghFailure は gh の失敗の stderr から取り出したもの。
 type ghFailure struct {
 	exit int
 	// status は message とともに出た HTTP status。message の無い応答と、status の無い失敗 (GraphQL のエラー) は 0
 	status int
-	// messages は stderr の行から、行頭の `gh: `・`GraphQL: ` を除いたもの (GraphQL のエラーが複数なら 2 行目以降は印が無い)
+	// messages は印で始まる行の message (印と、行末の `(HTTP <status>)` を除いたもの)
 	messages []string
 }
 
-// readFailure は gh の失敗の stderr から status と message を取り出す。gh の stderr を読むのはここだけ。*proc.Error でない
-// 失敗 (gh を起動できない) なら false。
+// readFailure は gh の失敗の stderr から status と message を取り出す。gh の stderr を読むのはここだけ。gh を探せない
+// 失敗 (*proc.Error でない) なら false。
 func readFailure(err error) (ghFailure, bool) {
 	var failed *proc.Error
 	if !errors.As(err, &failed) {
 		return ghFailure{}, false
 	}
 	f := ghFailure{exit: failed.Exit}
-	if m := statusPattern.FindStringSubmatch(failed.Stderr); m != nil {
-		status := m[statusPattern.SubexpIndex("apiStatus")]
-		if status == "" {
-			status = m[statusPattern.SubexpIndex("clientStatus")]
-		}
-		f.status, _ = strconv.Atoi(status)
-	}
 	for _, line := range strings.Split(failed.Stderr, "\n") {
-		f.messages = append(f.messages, messagePrefix.ReplaceAllString(strings.TrimSpace(line), ""))
+		line = strings.TrimSpace(line)
+		if message, ok := strings.CutPrefix(line, "gh: "); ok {
+			if m := apiStatusPattern.FindStringSubmatch(message); m != nil {
+				message = m[apiStatusPattern.SubexpIndex("message")]
+				f.keepFirstStatus(m[apiStatusPattern.SubexpIndex("status")])
+			}
+			f.messages = append(f.messages, message)
+		} else if message, ok := strings.CutPrefix(line, "GraphQL: "); ok {
+			f.messages = append(f.messages, message)
+		} else if m := clientStatusPattern.FindStringSubmatch(line); m != nil {
+			f.keepFirstStatus(m[clientStatusPattern.SubexpIndex("status")])
+			f.messages = append(f.messages, m[clientStatusPattern.SubexpIndex("message")])
+		}
 	}
 	return f, true
+}
+
+// keepFirstStatus は、まだ status を読んでいなければ status に text を読む。
+func (f *ghFailure) keepFirstStatus(text string) {
+	if f.status == 0 {
+		f.status, _ = strconv.Atoi(text)
+	}
 }
 
 // begins は、行頭が prefix の message があるか。message の途中で触れただけのものには当てない。
@@ -564,10 +578,11 @@ func (f ghFailure) mentions(text string) bool {
 	return false
 }
 
-// resolvedNothing は、gh の失敗が、読み直したもの (issue・CL) が消えているという GraphQL の message (gone の書き出し) か。
+// resolvedNothing は、gh の失敗が、読み直したもの (issue・CL) が消えているという GraphQL の message (gone の書き出し)
+// だけか。repo が見えないという message も並ぶなら、消えたのではなく見えないので false。
 func resolvedNothing(err error, gone string) bool {
 	f, ok := readFailure(err)
-	return ok && f.begins(gone)
+	return ok && f.begins(gone) && !f.begins(repoGone)
 }
 
 // classify は gh の失敗を分類する。
@@ -577,7 +592,7 @@ func classify(err error) target.FailureKind {
 		return target.Unavailable
 	}
 	switch {
-	case f.exit == authExit || f.status == statusAuth || f.mentions(authLogin):
+	case f.exit == authExit || f.status == statusAuth || f.begins(badCredentials):
 		return target.Auth
 	case f.status == statusNotFound || f.begins(repoGone):
 		return target.NotVisible

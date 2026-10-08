@@ -179,6 +179,8 @@ func ghFailed(stderr string) response {
 func TestRereadIssueIsNotClosedWhenTheMissingIssueIsOnlyMentionedInsideAMessage(t *testing.T) {
 	for _, stderr := range []string{
 		"gh: upstream said Could not resolve to an Issue (HTTP 502)\n",
+		// message の中の 404 は status の位置にない
+		"gh: upstream returned HTTP 404 (HTTP 502)\n",
 		// message の無い 404 (手前の proxy の HTML などでありうる)
 		"gh: HTTP 404\n",
 	} {
@@ -190,6 +192,17 @@ func TestRereadIssueIsNotClosedWhenTheMissingIssueIsOnlyMentionedInsideAMessage(
 				t.Fatalf("err = %v, want 読めない (消えた issue と読まない)", err)
 			}
 		})
+	}
+}
+
+func TestRereadIssueOfARepositoryThatGhCannotResolveIsNotVisibleRatherThanClosed(t *testing.T) {
+	stderr := "gh: Could not resolve to a Repository with the name 'acme/widgets'.\nCould not resolve to an Issue with the number of 42.\n"
+
+	_, err := reread(t, ghFailed(stderr))
+
+	var failure *target.Failure
+	if !errors.As(err, &failure) || failure.Kind != target.NotVisible {
+		t.Fatalf("err = %v, want 見えない (消えた issue と読まない)", err)
 	}
 }
 
@@ -206,6 +219,9 @@ func TestGhFailuresAreClassifiedByTheStatusPositionAndTheMessage(t *testing.T) {
 		"gh: upstream returned HTTP 404 (HTTP 502)\n":      target.Unavailable,
 		"gh: upstream said (HTTP 401) (HTTP 502)\n":        target.Unavailable,
 		"gh: Bad Gateway (HTTP 502)\nupstream: HTTP 401\n": target.Unavailable,
+		// 印の無い行は message として読まない
+		"gh: Bad Gateway (HTTP 502)\nupstream: rate limit service unavailable\n": target.Unavailable,
+		"GraphQL: Bad credentials\n": target.Auth,
 		// message の無い応答 (手前の proxy の HTML などでありうる) は status に依らず分類しない
 		"gh: HTTP 401\n": target.Unavailable,
 		"gh: HTTP 429\n": target.Unavailable,
