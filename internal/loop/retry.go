@@ -202,13 +202,19 @@ func (l *loop) stillAbandoned(store Store, def workflow.Definition, v *view, ref
 	if !ok || v.ambiguous[ref] {
 		return false
 	}
-	if item, listed := findItem(v.open, ref); listed && (t.Matches(item) || t.Undecided(item)) {
+	if item, listed := findItem(v.open, ref); listed && matchesAbandoned(t, item) {
 		return true
 	}
 	item, err := store.Read(ref)
 	if err != nil {
-		l.rec.error(ref, "打ち切った作業対象を読み直せない (打ち切りを保ち、次の tick で読み直す): "+oneLine(err))
+		l.rec.error(ref, "打ち切った作業対象を読み直せない (打ち切りを保ち、次の tick で確かめ直す): "+oneLine(err))
 		return true
 	}
-	return !item.Terminal() && (t.Matches(item) || t.Undecided(item))
+	return matchesAbandoned(t, item)
+}
+
+// matchesAbandoned は、作業対象が打ち切ったときの trigger t に当たったままか。当たるかをまだ決められなければ当たったままと
+// する。終端か t から外れていれば当たっていない (outOfTrigger)。
+func matchesAbandoned(t trigger.Trigger, item target.Item) bool {
+	return t.Undecided(item) || outOfTrigger(t, item) == ""
 }

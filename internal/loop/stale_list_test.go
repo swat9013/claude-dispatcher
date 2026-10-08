@@ -3,6 +3,7 @@ package loop_test
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"strings"
 	"sync"
@@ -34,6 +35,8 @@ type staleTicks struct {
 	open func(tick int) []target.Item
 	// read は tick ごとに置き場からの読み直しが返す issue#1
 	read func(tick int) target.Item
+	// readFails は、置き場からの読み直しを失敗させる tick (0 なら失敗させない)
+	readFails int
 }
 
 // run は loop を ticks 回の tick まで回して止め、起動した worker と log.jsonl の行を返す。
@@ -63,7 +66,12 @@ func (s staleTicks) run(t *testing.T) ([]worker.Job, []map[string]any) {
 			return memoryStore{
 				scopeKey: func() string { return startScope },
 				observe:  func() ([]target.Item, error) { return s.open(tick), nil },
-				reread:   func(target.Ref) (target.Item, error) { return s.read(tick), nil },
+				reread: func(target.Ref) (target.Item, error) {
+					if tick == s.readFails {
+						return nil, errors.New("gh の失敗")
+					}
+					return s.read(tick), nil
+				},
 			}
 		},
 		Workspaces: func(workflow.Definition) loop.Workspaces { return noWorkspaces{} },
@@ -230,6 +238,36 @@ func TestAbandonmentIsKeptWhenAStaleListShowsTheIssueOutOfTheTriggerButItStillMa
 	if len(jobs) != 1 || len(eventsNamed(lines, "unabandon")) != 0 {
 		t.Fatalf("起動した数 = %d, unabandon の行 = %v, want 打ち切ったまま (古い一覧で外れて見えただけで解いた)", len(jobs), eventsNamed(lines, "unabandon"))
 	}
+}
+
+// unreadableAfterDroppingOut は、打ち切った issue#1 が 2 回目の tick の一覧から抜け、その tick の読み直しが失敗する
+// loop。置き場では閉じている (読み直せれば打ち切りを解く)。
+func unreadableAfterDroppingOut() staleTicks {
+	s := abandonedThenListed(nil, closedIssue(1))
+	s.ticks, s.readFails = 2, 2
+	return s
+}
+
+func TestAbandonmentIsKeptWhenTheIssueThatDroppedOutOfTheListCannotBeReadAgain(t *testing.T) {
+	_, lines := unreadableAfterDroppingOut().run(t)
+
+	if unabandons := eventsNamed(lines, "unabandon"); len(unabandons) != 0 {
+		t.Fatalf("unabandon の行 = %v, want 無し (読み直せないのに打ち切りを解いた)", unabandons)
+	}
+}
+
+func TestAbandonedIssueThatCannotBeReadAgainLeavesAnErrorLine(t *testing.T) {
+	_, lines := unreadableAfterDroppingOut().run(t)
+
+	errs := eventsNamed(lines, "error")
+	if len(errs) != 1 || errs[0]["target"] != "issue#1" || !strings.Contains(asText(errs[0]["error"]), "打ち切った作業対象を読み直せない") {
+		t.Fatalf("error の行 = %v, want issue#1 の「打ち切った作業対象を読み直せない」を 1 行", errs)
+	}
+}
+
+func asText(v any) string {
+	s, _ := v.(string)
+	return s
 }
 
 func TestAbandonmentIsLiftedWhenTheIssueReadAgainLeftTheTrigger(t *testing.T) {
