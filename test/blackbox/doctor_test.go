@@ -107,6 +107,24 @@ func TestDoctorFailsWhenTheIssueStoreIsNotVisible(t *testing.T) {
 	}
 }
 
+func TestDoctorLeavesOutAnHTMLBodyThatGhPutsOnStderr(t *testing.T) {
+	s := newSandbox(t)
+	// 手前の proxy が HTML のページで 502 を返した (gh の綴りは実物から写したものではない)
+	s.respond("gh", stubwire.Rule{Stderr: "HTTP 502: Bad Gateway (https://api.github.com/graphql)\n<!DOCTYPE html>\n<html><body><h1>502 Bad Gateway</h1></body></html>\n", Exit: 1})
+
+	r := s.run("doctor")
+
+	assertExit(t, r, 1)
+	for _, want := range []string{"NG   issue 置き場 acme/widgets: ", "gh api", "exit 1", "HTTP 502"} {
+		if !strings.Contains(r.stdout, want) {
+			t.Fatalf("stdout に %q が無い:\n%s", want, r.stdout)
+		}
+	}
+	if strings.Contains(r.stdout, "<html>") || strings.Contains(r.stdout, "<h1>") {
+		t.Fatalf("HTML の本文が載った:\n%s", r.stdout)
+	}
+}
+
 func TestDoctorStopsAtAnInvalidWorkflowWithoutCallingGh(t *testing.T) {
 	s := newSandbox(t)
 	s.writeWorkflowWithCommands(workflowWithTriggers("\n  - {name: implement, on: pr, action: /implement}"))

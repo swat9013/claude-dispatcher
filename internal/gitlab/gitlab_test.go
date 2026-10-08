@@ -74,6 +74,17 @@ func TestIssueThatIsGoneIsReadAsClosed(t *testing.T) {
 	}
 }
 
+func TestHTMLNotFoundFromInFrontOfGitLabDoesNotReadTheIssueAsGone(t *testing.T) {
+	store := gitlab.NewStore(glab{issuesEndpoint + "/7": {stderr: "glab: HTTP 404\n"}}, project)
+
+	_, err := store.Read(target.Ref{Kind: target.KindIssue, Number: 7})
+
+	var failure *target.Failure
+	if !errors.As(err, &failure) || failure.Kind != target.Unavailable {
+		t.Fatalf("err = %v, want 読めない (消えた issue と読まない)", err)
+	}
+}
+
 func TestIssueOfAProjectThatIsNotVisibleFailsAsNotVisible(t *testing.T) {
 	store := gitlab.NewStore(glab{issuesEndpoint + "/7": {stderr: "glab: 404 Project Not Found (HTTP 404)"}}, project)
 
@@ -161,18 +172,16 @@ func TestForbiddenRepoViewGivesTheShortReasonWithTheRequestInsteadOfTheBody(t *t
 	}
 }
 
-func TestRepoViewFailureWithAnHTMLBodyKeepsTheRequestAndTheStatusButNotTheBody(t *testing.T) {
-	stderr := "          \n   ERROR  \n          \n" +
-		"  Get https://gitlab.example.com/api/v4/projects/acme%2Fw: 502 failed to parse unknown error format: <html>\n" +
-		"  <head><title>502 Bad Gateway</title></head>\n  <body><h1>502 Bad Gateway</h1></body>\n  </html>\n  .\n\n"
+func TestRepoViewFailureOtherThanForbiddenDoesNotTakeTheForbiddenReason(t *testing.T) {
+	stderr := "  Get https://gitlab.example.com/api/v4/projects/acme%2Fw: 502 failed to parse unknown error format: <html></html>\n"
 
 	_, err := gitlab.CurrentProject(glab{"json": {stderr: stderr}})
 
 	if err == nil {
 		t.Fatal("err = nil")
 	}
-	assertContains(t, err.Error(), "Get https://gitlab.example.com/api/v4/projects/acme%2Fw: 502", "glab repo view", "exit 1")
-	assertLacks(t, err.Error(), "<html>", "<h1>", "Bad Gateway")
+	assertContains(t, err.Error(), "Get https://gitlab.example.com/api/v4/projects/acme%2Fw: 502")
+	assertLacks(t, err.Error(), forbiddenReason)
 }
 
 func TestOtherFailuresKeepTheirKindAndTheStderr(t *testing.T) {
@@ -187,6 +196,10 @@ func TestOtherFailuresKeepTheirKindAndTheStderr(t *testing.T) {
 		// 401・404・429 も status の位置でだけ読む
 		"glab: 502 Bad Gateway (HTTP 502)\nupstream said (HTTP 401)\n": target.Unavailable,
 		"glab: upstream said (HTTP 429) (HTTP 502)\n":                  target.Unavailable,
+		// HTML の本文の応答 (手前の proxy などで、GitLab の答えでない) は status に依らず分類しない
+		"glab: HTTP 401\n": target.Unavailable,
+		"glab: HTTP 404\n": target.Unavailable,
+		"glab: HTTP 429\n": target.Unavailable,
 	} {
 		t.Run(strings.TrimSpace(stderr), func(t *testing.T) {
 			store := gitlab.NewStore(glab{issuesEndpoint + "/7": {stderr: stderr}}, project)

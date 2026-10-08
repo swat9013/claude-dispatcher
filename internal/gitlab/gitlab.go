@@ -332,18 +332,22 @@ const (
 )
 
 // statusPattern は glab が stderr の status の位置に出す HTTP status。本文の中の `(HTTP 401)`・`403` などには当てない。
-//   - glab api は、本文が JSON なら `glab: <message> (HTTP <status>)` の行末に、HTML なら `glab: HTTP <status>` の行頭に
-//     出す (HTML の本文は出さない)
-//   - glab repo view は `<METHOD> <URL>: <status> <本文>` の行頭に出す (本文の無い応答なら status の後は改行)
-//
-// 群: 1 は glab api の HTML の status、2・3 は glab api の JSON の本文と status、4・5・6 は glab repo view の要求・status・本文
-var statusPattern = regexp.MustCompile(`(?m)^glab: HTTP (\d{3})\b|^glab: (.*)\(HTTP (\d{3})\)[ \t]*$|^[ \t]*([A-Za-z]+ https?://\S+): (\d{3})\b(.*)$`)
+//   - glab api は、本文が GitLab の JSON なら `glab: <message> (HTTP <status>)` の行末に (apiMessage・apiStatus)、HTML なら
+//     `glab: HTTP <status>` の行頭に出す (apiHTMLStatus。HTML の本文は出さない)
+//   - glab repo view は `<METHOD> <URL>: <status> <本文>` の行頭に出す (viewRequest・viewStatus・viewBody。本文の無い
+//     応答なら status の後は改行)
+var statusPattern = regexp.MustCompile(`(?m)^glab: HTTP (?P<apiHTMLStatus>\d{3})\b` +
+	`|^glab: (?P<apiMessage>.*)\(HTTP (?P<apiStatus>\d{3})\)[ \t]*$` +
+	`|^[ \t]*(?P<viewRequest>[A-Za-z]+ https?://\S+): (?P<viewStatus>\d{3})\b(?P<viewBody>.*)$`)
 
 // glabFailure は glab の失敗の stderr から取り出したもの。status を読めなければ status は 0。
 type glabFailure struct {
-	status  int
-	request string // 撃った要求 (`<METHOD> <URL>`)。stderr に無ければ (glab api) 空
-	body    string // status の行の本文 (status の行より後は含まない)
+	status int
+	// answeredByGitLab は GitLab が JSON の本文で答えた (glab api) か。HTML の本文の応答は手前の proxy・load balancer の
+	// ものでありうるので、status があっても認証・見えない・消えたなどの分類に使わない
+	answeredByGitLab bool
+	request          string // 撃った要求 (`<METHOD> <URL>`)。stderr に無ければ (glab api) 空
+	body             string // status の行の本文 (status の行より後は含まない)
 }
 
 // readFailure は glab の失敗の stderr から status・撃った要求・本文を取り出す。glab の stderr を読むのはここだけ。
@@ -357,29 +361,34 @@ func readFailure(err error) glabFailure {
 	if m == nil {
 		return glabFailure{}
 	}
+	group := func(name string) string { return m[statusPattern.SubexpIndex(name)] }
 	var f glabFailure
 	switch {
-	case m[1] != "":
-		f.status, _ = strconv.Atoi(m[1])
-	case m[3] != "":
-		f.status, _ = strconv.Atoi(m[3])
-		f.body = m[2]
+	case group("apiHTMLStatus") != "":
+		f.status, _ = strconv.Atoi(group("apiHTMLStatus"))
+	case group("apiStatus") != "":
+		f.status, _ = strconv.Atoi(group("apiStatus"))
+		f.answeredByGitLab, f.body = true, group("apiMessage")
 	default:
-		f.status, _ = strconv.Atoi(m[5])
-		f.request, f.body = m[4], m[6]
+		f.status, _ = strconv.Atoi(group("viewStatus"))
+		f.request, f.body = group("viewRequest"), group("viewBody")
 	}
 	return f
 }
 
-// gone は、project は見えていて、読んだもの (issue・merge request・member) が無いときの 404 か。
+// gone は、project は見えていて、読んだもの (issue・merge request・member) が無いと GitLab が答えた 404 か。
 func gone(err error) bool {
 	f := readFailure(err)
-	return f.status == statusNotFound && !strings.Contains(f.body, projectGone)
+	return f.answeredByGitLab && f.status == statusNotFound && !strings.Contains(f.body, projectGone)
 }
 
-// classify は glab の失敗を分類する。
+// classify は glab の失敗を分類する。GitLab が答えた status だけで分け、HTML の本文の応答はその他の失敗にする。
 func classify(err error) target.FailureKind {
-	switch readFailure(err).status {
+	f := readFailure(err)
+	if !f.answeredByGitLab {
+		return target.Unavailable
+	}
+	switch f.status {
 	case statusAuth:
 		return target.Auth
 	case statusNotFound:

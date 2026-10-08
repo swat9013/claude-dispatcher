@@ -12,6 +12,7 @@ func TestErrorTextLeavesOutAnHTMLBodyButKeepsTheCommandAndTheExitCode(t *testing
 		"glab repo view の 502": "  Get https://gitlab.example.com/api/v4/projects/acme%2Fw: 502 failed to parse unknown error format: <html>\n" +
 			"  <head><title>502 Bad Gateway</title></head>\n  <body><h1>502 Bad Gateway</h1></body>\n  </html>\n  .\n",
 		"doctype から始まる本文": "HTTP 401: Unauthorized\n<!DOCTYPE html>\n<HTML><body><h1>Sign in</h1></body></HTML>\n",
+		"html の無い断片":      "HTTP 401: Unauthorized\n<head><title>Sign in</title></head><body><h1>Sign in</h1></body>\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			err := &proc.Error{Name: "glab", Args: []string{"repo", "view", "--output", "json"}, Exit: 1, Stderr: stderr}

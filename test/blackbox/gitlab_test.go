@@ -302,6 +302,9 @@ func TestGitLabForbiddenObservationIsUnavailableWithAShortReasonInDoctor(t *test
 			if !strings.Contains(out, glabForbiddenReason) || strings.Contains(out, strings.TrimSpace(stderr)) {
 				t.Fatalf("doctor の理由が %q でないか、glab の stderr %q が載った:\n%s", glabForbiddenReason, stderr, out)
 			}
+			if !strings.Contains(out, "glab api") || !strings.Contains(out, "exit 1") {
+				t.Fatalf("doctor の理由に撃ったコマンドと exit code が無い:\n%s", out)
+			}
 		})
 	}
 }
@@ -334,8 +337,10 @@ func TestGitLabSetupShowsAShortReasonWhenRepoViewIsForbiddenByAProxy(t *testing.
 		t.Fatalf("setup の理由が %q でないか、proxy の HTML が載った:\n%s", glabForbiddenReason, r.stderr)
 	}
 	// 拒否した host を読めるよう、撃った要求は残す
-	if request := "Get https://" + gitlabHost + "/api/v4/projects/acme%2Fw"; !strings.Contains(r.stderr, request) {
-		t.Fatalf("setup のエラー文に撃った要求 %q が無い:\n%s", request, r.stderr)
+	for _, want := range []string{"Get https://" + gitlabHost + "/api/v4/projects/acme%2Fw", "glab repo view", "exit 1"} {
+		if !strings.Contains(r.stderr, want) {
+			t.Fatalf("setup のエラー文に %q が無い:\n%s", want, r.stderr)
+		}
 	}
 }
 
