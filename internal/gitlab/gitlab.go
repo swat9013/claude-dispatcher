@@ -85,7 +85,7 @@ func ParsePath(text string) (string, error) {
 func CurrentProject(glab Runner) (Project, error) {
 	out, err := glab.Run("repo", "view", "--output", "json")
 	if err != nil {
-		return Project{}, fmt.Errorf("glab repo view が失敗した: %w", replaceForbiddenStderr(err))
+		return Project{}, fmt.Errorf("glab repo view が失敗した: %w", summarizeForbidden(err))
 	}
 	var view struct {
 		PathWithNamespace string `json:"path_with_namespace"`
@@ -317,60 +317,96 @@ func (s Store) collaborator(userID int) (bool, error) {
 }
 
 func (s Store) fail(kind target.FailureKind, err error) *target.Failure {
-	return &target.Failure{Kind: kind, Place: s.project.String(), Err: replaceForbiddenStderr(err)}
+	return &target.Failure{Kind: kind, Place: s.project.String(), Err: summarizeForbidden(err)}
 }
 
-// glab は HTTP の失敗をどれも exit 1 で返し、stderr の `(HTTP <status>)` で見分ける
+// glab は HTTP の失敗をどれも exit 1 で返すので、stderr の status で見分ける
 const (
-	authMarker      = "(HTTP 401)"
-	notFoundMarker  = "(HTTP 404)"
-	rateLimitMarker = "(HTTP 429)"
-	// projectGone は project が見えないときの 404 の文言。issue・merge request・member が無いときの 404 (`404 Not found`)
+	statusAuth      = 401
+	statusForbidden = 403
+	statusNotFound  = 404
+	statusRateLimit = 429
+	// projectGone は project が見えないときの 404 の本文。issue・merge request・member が無いときの 404 (`404 Not found`)
 	// と分ける
 	projectGone = "Project Not Found"
 )
 
+// statusPattern は glab が stderr の status の位置に出す HTTP status。本文の中の `(HTTP 401)`・`403` などには当てない。
+//   - glab api は、本文が JSON なら `glab: <message> (HTTP <status>)` の行末に、HTML なら `glab: HTTP <status>` の行頭に
+//     出す (HTML の本文は出さない)
+//   - glab repo view は `<METHOD> <URL>: <status> <本文>` の行頭に出す (本文の無い応答なら status の後は改行)
+//
+// 群: 1 は glab api の HTML の status、2・3 は glab api の JSON の本文と status、4・5・6 は glab repo view の要求・status・本文
+var statusPattern = regexp.MustCompile(`(?m)^glab: HTTP (\d{3})\b|^glab: (.*)\(HTTP (\d{3})\)[ \t]*$|^[ \t]*([A-Za-z]+ https?://\S+): (\d{3})\b(.*)$`)
+
+// glabFailure は glab の失敗の stderr から取り出したもの。status を読めなければ status は 0。
+type glabFailure struct {
+	status  int
+	request string // 撃った要求 (`<METHOD> <URL>`)。stderr に無ければ (glab api) 空
+	body    string // status の行の本文 (status の行より後は含まない)
+}
+
+// readFailure は glab の失敗の stderr から status・撃った要求・本文を取り出す。glab の stderr を読むのはここだけ。
+// *proc.Error でない失敗 (glab を起動できない) と status を読めない stderr は、status 0 で返す。
+func readFailure(err error) glabFailure {
+	var failed *proc.Error
+	if !errors.As(err, &failed) {
+		return glabFailure{}
+	}
+	m := statusPattern.FindStringSubmatch(failed.Stderr)
+	if m == nil {
+		return glabFailure{}
+	}
+	var f glabFailure
+	switch {
+	case m[1] != "":
+		f.status, _ = strconv.Atoi(m[1])
+	case m[3] != "":
+		f.status, _ = strconv.Atoi(m[3])
+		f.body = m[2]
+	default:
+		f.status, _ = strconv.Atoi(m[5])
+		f.request, f.body = m[4], m[6]
+	}
+	return f
+}
+
 // gone は、project は見えていて、読んだもの (issue・merge request・member) が無いときの 404 か。
 func gone(err error) bool {
-	var failed *proc.Error
-	return errors.As(err, &failed) && strings.Contains(failed.Stderr, notFoundMarker) && !strings.Contains(failed.Stderr, projectGone)
+	f := readFailure(err)
+	return f.status == statusNotFound && !strings.Contains(f.body, projectGone)
 }
 
 // classify は glab の失敗を分類する。
 func classify(err error) target.FailureKind {
-	var failed *proc.Error
-	if !errors.As(err, &failed) {
-		return target.Unavailable
-	}
-	switch {
-	case strings.Contains(failed.Stderr, authMarker):
+	switch readFailure(err).status {
+	case statusAuth:
 		return target.Auth
-	case strings.Contains(failed.Stderr, notFoundMarker):
+	case statusNotFound:
 		return target.NotVisible
-	case strings.Contains(failed.Stderr, rateLimitMarker):
+	case statusRateLimit:
 		return target.RateLimit
 	}
 	return target.Unavailable
 }
 
-// forbiddenPattern は glab が stderr の status の位置に出す HTTP 403。glab api は本文が JSON なら `glab: <message> (HTTP 403)`
-// の行末に、HTML なら `glab: HTTP 403` の行頭に出す。glab repo view は `<METHOD> <URL>: 403 <本文>` の行頭に出す (本文の無い
-// 403 なら 403 の後は改行)。本文の中の 403 には当てない
-var forbiddenPattern = regexp.MustCompile(`(?m)\(HTTP 403\)\s*$|^glab: HTTP 403\b|^\s*[A-Za-z]+ https?://\S+: 403\b`)
-
 // forbiddenReason は HTTP 403 の失敗の理由。403 は手前の proxy の拒否 (接続元のネットワーク) でも GitLab の拒否 (token の
 // scope の不足など) でも起き、stderr の本文は proxy の HTML でありうるので、本文の代わりにこれを出す
 const forbiddenReason = "HTTP 403 で拒否された (接続元のネットワークか、token の権限)"
 
-// replaceForbiddenStderr は glab の失敗が HTTP 403 なら、stderr を forbiddenReason に差し替えた *proc.Error を返す
-// (撃ったコマンドと exit code は残す)。それ以外は err のまま返す。差し替えた後の stderr も 401・404・429 の marker を
-// 含まないので、classify と gone は差し替えの前後で同じ答えを返す。
-func replaceForbiddenStderr(err error) error {
+// summarizeForbidden は glab の失敗が HTTP 403 なら、エラー文に stderr の代わりに forbiddenReason を載せる *proc.Error を
+// 返す (撃ったコマンドと exit code は残す)。stderr が撃った要求を含めば (glab repo view)、拒否した host を読めるよう要求を
+// 添える。それ以外は err のまま返す。Stderr は書き換えないので、分類は summarize の前後で変わらない。
+func summarizeForbidden(err error) error {
 	var failed *proc.Error
-	if !errors.As(err, &failed) || !forbiddenPattern.MatchString(failed.Stderr) {
+	f := readFailure(err)
+	if f.status != statusForbidden || !errors.As(err, &failed) {
 		return err
 	}
-	shortened := *failed
-	shortened.Stderr = forbiddenReason
-	return &shortened
+	summarized := *failed
+	summarized.Summary = forbiddenReason
+	if f.request != "" {
+		summarized.Summary += ": " + f.request
+	}
+	return &summarized
 }
