@@ -63,7 +63,7 @@ jq -s -r 'map(select(.event=="start" or .event=="end")) | group_by([.session_id,
 jq -s -r 'map(select(.target)) | group_by(.target)[] | last | select(.event=="start" or .event=="retry" or .event=="wait_slot" or .event=="verify_wait" or (.event=="end" and .outcome=="failed")) | [.target, .event, .ts] | @tsv' F
 ```
 
-claim を解く行は formats.md §4 (`completed` と `stopped` の `end`・`release`・`abandon`) が正本。停止要求で捨てた再起動待ちの claim は、最後の行が `error` になる (§6 の停止要求)。そのため上の jq は `error` の行も含めて最後の行を見る。
+claim を解く行は formats.md §4 (`completed` と `stopped` の `end`・`release`・`abandon`) が正本。停止要求で捨てた再起動待ちと確かめ待ちの claim は、最後の行が `error` になる (§6 の停止要求)。そのため上の jq は `error` の行も含めて最後の行を見る。
 
 閉じていない claim は、`scripts/claude-dispatcher-dev.sh status <WORKFLOW.md の path>` が示す今の loop の worker と突き合わせる。claim は loop の memory にしか無いので、loop が居なければすべて消えている。本体の記録の欠けの候補は次の 2 つ。
 

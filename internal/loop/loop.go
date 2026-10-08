@@ -106,11 +106,11 @@ const (
 	reasonStillMatches = "trigger に当たったまま"
 )
 
+// 当たるかをまだ決められない理由。終わった worker の確かめ (verify_wait) と起動の直前の読み直し (recheck_skip) で使う
+const reasonUndecided = "当たるかをまだ決められない"
+
 // 起動の直前の読み直しだけで使う理由
-const (
-	reasonUndecided      = "当たるかをまだ決められない"
-	reasonEarlierTrigger = "宣言順で先の trigger に当たる"
-)
+const reasonEarlierTrigger = "宣言順で先の trigger に当たる"
 
 // outcome は claim を解いたときの終わり方 (formats.md §4)。
 type outcome string
@@ -484,7 +484,7 @@ func (l *loop) stop(c *claim, reason stopReason) {
 	c.run.Stop()
 }
 
-// recheck は、終わったが作業対象を読み直せなかった worker を確かめ直す。
+// recheck は、終わり方を確かめ待ちの worker (phaseAwaitingVerification) を確かめ直す。
 func (l *loop) recheck(store Store) {
 	for ref, c := range l.claims {
 		if c.phase == phaseAwaitingVerification {
