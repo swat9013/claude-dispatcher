@@ -78,9 +78,13 @@ jq -r 'select(.event=="tick") | .blocked[]? | [.trigger, .error] | @tsv' F | sor
 jq -r 'select(.event=="tick") | .ambiguous[]? | [.head, (.targets | join(","))] | @tsv' F | sort | uniq -c
 # 候補があるのに何も起動しなかった tick と、起動の判定に使った値
 jq -r 'select(.event=="tick" and .candidates > 0 and (.launched | length) == 0) | [.ts, .candidates, .running, .waiting_retry, .max_concurrent] | @tsv' F
+# 起動の直前の読み直しで起動しなかった候補 (作業対象・trigger・理由ごとの件数)
+jq -r 'select(.event=="recheck_skip") | [.target, .trigger, .reason] | @tsv' F | sort | uniq -c | sort -rn
 ```
 
-候補があるのに起動しなかった tick は、`running` と `waiting_retry` の和が `max_concurrent` に達していれば正常 (起動をやめる規則と 3 つの値の意味は formats.md §4 の tick 行の項)。達していないのに起動していなければ、同じ tick の `blocked`・`ambiguous` と、その候補の claim・打ち切りの状態で理由を読む。
+候補があるのに起動しなかった tick は、`running` と `waiting_retry` の和が `max_concurrent` に達していれば正常 (起動をやめる規則と 3 つの値の意味は formats.md §4 の tick 行の項)。達していないのに起動していなければ、その tick の行の直前に書かれた `recheck_skip` の行 (起動の直前の読み直しで見送った候補と理由。formats.md §4)、同じ tick の `blocked`・`ambiguous`、その候補の claim・打ち切りの状態で理由を読む。
+
+`recheck_skip` は tick ごとに書かれるので、同じ作業対象の同じ理由が多くの tick に続けば、open な一覧の検索が古い結果を返し続けているか (`終端`・`trigger から外れた`)、CL の conflict の計算が終わらないまま (`当たるかをまだ決められない`) の候補になる。
 
 `running`・`waiting_retry`・`max_concurrent` の欄が空の行は、この 3 つの key を書かない古い版の log。その行に限り、その時刻に走っていた attempt (start と end の間) を数え、並列上限は `git -C <WORKFLOW.md の dir> log -p -- WORKFLOW.md` の変更時刻と照らして決める (並列上限は tick ごとに workflow 定義を読み直して決まる。formats.md §6)。
 
