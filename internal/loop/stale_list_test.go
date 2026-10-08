@@ -291,6 +291,33 @@ func TestAbandonmentOfACLIsKeptWhenAStaleListMakesItLookAmbiguous(t *testing.T) 
 	}
 }
 
+func TestAbandonmentOfACLIsLiftedWhenItIsMergedEvenIfItsConflictIsUnknown(t *testing.T) {
+	conflicting := true
+	fixConflict := trigger.Trigger{Name: "fix-conflict", On: target.KindCL, CL: trigger.CLPredicate{Conflict: &conflicting}}
+	inConflict := target.CL{Number: 7, Head: "feature", HeadRepo: "acme/widgets", SameRepo: true, Mergeable: target.MergeConflict}
+	// merge した CL は conflict を計算しない
+	merged := target.CL{Number: 7, Head: "feature", HeadRepo: "acme/widgets", SameRepo: true, Closed: true, Mergeable: target.MergeUnknown}
+	s := staleTicks{triggers: []trigger.Trigger{fixConflict}, maxAttempts: 1, ticks: 2,
+		open: func(tick int) []target.Item {
+			if tick == 2 {
+				return nil
+			}
+			return []target.Item{inConflict}
+		},
+		read: func(tick int) target.Item {
+			if tick == 2 {
+				return merged
+			}
+			return inConflict
+		}}
+
+	_, lines := s.run(t)
+
+	if unabandons := eventsNamed(lines, "unabandon"); len(unabandons) != 1 || unabandons[0]["target"] != "cl#7" {
+		t.Fatalf("unabandon の行 = %v, want cl#7 を 1 行 (merge した CL の打ち切りを保った)", unabandons)
+	}
+}
+
 func TestAbandonmentIsLiftedWhenTheIssueReadAgainLeftTheTrigger(t *testing.T) {
 	_, lines := abandonedThenListed([]target.Item{unlabeledIssue(1)}, unlabeledIssue(1)).run(t)
 

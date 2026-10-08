@@ -117,7 +117,7 @@ func (s Store) Read(ref target.Ref) (target.Item, error) {
 	key := s.project.IssueKey(ref.Number)
 	n, err := s.view(key)
 	if err == nil {
-		return s.viewed(ref, n), nil
+		return s.itemFromView(ref, n), nil
 	}
 	if kind := s.classify(err, target.Unavailable); kind != target.Unavailable {
 		return nil, s.fail(kind, err)
@@ -132,16 +132,20 @@ func (s Store) Read(ref target.Ref) (target.Item, error) {
 		return nil, s.fail(target.Unavailable, err)
 	}
 	// 一覧の検索は書き込みの直後に古い結果を返しうるので、一覧に無いことだけでは終端としない。view の失敗が一時的だった
-	// なら読めるので、もう 1 回撃ち、また落ちたときだけ終端とする (formats.md §6)
-	if n, err := s.view(key); err == nil {
-		return s.viewed(ref, n), nil
+	// なら読めるので、もう 1 回撃ち、また落ちたときだけ終端とする (formats.md §6)。2 回目が認証の失敗なら終端としない
+	n, err = s.view(key)
+	if err == nil {
+		return s.itemFromView(ref, n), nil
+	}
+	if kind := s.classify(err, target.Unavailable); kind != target.Unavailable {
+		return nil, s.fail(kind, err)
 	}
 	return target.Issue{Number: ref.Number, Closed: true}, nil
 }
 
-// viewed は view で読めた issue を作業対象にする。返った key が別の project のもの (旧 key の転送で、移った先の issue が
-// 返った) なら終端とする。
-func (s Store) viewed(ref target.Ref, n issueJSON) target.Item {
+// itemFromView は view で読めた issue を作業対象にする。返った key が別の project のもの (旧 key の転送で、移った先の
+// issue が返った) なら終端とする。
+func (s Store) itemFromView(ref target.Ref, n issueJSON) target.Item {
 	number, ok := s.number(n.Key)
 	if !ok {
 		return target.Issue{Number: ref.Number, Closed: true}

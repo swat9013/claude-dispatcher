@@ -503,7 +503,7 @@ claude-dispatcher loop [<workflow の path>]
     1. `acli jira workitem view <key> --json` で読む。返った key の project key が `tracker.repo` と違えば (別の project へ移した) 終端
     2. 読み出しが落ちたら `acli jira auth status` を撃つ。落ちれば認証の失敗
     3. 通れば open な一覧を読む。読めればその中に key があれば読み直せない失敗。一覧を読めなければ、その失敗
-    4. 一覧に key が無ければ、もう 1 回 `acli jira workitem view` で読む。読めればその issue (1 と同じく、別の project の key なら終端)、また落ちれば終端。一覧の検索は書き込みの直後に古い結果を返しうるので、一覧に無いことだけでは終端としない (view の一時的な失敗と古い一覧が重なると、存在する issue を終端と読むため)
+    4. 一覧に key が無ければ、もう 1 回 `acli jira workitem view` で読む。読めればその issue (1 と同じく、別の project の key なら終端)、また落ちれば 2 と同じく `acli jira auth status` を撃ち、落ちれば認証の失敗、通れば終端。一覧の検索は書き込みの直後に古い結果を返しうるので、一覧に無いことだけでは終端としない (view の一時的な失敗と古い一覧が重なると、存在する issue を終端と読むため)
     - 1 件の読み直しを JQL の `key = …` で撃たない。存在しない key を JQL に書くと検索ごと失敗し、消えた issue と見えない issue を区別できない
 
 **worker の 1 回分**:

@@ -182,8 +182,8 @@ func (l *loop) waitingRetry() int {
 }
 
 // clearAbandoned は、打ち切った作業対象のうち、終端になったか、打ち切ったときの trigger の述語に当たらなくなったものの
-// 打ち切りを解く。trigger が workflow 定義から消えたものも解く。曖昧な CL になったことでは解かない (曖昧さは一覧でしか
-// 決まらず、古い一覧で曖昧に見えただけで解けるため。曖昧な間はどの trigger でも起動しないので、保っても失うものが無い)。
+// 打ち切りを解く。trigger が workflow 定義から消えたものも解く。曖昧な CL になったことでは解かない (formats.md §6 の
+// tick の手順 5)。
 func (l *loop) clearAbandoned(store Store, def workflow.Definition, v *view) {
 	for ref, name := range l.abandoned {
 		if l.stillAbandoned(store, def, v, ref, name) {
@@ -214,8 +214,12 @@ func (l *loop) stillAbandoned(store Store, def workflow.Definition, v *view, ref
 	return matchesAbandoned(t, item)
 }
 
-// matchesAbandoned は、作業対象が打ち切ったときの trigger t に当たったままか。当たるかをまだ決められなければ当たったままと
-// する。終端か t から外れていれば当たっていない (outOfTrigger)。
+// matchesAbandoned は、作業対象が打ち切ったときの trigger t に当たったままか。終端なら当たっていない (merge した CL は
+// conflict を計算しないので、当たるかを決められないままになりうる)。終端でなく、当たるかをまだ決められなければ当たった
+// ままとする。
 func matchesAbandoned(t trigger.Trigger, item target.Item) bool {
+	if item.Terminal() {
+		return false
+	}
 	return t.Undecided(item) || outOfTrigger(t, item) == ""
 }
