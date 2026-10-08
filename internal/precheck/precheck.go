@@ -71,7 +71,7 @@ func (s *scan) add(names ...string) {
 // --plugin-dir・.claude-plugin が file を指す等) なので、読めなかった置き場でなく、file になっている path を覚える。その下の
 // path を何通り探しても同じ file に行き着くので、1 度だけ覚える。
 func (s *scan) failed(path string, err error) {
-	if err == nil || errors.Is(err, fs.ErrNotExist) {
+	if !unreadable(err) {
 		return
 	}
 	if errors.Is(err, syscall.ENOTDIR) {
@@ -85,6 +85,11 @@ func (s *scan) failed(path string, err error) {
 	if note := fmt.Sprintf("%s (%v)", path, err); !slices.Contains(s.unreadable, note) {
 		s.unreadable = append(s.unreadable, note)
 	}
+}
+
+// unreadable は、err が読めなかった置き場に数える失敗か (無い ErrNotExist は数えない)。
+func unreadable(err error) bool {
+	return err != nil && !errors.Is(err, fs.ErrNotExist)
 }
 
 // fileOnTheWay は、path から親へ辿って最初に在るものが file なら、その path を返す。在るのが dir (ENOTDIR の後に置き換わった等)
@@ -117,17 +122,16 @@ func (s *scan) note() string {
 // available は呼べる skill と command の名前を探す。
 func available(clone, home string, claudeArgs []string) *scan {
 	s := &scan{names: map[string]bool{}}
-	plugins := s.installed(clone, home)
+	var placed []string
 	for _, base := range []string{filepath.Join(clone, ".claude"), filepath.Join(home, ".claude")} {
-		skills, placed := s.skillsPlace(filepath.Join(base, "skills"))
+		skills, pluginDirs := s.skillsPlace(filepath.Join(base, "skills"))
 		for _, k := range skills {
 			s.add(k.name)
 		}
-		plugins = append(plugins, placed...)
+		placed = append(placed, pluginDirs...)
 		s.add(s.commandsUnder(filepath.Join(base, "commands"))...)
 	}
-	plugins = append(plugins, s.pluginDirs(clone, claudeArgs)...)
-	for _, p := range plugins {
+	for _, p := range s.plugins(clone, home, claudeArgs, placed) {
 		for _, k := range s.pluginSkills(p) {
 			s.add(p.name + ":" + k.name)
 			if k.named {
@@ -243,38 +247,46 @@ func (s *scan) paths(p plugin, key string, raw json.RawMessage) []string {
 
 // exists は path があるかを確かめる。無い以外の失敗は failed に渡す。
 func (s *scan) exists(path string) bool {
+	return s.stat(path) == nil
+}
+
+// stat は path を Stat し、無い以外の失敗を failed に渡して、Stat の失敗をそのまま返す。
+func (s *scan) stat(path string) error {
 	_, err := os.Stat(path)
 	s.failed(path, err)
-	return err == nil
+	return err
 }
 
 // skillsPlace は skills の置き場 (repo の `.claude/skills`・`~/.claude/skills`) を 1 度だけ読み、直下の dir ごとに skill の
 // dir (`SKILL.md` を持つ) か plugin の dir (`.claude-plugin/plugin.json` を持つ) かに分ける。両方を持つ dir は両方に数える。
-// dir の中を確かめられなければ (権限が無い等)、その失敗を 1 件だけ覚えて dir を飛ばす: 続けて plugin.json を確かめても、
-// 同じ原因の失敗が別の path で並ぶだけになる。
-func (s *scan) skillsPlace(dir string) ([]skill, []plugin) {
-	var skills []skill
-	var plugins []plugin
+// plugin の dir は path で返し、plugins が他の plugin と並べて読む。
+func (s *scan) skillsPlace(dir string) (skills []skill, pluginDirs []string) {
 	for _, path := range s.dirsUnder(dir) {
-		skillFile := filepath.Join(path, "SKILL.md")
-		_, err := os.Stat(skillFile)
-		if err != nil && !errors.Is(err, fs.ErrNotExist) {
-			s.failed(skillFile, err)
-			continue
-		}
-		if err == nil {
+		skillErr := s.stat(filepath.Join(path, "SKILL.md"))
+		if skillErr == nil {
 			skills = append(skills, s.readSkill(path))
 		}
-		if s.exists(filepath.Join(path, ".claude-plugin", "plugin.json")) {
-			plugins = append(plugins, s.readPlugin(path, filepath.Base(path)))
+		manifest := filepath.Join(path, ".claude-plugin", "plugin.json")
+		_, err := os.Stat(manifest)
+		if !unreadable(skillErr) {
+			// SKILL.md を確かめられない dir (権限が無い等) は、plugin.json も同じ原因で確かめられないことが多い。同じ原因の失敗を
+			// 別の path で並べないよう、そのときの失敗は SKILL.md の 1 件だけ覚え、plugin.json は確かめられたときだけ数える
+			s.failed(manifest, err)
+		}
+		if err == nil {
+			pluginDirs = append(pluginDirs, path)
 		}
 	}
-	return skills, plugins
+	return skills, pluginDirs
 }
 
-// pluginDirs は claude に渡す --plugin-dir の plugin。相対 path は clone から。
-func (s *scan) pluginDirs(clone string, claudeArgs []string) []plugin {
-	var list []plugin
+// plugins は事前検査が探す plugin: installed_plugins.json が挙げるもの・skills の置き場に置いたもの (placed。skillsPlace が
+// skill と一緒に見つけた dir)・--plugin-dir。
+func (s *scan) plugins(clone, home string, claudeArgs, placed []string) []plugin {
+	list := s.installed(clone, home)
+	for _, dir := range placed {
+		list = append(list, s.readPlugin(dir, filepath.Base(dir)))
+	}
 	for i, arg := range claudeArgs {
 		var dir string
 		switch {
