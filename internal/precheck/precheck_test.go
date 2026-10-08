@@ -389,10 +389,12 @@ func TestPluginWhoseSkillFileCannotBeFollowedIsFound(t *testing.T) {
 func TestDirectoryWithBothASkillAndAManifestIsASkillAndAPlugin(t *testing.T) {
 	p := newPlaces(t)
 	dir := p.bundle(t, `{"name": "bundle", "commands": ["./cmds/run.md"]}`)
-	write(t, filepath.Join(dir, "SKILL.md"), "---\nname: guide\n---\n")
+	// front matter に name の無い SKILL.md は、plugin の skill としては `bundle:bundle` でだけ呼べる。素の `bundle` は skill の
+	// dir として数えたときだけ呼べる
+	write(t, filepath.Join(dir, "SKILL.md"), "手順")
 	write(t, filepath.Join(dir, "cmds/run.md"), "走る")
 
-	p.assertFound(t, "/guide")
+	p.assertFound(t, "/bundle")
 	p.assertFound(t, "/bundle:run")
 }
 

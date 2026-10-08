@@ -233,16 +233,13 @@ func (s *scan) skillsPlace(dir string) (skills []skill, pluginDirs []string) {
 			skills = append(skills, s.readSkill(path))
 		}
 		manifest := filepath.Join(path, ".claude-plugin", "plugin.json")
-		var found bool
-		if unreadable(skillErr) {
+		_, err := os.Stat(manifest)
+		if !unreadable(skillErr) {
 			// SKILL.md を確かめられない dir (権限が無い等) は、plugin.json も同じ原因で確かめられないことが多い。同じ原因の失敗を
-			// 別の path で並べないよう、失敗は SKILL.md の 1 件だけ覚え、plugin.json は確かめられたときだけ数える
-			_, err := os.Stat(manifest)
-			found = err == nil
-		} else {
-			found = s.exists(manifest)
+			// 別の path で並べないよう、そのときの失敗は SKILL.md の 1 件だけ覚え、plugin.json は確かめられたときだけ数える
+			s.failed(manifest, err)
 		}
-		if found {
+		if err == nil {
 			pluginDirs = append(pluginDirs, path)
 		}
 	}
