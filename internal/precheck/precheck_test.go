@@ -323,11 +323,12 @@ func TestSkillDirectoryThatIsASymlinkIsFound(t *testing.T) {
 	p.assertFound(t, "/deploy")
 }
 
-func TestSkillDirectoryWithoutPermissionIsAPlaceThatCouldNotBeRead(t *testing.T) {
+// lockedSkill は ~/.claude/skills/locked に skill を置いて権限を外し、その dir を返す。root は権限に関わらず読めるので skip する。
+func (p places) lockedSkill(t *testing.T) string {
+	t.Helper()
 	if os.Getuid() == 0 {
 		t.Skip("root は権限に関わらず読める")
 	}
-	p := newPlaces(t)
 	locked := filepath.Join(p.home, ".claude/skills/locked")
 	write(t, filepath.Join(locked, "SKILL.md"), "---\nname: locked\n---\n")
 	if err := os.Chmod(locked, 0o000); err != nil {
@@ -339,6 +340,12 @@ func TestSkillDirectoryWithoutPermissionIsAPlaceThatCouldNotBeRead(t *testing.T)
 			t.Error(err)
 		}
 	})
+	return locked
+}
+
+func TestSkillDirectoryWithoutPermissionIsAPlaceThatCouldNotBeRead(t *testing.T) {
+	p := newPlaces(t)
+	locked := p.lockedSkill(t)
 
 	got := p.check("/x")
 
@@ -348,22 +355,9 @@ func TestSkillDirectoryWithoutPermissionIsAPlaceThatCouldNotBeRead(t *testing.T)
 }
 
 func TestSkillDirectoryWithoutPermissionIsShownOnce(t *testing.T) {
-	// skills の置き場の dir は skill の dir か plugin の dir かを 1 度に確かめるので、同じ原因の失敗を別の path で並べない
-	if os.Getuid() == 0 {
-		t.Skip("root は権限に関わらず読める")
-	}
+	// skills の置き場の dir は skill の dir でも plugin の dir でもありうるが、同じ原因の失敗を別の path で並べない
 	p := newPlaces(t)
-	locked := filepath.Join(p.home, ".claude/skills/locked")
-	write(t, filepath.Join(locked, "SKILL.md"), "---\nname: locked\n---\n")
-	if err := os.Chmod(locked, 0o000); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		// TempDir が片付けられるよう、権限を戻す
-		if err := os.Chmod(locked, 0o755); err != nil {
-			t.Error(err)
-		}
-	})
+	locked := p.lockedSkill(t)
 
 	got := p.check("/x")
 
@@ -377,6 +371,29 @@ func TestSkillDirectoryWithoutPermissionIsShownOnce(t *testing.T) {
 	if n != 1 {
 		t.Fatalf("%s の下の失敗が %d 件載る: %q", locked, n, got)
 	}
+}
+
+func TestPluginWhoseSkillFileCannotBeFollowedIsFound(t *testing.T) {
+	// SKILL.md だけが辿れない (輪になった symlink) dir は、plugin.json を確かめられるので plugin の dir として数える
+	p := newPlaces(t)
+	dir := p.bundle(t, `{"name": "bundle"}`)
+	write(t, filepath.Join(dir, "skills/foo/SKILL.md"), "---\nname: foo\n---\n")
+	loop := filepath.Join(dir, "SKILL.md")
+	if err := os.Symlink(loop, loop); err != nil {
+		t.Fatal(err)
+	}
+
+	p.assertFound(t, "/bundle:foo")
+}
+
+func TestDirectoryWithBothASkillAndAManifestIsASkillAndAPlugin(t *testing.T) {
+	p := newPlaces(t)
+	dir := p.bundle(t, `{"name": "bundle", "commands": ["./cmds/run.md"]}`)
+	write(t, filepath.Join(dir, "SKILL.md"), "---\nname: guide\n---\n")
+	write(t, filepath.Join(dir, "cmds/run.md"), "走る")
+
+	p.assertFound(t, "/guide")
+	p.assertFound(t, "/bundle:run")
 }
 
 func TestBrokenManifestOfAPluginIsAPlaceThatCouldNotBeRead(t *testing.T) {
