@@ -3,6 +3,7 @@ package workspace_test
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -18,11 +19,15 @@ var (
 	issue2 = target.Ref{Kind: target.KindIssue, Number: 2}
 )
 
+// otherNumber は、issue1 と issue2 の hook の中で相手の番号を求める shell の式。
+var otherNumber = "$((" + strconv.Itoa(issue1.Number+issue2.Number) + " - CLAUDE_DISPATCHER_NUMBER))"
+
 // overlapDetector は、issue1 と issue2 の hook が重なって走ると重なりの印を残して exit 1 で落ちる script を返す。
 // 始めに in-<番号>、終わりに out-<番号> の印を置き、その間に相手の in を最長 2s 待つ。相手の in があって out が
-// まだ無ければ重なっている。重なると、少なくとも片方は相手の out より先に相手の in を見るので、窓の長さに依らずに検出する。
+// まだ無ければ重なっている。相手が待ちの 2s の間に始まれば、少なくとも片方は相手の out より先に相手の in を見るので検出する。
+// 同じ仕組みを test/blackbox の TestAfterCreateOfTwoWorkersLaunchedInTheSameTickDoesNotOverlap も持つ (一緒に直す)。
 func overlapDetector(dir string) string {
-	return `n=$CLAUDE_DISPATCHER_NUMBER; o=$((3 - n)); d='` + dir + `'
+	return `n=$CLAUDE_DISPATCHER_NUMBER; o=` + otherNumber + `; d='` + dir + `'
 touch "$d/in-$n"
 i=0
 while [ ! -e "$d/in-$o" ] && [ "$i" -lt 20 ]; do sleep 0.1; i=$((i + 1)); done
@@ -33,7 +38,7 @@ touch "$d/out-$n"`
 // rendezvous は、issue1 と issue2 の hook が互いに相手の到着を待つ script を返す。相手が 5s 来なければ exit 1 で落ちる。
 // 直列に撃たれると、先の hook は相手を待ちきれずに落ちる。
 func rendezvous(dir string) string {
-	return `touch '` + dir + `/'"$CLAUDE_DISPATCHER_NUMBER"; other=$((3 - CLAUDE_DISPATCHER_NUMBER)); i=0; ` +
+	return `touch '` + dir + `/'"$CLAUDE_DISPATCHER_NUMBER"; other=` + otherNumber + `; i=0; ` +
 		`while [ ! -e '` + dir + `/'"$other" ]; do i=$((i + 1)); [ "$i" -gt 50 ] && exit 1; sleep 0.1; done`
 }
 
@@ -94,13 +99,17 @@ func TestAfterCreateDoesNotOverlapBeforeRemoveOfAnotherWorkspace(t *testing.T) {
 }
 
 func TestRemovingWithoutABeforeRemoveHookDoesNotWaitForAnotherAfterCreate(t *testing.T) {
-	m := loopManager(t, workspace.Hooks{AfterCreate: "exit 0"})
+	dir := t.TempDir()
+	// after_create は印を置き、release が置かれるまで (最長 10s) 走り続ける
+	m := loopManager(t, workspace.Hooks{AfterCreate: `touch '` + dir + `/creating'; i=0; ` +
+		`while [ ! -e '` + dir + `/release' ] && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done`})
 	if err := os.MkdirAll(m.Path(issue2), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// 他の workspace の after_create が走っている間
-	m.HookLock.Lock()
-	defer m.HookLock.Unlock()
+	t.Cleanup(func() { _ = os.WriteFile(filepath.Join(dir, "release"), nil, 0o644) })
+	prepared := make(chan error, 1)
+	go func() { _, err := m.Prepare(issue1); prepared <- err }()
+	waitForFile(t, filepath.Join(dir, "creating"))
 	removed := make(chan error, 1)
 
 	go func() { removed <- m.Remove(issue2) }()
@@ -113,6 +122,26 @@ func TestRemovingWithoutABeforeRemoveHookDoesNotWaitForAnotherAfterCreate(t *tes
 	case <-time.After(5 * time.Second):
 		t.Fatal("撃つ hook が無いのに、他の after_create の終わりを待った")
 	}
+	if _, err := os.Stat(m.Path(issue2)); !os.IsNotExist(err) {
+		t.Errorf("workspace が消えていない: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "release"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-prepared; err != nil {
+		t.Fatal(err)
+	}
+}
+
+// waitForFile は path が置かれるまで最長 5s 待つ。
+func waitForFile(t *testing.T, path string) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+	}
+	t.Fatalf("%s が置かれない", path)
 }
 
 func TestBeforeRunOfTwoWorkspacesCanRunAtOnce(t *testing.T) {
