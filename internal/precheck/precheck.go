@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 
 	"gopkg.in/yaml.v3"
 
@@ -42,17 +43,19 @@ func Check(def workflow.Definition, home string) []Problem {
 				found = available(def.Dir, home, def.Claude.Args)
 			}
 			if !found.names[name] {
-				problems = append(problems, Problem{t.Name, "action の先頭の /" + name + " が見つからない (plugin・repo の .claude・~/.claude の skill と command)" + found.unreadableNote()})
+				problems = append(problems, Problem{t.Name, "action の先頭の /" + name + " が見つからない (plugin・repo の .claude・~/.claude の skill と command)" + found.note()})
 			}
 		}
 	}
 	return problems
 }
 
-// scan は置き場を探した結果: 呼べる名前と、読めなかった置き場 (無いのではなく、読み出しか解析に失敗したもの)。
+// scan は置き場を探した結果: 呼べる名前と、読めなかった置き場 (無いのではなく、読み出しか解析に失敗したもの) と、dir である
+// はずが file になっている path (設定の誤り)。
 type scan struct {
 	names      map[string]bool
 	unreadable []string
+	notDirs    []string
 }
 
 func (s *scan) add(names ...string) {
@@ -61,11 +64,23 @@ func (s *scan) add(names ...string) {
 	}
 }
 
-// failed は、読めなかった置き場を覚える。無い (ErrNotExist) のは失敗に数えない。同じ dir に複数の経路から届くことがある
+// failed は、置き場の失敗を読めなかった置き場か設定の誤りとして覚える。無い (ErrNotExist) のは失敗に数えない。同じ dir に複数の経路から届くことがある
 // (installed_plugins.json と --plugin-dir が同じ plugin を挙げる等) ので、同じ失敗は 1 度だけ覚える。
+//
+// path の途中か path そのものが file で失敗した (ENOTDIR) のは、読み出しの失敗ではなく設定の誤り (plugin.json の skills・
+// --plugin-dir・.claude-plugin が file を指す等) なので、読めなかった置き場でなく、file になっている path を覚える。その下の
+// path を何通り探しても同じ file に行き着くので、1 度だけ覚える。
 func (s *scan) failed(path string, err error) {
 	if !unreadable(err) {
 		return
+	}
+	if errors.Is(err, syscall.ENOTDIR) {
+		if file, ok := fileOnTheWay(path); ok {
+			if !slices.Contains(s.notDirs, file) {
+				s.notDirs = append(s.notDirs, file)
+			}
+			return
+		}
 	}
 	if note := fmt.Sprintf("%s (%v)", path, err); !slices.Contains(s.unreadable, note) {
 		s.unreadable = append(s.unreadable, note)
@@ -77,12 +92,31 @@ func unreadable(err error) bool {
 	return err != nil && !errors.Is(err, fs.ErrNotExist)
 }
 
-// unreadableNote は、見つからない理由に添える、読めなかった置き場。無ければ ""。
-func (s *scan) unreadableNote() string {
-	if len(s.unreadable) == 0 {
-		return ""
+// fileOnTheWay は、path から親へ辿って最初に在るものが file なら、その path を返す。在るのが dir (ENOTDIR の後に置き換わった等)
+// か、何も在らなければ false。
+func fileOnTheWay(path string) (string, bool) {
+	for {
+		if info, err := os.Stat(path); err == nil {
+			return path, !info.IsDir()
+		}
+		parent := filepath.Dir(path)
+		if parent == path {
+			return "", false
+		}
+		path = parent
 	}
-	return " · 読めなかった置き場: " + strings.Join(s.unreadable, ", ")
+}
+
+// note は、見つからない理由に添える、設定の誤りと読めなかった置き場。無ければ ""。
+func (s *scan) note() string {
+	var note string
+	if len(s.notDirs) > 0 {
+		note += " · 設定の誤り (dir でなく file を指す): " + strings.Join(s.notDirs, ", ")
+	}
+	if len(s.unreadable) > 0 {
+		note += " · 読めなかった置き場: " + strings.Join(s.unreadable, ", ")
+	}
+	return note
 }
 
 // available は呼べる skill と command の名前を探す。
@@ -211,12 +245,12 @@ func (s *scan) paths(p plugin, key string, raw json.RawMessage) []string {
 	return slices.DeleteFunc(list, func(path string) bool { return path == "" })
 }
 
-// exists は path があるかを確かめる。無い以外の失敗 (権限など) は読めなかった置き場に数える。
+// exists は path があるかを確かめる。無い以外の失敗は failed に渡す。
 func (s *scan) exists(path string) bool {
 	return s.stat(path) == nil
 }
 
-// stat は path を Stat し、無い以外の失敗 (権限など) を読めなかった置き場に数えて、Stat の失敗をそのまま返す。
+// stat は path を Stat し、無い以外の失敗を failed に渡して、Stat の失敗をそのまま返す。
 func (s *scan) stat(path string) error {
 	_, err := os.Stat(path)
 	s.failed(path, err)
