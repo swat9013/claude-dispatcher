@@ -374,7 +374,7 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 | `start` | worker を起動した | `target`・`trigger`・`attempt`・`session_id`・`workspace`・`pid` |
 | `end` | worker 1 回分の終わり方を決めた | `target`・`trigger`・`attempt`・`session_id`・`outcome`・`reason`・`exit_code` (process が自分で終わったときだけ。signal で止まったら載せない)・`is_error`・`num_turns`・`permission_denial_count` (attempt の最後の `result` の要約。下の箇条) |
 | `retry` | `failed` の後、次の attempt を予定した | `target`・`trigger`・`attempt`・`next_attempt`・`session_id`・`backoff` (秒。小数を含む) |
-| `release` | 再起動を待つ claim を、起動せずに解いた | `target`・`trigger`・`attempt`・`session_id`・`reason` (`終端` / `trigger から外れた` / `trigger が workflow 定義から消えた` / `曖昧な CL`) |
+| `release` | 再起動を待つ claim を、起動せずに解いた | `target`・`trigger`・`attempt`・`session_id`・`reason` (`終端` / `trigger から外れた` / `trigger が workflow 定義から消えた`) |
 | `abandon` | attempt の上限で打ち切った | `target`・`trigger`・`attempt`・`session_id` |
 | `wait_slot` | backoff が明けた再起動が、並列上限に空きが無くて待ち始めた (1 回の待ちにつき 1 行) | `target`・`trigger`・`next_attempt`・`max_concurrent` |
 | `recheck_skip` | 起動しようとした候補を起動の直前に読み直し (§6 の tick の手順 7)、`reason` のどれかに当たって起動しなかった (tick ごとに、候補 1 件につき 1 行。同じ候補が次の tick でも当たれば、また 1 行書く。読み直せなかった候補は `error` の行で残し、この行は書かない) | `target`・`trigger`・`reason` (`当たるかをまだ決められない` / `終端` / `trigger から外れた` / `宣言順で先の trigger に当たる`) |
@@ -493,7 +493,8 @@ claude-dispatcher loop [<workflow の path>]
   - 起動した trigger が workflow 定義から消えていれば、claim を解く (`release`)
   - 作業対象を置き場から 1 件読み直す。tick の中で試みるときも、tick の open な一覧は使わない (一覧の検索は、書き込みの直後に古い結果を返しうるため)。終端なら `before_remove` を撃って workspace を消し、終端か起動した trigger から外れていれば、claim を解く (`release`)。読み直せなければ次の tick で試み直す
   - 読み直しで確かめるのは、終端か、起動した trigger から外れたか (と、下の当たるかをまだ決められないか) だけ。宣言順で先の trigger に当たるようになったかは確かめない (再起動は同じ trigger で続ける。system.md §7)。起動の直前の読み直し (tick の手順 7) と違って `recheck_skip` の行は書かず、claim を解くときは `release` の行で残す
-  - CL は、tick の中でだけ再起動を試みる (曖昧さと branch は tick が読んだ一覧で確かめるため)。曖昧な CL になっていれば claim を解き (`release`)、head branch を別の claim の workspace が checkout しているか、その branch を読めなければ、attempt を進めずに次の tick で試み直す
+  - CL は、tick の中でだけ再起動を試みる (曖昧さと branch は tick が読んだ一覧で確かめるため)。tick の一覧で曖昧な CL に見えるか、head branch を別の claim の workspace が checkout しているか、その branch を読めなければ、attempt を進めずに次の tick で試み直す
+    - 曖昧に見えても claim は解かない。曖昧さは一覧でしか決まらず、1 件の読み直しでは確かめられないので、古い一覧で曖昧に見えただけで解けてしまうため (解けると、次の tick で attempt 1 から数え直して起動しうる)。曖昧な間も claim は再起動待ちとして `limits.max_concurrent` の枠を 1 つ使う。曖昧な CL は状態 file の `ambiguous` (§7.1) に出て、人が片方を close すれば解ける
   - 当たるかをまだ決められなければ (conflict を計算中の CL。§2.3)、attempt を進めずに次の tick で試み直す
   - 当たったままなら、attempt を 1 つ進め、同じ trigger・同じ session id・同じ workspace で起動する
 - 再起動は、そのときの workflow 定義 (trigger・本文・hooks・`claude`・`limits`) で行う。workspace の root だけは、最初に起動したときのものを使う (session は workspace の path ごとに保存されるので)
