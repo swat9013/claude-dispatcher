@@ -45,7 +45,7 @@ jobs:
           GH_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
       - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
-          version: v2.18.2
+          version: v2.18.3
           install-only: true
       # 壊れた cask を tap へ publish するのを止める。.goreleaser.yaml の custom_block の template escape が崩れると、
       # Homebrew が install 時に展開する {{staged_path}} が literal で残らない
