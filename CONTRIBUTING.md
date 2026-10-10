@@ -12,7 +12,7 @@
   ```
 - 加えて `golangci-lint` を CI と同じ版 (.github/workflows/checks.yml の `lint` job の `version:`) で入れる。公式の install script に版を渡して binary を入れる (手順は <https://golangci-lint.run/docs/welcome/install/>)。brew などの package manager は版を選べず、CI と版がずれるので使わない。`go install` と go.mod の `tool` directive は golangci-lint の公式が動作を保証していない
   - push 前の hook は、手元の版が checks.yml の `version:` と違えば lint を撃たずに落とし、入れ直しのコマンドを出す。Renovate が golangci-lint の版を上げた PR を merge した後は、入れ直すまで push が止まる (worker の workspace を含む)
-- 加えて `pre-commit` (4.4.0 以上) を入れ、clone ごとに 1 回 `pre-commit install` を撃つ (commit 時と push 前の hook が両方入る)。gitleaks・actionlint・shellcheck は pre-commit が hook 環境として build するので別途の導入は要らない (初回の build に network が要る)
+- 加えて `pre-commit` を最低版 ([.pre-commit-config.yaml](.pre-commit-config.yaml) の `minimum_pre_commit_version`) 以上で入れ、clone ごとに 1 回 `pre-commit install` を撃つ (commit 時と push 前の hook が両方入る)。gitleaks・actionlint・shellcheck は pre-commit が hook 環境として build するので別途の導入は要らない (初回の build に network が要る)
   - Go は手元の版が [go.mod](go.mod) の `toolchain` 行より古くても、`go` コマンドがその版を取ってきて使う (`GOTOOLCHAIN` の既定の `auto`)。hook も `go` コマンド経由で撃つので、手元と CI で同じ版の Go が動く
 
 ## 開発中の claude-dispatcher を試す
