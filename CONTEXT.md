@@ -36,6 +36,10 @@ _Avoid_: state, cache
 状態の正本が置かれる tracker (issue と label) と CL host (CL・review thread・checks・branch) の総称。
 _Avoid_: 台帳, database
 
+**利用者のセッション**:
+利用者が対話で動かす LLM のセッション。dispatcher の導入と workflow 定義の編集を手伝う。dispatcher が起動するものではなく、worker とは別物。
+_Avoid_: エージェント (単独では worker と紛れる)
+
 ## 置き場
 
 **issue 置き場**:

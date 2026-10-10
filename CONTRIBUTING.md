@@ -39,6 +39,7 @@ claude-dispatcher-dev loop
 - ファイルの変更 (コード・docs を問わない) は、main の checkout で直接行わず、worktree を作ってその中で行う。main の checkout に未 commit の変更を残すと、別の作業の差分と混ざって PR に切り出せなくなる
   - 対話で動かす Claude Code では `EnterWorktree` に name `issue-<n>` を渡す。branch 名は `worktree-` が前置されて `worktree-issue-<n>` になる
   - dispatcher が起動する worker は、WORKFLOW.md の hooks が clone から作った workspace (worktree。`.claude-dispatcher/workspaces/` の下) の中で作業する ([docs/design/system.md](docs/design/system.md) §7)
+- 対話の session が issue の作業を始め、途中から worker に引き継いでよい。`worktree-issue-<n>` を push し、worktree を消してから `ready-for-agent` を付ける。worker は remote の同じ branch を取り込んで続ける ([WORKFLOW.md](WORKFLOW.md) の `implement`)
 - 実装が終わったら、worktree の branch を push して PR を作る
 - main へは PR 経由でだけ入れる (ruleset が強制する。下の「gate」の「main の保護」)
 
