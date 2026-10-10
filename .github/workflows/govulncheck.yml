@@ -50,27 +50,11 @@ jobs:
           TITLE: govulncheck が脆弱性を検出した
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          # --search は曖昧に一致するので、題名の完全一致で同じ issue が open かを見る
-          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"$TITLE\" in:title" --json number,title --jq 'map(select(.title == env.TITLE)) | .[0].number // empty')
-          if [ -n "$existing" ]; then
-            echo "open な #$existing があるので issue を起こさない"
-          else
-            {
-              echo "govulncheck が依存か標準ライブラリの脆弱性を検出した。run: $RUN_URL"
-              echo
-              echo "手元での再現: \`go tool govulncheck ./...\`"
-              echo
-              echo '```'
-              # issue 本文の上限 (65536 文字) に収める
-              limit=60000
-              head -c "$limit" report.txt
-              echo '```'
-              if [ "$(wc -c < report.txt)" -gt "$limit" ]; then
-                echo
-                echo "出力が長いので先頭の $limit byte で切った。全文は run の log にある"
-              fi
-            } > body.md
-            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --label needs-triage --body-file body.md
-          fi
+          {
+            echo "govulncheck が依存か標準ライブラリの脆弱性を検出した。run: $RUN_URL"
+            echo
+            echo "手元での再現: \`go tool govulncheck ./...\`"
+          } > prelude.md
+          scripts/open-triage-issue.sh "$TITLE" prelude.md report.txt
           echo "::error::govulncheck が脆弱性を検出した"
           exit 1
