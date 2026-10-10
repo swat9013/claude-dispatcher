@@ -66,7 +66,7 @@ claude-dispatcher-dev loop
   - `goreleaser-check`: `goreleaser check` で [.goreleaser.yaml](.goreleaser.yaml) を検査する
   - `pre-commit`: commit 時の hook を `pre-commit run --all-files` で撃つ。PR では加えて、push 前の gitleaks の hook を PR の commit 範囲 (base..head。merge commit を除く) に撃つ。merge commit を許しているので、途中の commit で入れて後の commit で消した秘匿情報も main の履歴に残るため。merge commit で解いた conflict の中身は検査されない。手元での再現は `pre-commit run --hook-stage pre-push --from-ref origin/main --to-ref HEAD gitleaks` (stack した CL なら `origin/main` を前段の branch にする)
   - 同じ PR に push が重なると、古い run を中止する。main への push の run は中止しない
-  - PR に付く check 名: `checks / test (ubuntu-latest)`・`checks / test (macos-latest)`・`checks / lint`・`checks / goreleaser-check`・`checks / pre-commit`。名前は checks.yml の job 名と matrix から決まる。変えたら、この列挙と、下の ruleset の required status checks を一緒に直す。列挙のずれは commit 時の repocheck が、ruleset のずれは下の「定期」の required-checks が拾う。repocheck はこの行の「PR に付く check 名:」から最初の「。」までの、バッククォートで囲んだ語を列挙として読む。言い回しを変えるときは scripts/repocheck も直す
+  - PR に付く check 名: `checks / test (ubuntu-latest)`・`checks / test (macos-latest)`・`checks / lint`・`checks / goreleaser-check`・`checks / pre-commit`。名前は checks.yml の job 名と matrix から決まる。変えたら、この列挙と、下の ruleset の required status checks を一緒に直す。列挙のずれは commit 時の repocheck が、ruleset のずれは下の「定期」の required-checks が拾う。この列挙は repocheck が機械で読む (読み方は scripts/repocheck の listedCheckNames)
 - main の保護: repo の ruleset `main` (対象は既定 branch) が、「main へは PR 経由でだけ入れる」と「CI が通った PR だけを merge する」を機械で強制する。設定は repo の管理権限が要るので、worker は変えられない
   - PR を必須にする。review の承認は必須にしない (一人運用で、自分の PR を merge できなくなるため)
   - required status checks は上の 5 つの check 名。報告元を GitHub Actions に限る (同じ名前の check を別の app が報告しても通らない)。govulncheck は PR で走らないので含めない
@@ -77,12 +77,12 @@ claude-dispatcher-dev loop
 - 版の更新: 2 つの bot が週 1 回、版を上げる PR を出す。auto-merge はしない。分担の理由は [ADR 0011](docs/adr/0011-renovate-regex-beside-dependabot.md)
   - [.github/dependabot.yml](.github/dependabot.yml): GitHub Actions・Go の依存 (indirect と、govulncheck を含む)・pre-commit の hook の `rev` を、それぞれ 1 本の PR で上げる
   - [renovate.json](renovate.json) (Renovate。manager は `custom.regex` だけ): Dependabot の対象外の次の版を、regex で拾って上げる。版の行の書き方を変えたら、renovate.json の regex も直す
-    - Renovate は GitHub App [Renovate](https://github.com/apps/renovate) を repo に入れて初めて動く。導入は repo の管理権限を持つ人の作業で、worker はできない。入っているかは repo の Settings の「GitHub Apps」で確かめ、動いているかは `renovate/` で始まる branch の PR が出るかで確かめる
     - go.mod の `toolchain` 行 (build に使う版)
     - goreleaser-action に渡す `version:` (checks.yml と release.yml の 2 箇所。一致は commit 時の repocheck が検査する)
     - checks.yml の `pre-commit` job で入れる pre-commit の版
     - checks.yml の `lint` job で golangci-lint-action に渡す `version:` (上げたら手元の binary も同じ版にする。上の「セットアップ」)
     - .pre-commit-config.yaml の actionlint の `additional_dependencies` に固定した shellcheck (go-shellcheck) の版 (Dependabot が上げるのは hook の `rev`)
+  - Renovate は GitHub App [Renovate](https://github.com/apps/renovate) を repo に入れて初めて動く。導入は repo の管理権限を持つ人の作業で、worker はできない。入っているかは repo の Settings の「GitHub Apps」で確かめ、動いているかは `renovate/` で始まる branch の PR が出るかで確かめる
   - 手で見るもの: go.mod の `go` 行 (利用者に求める最低の版。サポート中の最も古い Go の版に合わせる)。依存の go.mod の `go` 行より下げられないので、Dependabot が上げた依存 (govulncheck の `golang.org/x/vuln` とその依存を含む) に引き上げられることがある。Dependabot の PR で `go` 行が動いたら、利用者に求める版が上がってよいかを見てから merge する
 - release: tag (`v*`) は main の commit に打つ。push すると [.github/workflows/release.yml](.github/workflows/release.yml) が、上の CI と同じ検査の本体 (checks.yml) を tag の commit で通し、tag の commit が main に在ることを確かめてから GoReleaser で GitHub Releases に binary を出し、tap `swat9013/homebrew-tap` の cask を更新する ([.goreleaser.yaml](.goreleaser.yaml))
   - prerelease の tag (`v1.2.0-rc.1` 等) は、Release を prerelease として出し、tap を更新しない

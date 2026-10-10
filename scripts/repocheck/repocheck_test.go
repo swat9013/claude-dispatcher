@@ -67,6 +67,22 @@ func TestCheckNames_組み立て方を知らない形はエラーにする(t *te
 	}
 }
 
+func TestCheckNames_呼び出し元のjobのifはエラーにする(t *testing.T) {
+	ci := "jobs:\n  checks:\n    if: github.event_name == 'push'\n    uses: ./.github/workflows/checks.yml\n"
+
+	if _, err := checkNames([]byte(ci), []byte(checksYAML)); err == nil {
+		t.Fatal("エラーにならなかった")
+	}
+}
+
+func TestCheckFiles_versionを渡さないGoReleaserのstepはエラーにする(t *testing.T) {
+	release := releaseYAML + "      - uses: goreleaser/goreleaser-action@abc # v7\n"
+
+	if _, err := checkFiles(repoFiles{ci: ciYAML, checks: checksYAML, release: release, contributing: contributing}); err == nil {
+		t.Fatal("エラーにならなかった")
+	}
+}
+
 func TestCheckFiles_一致していれば問題を返さない(t *testing.T) {
 	problems, err := checkFiles(repoFiles{ci: ciYAML, checks: checksYAML, release: releaseYAML, contributing: contributing})
 

@@ -227,7 +227,7 @@ func checkNames(ci, checks []byte) ([]string, error) {
 	for i, j := range ciJobs {
 		if j.Uses == "./"+checksPath {
 			if err := unverifiedJobForm(j); err != nil {
-				return nil, fmt.Errorf("%s: job %s の%w", ciPath, ciIDs[i], err)
+				return nil, fmt.Errorf("%s: job %s: %w", ciPath, ciIDs[i], err)
 			}
 			caller = ciIDs[i]
 		}
@@ -243,7 +243,7 @@ func checkNames(ci, checks []byte) ([]string, error) {
 	var names []string
 	for i, j := range js {
 		if err := unverifiedJobForm(j); err != nil {
-			return nil, fmt.Errorf("%s: job %s の%w", checksPath, ids[i], err)
+			return nil, fmt.Errorf("%s: job %s: %w", checksPath, ids[i], err)
 		}
 		prefix := caller + " / " + ids[i]
 		m := j.Strategy.Matrix
@@ -268,9 +268,9 @@ func checkNames(ci, checks []byte) ([]string, error) {
 func unverifiedJobForm(j job) error {
 	switch {
 	case j.Name != "":
-		return errors.New(" name: から check 名を組み立てる方法を確かめていない")
+		return errors.New("name: から check 名を組み立てる方法を確かめていない")
 	case j.If != "":
-		return errors.New(" if: で PR に check が付くかを確かめていない")
+		return errors.New("if: で PR に check が付くかを確かめていない")
 	}
 	return nil
 }
@@ -298,7 +298,8 @@ func goreleaserVersions(src []byte) ([]string, error) {
 	return versions, nil
 }
 
-// listedCheckNames は CONTRIBUTING.md の check 名の列挙を返す
+// listedCheckNames は CONTRIBUTING.md の check 名の列挙を返す。列挙は「PR に付く check 名:」の後から最初の「。」までの、
+// バッククォートで囲んだ語。目印が無ければエラーにする
 func listedCheckNames(src string) ([]string, error) {
 	_, after, ok := strings.Cut(src, checkNamesMarker)
 	if !ok {

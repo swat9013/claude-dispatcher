@@ -45,7 +45,7 @@
 
 ### GoReleaser の版を 1 箇所に置き、checks.yml と release.yml が読む
 
-- 却下理由: 版を置く先 (file か reusable workflow の input) から 2 つの workflow へ渡す配線が増え、Renovate の regex もその置き場を読むように書き換えることになる。問題は版が 2 箇所に在ることより、一致を人が保っていることなので、リテラルを 2 箇所に残したまま一致を commit 時の検査 (`scripts/repocheck`) で機械に保たせる。Renovate の既定の branch 名は file を含まないので、2 箇所は 1 本の PR にまとまる見込み (まとまらなければ `groupName` で揃える)
+- 却下理由: 版を置く先 (file か reusable workflow の input) から 2 つの workflow へ渡す配線が増え、Renovate の regex もその置き場を読むように書き換えることになる。問題は版が 2 箇所に在ることより、一致を人が保っていることなので、リテラルを 2 箇所に残したまま一致を commit 時の検査 (`scripts/repocheck`) で機械に保たせる。Renovate には 2 箇所を 1 本の PR で上げさせる (`groupName`)
 
 ### 古くなったら落ちる定期 job を自前で置く
 
