@@ -26,8 +26,11 @@ trap 'rm -f "$body"' EXIT
   cat "$prelude"
   echo
   echo '```'
-  # 末尾に改行が無い報告でも、閉じの ``` を行頭に置く
-  printf '%s\n' "$(head -c "$limit" "$report")"
+  head -c "$limit" "$report"
+  # 末尾に改行が無い報告 (切った報告を含む) でも、閉じの ``` を行頭に置く
+  if [ -n "$(head -c "$limit" "$report" | tail -c 1)" ]; then
+    echo
+  fi
   echo '```'
   if [ "$(wc -c < "$report")" -gt "$limit" ]; then
     echo
