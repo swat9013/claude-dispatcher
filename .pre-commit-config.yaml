@@ -53,13 +53,14 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [pre-push]
-      # 同じ値を 2 箇所以上に書いている設定 (GoReleaser の版、check 名の列挙) の一致を検査する。network は使わない
+      # 同じ値を 2 箇所以上に書いている設定 (GoReleaser の版、check 名の列挙) の一致を検査する。network は使わず軽いので、
+      # 読む file を files: に重ねて書かずに毎回撃つ
       - id: repocheck
         name: repocheck (設定の一致)
         entry: go run ./scripts/repocheck files
         language: unsupported
         pass_filenames: false
-        files: ^(\.github/workflows/(ci|checks|release)\.yml|CONTRIBUTING\.md|scripts/repocheck/.*)$
+        always_run: true
       # binary は CI と同じ版を人が公式の手段で入れる (CONTRIBUTING.md の「セットアップ」)。公式の hook は
       # language: golang で source から build し (公式が保証しない導入経路)、--fix も付くので使わない。
       # script は手元の版が checks.yml の lint job の version: と違えば lint を撃たずに落とす

@@ -102,16 +102,18 @@ func runRuleset() ([]string, error) {
 func checkFiles(f repoFiles) ([]string, error) {
 	var problems []string
 
-	checksVersion, err := goreleaserVersion([]byte(f.checks))
+	checksVersions, err := goreleaserVersions([]byte(f.checks))
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", checksPath, err)
 	}
-	releaseVersion, err := goreleaserVersion([]byte(f.release))
+	releaseVersions, err := goreleaserVersions([]byte(f.release))
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", releasePath, err)
 	}
-	if checksVersion != releaseVersion {
-		problems = append(problems, fmt.Sprintf("GoReleaser の版が違う: %s は %s、%s は %s", checksPath, checksVersion, releasePath, releaseVersion))
+	versions := append(slices.Clone(checksVersions), releaseVersions...)
+	if slices.ContainsFunc(versions, func(v string) bool { return v != versions[0] }) {
+		problems = append(problems, fmt.Sprintf("GoReleaser の版が違う: %s は %s、%s は %s",
+			checksPath, strings.Join(checksVersions, " / "), releasePath, strings.Join(releaseVersions, " / ")))
 	}
 
 	names, err := checkNames([]byte(f.ci), []byte(f.checks))
@@ -151,8 +153,9 @@ func checkRuleset(names []string, rules []byte) ([]string, error) {
 			required = append(required, c.Context)
 		}
 	}
+	// 規則が無いのは、gate が外れた最も大きいずれなので、検査の失敗でなくずれとして返す
 	if !found {
-		return nil, errors.New("ruleset に required_status_checks の規則が無い")
+		return []string{"ruleset に required_status_checks の規則が無い (PR の CI が通らなくても merge できる)"}, nil
 	}
 	return setDiff(names, required, "ruleset の required status checks"), nil
 }
@@ -179,6 +182,7 @@ type workflow struct {
 
 type job struct {
 	Name     string `yaml:"name"`
+	If       string `yaml:"if"`
 	Uses     string `yaml:"uses"`
 	Strategy struct {
 		Matrix yaml.Node `yaml:"matrix"`
@@ -213,7 +217,7 @@ func jobs(src []byte) ([]string, []job, error) {
 
 // checkNames は、ci.yml が checks.yml を呼ぶ job の id と、checks.yml の job id・matrix の値から、
 // PR に付く check 名 (`<呼び出し元の job id> / <job id>[ (<matrix の値>)]`) を組み立てる。
-// 組み立て方を確かめていない形 (job の name:・matrix の include / exclude・2 次元以上の matrix) はエラーにする
+// 組み立て方を確かめていない形 (job の name:・job の if:・matrix の include / exclude・2 次元以上の matrix) はエラーにする
 func checkNames(ci, checks []byte) ([]string, error) {
 	ciIDs, ciJobs, err := jobs(ci)
 	if err != nil {
@@ -222,8 +226,8 @@ func checkNames(ci, checks []byte) ([]string, error) {
 	caller := ""
 	for i, j := range ciJobs {
 		if j.Uses == "./"+checksPath {
-			if j.Name != "" {
-				return nil, fmt.Errorf("%s: job %s の name: から check 名を組み立てる方法を確かめていない", ciPath, ciIDs[i])
+			if err := unverifiedJobForm(j); err != nil {
+				return nil, fmt.Errorf("%s: job %s の%w", ciPath, ciIDs[i], err)
 			}
 			caller = ciIDs[i]
 		}
@@ -238,8 +242,8 @@ func checkNames(ci, checks []byte) ([]string, error) {
 	}
 	var names []string
 	for i, j := range js {
-		if j.Name != "" {
-			return nil, fmt.Errorf("%s: job %s の name: から check 名を組み立てる方法を確かめていない", checksPath, ids[i])
+		if err := unverifiedJobForm(j); err != nil {
+			return nil, fmt.Errorf("%s: job %s の%w", checksPath, ids[i], err)
 		}
 		prefix := caller + " / " + ids[i]
 		m := j.Strategy.Matrix
@@ -259,20 +263,39 @@ func checkNames(ci, checks []byte) ([]string, error) {
 	return names, nil
 }
 
-// goreleaserVersion は workflow で goreleaser-action に渡す version: を返す
-func goreleaserVersion(src []byte) (string, error) {
+// unverifiedJobForm は、check 名の組み立て方を確かめていない job の書き方をエラーで返す。
+// name: は check 名を変え、if: は PR で check が付かないことがある
+func unverifiedJobForm(j job) error {
+	switch {
+	case j.Name != "":
+		return errors.New(" name: から check 名を組み立てる方法を確かめていない")
+	case j.If != "":
+		return errors.New(" if: で PR に check が付くかを確かめていない")
+	}
+	return nil
+}
+
+// goreleaserVersions は workflow で goreleaser-action に渡す version: を、step の順にすべて返す
+func goreleaserVersions(src []byte) ([]string, error) {
 	_, js, err := jobs(src)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
+	var versions []string
 	for _, j := range js {
 		for _, s := range j.Steps {
-			if strings.HasPrefix(s.Uses, goreleaserAction) && s.With["version"] != "" {
-				return s.With["version"], nil
+			if strings.HasPrefix(s.Uses, goreleaserAction) {
+				if s.With["version"] == "" {
+					return nil, errors.New("goreleaser-action に version: を渡していない step がある")
+				}
+				versions = append(versions, s.With["version"])
 			}
 		}
 	}
-	return "", errors.New("goreleaser-action に渡す version: が無い")
+	if len(versions) == 0 {
+		return nil, errors.New("goreleaser-action の step が無い")
+	}
+	return versions, nil
 }
 
 // listedCheckNames は CONTRIBUTING.md の check 名の列挙を返す

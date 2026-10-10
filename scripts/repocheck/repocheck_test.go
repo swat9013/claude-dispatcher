@@ -56,6 +56,7 @@ func TestCheckNames_組み立て方を知らない形はエラーにする(t *te
 		"job の name":       "jobs:\n  lint:\n    name: Lint\n",
 		"matrix の include": "jobs:\n  test:\n    strategy:\n      matrix:\n        include: [{os: a}]\n",
 		"matrix の 2 次元":    "jobs:\n  test:\n    strategy:\n      matrix:\n        os: [a]\n        go: [b]\n",
+		"job の if":         "jobs:\n  lint:\n    if: github.event_name == 'push'\n",
 	}
 	for name, checks := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -76,6 +77,14 @@ func TestCheckFiles_一致していれば問題を返さない(t *testing.T) {
 
 func TestCheckFiles_GoReleaserの版が2箇所で違えば落とす(t *testing.T) {
 	release := strings.Replace(releaseYAML, "v2.18.2", "v2.19.0", 1)
+
+	problems, _ := checkFiles(repoFiles{ci: ciYAML, checks: checksYAML, release: release, contributing: contributing})
+
+	assertProblem(t, problems, "v2.19.0")
+}
+
+func TestCheckFiles_同じfileの2つ目のGoReleaserのstepの版が違っても落とす(t *testing.T) {
+	release := releaseYAML + "      - uses: goreleaser/goreleaser-action@abc # v7\n        with:\n          version: v2.19.0\n"
 
 	problems, _ := checkFiles(repoFiles{ci: ciYAML, checks: checksYAML, release: release, contributing: contributing})
 
@@ -109,20 +118,31 @@ func TestCheckRuleset_required_checksが一致していれば問題を返さな�
 	}
 }
 
-func TestCheckRuleset_required_checksの過不足を落とす(t *testing.T) {
+func TestCheckRuleset_required_checksにcheck名が欠けていれば落とす(t *testing.T) {
 	rules := `[{"type":"required_status_checks","parameters":{"required_status_checks":[
-		{"context":"checks / test (ubuntu-latest)"},{"context":"checks / test (macos-latest)"},{"context":"checks / goreleaser-check"},{"context":"checks / gone"}]}}]`
+		{"context":"checks / test (ubuntu-latest)"},{"context":"checks / test (macos-latest)"},{"context":"checks / goreleaser-check"}]}}]`
 
 	problems, _ := checkRuleset(wantNames, []byte(rules))
 
 	assertProblem(t, problems, "checks / lint")
+}
+
+func TestCheckRuleset_required_checksにcheck名に無い名前があれば落とす(t *testing.T) {
+	rules := `[{"type":"required_status_checks","parameters":{"required_status_checks":[
+		{"context":"checks / test (ubuntu-latest)"},{"context":"checks / test (macos-latest)"},{"context":"checks / lint"},{"context":"checks / goreleaser-check"},{"context":"checks / gone"}]}}]`
+
+	problems, _ := checkRuleset(wantNames, []byte(rules))
+
 	assertProblem(t, problems, "checks / gone")
 }
 
-func TestCheckRuleset_required_checksの規則が無ければエラーにする(t *testing.T) {
-	if _, err := checkRuleset(wantNames, []byte(`[{"type":"pull_request"}]`)); err == nil {
-		t.Fatal("エラーにならなかった")
+func TestCheckRuleset_required_checksの規則が無ければずれとして落とす(t *testing.T) {
+	problems, err := checkRuleset(wantNames, []byte(`[{"type":"pull_request"}]`))
+
+	if err != nil {
+		t.Fatal(err)
 	}
+	assertProblem(t, problems, "required_status_checks")
 }
 
 func assertProblem(t *testing.T, problems []string, want string) {
