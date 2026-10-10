@@ -1,0 +1,68 @@
+# main の ruleset の required status checks が、checks.yml の job から決まる check 名と一致するかを定期的に検査し、
+# ずれていたら triage 待ちの issue を 1 件起こす。ruleset は API でしか読めず CL と無関係に変わりうるので、
+# PR では撃たない。方針は CONTRIBUTING.md の「gate」
+name: required-checks
+
+on:
+  schedule:
+    - cron: "0 0 * * 1"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+# 同じ題名の issue を探してから起こすまでの間に別の run が割り込むと、issue が 2 件できる。run を 1 本ずつ流す
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  required-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      # exit 1 はずれの検出、それ以外の非 0 は検査そのものの失敗 (API の失敗を含む)
+      - name: 検査
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          code=0
+          scripts/check-required-checks.sh > report.txt 2>&1 || code=$?
+          cat report.txt
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          if [ "$code" -ne 0 ] && [ "$code" -ne 1 ]; then
+            echo "::error::required status checks の検査に失敗した (exit $code)"
+            exit "$code"
+          fi
+      - name: ずれを issue にする
+        if: steps.check.outputs.code == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: ruleset の required status checks が checks.yml の job とずれている
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # --search は曖昧に一致するので、題名の完全一致で同じ issue が open かを見る
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"$TITLE\" in:title" --json number,title --jq 'map(select(.title == env.TITLE)) | .[0].number // empty')
+          if [ -n "$existing" ]; then
+            echo "open な #$existing があるので issue を起こさない"
+          else
+            {
+              echo "main の ruleset の required status checks が、checks.yml の job から決まる check 名とずれている。run: $RUN_URL"
+              echo
+              echo "ruleset は repo の管理権限で直す (CONTRIBUTING.md の「gate」の「main の保護」)。checks.yml を直すなら CONTRIBUTING.md の check 名の列挙も一緒に直す。手元での再現: \`scripts/check-required-checks.sh\`"
+              echo
+              echo '```'
+              cat report.txt
+              echo '```'
+            } > body.md
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --label needs-triage --body-file body.md
+          fi
+          echo "::error::ruleset の required status checks が checks.yml の job とずれている"
+          exit 1

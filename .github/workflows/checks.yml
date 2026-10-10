@@ -51,7 +51,7 @@ jobs:
           go-version-file: go.mod
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
-          # 手元に入れる版と揃える (CONTRIBUTING.md の「セットアップ」)
+          # 手元に入れる版と揃える (CONTRIBUTING.md の「セットアップ」)。手元の版との一致は push 前の hook が検査する
           version: v2.14.0
 
   goreleaser-check:
@@ -74,7 +74,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      # 版は Dependabot の対象外なので手で上げる (CONTRIBUTING.md の「gate」)
+      # 版は Renovate が上げる (CONTRIBUTING.md の「gate」の「版の更新」)
       - run: pipx install pre-commit==4.6.2
       - run: pre-commit run --all-files --show-diff-on-failure
       # merge commit を許しているので、PR の途中の commit で入れて後の commit で消した秘匿情報も main の履歴に残る。

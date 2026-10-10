@@ -1,0 +1,49 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Dependabot が上げない版だけを regex で拾って上げる。Dependabot との分担は docs/adr/0011-renovate-regex-beside-dependabot.md",
+  "extends": ["schedule:weekly"],
+  "enabledManagers": ["custom.regex"],
+  "dependencyDashboard": false,
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "go.mod の toolchain 行 (build に使う Go の版)",
+      "managerFilePatterns": ["/^go\\.mod$/"],
+      "matchStrings": ["\\ntoolchain go(?<currentValue>\\d+\\.\\d+\\.\\d+)\\n"],
+      "depNameTemplate": "go",
+      "datasourceTemplate": "golang-version"
+    },
+    {
+      "customType": "regex",
+      "description": "goreleaser-action に渡す GoReleaser の版 (checks.yml と release.yml)",
+      "managerFilePatterns": ["/^\\.github/workflows/(checks|release)\\.yml$/"],
+      "matchStrings": ["goreleaser/goreleaser-action@\\S+.*\\n\\s+with:\\n\\s+version: (?<currentValue>v\\S+)"],
+      "depNameTemplate": "goreleaser/goreleaser",
+      "datasourceTemplate": "github-releases"
+    },
+    {
+      "customType": "regex",
+      "description": "golangci-lint-action に渡す golangci-lint の版",
+      "managerFilePatterns": ["/^\\.github/workflows/checks\\.yml$/"],
+      "matchStrings": ["golangci/golangci-lint-action@\\S+.*\\n\\s+with:\\n(?:\\s+#.*\\n)*\\s+version: (?<currentValue>v\\S+)"],
+      "depNameTemplate": "golangci/golangci-lint",
+      "datasourceTemplate": "github-releases"
+    },
+    {
+      "customType": "regex",
+      "description": "CI の pre-commit job で入れる pre-commit の版",
+      "managerFilePatterns": ["/^\\.github/workflows/checks\\.yml$/"],
+      "matchStrings": ["pipx install pre-commit==(?<currentValue>\\S+)"],
+      "depNameTemplate": "pre-commit",
+      "datasourceTemplate": "pypi"
+    },
+    {
+      "customType": "regex",
+      "description": "actionlint の hook 環境に入れる shellcheck (go-shellcheck) の版",
+      "managerFilePatterns": ["/^\\.pre-commit-config\\.yaml$/"],
+      "matchStrings": ["github\\.com/wasilibs/go-shellcheck/cmd/shellcheck@(?<currentValue>v\\S+?)\\]"],
+      "depNameTemplate": "github.com/wasilibs/go-shellcheck",
+      "datasourceTemplate": "go"
+    }
+  ]
+}

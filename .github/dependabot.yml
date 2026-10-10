@@ -1,5 +1,5 @@
 # 依存の版を週 1 回、ecosystem ごとに 1 本の PR で上げる。auto-merge はしない (PR の CI を人が見て merge する)。
-# 対象外で手で上げるもの (goreleaser の version・CI の pre-commit の版・go.mod の toolchain) は CONTRIBUTING.md の「gate」
+# 対象外の版 (go.mod の toolchain・GoReleaser・golangci-lint・CI の pre-commit・go-shellcheck) は Renovate が上げる (renovate.json。ADR 0011)
 version: 2
 updates:
   - package-ecosystem: github-actions
