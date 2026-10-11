@@ -1,6 +1,6 @@
 # claude-dispatcher の案内
 
-`claude-dispatcher guide` が出す文書。workflow 定義 (`WORKFLOW.md`) の書き方・action が守る約束・導入の流れを書く。中身は、この binary と同じ版の形式。
+`claude-dispatcher guide` が出す文書。導入の流れ・loop の回し方と止め方・action が守る約束・workflow 定義 (`WORKFLOW.md`) の書き方を書く。中身は、この binary と同じ版の形式。
 
 claude-dispatcher は、tracker (GitHub・GitLab・Jira Cloud) の issue と CL (GitHub の pull request・GitLab の merge request) を周期ごとに読み、workflow 定義が宣言した trigger に当たったものへ Claude Code の worker (`claude -p` で無人で起動するセッション) を起動する。CLI は tracker にも CL にも書かない。label を付け替える・CL を開く・人へ返すのは worker と人の仕事。
 
@@ -11,9 +11,18 @@ claude-dispatcher は、tracker (GitHub・GitLab・Jira Cloud) の issue と CL 
 - **tick**: 周期ごとに 1 回、作業対象を読んで trigger を評価し、worker を起動する処理
 - **終端**: 作業対象が閉じた状態 (issue の close、CL の merge か close、Jira の status の区分が `done`)
 
+節:
+
+- 導入の流れ
+- 回す・見る・止める
+- action が守る約束
+- workflow 定義の書き方: 項目 / issue 側の述語 / CL 側の述語 / 評価の規則 / `$VAR` による間接参照 / hooks / template / 検査 / 事前検査
+
+全文は長いので、file に保存してから要る節を引いてもよい (`claude-dispatcher guide > guide.md`)。
+
 ## 導入の流れ
 
-実装 repo の clone を cwd にして、次の順に撃つ。どのコマンドも、workflow 定義の path を最後の引数で渡せる (省けば cwd の `WORKFLOW.md`)。
+実装 repo の clone を cwd にして、次の順に撃つ。`setup`・`loop`・`status`・`paths`・`doctor` は、workflow 定義の path を最後の引数で渡せる (省けば cwd の `WORKFLOW.md`)。
 
 1. **雛形を置く**: `claude-dispatcher setup` が cwd に `WORKFLOW.md` の雛形を書く。既にある file は上書きしない
    - origin の host が `github.com` なら GitHub の雛形で、`tracker.repo` は `gh repo view` が返す repo で埋まる
@@ -24,9 +33,47 @@ claude-dispatcher は、tracker (GitHub・GitLab・Jira Cloud) の issue と CL 
    - workspace の置き場 (`workspace.root`) が clone の中なら、`.gitignore` に足す。既定の `.claude-dispatcher/workspaces` は clone の中に入る。`setup` は `.gitignore` を書かない
 3. **試運転**: `claude-dispatcher loop --dry-run` が workflow 定義を検査し、起動するはずの作業対象と trigger を 1 件 1 行で示す。何も起動せず、何も書かない
 4. **導入を確かめる**: `claude-dispatcher doctor` が workflow 定義・issue 置き場・依存 CLI・事前検査を確かめ、利用者の約束に頼る宣言を警告する。Claude Code の settings (`permissions.allow`) に要りそうな entry も示すので、自分で足す (CLI は settings を書かない)
-5. **回す**: `claude-dispatcher loop` を撃つ。起動直後に 1 回、以後は `polling.interval` ごとに tick を回す
+5. **回す**: `claude-dispatcher loop` を撃つ (下の「回す・見る・止める」)
 
 workflow 定義に誤りがあれば、試運転・`loop` の起動・`doctor` が項目の位置を名指しして失敗する。直して 3 へ戻る。
+
+## 回す・見る・止める
+
+### 回す
+
+- `claude-dispatcher loop` は前面で回り続け、止めるまで戻らない。起動直後に 1 回、以後は tick の終わりから `polling.interval` だけ待って次の tick を回す
+  - 戻るのを待つ撃ち方 (tool の呼び出しの中で終わりを待つなど) はしない。端末で撃つか background の process として撃ち、様子は下の `status` で見る
+- 起動時に workflow 定義の検査と事前検査を通す。落ちれば誤りを名指しして起動しない
+- tick ごとに workflow 定義を読み直す。読み直した定義が検査に落ちた tick と、事前検査に落ちた trigger は、何も起動しない
+- 同じ issue 置き場の loop は、同じマシンで 1 本しか起動できない (2 本目は exit 3 で止まる)。マシンを跨いだ排他は持たないので、1 つの issue 置き場は 1 台から回す
+- loop は自分では起き直さない。端末を閉じた・マシンを再起動した・binary を入れ替えた (走っている loop は起動した時点の binary で回り続ける) ときは、同じコマンドを撃ち直す
+
+### 見る
+
+- loop を撃った端末には、`status` と同じ内容と直近のログを描き直し続ける。stdout が端末でなければ、ログの行と worker の活動を 1 行ずつ追記する
+- 別の端末からは `claude-dispatcher status` で見る。loop が書き出す状態 file を描くだけで、何も書かず、tracker の CLI も撃たない
+  - 見出しの 1 行目は loop が生きているか (`loop 稼働中` / `loop 停止待ち` / `loop なし`)、2 行目は次の tick と直近の tick の結果
+  - `workers` に走っている worker と再起動待ちを、`要対処` に打ち切り・曖昧な CL・事前検査に落ちた trigger を解き方とともに並べる
+- 置き場は `claude-dispatcher paths --json` で引く。何も書かず、tracker の CLI も撃たない
+
+| key | 中身 |
+|---|---|
+| `scope_key` | issue 置き場から決まる loop の識別子 |
+| `state_dir` | loop の状態を置く dir |
+| `log` | 過去の tick と worker の起動・終わり方を 1 行ずつ残す log (JSON Lines) |
+| `status_file` | `status` が描く状態 file (JSON) |
+| `workspace_root` | workspace を置く dir |
+
+- worker の stream は `<state_dir>/workers/<作業対象>.log` (stderr は `.stderr.log`) に残る。worker が何をして終わったかはここで読む
+- 打ち切りは loop の memory にだけ持つので、loop を撃ち直すと解ける。loop を止めずに解くなら、作業対象を打ち切ったときの trigger から外し (label で当てる trigger なら label を外す)、1 周期待ってから戻す
+
+### 止める
+
+1. loop に停止要求を送る (端末なら Ctrl+C。SIGINT・SIGTERM・SIGHUP のどれでもよい)。新しい起動と再起動をやめ、走っている worker が終わるのを待って止まる。worker が走っていなければすぐ止まる
+2. 待てないときは、もう一度停止要求を送る。走っている worker を止めて止まる
+   - worker が途中まで書いた成果は workspace と remote branch に残る
+   - 作業対象が trigger に当たったままなら、次に起動した loop が同じ workspace で worker を起動し直す。session は新しく、attempt も 1 から数え直す。前の成果を拾わせるなら、共通 prompt にそう書く
+3. 使うのをやめるなら、`paths --json` が返す `state_dir` と `workspace_root` を消す (workspace が worktree なら、消した後に clone で `git worktree prune` を撃つ)。tracker の label は残る
 
 ## action が守る約束
 
@@ -100,7 +147,7 @@ triggers:                    # 必須。1 つ以上
       author: collaborator
       blocked: false
     action: |                # 必須。worker に渡す prompt の template
-      /swat-skills:playbook-implementation
+      /implement issue #{{ .issue.number }} ({{ .issue.url }})。CL を開いたら ready-for-agent を外す
   - name: fix-ci
     on: cl
     when:
@@ -310,7 +357,7 @@ action と本文 (共通 prompt) は、worker を起動するたびに Go の te
 - `jira` の `.issue.url` は `https://<site>/browse/<key>`、`.issue.labels` は Jira の label の綴りのまま。`.issue.key` を他の kind で書くと、未知の変数として検査で落ちる
 - 未知の変数 (`.issue.body` など、CL の worker の `.issue`) と未知の関数は、描画の失敗にする。描画に失敗した attempt は失敗
 - 検査で、action と本文を見本の変数 (どれも空でない値) で描画してみる。action はその trigger の種類の見本で、本文はどの worker にも渡るので、trigger に現れる種類すべての見本で描画する。描画できなければ検査で落ちるので、作業対象を読んでから描画に失敗するのは、見本では通った分岐だけになる
-- 例: `/swat-skills:playbook-implementation issue #{{ .issue.number }} ({{ .issue.url }})`
+- 例: `/implement issue #{{ .issue.number }} ({{ .issue.url }})`。`/implement` は repo の `.claude/commands/implement.md` に置いた command (下の「事前検査」)
 
 ### 検査
 

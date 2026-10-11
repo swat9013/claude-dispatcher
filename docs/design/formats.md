@@ -672,7 +672,7 @@ exit: 0。
 claude-dispatcher guide
 ```
 
-案内 ([`internal/guide/guide.md`](../../internal/guide/guide.md)。workflow 定義の書き方・action が守る約束・導入の流れ) を stdout にそのまま出す。
+案内 ([`internal/guide/guide.md`](../../internal/guide/guide.md)。workflow 定義の書き方・action が守る約束・導入の流れ・loop の回し方と見方と止め方) を stdout にそのまま出す。
 
 - workflow 定義も state dir も読まず、tracker の CLI も撃たない。`--version` (§8) と同じく、導入が壊れていても撃てる
 - `tracker.kind` で出し分けない。tracker の種類ごとの違いは案内の中の表に並べる

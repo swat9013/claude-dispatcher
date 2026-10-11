@@ -17,3 +17,17 @@ func TestGuideDoesNotPointToWhatTheUserDoesNotHave(t *testing.T) {
 		t.Fatalf("案内が利用者の手元に無いものを指している: %q", found)
 	}
 }
+
+// pluginSkill は plugin の skill か command を呼ぶ綴り (`/<plugin>:<名前>`)。案内の例が特定の plugin を指すと、
+// 写した利用者の workflow 定義は、その plugin を入れていない手元で事前検査に落ちる
+var pluginSkill = regexp.MustCompile(`/[A-Za-z0-9._-]+:[A-Za-z0-9._-]+`)
+
+func TestGuideExamplesDoNotCallAPluginTheUserMayNotHave(t *testing.T) {
+	text := Text()
+
+	found := pluginSkill.FindAllString(text, -1)
+
+	if len(found) > 0 {
+		t.Fatalf("案内の例が利用者の手元に無いかもしれない plugin を呼んでいる: %q", found)
+	}
+}
