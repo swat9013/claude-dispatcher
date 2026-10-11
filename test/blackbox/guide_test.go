@@ -3,6 +3,7 @@ package blackbox_test
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -59,6 +60,25 @@ func TestUsageEndsWithAPointerToTheGuide(t *testing.T) {
 	assertExit(t, r, 0)
 	if !strings.Contains(lastLine(r.stdout), "claude-dispatcher guide") {
 		t.Fatalf("usage の最後の行が案内を指していない:\n%s", r.stdout)
+	}
+}
+
+func TestGuideCoversEverySubcommandInTheUsage(t *testing.T) {
+	// 利用者の手元には README が無いので、usage に並ぶ subcommand の使い方は案内にしか無い
+	s := newSandbox(t)
+	usage := s.run("--help")
+	guide := s.run("guide")
+	subcommand := regexp.MustCompile(`(?m)^  claude-dispatcher ([a-z]+)`)
+
+	matches := subcommand.FindAllStringSubmatch(usage.stdout, -1)
+
+	if len(matches) == 0 {
+		t.Fatalf("usage から subcommand を読めない:\n%s", usage.stdout)
+	}
+	for _, m := range matches {
+		if !strings.Contains(guide.stdout, "claude-dispatcher "+m[1]) {
+			t.Errorf("案内に `claude-dispatcher %s` が出てこない", m[1])
+		}
 	}
 }
 

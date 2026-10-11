@@ -92,7 +92,7 @@ binary は署名していない。macOS でブラウザから取った archive �
    claude-dispatcher doctor
    ```
 
-どのコマンドも、workflow 定義の path を最後の引数で渡せる (省けば cwd の `WORKFLOW.md`)。
+`setup`・`loop`・`status`・`paths`・`doctor` は、workflow 定義の path を最後の引数で渡せる (省けば cwd の `WORKFLOW.md`)。
 
 ## 回す
 
