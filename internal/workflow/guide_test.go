@@ -21,6 +21,19 @@ type nestedTable struct {
 	table keyTable
 }
 
+// section は案内の `### <heading>` の節の本文 (次の見出しの前まで)。節が無ければ空。
+func section(text, heading string) string {
+	start := strings.Index(text, "\n### "+heading+"\n")
+	if start < 0 {
+		return ""
+	}
+	body := text[start+len("\n### "+heading+"\n"):]
+	if end := strings.Index(body, "\n#"); end >= 0 {
+		body = body[:end]
+	}
+	return body
+}
+
 // leaves は表の key を、値が対応表でない key まで辿って、案内での path の綴りで返す。
 func (k keyTable) leaves(prefix string) []string {
 	var out []string
@@ -35,8 +48,10 @@ func (k keyTable) leaves(prefix string) []string {
 }
 
 func TestEveryKeyTheLoaderAcceptsAppearsInTheGuide(t *testing.T) {
-	// 案内は key を次の綴りで書く。設定の項目は top level からの path (`tracker.kind`・`triggers[].when`)、述語は when からの
-	// path (`labels.all`・`assignee`)。値が対応表の key をここで辿り忘れると、その key の綴り (`tracker` など) を案内に探して落ちる
+	// 案内は key を、その key を説明する節の中に次の綴りで書く。設定の項目は「項目」の節に top level からの path
+	// (`tracker.kind`・`triggers[].when`)、述語は「issue 側の述語」「CL 側の述語」の節に when からの path (`labels.all`・`assignee`)。
+	// 節を限るのは、例や違いの表に出る綴りで、説明の行が消えたのを見逃さないため。値が対応表の key をここで辿り忘れると、その
+	// key の綴り (`tracker` など) を案内に探して落ちる
 	c := &checker{}
 	def := &Definition{}
 	var issue trigger.IssuePredicate
@@ -48,10 +63,10 @@ func TestEveryKeyTheLoaderAcceptsAppearsInTheGuide(t *testing.T) {
 		"labels": {"labels", labels}, "status": {"status", names}, "type": {"type", names},
 	}
 	roots := []struct {
-		prefix string
-		table  keyTable
+		section string
+		table   keyTable
 	}{
-		{"", keyTable{fields: c.topFields(def), nested: map[string]nestedTable{
+		{"項目", keyTable{fields: c.topFields(def), nested: map[string]nestedTable{
 			"tracker":   {"tracker", keyTable{fields: c.trackerFields(&def.Tracker, new(bool))}},
 			"polling":   {"polling", keyTable{fields: c.pollingFields(&def.Interval)}},
 			"workspace": {"workspace", keyTable{fields: c.workspaceFields(def)}},
@@ -61,16 +76,17 @@ func TestEveryKeyTheLoaderAcceptsAppearsInTheGuide(t *testing.T) {
 			"triggers":  {"triggers[]", keyTable{fields: c.triggerFields(&trigger.Trigger{}, map[string]bool{}, &deferredItems{})}},
 		}}},
 		// when の中は on で表が変わるので、述語の表は when からの path で別に辿る
-		{"", keyTable{fields: c.issuePredicateFields(&issue, &node, &node), nested: predicateNesting}},
-		{"", keyTable{fields: c.clPredicateFields(&cl, &node), nested: predicateNesting}},
+		{"issue 側の述語", keyTable{fields: c.issuePredicateFields(&issue, &node, &node), nested: predicateNesting}},
+		{"CL 側の述語", keyTable{fields: c.clPredicateFields(&cl, &node), nested: predicateNesting}},
 	}
 	text := guide.Text()
 
 	var missing []string
 	for _, root := range roots {
-		for _, key := range root.table.leaves(root.prefix) {
-			if !strings.Contains(text, "`"+key+"`") {
-				missing = append(missing, key)
+		body := section(text, root.section)
+		for _, key := range root.table.leaves("") {
+			if !strings.Contains(body, "`"+key+"`") {
+				missing = append(missing, root.section+": "+key)
 			}
 		}
 	}

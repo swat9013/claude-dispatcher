@@ -1,9 +1,24 @@
 package scaffold
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
+
+// frontMatter は雛形の 1 行目の `---` から次の `---` の行までの行。閉じていなければ nil。
+func frontMatter(text string) []string {
+	lines := strings.Split(text, "\n")
+	if lines[0] != "---" {
+		return nil
+	}
+	for i := 1; i < len(lines); i++ {
+		if lines[i] == "---" {
+			return lines[1:i]
+		}
+	}
+	return nil
+}
 
 func TestEveryTemplatePointsToTheGuideInItsFrontMatter(t *testing.T) {
 	// 案内を指す comment は front matter の YAML の comment に置く。本文に書くと共通 prompt として worker に渡る
@@ -14,12 +29,15 @@ func TestEveryTemplatePointsToTheGuideInItsFrontMatter(t *testing.T) {
 	}
 	for kind, text := range templates {
 		t.Run(kind, func(t *testing.T) {
-			lines := strings.Split(text, "\n")
+			lines := frontMatter(text)
+			pointsToGuide := func(line string) bool {
+				return strings.HasPrefix(strings.TrimSpace(line), "#") && strings.Contains(line, "`claude-dispatcher guide`")
+			}
 
-			second := lines[1]
+			found := slices.ContainsFunc(lines, pointsToGuide)
 
-			if lines[0] != "---" || !strings.HasPrefix(second, "# ") || !strings.Contains(second, "`claude-dispatcher guide`") {
-				t.Fatalf("2 行目が front matter の中で案内を指す comment でない: %q", second)
+			if !found {
+				t.Fatalf("front matter に案内を指す comment が無い:\n%s", strings.Join(lines, "\n"))
 			}
 		})
 	}

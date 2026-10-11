@@ -22,7 +22,7 @@ CLI の subcommand は、役割で 3 群に分かれる。
 |---|---|---|
 | 駆動 | `loop` | state dir (状態 file・log・worker log・lock・共通 prompt の描画結果) と workspace。外部 store には書かない |
 | 観測 | `status` / `paths` | 何も書かない (読み取り専用) |
-| 導入 | `setup` / `doctor` / `guide` | `setup` だけが書く。書くのは workflow 定義の雛形で、無いときだけ作り、既存は上書きしない。Claude Code の settings はどちらも書かない |
+| 導入 | `setup` / `doctor` / `guide` | `setup` だけが書く。書くのは workflow 定義の雛形で、無いときだけ作り、既存は上書きしない。Claude Code の settings はどれも書かない。`guide` は案内を出すだけで、workflow 定義も state dir も読まない |
 
 | アクター | 方向 | 関わり |
 |---|---|---|

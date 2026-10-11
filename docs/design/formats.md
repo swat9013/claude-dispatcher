@@ -95,6 +95,7 @@ workspace は state dir の外、workflow 定義の `workspace.root` の下に�
   - tick の中の読み直しの失敗 (tick の error。§6)
   - `status` と `paths` (§7.2・§7.3) の失敗
   - 事前検査 (§2.9) の失敗
+  - `jira` の issue 置き場の確認 (§6) の失敗 (下)
 
 | いつ | 落ちたら |
 |---|---|
@@ -104,7 +105,7 @@ workspace は state dir の外、workflow 定義の `workspace.root` の下に�
 | `doctor` (§7.4) | `NG` の行に出し、以降は確かめない (exit 1) |
 | `status`・`paths` (§7.2・§7.3) | 失敗させる (exit 2) |
 
-- `jira` の、acli の認証の site と status 名・issue type 名の実在は、workflow 定義だけでは確かめられないので、issue 置き場の確認 (§6) で名指しする
+- `jira` の、acli の認証の site と status 名・issue type 名の実在は、workflow 定義だけでは確かめられないので、検査ではなく issue 置き場の確認 (§6) で名指しする。案内の行は足さない
 
 ### 2.9 事前検査
 

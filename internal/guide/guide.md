@@ -24,7 +24,7 @@ claude-dispatcher は、tracker (GitHub・GitLab・Jira Cloud) の issue と CL 
    - workspace の置き場 (`workspace.root`) が clone の中なら、`.gitignore` に足す。既定の `.claude-dispatcher/workspaces` は clone の中に入る。`setup` は `.gitignore` を書かない
 3. **試運転**: `claude-dispatcher loop --dry-run` が workflow 定義を検査し、起動するはずの作業対象と trigger を 1 件 1 行で示す。何も起動せず、何も書かない
 4. **導入を確かめる**: `claude-dispatcher doctor` が workflow 定義・issue 置き場・依存 CLI・事前検査を確かめ、利用者の約束に頼る宣言を警告する。Claude Code の settings (`permissions.allow`) に要りそうな entry も示すので、自分で足す (CLI は settings を書かない)
-5. **回す**: `claude-dispatcher loop` を撃つ。起動直後に 1 回、以後は `polling.interval` ごとに tick を回す。Ctrl+C で止める
+5. **回す**: `claude-dispatcher loop` を撃つ。起動直後に 1 回、以後は `polling.interval` ごとに tick を回す
 
 workflow 定義に誤りがあれば、試運転・`loop` の起動・`doctor` が項目の位置を名指しして失敗する。直して 3 へ戻る。
 
@@ -57,7 +57,7 @@ worker に渡るもの:
 
 ## workflow 定義の書き方
 
-実装 repo の中に置く。tick ごとに読み直すので、直せば loop を起動し直さずに効く。
+実装 repo の中に置く。tick ごとに読み直すので、直せば loop を起動し直さずに効く。ただし issue 置き場 (`tracker.kind`・`tracker.host`・`tracker.repo`) を変えたら、loop を起動し直すまで、どの tick も何も起動しない。
 
 file は YAML の front matter と本文からなる。
 
@@ -261,8 +261,8 @@ triggers:                    # 必須。1 つ以上
 - 作業対象ごとに trigger を宣言順に評価し、最初に当たった 1 つだけを採る。issue には `on: issue` の trigger だけを、CL には `on: cl` の trigger だけを当てる
 - 候補は、trigger の宣言順を先に、同じ trigger の中では作業対象の作成日時の古い順に並べる。作成日時が同じなら番号の小さい順。`jira` では、作成日時の代わりに番号の小さい順 (acli の一覧は作成日時を返さない)
 - 空いている並列の枠 (`limits.max_concurrent` から、走っている worker と再起動待ちの数を引いた分) だけ、候補を先頭から起動する。起動の直前に作業対象を読み直し、終端になっているか trigger から外れていれば起動しない
-- **曖昧な CL** (同じ repo の同じ head branch から、open な CL が 2 本以上ある) には、CL 側の trigger を当てない。fork の head branch は、fork ごとに別の branch として数える。head の repo が消えた fork の CL は、曖昧さを数えるときに数えない
-- loop は、worker を割り当てている作業対象 (走っている・再起動待ち) の workspace で checkout されている branch を head に持つ、同じ repo の CL にも CL 側の trigger を当てない。issue の worker が CL を開いた後も作業を続けている間に、同じ branch へ CL の worker を重ねないため。試運転はこの除外を掛けない
+- **曖昧な CL** (同じ repo の同じ head branch から、open な CL が 2 本以上ある) には、CL 側の trigger を当てない。fork の head branch は、fork ごとに別の branch として数える (fork は GitHub では head の repo の名前、GitLab では `source_project_id` で見分ける)。head の repo が消えた fork の CL (GitHub の `headRepository` が null、GitLab の `source_project_id` が null) は、どの fork の branch か分からないので、曖昧さを数えるときに数えない
+- loop は、worker を割り当てている作業対象 (worker が走っている・止めている途中・終わった後の確かめ待ち・再起動待ち) の workspace で checkout されている branch を head に持つ、同じ repo の CL にも CL 側の trigger を当てない。issue の worker が CL を開いた後も作業を続けている間に、同じ branch へ CL の worker を重ねないため。試運転はこの除外を掛けない
 - open な一覧は、trigger に現れる種類のものだけを読む (`on: cl` の trigger が 1 つも無ければ CL の一覧を読まず、`on: issue` の trigger が無ければ issue の一覧を読まない)
 
 ### `$VAR` による間接参照
@@ -314,7 +314,7 @@ action と本文 (共通 prompt) は、worker を起動するたびに Go の te
 
 ### 検査
 
-workflow 定義は、試運転・`loop` の起動時・`doctor`・tick ごとの読み直しで検査する。次のものが誤りで、項目の位置 (`triggers[0].when.labels.all` の形) を名指しして失敗する。誤りが複数あれば、すべてを 1 行ずつ出す。
+workflow 定義の次のものが誤りで、項目の位置 (`triggers[0].when.labels.all` の形) を名指しして失敗する。
 
 - file が無い・読めない・front matter が無い・YAML として読めない (YAML の誤りの行番号も file の行番号で出す)
 - 未知の key (綴りの誤りを黙って無視しない)
@@ -328,8 +328,6 @@ workflow 定義は、試運転・`loop` の起動時・`doctor`・tick ごとの
 - `jira` の次の誤りは、workflow 定義だけでは確かめられないので、`loop` の起動時・試運転・`doctor` で issue 置き場を確かめるときに名指しする。tick の中では確かめない
   - acli の認証の site が `tracker.host` と違う
   - `status` の status 名・`type` の issue type 名が実在しない
-
-tick の中の読み直しで検査に落ちたら、その tick は何も起動しない (走っている worker はそのまま)。
 
 ### 事前検査
 
@@ -351,19 +349,11 @@ trigger ごとに、action の先頭の skill か command が worker から呼�
   - `plugin.json` の空の path は置き場にしない
   - skill と plugin の dir を探す置き場 (`.claude/skills/`・plugin の `skills/`・`plugin.json` の `skills` が挙げる path) の直下は、dir (指す先が dir の symlink を含む) だけを skill か plugin の dir とみなす。直下の通常の file (`.DS_Store`・README 等) は飛ばす
   - repo の `.claude/skills/` と `~/.claude/skills/` の直下の dir は、`SKILL.md` を持てば skill の dir、`.claude-plugin/plugin.json` を持てば plugin の dir とする (両方を持つ dir は両方に数える)
-- 次のものが誤りで、trigger を名指しして 1 件 1 行で出す
-  - 先頭の `/名前` がどの置き場にも見つからない。置き場を読めなかったとき (権限が無い等) と、dir であるはずの path が file のとき (`--plugin-dir` が file を指す等) は、その path を理由に添える
+- 次のものが誤りで、trigger を名指しして失敗する
+  - 先頭の `/名前` がどの置き場にも見つからない (置き場を読めない・`--plugin-dir` が dir でなく file を指す、などの設定の誤りを含む)
   - action の先頭を template 変数で始める (前の空白を除いて `{{` で始まる)。先頭の `/名前` を確かめられないため
 - 先頭が `/` でも template 変数でもない action は、確かめない
 - Claude Code に組み込みの command (`/review` など) は上の置き場に無いので、見つからないと数える
 - plugin が有効か (settings の `enabledPlugins`) は見ない
 - 置き場は Claude Code の読み方より広めに取る (見つからないと取り違えて起動を止めない側に倒す)。広めに取った分は、worker の起動の後に claude が名前を解けずに失敗する
 
-落ちたときの扱い:
-
-| いつ | 落ちたら |
-|---|---|
-| `loop` の起動時 | 起動を失敗させる |
-| 試運転 (`loop --dry-run`) | 失敗させる |
-| tick の中 | その trigger だけを評価から外し、再起動もしない。他の trigger は評価して起動する (外した trigger にも当たる作業対象は、他の trigger の候補になる)。loop の画面と `status` に出る |
-| `doctor` | `NG` の行に出す |

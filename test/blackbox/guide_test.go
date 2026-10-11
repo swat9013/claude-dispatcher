@@ -140,8 +140,11 @@ func TestStatusAndPathsDoNotPointToTheGuideOnWorkflowDefinitionErrors(t *testing
 			r := s.run(args...)
 
 			assertExit(t, r, 2)
-			if !strings.Contains(r.stderr, "triggers[0].on") || strings.Contains(r.stderr, "claude-dispatcher guide") {
-				t.Fatalf("stderr:\n%s", r.stderr)
+			if !strings.Contains(r.stderr, "triggers[0].on") {
+				t.Fatalf("workflow 定義の誤りを名指ししていない:\n%s", r.stderr)
+			}
+			if strings.Contains(r.stderr, "claude-dispatcher guide") {
+				t.Fatalf("%s の失敗に案内の行が付いた:\n%s", args[0], r.stderr)
 			}
 		})
 	}
