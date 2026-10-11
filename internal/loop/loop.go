@@ -94,6 +94,14 @@ const (
 	phaseWaitingRetry
 )
 
+// stopReason は loop が worker を止めた理由。止めた worker の end の行の reason に書く。
+type stopReason Reason
+
+const (
+	stoppedAtTerminal = stopReason(reasonTerminal)
+	stoppedByRequest  = stopReason(reasonStopRequested)
+)
+
 // outcome は claim を解いたときの終わり方 (formats.md §4)。
 type outcome string
 
@@ -120,8 +128,8 @@ type claim struct {
 	phase          phase
 	// run は phaseRunning と phaseStopping の worker
 	run Worker
-	// stopReason は phaseStopping の理由 (reasonTerminal か reasonStopRequested)
-	stopReason Reason
+	// stopReason は phaseStopping の理由
+	stopReason stopReason
 	// ended は phaseAwaitingVerification の worker の終わり方
 	ended *worker.Result
 	// retryAt は phaseWaitingRetry の backoff が明ける時刻
@@ -223,7 +231,7 @@ func (l *loop) requestStop(sig os.Signal) {
 	}
 	for _, c := range l.claims {
 		if c.phase == phaseRunning {
-			l.stop(c, reasonStopRequested)
+			l.stop(c, stoppedByRequest)
 		}
 	}
 }
@@ -460,12 +468,12 @@ func (l *loop) reconcile(store Store) {
 			continue
 		}
 		if item.Terminal() {
-			l.stop(c, reasonTerminal)
+			l.stop(c, stoppedAtTerminal)
 		}
 	}
 }
 
-func (l *loop) stop(c *claim, reason Reason) {
+func (l *loop) stop(c *claim, reason stopReason) {
 	c.phase, c.stopReason = phaseStopping, reason
 	c.run.Stop()
 }
@@ -618,10 +626,10 @@ func (l *loop) handle(ev worker.Event) {
 		}
 		store := l.o.Store(l.def)
 		if result.Stopped {
-			if c.stopReason == reasonTerminal {
+			if c.stopReason == stoppedAtTerminal {
 				l.remove(l.o.Workspaces(l.definitionOf(c)), ev.Target)
 			}
-			l.end(ev.Target, c, stopped, c.stopReason, result)
+			l.end(ev.Target, c, stopped, Reason(c.stopReason), result)
 			delete(l.claims, ev.Target)
 		} else {
 			c.phase, c.ended = phaseAwaitingVerification, &result

@@ -14,7 +14,7 @@ log.jsonl の値のうち、`reason` だけが日本語の文 (`終端`・`trigg
 1. **出力は日本語の 1 言語にする。`LANG` での切り替えは採らない**
    - 出力の言語は文書の読み手に従う。英語の出力は、README・案内 (`guide`)・雛形・`CONTEXT.md` を含めて英語にしないと成り立たない。文書が日本語のままでは、日本語を読めない人は導入できない。今の読み手は日本語を読む人だけ
 2. **機械が読む値は言語に依らない。列挙の値は ASCII の token、自由文の値は人向けの日本語にする**
-   - 自由文の値 (`error`・`tick` の `blocked[].error` など) は日本語のまま
+   - 規則は log.jsonl に限らず、status.json などの機械が読む出力にも掛かる。自由文の値 (log.jsonl の `error`・`tick` の `blocked[].error`、status.json の `last_tick.error`) は日本語のまま
 3. **log.jsonl の `reason` を token にする**
 
    | 旧値 | token |
@@ -49,6 +49,7 @@ log.jsonl の値のうち、`reason` だけが日本語の文 (`終端`・`trigg
 ### 悪い影響 / 制約
 
 - 旧値で `reason` を比べていた読み手は壊れる。この版の前後の log.jsonl が同じ file に混ざる
+- repo の中の読み手 (`.claude/skills/debrief` の log.jsonl の読み方) も、同じ変更で token と `failure` に移す
 - 日本語を読めない人は、今の出力と文書では導入できない
 
 ## Alternatives considered

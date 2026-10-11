@@ -12,7 +12,7 @@ const (
 	reasonStillMatches Reason = "still_matches"
 )
 
-// 2 回目の停止要求で worker を止めた理由
+// 2 回目の停止要求で worker を止めた理由 (stoppedByRequest)
 const reasonStopRequested Reason = "stop_requested"
 
 // 再起動を待つ claim を起動せずに解く理由のうち、起動した trigger が workflow 定義から消えたこと (ほかの理由は settle が返す)

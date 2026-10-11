@@ -370,7 +370,7 @@ func TestWaitingRetryIsReleasedWhenTheIssueLeavesTheTrigger(t *testing.T) {
 	s.writeWorkflowWithCommands(s.workerWorkflow(slowRetry))
 	s.setIssues(readyIssue(42))
 	s.onClaude(stubwire.Rule{})
-	s.startLoop()
+	loop := s.startLoop()
 	s.waitEvents("retry", 1)
 	offTrigger := readyIssue(42)
 	offTrigger.labels = nil
@@ -380,6 +380,7 @@ func TestWaitingRetryIsReleasedWhenTheIssueLeavesTheTrigger(t *testing.T) {
 	if release := s.waitEvents("release", 1)[0]; release["reason"] != "left_trigger" {
 		t.Fatalf("release の行 = %v", release)
 	}
+	loop.waitForOutput(regexp.MustCompile(` 再起動せずに解いた issue#42 \(implement\): trigger から外れた$`))
 	if starts := s.events("start"); len(starts) != 1 {
 		t.Fatalf("start の行 = %v, want trigger から外れた issue を再起動しない", starts)
 	}
@@ -390,7 +391,7 @@ func TestWaitingRetryOfAClosedIssueIsReleasedAndItsWorkspaceRemoved(t *testing.T
 	s.writeWorkflowWithCommands(s.workerWorkflow(slowRetry))
 	s.setIssues(readyIssue(42))
 	s.onClaude(stubwire.Rule{})
-	s.startLoop()
+	loop := s.startLoop()
 	s.waitEvents("retry", 1)
 	closed := readyIssue(42)
 	closed.closed = true
@@ -400,6 +401,7 @@ func TestWaitingRetryOfAClosedIssueIsReleasedAndItsWorkspaceRemoved(t *testing.T
 	if release := s.waitEvents("release", 1)[0]; release["reason"] != "terminal" {
 		t.Fatalf("release の行 = %v", release)
 	}
+	loop.waitForOutput(regexp.MustCompile(` 再起動せずに解いた issue#42 \(implement\): 終端$`))
 	if _, err := os.Stat(s.workspace(42)); !os.IsNotExist(err) {
 		t.Fatalf("終端の issue の workspace が残っている: %v", err)
 	}
@@ -426,7 +428,7 @@ func TestWaitingRetryIsReleasedWhenItsTriggerIsRemovedFromTheWorkflow(t *testing
 	s.writeWorkflowWithCommands(s.workerWorkflow(slowRetry))
 	s.setIssues(readyIssue(42))
 	s.onClaude(stubwire.Rule{})
-	s.startLoop()
+	loop := s.startLoop()
 	s.waitEvents("retry", 1)
 
 	s.writeWorkflowWithCommands(strings.Replace(s.workerWorkflow(slowRetry), "name: implement", "name: renamed", 1))
@@ -434,4 +436,5 @@ func TestWaitingRetryIsReleasedWhenItsTriggerIsRemovedFromTheWorkflow(t *testing
 	if release := s.waitEvents("release", 1)[0]; release["reason"] != "trigger_removed" {
 		t.Fatalf("release の行 = %v", release)
 	}
+	loop.waitForOutput(regexp.MustCompile(` 再起動せずに解いた issue#42 \(implement\): trigger が workflow 定義から消えた$`))
 }

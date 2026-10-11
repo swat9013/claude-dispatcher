@@ -53,10 +53,12 @@ jq '{last_tick, abandoned, ambiguous, blocked}' <status_file>   # 最後に書�
 **1. 終わり方**
 
 ```sh
-# outcome と reason の組ごとの件数。completed なのに reason に失敗が付いた行もここに出る
-jq -r 'select(.event=="end") | [.trigger, .outcome, (.reason // "")] | @tsv' F | sort | uniq -c | sort -rn
+# outcome と reason の組ごとの件数と、worker 自身が失敗した数 (failure のある行。completed でも載る)
+jq -r 'select(.event=="end") | [.trigger, .outcome, (.reason // ""), (if .failure then "failure" else "" end)] | @tsv' F | sort | uniq -c | sort -rn
+# worker 自身の失敗の文ごとの件数
+jq -r 'select(.event=="end" and .failure) | [.trigger, .outcome, .failure] | @tsv' F | sort | uniq -c | sort -rn
 # 作業対象ごとの経過 (retry の連鎖・abandon / unabandon の往復を見る)
-jq -r 'select(.target) | [.target, .ts, .event, (.attempt // .next_attempt // ""), (.outcome // .reason // .error // "")] | @tsv' F | sort -s -k1,1
+jq -r 'select(.target) | [.target, .ts, .event, (.attempt // .next_attempt // ""), (.outcome // .reason // .error // ""), (.failure // "")] | @tsv' F | sort -s -k1,1
 # attempt 1 回分の所要時間 (分)
 jq -s -r 'map(select(.event=="start" or .event=="end")) | group_by([.session_id, .attempt])[] | select(length==2) | [.[0].target, .[0].trigger, .[0].attempt, (((.[1].ts|fromdateiso8601) - (.[0].ts|fromdateiso8601))/60 | floor), .[1].outcome] | @tsv' F
 # 閉じていない claim (最後の行が claim を持ったままの event である作業対象)
@@ -86,7 +88,7 @@ jq -r 'select(.event=="recheck_skip" or .event=="tick") | [.ts, .event, (.target
 
 候補があるのに起動しなかった tick は、`running` と `waiting_retry` の和が `max_concurrent` に達していれば正常 (起動をやめる規則と 3 つの値の意味は formats.md §4 の tick 行の項)。達していないのに起動していなければ、その tick の行より前に書かれた `recheck_skip` の行 (起動の直前の読み直しで見送った候補と理由。`reason` の値は formats.md §4)、同じ tick の `blocked`・`ambiguous`、その候補の claim・打ち切りの状態で理由を読む。読み直せなかった候補は `recheck_skip` ではなく、観点 4 の `error` の行 (`起動しようとした作業対象を読み直せない`) に出る。
 
-`recheck_skip` は tick ごとに書かれる。同じ組の件数が多く、最初と最後の `ts` の間が周期の何倍にも及べば、その見送りが続いている。続く原因の推定は確度「解釈」とする。`終端`・`trigger から外れた` が続けば open な一覧の検索が古い結果を返し続けている、`当たるかをまだ決められない` が続けば CL の conflict の計算が終わらない、`宣言順で先の trigger に当たる` が続けば先の trigger でも起動されていない (その作業対象の claim・打ち切り・`blocked` を見る) 候補になる。
+`recheck_skip` は tick ごとに書かれる。同じ組の件数が多く、最初と最後の `ts` の間が周期の何倍にも及べば、その見送りが続いている。続く原因の推定は確度「解釈」とする。`terminal`・`left_trigger` が続けば open な一覧の検索が古い結果を返し続けている、`undecided` が続けば CL の conflict の計算が終わらない、`earlier_trigger` が続けば先の trigger でも起動されていない (その作業対象の claim・打ち切り・`blocked` を見る) 候補になる。
 
 `running`・`waiting_retry`・`max_concurrent` の欄が空の行は、この 3 つの key を書かない古い版の log。その行に限り、その時刻に走っていた attempt (start と end の間) を数え、並列上限は `git -C <WORKFLOW.md の dir> log -p -- WORKFLOW.md` の変更時刻と照らして決める (並列上限は tick ごとに workflow 定義を読み直して決まる。formats.md §6)。
 
@@ -101,7 +103,7 @@ jq -s -r 'map(select(.event=="verify_wait")) | group_by([.session_id, .attempt])
 
 `verify_wait` は確かめ直すたびに (tick ごとに) 書かれる。最初と最後の `ts` の間が周期の何倍にも及べば、CL の conflict の計算が終わらず確かめ待ちが続いている (確度「解釈」)。
 
-stall と上限時間の超過は、観点 1 の `reason` に文で載る。WORKFLOW.md の `limits.stall_timeout`・`limits.run_timeout` (省けば formats.md §2.1 の既定) と、観点 1 の所要時間を並べて読む。
+stall と上限時間の超過は、観点 1 の `end` の行の `failure` に文で載る。WORKFLOW.md の `limits.stall_timeout`・`limits.run_timeout` (省けば formats.md §2.1 の既定) と、観点 1 の所要時間を並べて読む。
 
 **4. error の行**
 
