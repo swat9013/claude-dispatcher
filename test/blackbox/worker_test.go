@@ -221,7 +221,7 @@ func TestWorkerOfAnIssueThatIsClosedIsStoppedAndItsWorkspaceRemoved(t *testing.T
 	s.writeWorkflowWithCommands(s.workerWorkflow(""))
 	s.setIssues(readyIssue(42))
 	s.onClaude(stubwire.Rule{ReleaseFile: s.releaseFile()})
-	s.startLoop()
+	loop := s.startLoop()
 	s.waitEvents("start", 1)
 	closed := readyIssue(42)
 	closed.closed = true
@@ -229,9 +229,10 @@ func TestWorkerOfAnIssueThatIsClosedIsStoppedAndItsWorkspaceRemoved(t *testing.T
 	s.setIssues(closed)
 
 	end := s.waitEvents("end", 1)[0]
-	if end["outcome"] != "stopped" {
-		t.Fatalf("end の行 = %v, want stopped", end)
+	if _, ok := end["failure"]; end["outcome"] != "stopped" || end["reason"] != "terminal" || ok {
+		t.Fatalf("end の行 = %v, want failure の無い terminal の stopped", end)
 	}
+	loop.waitForOutput(regexp.MustCompile(` 終了 issue#42 \(implement\): stopped — 終端$`))
 	for _, name := range []string{"after_run-42", "before_remove-42"} {
 		if _, err := os.Stat(s.mark(name)); err != nil {
 			t.Fatalf("%s を撃っていない: %v", name, err)
@@ -345,7 +346,7 @@ func TestActionThatFailsToRenderForTheIssueFailsWithoutLaunching(t *testing.T) {
 	s.startLoop()
 
 	end := s.waitEvents("end", 1)[0]
-	if end["outcome"] != "failed" || !strings.Contains(asString(end["reason"]), "描画") {
+	if end["outcome"] != "failed" || !strings.Contains(asString(end["failure"]), "描画") {
 		t.Fatalf("end の行 = %v, want 描画の失敗", end)
 	}
 	if calls := s.calls("claude"); len(calls) != 0 {
@@ -362,7 +363,7 @@ func TestFailingBeforeRunHookFailsWithoutLaunching(t *testing.T) {
 	s.startLoop()
 
 	end := s.waitEvents("end", 1)[0]
-	if end["outcome"] != "failed" || !strings.Contains(asString(end["reason"]), "before_run") {
+	if end["outcome"] != "failed" || !strings.Contains(asString(end["failure"]), "before_run") {
 		t.Fatalf("end の行 = %v, want before_run の失敗", end)
 	}
 	if calls := s.calls("claude"); len(calls) != 0 {
@@ -477,9 +478,10 @@ func TestSecondStopRequestStopsTheRunningWorker(t *testing.T) {
 
 	assertExit(t, loop.wait(), 0)
 	ends := s.events("end")
-	if len(ends) != 1 || ends[0]["outcome"] != "stopped" {
-		t.Fatalf("end の行 = %v, want stopped", ends)
+	if len(ends) != 1 || ends[0]["outcome"] != "stopped" || ends[0]["reason"] != "stop_requested" {
+		t.Fatalf("end の行 = %v, want stop_requested の stopped", ends)
 	}
+	loop.waitForOutput(regexp.MustCompile(` 終了 issue#42 \(implement\): stopped — 停止要求$`))
 	if code, ok := ends[0]["exit_code"]; ok {
 		t.Fatalf("signal で止めた worker に exit_code %v が載った", code)
 	}
@@ -514,8 +516,8 @@ func TestWorkerThatFailsButLeavesTheTriggerIsCompleted(t *testing.T) {
 	s.startLoop()
 
 	end := s.waitEvents("end", 1)[0]
-	if end["outcome"] != "completed" || !strings.Contains(asString(end["reason"]), "worker は") {
-		t.Fatalf("end の行 = %v, want 失敗を添えた completed", end)
+	if end["outcome"] != "completed" || end["reason"] != "left_trigger" || !strings.Contains(asString(end["failure"]), "異常終了") {
+		t.Fatalf("end の行 = %v, want 失敗を failure に載せた left_trigger の completed", end)
 	}
 }
 
@@ -528,7 +530,7 @@ func TestFailingAfterCreateHookRemovesTheWorkspaceAndFails(t *testing.T) {
 	s.startLoop()
 
 	end := s.waitEvents("end", 1)[0]
-	if end["outcome"] != "failed" || !strings.Contains(asString(end["reason"]), "after_create") {
+	if end["outcome"] != "failed" || !strings.Contains(asString(end["failure"]), "after_create") {
 		t.Fatalf("end の行 = %v, want after_create の失敗", end)
 	}
 	if _, err := os.Stat(s.workspace(42)); !os.IsNotExist(err) {
@@ -590,7 +592,7 @@ func TestHookThatRunsPastItsTimeoutIsStoppedAndFails(t *testing.T) {
 	s.startLoop()
 
 	end := s.waitEvents("end", 1)[0]
-	if end["outcome"] != "failed" || !strings.Contains(asString(end["reason"]), "before_run") {
+	if end["outcome"] != "failed" || !strings.Contains(asString(end["failure"]), "before_run") {
 		t.Fatalf("end の行 = %v, want before_run の timeout", end)
 	}
 }
