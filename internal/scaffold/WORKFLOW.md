@@ -1,5 +1,5 @@
 ---
-# claude-dispatcher の workflow 定義 (形式は docs/design/formats.md §2)。setup が書いた雛形なので、project に合わせて直す。
+# claude-dispatcher の workflow 定義 (書き方は `claude-dispatcher guide`)。setup が書いた雛形なので、project に合わせて直す。
 tracker:
   kind: github
   repo: {{REPO}}

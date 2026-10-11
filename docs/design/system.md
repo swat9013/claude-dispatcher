@@ -2,7 +2,8 @@
 
 - 本 file が構造の正本
   - ユースケースは [`usecases.md`](usecases.md)
-  - 外から観測できる形式 (workflow 定義・状態 file・log・出力) は [`formats.md`](formats.md)
+  - 外から観測できる形式 (状態 file・log・出力) は [`formats.md`](formats.md)
+  - workflow 定義の書き方 (項目・述語・template・何が誤りになるか) は、binary に埋め込んだ案内 [`internal/guide/guide.md`](../../internal/guide/guide.md) (`claude-dispatcher guide` が出す。ADR 0012)。検査で CLI が何を出すかは formats.md §2.8・§2.9
 - 用語は [`CONTEXT.md`](../../CONTEXT.md)、決定の理由は [`docs/adr/`](../adr/)
 - 構造は [openai/symphony の `SPEC.md`](https://github.com/openai/symphony/blob/main/SPEC.md) を土台にする (ADR 0009)
   - 本 file の「SPEC §n」はその節を指す
@@ -21,7 +22,7 @@ CLI の subcommand は、役割で 3 群に分かれる。
 |---|---|---|
 | 駆動 | `loop` | state dir (状態 file・log・worker log・lock・共通 prompt の描画結果) と workspace。外部 store には書かない |
 | 観測 | `status` / `paths` | 何も書かない (読み取り専用) |
-| 導入 | `setup` / `doctor` | `setup` だけが書く。書くのは workflow 定義の雛形で、無いときだけ作り、既存は上書きしない。Claude Code の settings はどちらも書かない |
+| 導入 | `setup` / `doctor` / `guide` | `setup` だけが書く。書くのは workflow 定義の雛形で、無いときだけ作り、既存は上書きしない。Claude Code の settings はどれも書かない。`guide` は案内を出すだけで、workflow 定義も state dir も読まない |
 
 | アクター | 方向 | 関わり |
 |---|---|---|
@@ -249,7 +250,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。
 
 ## 8. workflow 定義
 
-実装 repo の中に置く (SPEC §5)。path は loop の引数で渡せ、省けば loop を起動した cwd の `WORKFLOW.md` を読む。項目の書式は formats.md が正本。
+実装 repo の中に置く (SPEC §5)。path は loop の引数で渡せ、省けば loop を起動した cwd の `WORKFLOW.md` を読む。項目の書式は案内 ([`internal/guide/guide.md`](../../internal/guide/guide.md)) が正本 (ADR 0012)。本節は項目の構成と検査の姿勢を持つ。
 
 - **front matter が持つもの**
   - tracker の種類 (`github` / `gitlab` / `jira`) と adapter の設定

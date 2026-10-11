@@ -19,6 +19,7 @@ import (
 	"github.com/swat9013/claude-dispatcher/internal/deps"
 	"github.com/swat9013/claude-dispatcher/internal/github"
 	"github.com/swat9013/claude-dispatcher/internal/gitlab"
+	"github.com/swat9013/claude-dispatcher/internal/guide"
 	"github.com/swat9013/claude-dispatcher/internal/jira"
 	"github.com/swat9013/claude-dispatcher/internal/loop"
 	"github.com/swat9013/claude-dispatcher/internal/precheck"
@@ -48,8 +49,13 @@ const usage = `usage:
   claude-dispatcher paths --json [<workflow の path>]
   claude-dispatcher setup [--kind jira --host <site> --repo <project key>] [<workflow の path>]
   claude-dispatcher doctor [<workflow の path>]
+  claude-dispatcher guide
   claude-dispatcher --version
-`
+
+` + "`WORKFLOW.md` の書き方と導入の流れは `claude-dispatcher guide` を参照\n"
+
+// guidePointer は workflow 定義の誤りの行の後ろに足す、案内を指す行 (formats.md §2.8)。誤りは案内を読めば直せる
+const guidePointer = "書き方は `claude-dispatcher guide` を参照"
 
 // defaultWorkflowFile は workflow 定義の path を省いたときに cwd から読む file
 const defaultWorkflowFile = "WORKFLOW.md"
@@ -74,6 +80,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runSetup(args[1:], stdout, stderr)
 	case "doctor":
 		return runDoctor(args[1:], stdout, stderr)
+	case "guide":
+		return runGuide(args[1:], stdout, stderr)
 	case "-h", "--help", "help":
 		fmt.Fprint(stdout, usage)
 		return 0
@@ -83,6 +91,16 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 	return usageError(stderr, "未知の subcommand: %s", args[0])
+}
+
+// runGuide は `guide` を撃つ (formats.md §9)。workflow 定義も state dir も読まず、tracker の CLI も撃たない。導入が壊れて
+// いても、利用者のセッションが書き方を読めるようにする
+func runGuide(args []string, stdout, stderr io.Writer) int {
+	if len(args) > 0 {
+		return usageError(stderr, "引数が多い: %s", args[0])
+	}
+	fmt.Fprint(stdout, guide.Text())
+	return 0
 }
 
 func usageError(stderr io.Writer, format string, args ...any) int {
@@ -241,6 +259,7 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 	def, err := load()
 	if err != nil {
 		fmt.Fprintln(stderr, err)
+		fmt.Fprintln(stderr, guidePointer)
 		return exitUsage
 	}
 	// PATH は起動時の workflow 定義が撃つ依存 CLI で解決する
