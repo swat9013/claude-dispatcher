@@ -12,7 +12,7 @@
   ```
 - 加えて `golangci-lint` を CI と同じ版 (.github/workflows/checks.yml の `lint` job の `version:`) で入れる。公式の install script に版を渡して binary を入れる (手順は <https://golangci-lint.run/docs/welcome/install/>)。brew などの package manager は版を選べず、CI と版がずれるので使わない。`go install` と go.mod の `tool` directive は golangci-lint の公式が動作を保証していない
   - push 前の hook は、手元の版が checks.yml の `version:` と違えば lint を撃たずに落とし、入れ直しのコマンドを出す。Renovate が golangci-lint の版を上げた PR を merge した後は、入れ直すまで push が止まる (worker の workspace を含む)
-- 加えて `pre-commit` (4.4.0 以上) を入れ、clone ごとに 1 回 `pre-commit install` を撃つ (commit 時と push 前の hook が両方入る)。gitleaks・actionlint・shellcheck は pre-commit が hook 環境として build するので別途の導入は要らない (初回の build に network が要る)
+- 加えて `pre-commit` を最低版 ([.pre-commit-config.yaml](.pre-commit-config.yaml) の `minimum_pre_commit_version`) 以上で入れ、clone ごとに 1 回 `pre-commit install` を撃つ (commit 時と push 前の hook が両方入る)。gitleaks・actionlint・shellcheck は pre-commit が hook 環境として build するので別途の導入は要らない (初回の build に network が要る)
   - Go は手元の版が [go.mod](go.mod) の `toolchain` 行より古くても、`go` コマンドがその版を取ってきて使う (`GOTOOLCHAIN` の既定の `auto`)。hook も `go` コマンド経由で撃つので、手元と CI で同じ版の Go が動く
 
 ## 開発中の claude-dispatcher を試す
@@ -73,7 +73,7 @@ claude-dispatcher-dev loop
   - required status checks は上の 5 つの check 名。報告元を GitHub Actions に限る (同じ名前の check を別の app が報告しても通らない)。govulncheck は PR で走らないので含めない
   - 「merge 前に branch を最新にする」(strict) は無効にする。有効にすると main が進むたびに開いている全 PR の branch 更新が要り、worker の CL ではそれが手直しの trigger の起動や人への返却を招く。main への push で走る CI が事後に検知する
   - bypass は置かない (管理者も main へ直接 push できない)
-- 定期: [.github/workflows/govulncheck.yml](.github/workflows/govulncheck.yml) が、週 1 回 (月曜 0:00 UTC)・main への push・手動 (`workflow_dispatch`) で、依存と標準ライブラリの脆弱性を `go tool govulncheck ./...` で検査する。検出したら `needs-triage` の issue を 1 件起こし (同じ題名の open な issue があれば起こさない)、run を落とす。run を落とすのは、issue を起こせなかったとき (権限・API の失敗) にも検出を見落とさないため。手元での再現は同じコマンド (版は go.mod の `tool` 行で固定している)
+- 定期: [.github/workflows/govulncheck.yml](.github/workflows/govulncheck.yml) が、週 1 回 (月曜 0:00 UTC)・main への push・手動 (`workflow_dispatch`) で、依存と標準ライブラリの脆弱性を `go tool govulncheck ./...` で検査する。検出したら `needs-triage` の issue を 1 件起こし (同じ題名の open な issue があれば起こさない。手順は `scripts/open-triage-issue.sh`)、run を落とす。run を落とすのは、issue を起こせなかったとき (権限・API の失敗) にも検出を見落とさないため。手元での再現は同じコマンド (版は go.mod の `tool` 行で固定している)
   - [.github/workflows/required-checks.yml](.github/workflows/required-checks.yml) が、同じ契機 (週 1 回・main への push・手動) で、main の ruleset の required status checks が checks.yml の job から決まる check 名と一致するかを検査する。ruleset は API でしか読めず CL と無関係に変わりうるので、PR では撃たない。ずれていれば govulncheck と同じく `needs-triage` の issue を 1 件起こし、run を落とす。手元での再現は `scripts/check-required-checks.sh` (`gh` の認証が要る)
 - 版の更新: 2 つの bot が週 1 回、版を上げる PR を出す。auto-merge はしない。分担の理由は [ADR 0011](docs/adr/0011-renovate-regex-beside-dependabot.md)
   - [.github/dependabot.yml](.github/dependabot.yml): GitHub Actions・Go の依存 (indirect と、govulncheck を含む)・pre-commit の hook の `rev` を、それぞれ 1 本の PR で上げる

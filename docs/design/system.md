@@ -94,6 +94,7 @@ dispatcher は、状態の意味を定めない。issue の label が何を表�
 - **claim は tracker に書かない**。そのため、同じ issue 置き場に 2 本の loop が立つと二重に起動する
   - 同じマシンの中では、scope key の lock で 2 本目の loop を拒む (§9)
   - マシンを跨いだ排他は持たない。1 つの issue 置き場は 1 台から回す
+  - マシンを跨いだ分担は、調停 remote を指した project に限り ADR 0011 の形で持つことを決めた。未実装 (#167)
 
 ## 5. 機械と LLM の線
 
@@ -352,7 +353,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。
 
 - **merge 後の deploy**
 - **triage**: label を付けて作業対象を trigger に当てるのは人の領分
-- **マシンを跨いだ二重起動の防止**: 1 つの issue 置き場は 1 台から回す (§4)
+- **マシンを跨いだ二重起動の防止**: 1 つの issue 置き場は 1 台から回す (§4)。ADR 0011 で範囲に入れることを決めた。未実装 (#167)
 - **loop の監督** (boot 時の起動・落ちた loop の起こし直し): 人が同じコマンドで起動し直す (ADR 0006)
 - **tracker 以外の起点** (定期実行・外部の webhook): SPEC §2.2 の「汎用の workflow engine にしない」に従う
 - **SPEC §13.7 の HTTP API と dashboard**: 観測は loop の画面・状態 file・`status` で足りる

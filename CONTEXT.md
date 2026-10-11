@@ -119,6 +119,28 @@ _Avoid_: done, success
 attempt が上限に達した作業対象を、loop がどの trigger でもそれ以上起動しないこと。打ち切ったときの trigger から作業対象が一度外れたのを観測すると解ける。
 _Avoid_: give up, dead letter
 
+## マシンを跨いだ分担
+
+**調停 remote**:
+別々のマシンの loop が同じ issue 置き場を分担するときに、着手宣言と生存報告を置き合う実装 repo の git remote。workflow 定義で指したときだけ使う。tracker には置かない。
+_Avoid_: 共有スレッド, 連絡 issue, lock server
+
+**loop 名**:
+調停 remote の上で loop を見分ける名前。loop を起動するたびに新しくなるので、起動し直した loop は前の loop とは別の者として扱う。
+_Avoid_: machine id, host 名 (同じマシンでも起動ごとに変わる)
+
+**着手宣言**:
+loop が作業対象を引き受けたことを調停 remote に示したもの。1 つの作業対象には 1 つしか立たず、立てられた loop だけが worker を起動する。その loop が claim を解くまで残る。claim はその loop の記憶にあり、着手宣言はそれを他の loop に見せる写しにあたる。
+_Avoid_: 取得, lock, 予約
+
+**生存報告**:
+loop が生きていることを調停 remote に示す、周期ごとに新しくなる合図。新しくならなくなった loop は死んだとみなされる。
+_Avoid_: heartbeat (worker の stream の通知行と紛れる), ping
+
+**乗っ取り**:
+死んだとみなした loop の着手宣言を、別の loop が自分の着手宣言に置き換えること。乗っ取られた loop が実は生きていた場合は、気づいた時点でその作業対象の worker を止める。
+_Avoid_: takeover, 横取り
+
 ## 観測
 
 **段階**:
@@ -134,5 +156,5 @@ loop が人に向けて出す 1 行。tick・起動・終了・再起動・停�
 _Avoid_: 事象, ログ (単独では機械向けの記録・worker の stream と紛れる)
 
 **要対処**:
-人が手当てしないと進まないものの総称。打ち切り・曖昧な CL・起動しない trigger を指す。
+人が手当てしないと進まないものの総称。打ち切り・曖昧な CL・起動しない trigger・乗っ取られて止めた worker を指す。
 _Avoid_: alert, warning
