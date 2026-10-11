@@ -46,6 +46,7 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 		for _, line := range strings.Split(err.Error(), "\n") {
 			fmt.Fprintf(stdout, "NG   %s\n", line)
 		}
+		fmt.Fprintln(stdout, guidePointer)
 		return exitFailed
 	}
 	// loop の起動時と同じく、workflow 定義が撃つ依存 CLI で PATH を解決する

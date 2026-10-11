@@ -76,7 +76,7 @@ binary は署名していない。macOS でブラウザから取った archive �
    claude-dispatcher setup --kind jira --host acme.atlassian.net --repo WIDGETS   # Jira の issue 置き場
    ```
 
-2. **自分の project に合わせて書く**: trigger の述語 (どの label・どの head branch に当てるか)・action (worker に何をさせるか)・hooks (workspace の作り方)・並列上限を直し、repo に commit する。書ける項目は [`docs/design/formats.md`](docs/design/formats.md) §2、この repo 自身の例は [`WORKFLOW.md`](WORKFLOW.md)
+2. **自分の project に合わせて書く**: trigger の述語 (どの label・どの head branch に当てるか)・action (worker に何をさせるか)・hooks (workspace の作り方)・並列上限を直し、repo に commit する。書ける項目と action が守る約束は `claude-dispatcher guide` が出す案内 (書き方の正本。利用者のセッションに読ませてもよい)、この repo 自身の例は [`WORKFLOW.md`](WORKFLOW.md)
    - worker が作業を終えたら作業対象を trigger から外すよう、action か本文 (共通 prompt) に書く (例: CL を開いたら `ready-for-agent` を外す)。外さないと、失敗として数えられて再起動される
    - 承認済みの CL (`approved: true`) に action を当てるかは自分で決める。当てると merge を worker に任せうる
    - workspace の置き場 (`workspace.root`) が clone の中なら、`.gitignore` に足す。既定の `.claude-dispatcher/workspaces` (`WORKFLOW.md` の dir からの相対) は clone の中に入る。`setup` は `.gitignore` を書かない
@@ -109,7 +109,7 @@ claude-dispatcher loop
   - tick の中で事前検査に落ちた trigger は起動しない
   - `tracker.repo` を変えたら、loop を撃ち直すまでどの tick も何も起動しない
 - 同じ issue 置き場の loop は、同じマシンで 1 本しか起動できない。マシンを跨いだ排他は持たないので、1 つの issue 置き場は 1 台から回す
-- loop を起動した環境から gh の認証を取れない (ssh 越しの session など) なら、`tracker.token` に `$VAR` で token を渡して撃ち直す ([`docs/design/formats.md`](docs/design/formats.md) §2.1)
+- loop を起動した環境から gh の認証を取れない (ssh 越しの session など) なら、`tracker.token` に `$VAR` で token を渡して撃ち直す (`claude-dispatcher guide` の「項目」)
 - loop は自分では起き直さない。端末を閉じたりマシンを再起動したりしたら、同じコマンドを撃ち直す。`brew upgrade` の後も撃ち直す (走っている loop は起動した時点の binary で回り続ける)
 
 ## 動いているかを見る

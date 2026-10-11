@@ -58,8 +58,9 @@ func TestEveryWorkflowDefinitionErrorIsReportedOnItsOwnLine(t *testing.T) {
 	r := s.dryRun()
 
 	s.assertRejected(r, "triggers[0].on", "triggers[1].colour")
-	if lines := strings.Split(strings.TrimSpace(r.stderr), "\n"); len(lines) != 2 {
-		t.Fatalf("誤り 2 件が %d 行で出た:\n%s", len(lines), r.stderr)
+	// 誤りの行の後ろに、案内を指す行が 1 行付く (formats.md §2.8)
+	if lines := strings.Split(strings.TrimSpace(r.stderr), "\n"); len(lines) != 3 || lines[2] != guidePointer {
+		t.Fatalf("誤り 2 件と案内の行が 3 行で出ていない (%d 行):\n%s", len(lines), r.stderr)
 	}
 }
 
