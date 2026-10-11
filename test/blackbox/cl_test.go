@@ -412,7 +412,7 @@ func TestEndedCLWorkerWaitsForVerificationWithoutAnErrorWhileItsConflictIsBeingC
 	waits := s.waitEvents("verify_wait", 2)
 	start := s.waitEvents("start", 1)[0]
 	for _, w := range waits {
-		want := map[string]any{"target": "cl#5", "trigger": "fix", "attempt": float64(1), "session_id": start["session_id"], "reason": "当たるかをまだ決められない"}
+		want := map[string]any{"target": "cl#5", "trigger": "fix", "attempt": float64(1), "session_id": start["session_id"], "reason": "undecided"}
 		for key, value := range want {
 			if w[key] != value {
 				t.Fatalf("verify_wait の行 = %v, want %s = %v", w, key, value)
@@ -454,7 +454,10 @@ func TestEndedCLWorkerOfAMergedCLIsCompletedEvenWhileItsConflictIsBeingComputed(
 	s.startLoop()
 
 	end := s.waitEvents("end", 1)[0]
-	if end["target"] != "cl#5" || end["outcome"] != "completed" || end["reason"] != "終端" {
-		t.Fatalf("end の行 = %v, want 終端の completed", end)
+	if end["target"] != "cl#5" || end["outcome"] != "completed" || end["reason"] != "terminal" {
+		t.Fatalf("end の行 = %v, want terminal の completed", end)
+	}
+	if _, ok := end["failure"]; ok {
+		t.Fatalf("end の行 = %v, want worker は失敗していないので failure を載せない", end)
 	}
 }

@@ -119,7 +119,7 @@ func TestRetryOfATriggerThatLostItsSkillIsReleasedWhenTheIssueCloses(t *testing.
 
 	s.setIssues(closed)
 
-	if release := s.waitEvents("release", 1)[0]; release["reason"] != "終端" {
+	if release := s.waitEvents("release", 1)[0]; release["reason"] != "terminal" {
 		t.Fatalf("release の行 = %v", release)
 	}
 }

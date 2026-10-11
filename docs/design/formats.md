@@ -142,7 +142,7 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 
 - 観測の失敗は、issue 置き場の部品が 認証 / 見えない / 読み切れない / rate limit に分けて返す (system.md §13)
   - 読み切れない: 1 往復で読む件数の上限を超えた (GitHub の issue の label・assignee・依存先、CL の label・review thread が 100 件を超えた)。切り詰めた像から候補を出さない
-  - 外部 CLI (gh・glab・acli) と workspace の hooks (§2.6) の失敗のエラー文は、撃ったコマンド (hook はその名前)・exit code・stderr を載せる。stderr に HTML の本文 (`<!doctype html` か `<html` から後) があれば、status に依らずそこから後を落とし、落としたことを書き添える。reverse proxy・SSO・load balancer は HTML のページを返しうるので、tick の error・`doctor` の理由・`setup` (§7.4) のエラー文・log.jsonl (§4) の `end` の `reason`・`error` の `error` (hook の失敗の行き先) にページを丸ごと載せない
+  - 外部 CLI (gh・glab・acli) と workspace の hooks (§2.6) の失敗のエラー文は、撃ったコマンド (hook はその名前)・exit code・stderr を載せる。stderr に HTML の本文 (`<!doctype html` か `<html` から後) があれば、status に依らずそこから後を落とし、落としたことを書き添える。reverse proxy・SSO・load balancer は HTML のページを返しうるので、tick の error・`doctor` の理由・`setup` (§7.4) のエラー文・log.jsonl (§4) の `end` の `failure`・`error` の `error` (hook の失敗の行き先) にページを丸ごと載せない
   - gh は、exit 4・status 401・message の `Bad credentials` を認証、status 404・message の `Could not resolve to a Repository` を見えない、status 429・message の `rate limit` を rate limit と見分ける
     - status は gh が status を出す位置でだけ読み、message の中の `HTTP 404` などには当てない。message は gh が印を付けて出す行 (と `gh api` の message の塊の続きの行) だけを読み、message の書き出しで当てる語 (`Bad credentials`・`Could not resolve to …`) は message の途中で触れただけのものには当てない。綴りの詳細は gh の版で変わりうるので、internal/github の apiStatusPattern のコメントが持つ
     - message の無い応答 (`gh api` は本文が JSON でないと status だけを出し、本文を stdout へ出す) は、status に依らずその他の失敗に置く。この応答は GitHub の手前の proxy・SSO の HTML でありうるので、その 401・404 を認証・見えないと読むと、token や repo の綴りという誤った手当てを示す
@@ -159,18 +159,20 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 
 1 行 1 JSON object。append-only。どの行も `ts` (RFC 3339 の UTC、秒まで)・`scope` (scope key)・`event` を持つ。
 
+値のうち、列挙の値 (`event`・`result`・`outcome`・`reason`) は言語に依らない ASCII の token、自由文の値 (`error`・`failure` など) は人向けの日本語にする (ADR 0013)。
+
 | `event` | いつ | ほかの key |
 |---|---|---|
 | `loop_start` | loop を起動した (起動時の検査に通り、最初の tick の前。1 回の起動につき 1 行) | `version`・`commit` (loop を書いた binary の版と commit。値は `--version` (§8) と同じ) |
 | `tick` | tick の終わり | `result` (`ok` / `error`)・`candidates` (候補の数)・`launched` (起動した作業対象の列)・`ambiguous` (曖昧な CL。`{"head": <head branch>, "targets": [<作業対象>…]}` の列)・`blocked` (事前検査 (§2.9) に落ちて起動しない trigger。`{"trigger": <名前>, "error": <理由>}` の列)・`running`・`waiting_retry`・`max_concurrent` (起動の判定に使った値。`result` が `ok` のとき)・`error` (`result` が `error` のとき) |
 | `start` | worker を起動した | `target`・`trigger`・`attempt`・`session_id`・`workspace`・`pid` |
-| `end` | worker 1 回分の終わり方を決めた | `target`・`trigger`・`attempt`・`session_id`・`outcome`・`reason`・`exit_code` (process が自分で終わったときだけ。signal で止まったら載せない)・`is_error`・`num_turns`・`permission_denial_count` (attempt の最後の `result` の要約。下の箇条) |
+| `end` | worker 1 回分の終わり方を決めた | `target`・`trigger`・`attempt`・`session_id`・`outcome`・`reason`・`failure` (worker 自身が失敗したときだけ。下の `outcome` の表)・`exit_code` (process が自分で終わったときだけ。signal で止まったら載せない)・`is_error`・`num_turns`・`permission_denial_count` (attempt の最後の `result` の要約。下の箇条) |
 | `retry` | `failed` の後、次の attempt を予定した | `target`・`trigger`・`attempt`・`next_attempt`・`session_id`・`backoff` (秒。小数を含む) |
-| `release` | 再起動を待つ claim を、起動せずに解いた | `target`・`trigger`・`attempt`・`session_id`・`reason` (`終端` / `trigger から外れた` / `trigger が workflow 定義から消えた`) |
+| `release` | 再起動を待つ claim を、起動せずに解いた | `target`・`trigger`・`attempt`・`session_id`・`reason` (`terminal` / `left_trigger` / `trigger_removed`) |
 | `abandon` | attempt の上限で打ち切った | `target`・`trigger`・`attempt`・`session_id` |
 | `wait_slot` | backoff が明けた再起動が、並列上限に空きが無くて待ち始めた (1 回の待ちにつき 1 行) | `target`・`trigger`・`next_attempt`・`max_concurrent` |
-| `recheck_skip` | 起動しようとした候補を起動の直前に読み直し (§6 の tick の手順 7)、`reason` のどれかに当たって起動しなかった (tick ごとに、候補 1 件につき 1 行。同じ候補が次の tick でも当たれば、また 1 行書く。読み直せなかった候補は `error` の行で残し、この行は書かない) | `target`・`trigger`・`reason` (`当たるかをまだ決められない` / `終端` / `trigger から外れた` / `宣言順で先の trigger に当たる`) |
-| `verify_wait` | worker が終わった後の確かめ (§6 の「worker の 1 回分」の手順 4) で、作業対象が trigger に当たるかをまだ決められず、claim を持ったまま次の tick で確かめ直す (確かめ直すたびに 1 行。失敗ではないので `error` の行は書かない。読み直せなかったときは `error` の行で残し、この行は書かない) | `target`・`trigger`・`attempt`・`session_id`・`reason` (`当たるかをまだ決められない`) |
+| `recheck_skip` | 起動しようとした候補を起動の直前に読み直し (§6 の tick の手順 7)、`reason` のどれかに当たって起動しなかった (tick ごとに、候補 1 件につき 1 行。同じ候補が次の tick でも当たれば、また 1 行書く。読み直せなかった候補は `error` の行で残し、この行は書かない) | `target`・`trigger`・`reason` (`undecided` / `terminal` / `left_trigger` / `earlier_trigger`) |
+| `verify_wait` | worker が終わった後の確かめ (§6 の「worker の 1 回分」の手順 4) で、作業対象が trigger に当たるかをまだ決められず、claim を持ったまま次の tick で確かめ直す (確かめ直すたびに 1 行。失敗ではないので `error` の行は書かない。読み直せなかったときは `error` の行で残し、この行は書かない) | `target`・`trigger`・`attempt`・`session_id`・`reason` (`undecided`) |
 | `unabandon` | 打ち切りを解いた (打ち切ったときの trigger から外れたのを観測した) | `target`・`trigger` |
 | `error` | 処理は続けるが、運用者が知るべき失敗 | `target` (あれば)・`error` |
 
@@ -183,9 +185,23 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 
 | 値 | 意味 |
 |---|---|
-| `completed` | worker が終わった後、作業対象が起動した trigger から外れていた。または終端になっていた。worker 自身が失敗していても completed とし、`reason` に失敗を添える |
+| `completed` | worker が終わった後、作業対象が起動した trigger から外れていた。または終端になっていた。worker 自身が失敗していても completed とし、`failure` に失敗を載せる |
 | `failed` | worker が終わった後も作業対象が trigger に当たったままで、worker が失敗した (異常終了・hook の失敗・描画の失敗・起動できない・stall・上限時間の超過) か、正常に終わった。claim は解かず、`retry` か `abandon` の行が続く |
 | `stopped` | loop が止めた (作業対象が終端になった・2 回目の停止要求) |
+
+- `reason` の token。画面の文は、loop が人の読む行 (§6) で token の代わりに出す文
+
+| token | 意味 | 画面の文 | 出る行 |
+|---|---|---|---|
+| `terminal` | 作業対象が終端になっている | `終端` | `end`・`release`・`recheck_skip` |
+| `left_trigger` | 作業対象が起動した (起動しようとした) trigger から外れている | `trigger から外れた` | `end`・`release`・`recheck_skip` |
+| `still_matches` | worker が終わった後も、作業対象が trigger に当たったまま (`failed`) | `trigger に当たったまま` | `end` |
+| `stop_requested` | 2 回目の停止要求で止めた (`stopped`) | `停止要求` | `end` |
+| `trigger_removed` | 再起動を待つ claim を起動した trigger が、workflow 定義から消えた | `trigger が workflow 定義から消えた` | `release` |
+| `undecided` | 作業対象が trigger に当たるかをまだ決められない (conflict を計算中の CL。§2.3) | `当たるかをまだ決められない` | `verify_wait`・`recheck_skip` |
+| `earlier_trigger` | 作業対象が、宣言順で先の trigger に当たる | `宣言順で先の trigger に当たる` | `recheck_skip` |
+
+- `end` の `failure`: worker 自身の失敗の理由 (異常終了・hook の失敗・描画の失敗・起動できない・stall・上限時間の超過) の自由文。失敗したときだけ載せ、`completed` と `failed` で同じ形にする。`stopped` には載せない。`reason` には失敗を含めない
 
 - `error` の行を書く場面: `after_run` と `before_remove` の失敗・workspace を消せない (次の tick の掃除で消し直す)・終わった worker の作業対象を読み直せない (claim を持ったまま次の tick で読み直す)・起動しようとした作業対象を読み直せない (その tick は起動せず、次の tick で候補になれば試み直す)・打ち切った作業対象を読み直せない (打ち切りを保ち、次の tick で確かめ直す)・止める worker の process group に signal を送れない・worker log から attempt の最後の `result` を読めない (項目の型が違うときを含む)
 - log.jsonl に行を書けなければ、そのことを stdout に出して続ける

@@ -213,7 +213,7 @@ func TestStalledWorkerIsStoppedAndCountedAsAFailure(t *testing.T) {
 	s.startLoop()
 
 	end := s.waitEvents("end", 1)[0]
-	if end["outcome"] != "failed" || !strings.Contains(asString(end["reason"]), "stall") {
+	if end["outcome"] != "failed" || !strings.Contains(asString(end["failure"]), "stall") {
 		t.Fatalf("end の行 = %v, want stall の失敗", end)
 	}
 }
@@ -227,7 +227,7 @@ func TestEndLineOfAWorkerStalledBeforeWritingAResultHasNoResultSummary(t *testin
 	s.startLoop()
 
 	end := s.waitEvents("end", 1)[0]
-	if !strings.Contains(asString(end["reason"]), "stall") {
+	if !strings.Contains(asString(end["failure"]), "stall") {
 		t.Fatalf("end の行 = %v, want stall の失敗", end)
 	}
 	for _, key := range []string{"is_error", "num_turns", "permission_denial_count"} {
@@ -247,7 +247,7 @@ func TestEndLineOfAWorkerStalledAfterWritingAResultCarriesItsSummary(t *testing.
 	s.startLoop()
 
 	end := s.waitEvents("end", 1)[0]
-	if !strings.Contains(asString(end["reason"]), "stall") || end["num_turns"] != float64(6) {
+	if !strings.Contains(asString(end["failure"]), "stall") || end["num_turns"] != float64(6) {
 		t.Fatalf("end の行 = %v, want stall の失敗に、止める前の result の num_turns 6 を載せる", end)
 	}
 }
@@ -274,7 +274,7 @@ func TestWorkerThatRunsPastItsTimeLimitIsStoppedAndCountedAsAFailure(t *testing.
 	s.startLoop()
 
 	end := s.waitEvents("end", 1)[0]
-	if end["outcome"] != "failed" || !strings.Contains(asString(end["reason"]), "上限時間") {
+	if end["outcome"] != "failed" || !strings.Contains(asString(end["failure"]), "上限時間") {
 		t.Fatalf("end の行 = %v, want 上限時間の失敗", end)
 	}
 }
@@ -377,7 +377,7 @@ func TestWaitingRetryIsReleasedWhenTheIssueLeavesTheTrigger(t *testing.T) {
 
 	s.setIssues(offTrigger)
 
-	if release := s.waitEvents("release", 1)[0]; release["reason"] != "trigger から外れた" {
+	if release := s.waitEvents("release", 1)[0]; release["reason"] != "left_trigger" {
 		t.Fatalf("release の行 = %v", release)
 	}
 	if starts := s.events("start"); len(starts) != 1 {
@@ -397,7 +397,7 @@ func TestWaitingRetryOfAClosedIssueIsReleasedAndItsWorkspaceRemoved(t *testing.T
 
 	s.setIssues(closed)
 
-	if release := s.waitEvents("release", 1)[0]; release["reason"] != "終端" {
+	if release := s.waitEvents("release", 1)[0]; release["reason"] != "terminal" {
 		t.Fatalf("release の行 = %v", release)
 	}
 	if _, err := os.Stat(s.workspace(42)); !os.IsNotExist(err) {
@@ -431,7 +431,7 @@ func TestWaitingRetryIsReleasedWhenItsTriggerIsRemovedFromTheWorkflow(t *testing
 
 	s.writeWorkflowWithCommands(strings.Replace(s.workerWorkflow(slowRetry), "name: implement", "name: renamed", 1))
 
-	if release := s.waitEvents("release", 1)[0]; release["reason"] != "trigger が workflow 定義から消えた" {
+	if release := s.waitEvents("release", 1)[0]; release["reason"] != "trigger_removed" {
 		t.Fatalf("release の行 = %v", release)
 	}
 }

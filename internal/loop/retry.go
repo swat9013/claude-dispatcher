@@ -15,10 +15,6 @@ import (
 // baseBackoff は 1 回目の失敗の後の backoff
 const baseBackoff = 10 * time.Second
 
-// reasonTriggerRemoved は、再起動を待つ claim を起動せずに解く理由のうち、起動した trigger が workflow 定義から消えた
-// こと (ほかの理由は settle が返す)
-const reasonTriggerRemoved = "trigger が workflow 定義から消えた"
-
 // backoff は attempt 回目が失敗した後に待つ時間: min(10s × 2^(attempt−1), limit)。
 func backoff(attempt int, limit time.Duration) time.Duration {
 	d := baseBackoff
@@ -151,11 +147,11 @@ func triggerNamed(def workflow.Definition, name string) (trigger.Trigger, bool) 
 }
 
 // releaseWaiting は再起動を待つ claim を、起動せずに解く。
-func (l *loop) releaseWaiting(ref target.Ref, c *claim, reason string) {
+func (l *loop) releaseWaiting(ref target.Ref, c *claim, reason Reason) {
 	delete(l.claims, ref)
 	name := ref.String()
 	l.rec.event("release", map[string]any{"target": name, "trigger": c.trigger.Name, "attempt": c.attempt, "session_id": c.sessionID, "reason": reason},
-		LineNote, "再起動せずに解いた", " %s (%s): %s", name, c.trigger.Name, reason)
+		LineNote, "再起動せずに解いた", " %s (%s): %s", name, c.trigger.Name, reason.screen())
 }
 
 // restartable は、再起動待ちの claim のうち、起動できるもの (trigger が事前検査に落ちていない)。落ちている trigger の

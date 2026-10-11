@@ -40,6 +40,8 @@ type oneTick struct {
 	maxConcurrent int
 	// branches は claim した作業対象の workspace で checkout されている branch
 	branches map[target.Ref]string
+	// failure は起動した worker 自身の失敗の理由 (空なら worker は正常に終わる)
+	failure string
 }
 
 // branchWorkspaces は、作業対象ごとに決まった branch を checkout している workspace の口。
@@ -108,7 +110,7 @@ func (o oneTick) runLogging(t *testing.T, log io.Writer) ([]worker.Job, string) 
 			go func() {
 				events <- worker.Started{Target: job.Item.Ref(), PID: 1}
 				code := 0
-				events <- worker.Ended{Target: job.Item.Ref(), Result: worker.Result{ExitCode: &code}}
+				events <- worker.Ended{Target: job.Item.Ref(), Result: worker.Result{ExitCode: &code, Failure: o.failure}}
 			}()
 			return endedWorker{}
 		},
@@ -154,7 +156,7 @@ func TestCandidateClosedWhenReadAgainLeavesAPassLine(t *testing.T) {
 func TestCandidateClosedWhenReadAgainLeavesARecheckSkipEvent(t *testing.T) {
 	skips := closedWhenReadAgain().recheckSkips(t)
 
-	assertOneRecheckSkip(t, skips, map[string]any{"target": "issue#1", "trigger": "implement", "reason": "終端"})
+	assertOneRecheckSkip(t, skips, map[string]any{"target": "issue#1", "trigger": "implement", "reason": "terminal"})
 }
 
 func leftTheTriggerWhenReadAgain() oneTick {
@@ -181,7 +183,7 @@ func TestCandidateThatLeftTheTriggerWhenReadAgainLeavesAPassLine(t *testing.T) {
 func TestCandidateThatLeftTheTriggerWhenReadAgainLeavesARecheckSkipEvent(t *testing.T) {
 	skips := leftTheTriggerWhenReadAgain().recheckSkips(t)
 
-	assertOneRecheckSkip(t, skips, map[string]any{"target": "issue#1", "trigger": "implement", "reason": "trigger から外れた"})
+	assertOneRecheckSkip(t, skips, map[string]any{"target": "issue#1", "trigger": "implement", "reason": "left_trigger"})
 }
 
 func cannotBeReadAgain() oneTick {
@@ -242,7 +244,7 @@ func TestCandidateCLWhoseConflictIsStillBeingComputedWhenReadAgainLeavesAPassLin
 func TestCandidateCLWhoseConflictIsStillBeingComputedWhenReadAgainLeavesARecheckSkipEvent(t *testing.T) {
 	skips := conflictStillBeingComputedWhenReadAgain().recheckSkips(t)
 
-	assertOneRecheckSkip(t, skips, map[string]any{"target": "cl#7", "trigger": "fix-conflict", "reason": "当たるかをまだ決められない"})
+	assertOneRecheckSkip(t, skips, map[string]any{"target": "cl#7", "trigger": "fix-conflict", "reason": "undecided"})
 }
 
 func matchesAnEarlierTriggerWhenReadAgain() oneTick {
@@ -272,7 +274,7 @@ func TestCandidateThatMatchesAnEarlierTriggerWhenReadAgainLeavesAPassLine(t *tes
 func TestCandidateThatMatchesAnEarlierTriggerWhenReadAgainLeavesARecheckSkipEvent(t *testing.T) {
 	skips := matchesAnEarlierTriggerWhenReadAgain().recheckSkips(t)
 
-	assertOneRecheckSkip(t, skips, map[string]any{"target": "issue#1", "trigger": "implement", "reason": "宣言順で先の trigger に当たる"})
+	assertOneRecheckSkip(t, skips, map[string]any{"target": "issue#1", "trigger": "implement", "reason": "earlier_trigger"})
 }
 
 func TestCandidateCLWhoseHeadIsHeldByAClaimWhenReadAgainIsNotLaunched(t *testing.T) {

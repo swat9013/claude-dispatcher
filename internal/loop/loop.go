@@ -94,27 +94,6 @@ const (
 	phaseWaitingRetry
 )
 
-// stopReason は loop が worker を止めた理由。
-type stopReason string
-
-const (
-	stoppedAtTerminal stopReason = "終端"
-	stoppedByRequest  stopReason = "停止要求"
-)
-
-// 作業対象を読み直したときの理由。終わった worker の確かめ・再起動・起動の直前の読み直しで使う
-const (
-	reasonTerminal     = "終端"
-	reasonLeftTrigger  = "trigger から外れた"
-	reasonStillMatches = "trigger に当たったまま"
-)
-
-// 当たるかをまだ決められない理由。終わった worker の確かめ (verify_wait) と起動の直前の読み直し (recheck_skip) で使う
-const reasonUndecided = "当たるかをまだ決められない"
-
-// 起動の直前の読み直しだけで使う理由
-const reasonEarlierTrigger = "宣言順で先の trigger に当たる"
-
 // outcome は claim を解いたときの終わり方 (formats.md §4)。
 type outcome string
 
@@ -141,8 +120,8 @@ type claim struct {
 	phase          phase
 	// run は phaseRunning と phaseStopping の worker
 	run Worker
-	// stopReason は phaseStopping の理由
-	stopReason stopReason
+	// stopReason は phaseStopping の理由 (reasonTerminal か reasonStopRequested)
+	stopReason Reason
 	// ended は phaseAwaitingVerification の worker の終わり方
 	ended *worker.Result
 	// retryAt は phaseWaitingRetry の backoff が明ける時刻
@@ -244,7 +223,7 @@ func (l *loop) requestStop(sig os.Signal) {
 	}
 	for _, c := range l.claims {
 		if c.phase == phaseRunning {
-			l.stop(c, stoppedByRequest)
+			l.stop(c, reasonStopRequested)
 		}
 	}
 }
@@ -481,12 +460,12 @@ func (l *loop) reconcile(store Store) {
 			continue
 		}
 		if item.Terminal() {
-			l.stop(c, stoppedAtTerminal)
+			l.stop(c, reasonTerminal)
 		}
 	}
 }
 
-func (l *loop) stop(c *claim, reason stopReason) {
+func (l *loop) stop(c *claim, reason Reason) {
 	c.phase, c.stopReason = phaseStopping, reason
 	c.run.Stop()
 }
@@ -542,7 +521,7 @@ func (l *loop) recheckCandidate(store Store, triggers []trigger.Trigger, c trigg
 		return item, true
 	}
 	l.rec.event("recheck_skip", map[string]any{"target": ref.String(), "trigger": c.Trigger.Name, "reason": reason},
-		LineNote, "読み直しで起動せず", " %s (%s): %s", ref, c.Trigger.Name, reason)
+		LineNote, "読み直しで起動せず", " %s (%s): %s", ref, c.Trigger.Name, reason.screen())
 	return nil, false
 }
 
@@ -551,7 +530,7 @@ func (l *loop) recheckCandidate(store Store, triggers []trigger.Trigger, c trigg
 // 直す。loop の起動と試運転 (formats.md §5) が同じ判定を使う。起動してよければ読み直した作業対象と "" を、起動しなければその理由 (当たるかを
 // まだ決められない・終端・起動しようとした trigger から外れた・triggers (宣言順) のうち先のものに当たる) を返す。読み直せ
 // なければ error。再起動はこの判定を使わない (宣言順で先の trigger を確かめないため。retry を見る)。
-func RecheckCandidate(store Store, triggers []trigger.Trigger, c trigger.Candidate) (target.Item, string, error) {
+func RecheckCandidate(store Store, triggers []trigger.Trigger, c trigger.Candidate) (target.Item, Reason, error) {
 	item, err := store.Read(c.Item.Ref())
 	if err != nil {
 		return nil, "", err
@@ -639,10 +618,10 @@ func (l *loop) handle(ev worker.Event) {
 		}
 		store := l.o.Store(l.def)
 		if result.Stopped {
-			if c.stopReason == stoppedAtTerminal {
+			if c.stopReason == reasonTerminal {
 				l.remove(l.o.Workspaces(l.definitionOf(c)), ev.Target)
 			}
-			l.end(ev.Target, c, stopped, string(c.stopReason), result)
+			l.end(ev.Target, c, stopped, c.stopReason, result)
 			delete(l.claims, ev.Target)
 		} else {
 			c.phase, c.ended = phaseAwaitingVerification, &result
@@ -679,24 +658,20 @@ func (l *loop) verify(store Store, ref target.Ref, c *claim) {
 		l.rec.event("verify_wait", map[string]any{
 			"target": ref.String(), "trigger": c.trigger.Name, "attempt": c.attempt,
 			"session_id": c.sessionID, "reason": reasonUndecided,
-		}, LineNote, "確かめ待ち", " %s (%s, attempt %d): %s", ref, c.trigger.Name, c.attempt, reasonUndecided)
+		}, LineNote, "確かめ待ち", " %s (%s, attempt %d): %s", ref, c.trigger.Name, c.attempt, reasonUndecided.screen())
 		return
 	}
 	if settled := l.settle(ref, c, item); settled != "" {
-		l.end(ref, c, completed, withFailure(settled, result), result)
+		l.end(ref, c, completed, settled, result)
 		delete(l.claims, ref)
 		return
 	}
-	reason := reasonStillMatches
-	if result.Failure != "" {
-		reason = result.Failure
-	}
-	l.end(ref, c, failed, reason, result)
+	l.end(ref, c, failed, reasonStillMatches, result)
 	l.fail(ref, c)
 }
 
 // settle は読み直した作業対象が claim を解く状態かを見て、解く理由を返す。終端なら workspace も消す。当たったままなら ""。
-func (l *loop) settle(ref target.Ref, c *claim, item target.Item) string {
+func (l *loop) settle(ref target.Ref, c *claim, item target.Item) Reason {
 	if item.Terminal() {
 		l.remove(l.o.Workspaces(l.definitionOf(c)), ref)
 	}
@@ -705,7 +680,7 @@ func (l *loop) settle(ref target.Ref, c *claim, item target.Item) string {
 
 // outOfTrigger は、読み直した作業対象が trigger で走らせる対象から外れた理由を返す。終端か trigger から外れていれば
 // その理由、当たったままなら ""。
-func outOfTrigger(t trigger.Trigger, item target.Item) string {
+func outOfTrigger(t trigger.Trigger, item target.Item) Reason {
 	switch {
 	case item.Terminal():
 		return reasonTerminal
@@ -715,12 +690,16 @@ func outOfTrigger(t trigger.Trigger, item target.Item) string {
 	return ""
 }
 
-// withFailure は完了の理由に、worker 自身の失敗を添える。
-func withFailure(reason string, result worker.Result) string {
-	if result.Failure == "" {
-		return reason
+// endScreen は終了の行に出す、終わり方の理由の文。worker 自身が失敗していれば、completed では理由に失敗を添え、failed
+// では理由 (当たったまま) の代わりに失敗を出す。
+func endScreen(o outcome, reason Reason, failure string) string {
+	switch {
+	case failure == "":
+		return reason.screen()
+	case o == failed:
+		return failure
 	}
-	return reason + " (worker は " + result.Failure + ")"
+	return reason.screen() + " (worker は " + failure + ")"
 }
 
 // remove は workspace を消す。消せなければ error の行を残し、次の tick の掃除で消し直す。
@@ -732,12 +711,16 @@ func (l *loop) remove(ws Workspaces, ref target.Ref) bool {
 	return true
 }
 
-// end は worker 1 回分の終わり方の行を書く。claim を解くかは呼び出し側が決める。
-func (l *loop) end(ref target.Ref, c *claim, o outcome, reason string, result worker.Result) {
+// end は worker 1 回分の終わり方の行を書く。worker 自身が失敗していれば、その理由を reason とは別の failure に載せる。
+// claim を解くかは呼び出し側が決める。
+func (l *loop) end(ref target.Ref, c *claim, o outcome, reason Reason, result worker.Result) {
 	name := ref.String()
 	fields := map[string]any{
 		"target": name, "trigger": c.trigger.Name, "attempt": c.attempt, "session_id": c.sessionID,
 		"outcome": string(o), "reason": reason,
+	}
+	if result.Failure != "" {
+		fields["failure"] = result.Failure
 	}
 	if result.ExitCode != nil {
 		fields["exit_code"] = *result.ExitCode
@@ -753,7 +736,7 @@ func (l *loop) end(ref target.Ref, c *claim, o outcome, reason string, result wo
 			fields["permission_denial_count"] = *summary.PermissionDenialCount
 		}
 	}
-	l.rec.event("end", fields, endKinds[o], "終了", " %s (%s): %s — %s", name, c.trigger.Name, o, reason)
+	l.rec.event("end", fields, endKinds[o], "終了", " %s (%s): %s — %s", name, c.trigger.Name, o, endScreen(o, reason, result.Failure))
 }
 
 func nonNil(s []string) []string {

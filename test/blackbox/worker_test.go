@@ -345,7 +345,7 @@ func TestActionThatFailsToRenderForTheIssueFailsWithoutLaunching(t *testing.T) {
 	s.startLoop()
 
 	end := s.waitEvents("end", 1)[0]
-	if end["outcome"] != "failed" || !strings.Contains(asString(end["reason"]), "描画") {
+	if end["outcome"] != "failed" || !strings.Contains(asString(end["failure"]), "描画") {
 		t.Fatalf("end の行 = %v, want 描画の失敗", end)
 	}
 	if calls := s.calls("claude"); len(calls) != 0 {
@@ -362,7 +362,7 @@ func TestFailingBeforeRunHookFailsWithoutLaunching(t *testing.T) {
 	s.startLoop()
 
 	end := s.waitEvents("end", 1)[0]
-	if end["outcome"] != "failed" || !strings.Contains(asString(end["reason"]), "before_run") {
+	if end["outcome"] != "failed" || !strings.Contains(asString(end["failure"]), "before_run") {
 		t.Fatalf("end の行 = %v, want before_run の失敗", end)
 	}
 	if calls := s.calls("claude"); len(calls) != 0 {
@@ -514,8 +514,8 @@ func TestWorkerThatFailsButLeavesTheTriggerIsCompleted(t *testing.T) {
 	s.startLoop()
 
 	end := s.waitEvents("end", 1)[0]
-	if end["outcome"] != "completed" || !strings.Contains(asString(end["reason"]), "worker は") {
-		t.Fatalf("end の行 = %v, want 失敗を添えた completed", end)
+	if end["outcome"] != "completed" || end["reason"] != "left_trigger" || !strings.Contains(asString(end["failure"]), "異常終了") {
+		t.Fatalf("end の行 = %v, want 失敗を failure に載せた left_trigger の completed", end)
 	}
 }
 
@@ -528,7 +528,7 @@ func TestFailingAfterCreateHookRemovesTheWorkspaceAndFails(t *testing.T) {
 	s.startLoop()
 
 	end := s.waitEvents("end", 1)[0]
-	if end["outcome"] != "failed" || !strings.Contains(asString(end["reason"]), "after_create") {
+	if end["outcome"] != "failed" || !strings.Contains(asString(end["failure"]), "after_create") {
 		t.Fatalf("end の行 = %v, want after_create の失敗", end)
 	}
 	if _, err := os.Stat(s.workspace(42)); !os.IsNotExist(err) {
@@ -590,7 +590,7 @@ func TestHookThatRunsPastItsTimeoutIsStoppedAndFails(t *testing.T) {
 	s.startLoop()
 
 	end := s.waitEvents("end", 1)[0]
-	if end["outcome"] != "failed" || !strings.Contains(asString(end["reason"]), "before_run") {
+	if end["outcome"] != "failed" || !strings.Contains(asString(end["failure"]), "before_run") {
 		t.Fatalf("end の行 = %v, want before_run の timeout", end)
 	}
 }

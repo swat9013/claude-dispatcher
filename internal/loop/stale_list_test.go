@@ -179,8 +179,8 @@ func TestRetryOfAnIssueClosedDuringTheBackoffIsReleasedAsTerminal(t *testing.T) 
 	_, lines := closedDuringTheBackoffWhileTheListIsStale().run(t)
 
 	releases := eventsNamed(lines, "release")
-	if len(releases) != 1 || releases[0]["target"] != "issue#1" || releases[0]["reason"] != "終端" {
-		t.Fatalf("release の行 = %v, want issue#1 を 終端 で 1 行", releases)
+	if len(releases) != 1 || releases[0]["target"] != "issue#1" || releases[0]["reason"] != "terminal" {
+		t.Fatalf("release の行 = %v, want issue#1 を terminal で 1 行", releases)
 	}
 }
 
