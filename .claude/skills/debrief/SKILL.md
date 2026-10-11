@@ -65,6 +65,8 @@ jq -s -r 'map(select(.event=="start" or .event=="end")) | group_by([.session_id,
 jq -s -r 'map(select(.target)) | group_by(.target)[] | last | select(.event=="start" or .event=="retry" or .event=="wait_slot" or .event=="verify_wait" or (.event=="end" and .outcome=="failed")) | [.target, .event, .ts] | @tsv' F
 ```
 
+`reason` が日本語の値 (`終端`・`trigger から外れた` など) の行は、`reason` を token にする前 (ADR 0013) の古い版の log。旧値と token の対応は ADR 0013 の表。その版の `end` の行は `failure` を持たず、worker 自身の失敗の文は `reason` にある (completed なら `<理由> (worker は <失敗>)`、failed なら失敗の文そのもの)。版をまたぐ log では、上の集計を旧値と token で読み合わせ、失敗は `failure` と旧行の `reason` の両方から拾う。
+
 claim を解く行は formats.md §4 (`completed` と `stopped` の `end`・`release`・`abandon`) が正本。停止要求で捨てた再起動待ちと確かめ待ちの claim は、最後の行が `error` になる (§6 の停止要求)。そのため上の jq は `error` の行も含めて最後の行を見る。
 
 閉じていない claim は、`scripts/claude-dispatcher-dev.sh status <WORKFLOW.md の path>` が示す今の loop の worker と突き合わせる。claim は loop の memory にしか無いので、loop が居なければすべて消えている。本体の記録の欠けの候補は次の 2 つ。
@@ -103,7 +105,7 @@ jq -s -r 'map(select(.event=="verify_wait")) | group_by([.session_id, .attempt])
 
 `verify_wait` は確かめ直すたびに (tick ごとに) 書かれる。最初と最後の `ts` の間が周期の何倍にも及べば、CL の conflict の計算が終わらず確かめ待ちが続いている (確度「解釈」)。
 
-stall と上限時間の超過は、観点 1 の `end` の行の `failure` に文で載る。WORKFLOW.md の `limits.stall_timeout`・`limits.run_timeout` (省けば formats.md §2.1 の既定) と、観点 1 の所要時間を並べて読む。
+stall と上限時間の超過は、観点 1 の `end` の行の `failure` に文で載る (古い版の行では `reason`)。WORKFLOW.md の `limits.stall_timeout`・`limits.run_timeout` (省けば formats.md §2.1 の既定) と、観点 1 の所要時間を並べて読む。
 
 **4. error の行**
 

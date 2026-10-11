@@ -49,7 +49,7 @@ log.jsonl の値のうち、`reason` だけが日本語の文 (`終端`・`trigg
 ### 悪い影響 / 制約
 
 - 旧値で `reason` を比べていた読み手は壊れる。この版の前後の log.jsonl が同じ file に混ざる
-- repo の中の読み手 (`.claude/skills/debrief` の log.jsonl の読み方) も、同じ変更で token と `failure` に移す
+- log.jsonl の値の形を変えると、repo の中の読み手 (`.claude/skills/debrief` の log.jsonl の読み方) も合わせて直す必要がある
 - 日本語を読めない人は、今の出力と文書では導入できない
 
 ## Alternatives considered
