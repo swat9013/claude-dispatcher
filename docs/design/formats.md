@@ -1,6 +1,7 @@
 # 外から観測できる形式
 
 - 本 file が CLI の外から観測できる形式の正本。black-box テストはここを参照して書き、実装とテストが食い違ったら本 file に合わせる
+- workflow 定義の書き方の正本は、binary に埋め込んだ案内 ([`internal/guide/guide.md`](../../internal/guide/guide.md)) に置く (§2、ADR 0012)。本 file は、その検査で CLI が何を出すかを持つ
 - 各 file の責務は [`system.md`](system.md) §7 / §8 / §9、用語は [`CONTEXT.md`](../../CONTEXT.md)
 - **公開契約**: log.jsonl の行 (§4) と `paths --json` (§7) は外部の読み手を持つ。key の削除・改名・意味の変更は互換を壊すので、足すだけにとどめるか、ADR を起こす
 
@@ -48,280 +49,73 @@ workspace は state dir の外、workflow 定義の `workspace.root` の下に�
 
 実装 repo の中に置く。path は `loop` の引数で渡し、省けば cwd の `WORKFLOW.md` を読む (§6)。
 
-file は YAML の front matter と本文からなる。
-
-- 1 行目が `---` の行で、次の `---` の行までが front matter
-- その後ろが本文。本文は共通 prompt (system.md §10)。空でもよい
-
-```markdown
----
-tracker:
-  kind: github               # 必須。github・gitlab・jira のどれか
-  repo: acme/widgets         # 必須。issue 置き場 (github は owner/name、gitlab は group/…/name、jira は project key)。$VAR で書ける
-  token: $WIDGETS_GH_TOKEN   # 任意。gh に GH_TOKEN として渡す。$VAR でだけ書ける
-polling:
-  interval: 5m               # 任意。周期。既定 5m
-workspace:
-  root: .claude-dispatcher/workspaces   # 任意。既定はこの値 (workflow 定義の dir からの相対)
-hooks:                       # 任意。どれも省ける
-  after_create: git -C "$CLAUDE_DISPATCHER_CLONE" worktree add "$CLAUDE_DISPATCHER_WORKSPACE"
-  before_run: git fetch
-  before_remove: git -C "$CLAUDE_DISPATCHER_CLONE" worktree remove --force "$CLAUDE_DISPATCHER_WORKSPACE"
-  timeout: 60s
-limits:
-  max_concurrent: 1          # 任意。並列上限。既定 1
-  max_attempts: 3            # 任意。作業対象 1 件の attempt の上限。既定 3
-  max_retry_backoff: 5m      # 任意。backoff の上限。既定 5m
-  stall_timeout: 15m         # 任意。worker の活動が途絶えてから止めるまで。既定 15m。0 で無効
-  run_timeout: 1h            # 任意。worker 1 回分の上限時間。既定 1h。0 で無効
-claude:
-  command: claude            # 任意。既定 claude
-  args: [--permission-mode, auto]   # 任意。既定は空
-triggers:                    # 必須。1 つ以上
-  - name: implement          # 必須
-    on: issue                # 必須
-    when:                    # 任意。省くと、open な issue のすべてに当たる
-      labels:
-        all: [ready-for-agent]
-        none: [needs-info]
-      unassigned: true
-      author: collaborator
-      blocked: false
-    action: |                # 必須。worker に渡す prompt の template
-      /swat-skills:playbook-implementation
-  - name: fix-ci
-    on: cl
-    when:
-      ci_failed: true
-      head: worktree-issue-*
-      draft: false
-    action: |
-      CL #{{ .cl.number }} の CI の失敗を直す
----
-この project の共通 prompt。
-```
+- **書き方の正本は、binary に埋め込んだ案内** [`internal/guide/guide.md`](../../internal/guide/guide.md) (`claude-dispatcher guide` が出す。§9、ADR 0012)。file の形・項目・述語・評価の規則・`$VAR`・hooks・template・何が誤りになるか・事前検査がどこを探すかは案内が持つ
+- 本節は、コード・テスト・ADR の `formats.md §2.x` の参照が辿れるよう §2.1〜§2.9 の見出しを残し、各節は案内の対応する節を指す
+- §2.8・§2.9 に、CLI が何を出すか (誤りの行の書式・exit・いつ落ちるか) を残す。外から観測できる形式で、black-box テストの正本
 
 ### 2.1 項目
 
-| key | 型 | 中身 |
-|---|---|---|
-| `tracker.kind` | 文字列 | tracker の種類。`github` (gh で読む)・`gitlab` (glab で読む)・`jira` (acli で読む。Jira Cloud) のどれか |
-| `tracker.host` | 文字列 | `gitlab` と `jira` でだけ書ける。`$VAR` で書ける。`github` で書くと未知の key<br>- `gitlab`: GitLab の host 名 (`gitlab.example.com`)。既定 `gitlab.com`<br>- `jira`: Jira Cloud の site (`acme.atlassian.net`)。既定を持たず必須。綴りは `[A-Za-z0-9.-]+` |
-| `tracker.repo` | 文字列 | issue 置き場。`github` は `<owner>/<name>`、`gitlab` は `<group>/<name>` の段数を問わない path (`acme/sub/widgets`。どの段も `[A-Za-z0-9._-]+`)、`jira` は Jira の project key (`WIDGETS`。`[A-Za-z][A-Za-z0-9_]*`。大文字に揃えて読む) |
-| `tracker.token` | 文字列 | `github` でだけ書ける。gh に環境変数 `GH_TOKEN` として渡す token。`$VAR` でだけ書ける (値そのものを書かない)。省くと、loop を起動した環境の認証を gh がそのまま使う。`gitlab` は glab 自身の認証 (`glab auth login` の結果)、`jira` は acli 自身の認証 (`acli jira auth login` の結果) を使い、書くと名指しで失敗する |
-| `polling.interval` | 文字列 | 周期。Go の duration の綴り (`90s` / `5m` / `1h30m`) で、1s 以上 24h 以下。短い周期は tracker の rate limit を食う |
-| `workspace.root` | 文字列 | workspace を置く dir。相対 path は workflow 定義の dir から、`~/` は HOME から (HOME が絶対 path でなければ失敗)。`$VAR` で書ける |
-| `hooks.after_create` | 文字列 | workspace を作った直後に撃つ shell script。失敗したら workspace を消し、その attempt は失敗。`before_remove` と合わせて、作業対象を跨いで直列に撃つ (同時に 1 本まで。system.md §7)。遅い `after_create` は他の workspace の用意と削除を待たせ、削除を待つ間は loop も停止要求・tick に応えない |
-| `hooks.before_run` | 文字列 | worker を起動する前に毎回撃つ。失敗したら、その attempt は失敗。作業対象を跨いで並列に走りうる (clone を触るなら、hook の中で排他する) |
-| `hooks.after_run` | 文字列 | worker が終わった後 (止めたときも) に毎回撃つ。失敗は log に残して続ける。作業対象を跨いで並列に走りうる (clone を触るなら、hook の中で排他する) |
-| `hooks.before_remove` | 文字列 | workspace を消す前に撃つ。失敗は log に残して続ける。`after_create` と合わせて、作業対象を跨いで直列に撃つ |
-| `hooks.timeout` | 文字列 | hook 1 回の上限時間。既定 60s。超えたら process group ごと止め、失敗として扱う |
-| `limits.max_concurrent` | 整数 | 同時に走らせる worker の上限。1 以上。既定 1 |
-| `limits.max_attempts` | 整数 | 作業対象 1 件の attempt の上限。1 以上。既定 3。上限の attempt が失敗したら打ち切る |
-| `limits.max_retry_backoff` | 文字列 | backoff の上限。Go の duration の綴りで、0 より長い。既定 5m |
-| `limits.stall_timeout` | 文字列 | worker の stream (stdout の stream-json) に活動 (§6) として数える行が書かれなくなってから、止めて失敗とするまでの時間。既定 15m。`0s` で無効。claude は tool の実行中は heartbeat (`tool_progress`) しか書かず、heartbeat は活動として数えないので、長い build や test を走らせる repo では長めにする |
-| `limits.run_timeout` | 文字列 | worker 1 回分の上限時間。起動からの経過が超えたら止めて失敗とする。既定 1h。`0s` で無効 |
-| `claude.command` | 文字列 | worker として起動する command。PATH から探す。既定 `claude` |
-| `claude.args` | 文字列の列 | command に、dispatcher の引数 (§6「worker の起動」) より前に渡す引数。既定は空 |
-| `triggers` | 列 | trigger の宣言。宣言順が起動の優先順 (system.md §6) |
-| `triggers[].name` | 文字列 | trigger の名前。`[A-Za-z0-9._-]+`。trigger の間で重複しない |
-| `triggers[].on` | 文字列 | 作業対象の種類。`issue` か `cl` (`gitlab` では merge request)。`jira` では `issue` だけを書ける (`cl` は名指しで失敗する。issue 置き場と別の CL 置き場の宣言は #114) |
-| `triggers[].when` | 対応表 | 述語。書いた条件はすべて AND で評価する。書ける key は `on` で変わる (issue は §2.2、CL は §2.3) |
-| `triggers[].action` | 文字列 | worker に渡す prompt の template (§2.7)。空にできない |
-
-**YAML の読み方**: 値を書いていない key (`when:` だけの行) は、空の対応表として読む。anchor と alias は辿る。merge key (`<<: *base`) は持たない (`<<` は未知の key として失敗する)。
+案内の「workflow 定義の書き方」(file の形と例) と「項目」(YAML の読み方・tracker の種類ごとの違いを含む)。
 
 ### 2.2 issue 側の述語 (`on: issue` の `when`)
 
-| key | 型 | 当たる issue |
-|---|---|---|
-| `labels.all` | 文字列の列 | 列の label をすべて持つ |
-| `labels.any` | 文字列の列 | 列の label のどれかを持つ。空の列は書けない |
-| `labels.none` | 文字列の列 | 列の label をどれも持たない |
-| `assignee` | 文字列 | その login (GitLab は username) の人が assignee に居る |
-| `unassigned` | 真偽 | `true` なら assignee が居ない、`false` なら 1 人以上居る |
-| `author` | 文字列 | `collaborator` なら作者が collaborator、`non_collaborator` ならそれ以外。collaborator の線は tracker ごとに下の表 |
-| `milestone` | 文字列 | その題名の milestone に入っている |
-| `blocked` | 真偽 | `true` なら未解決 (open) の依存先 (blocked by) が 1 つ以上ある、`false` なら無い。`tracker.kind` が `gitlab` なら書けない (下) |
-| `status.any` / `status.none` | 文字列の列 | `jira` でだけ書ける。status 名が列のどれかである / どれでもない。`any` の空の列は書けない |
-| `type.any` / `type.none` | 文字列の列 | `jira` でだけ書ける。issue type 名 (subtask・epic を含む) が列のどれかである / どれでもない。`any` の空の列は書けない |
-
-| `tracker.kind` | collaborator と数える作者 |
-|---|---|
-| `github` | repo の owner・organization の member・collaborator (GitHub の `authorAssociation` が `OWNER` / `MEMBER` / `COLLABORATOR`) |
-| `gitlab` | project での access level (group から継承したものを含む) が Developer (30) 以上の member。push できる層に揃える。worker は push 権限を持つので、誰の書き込みで起動してよいかの線を push できる人に引く |
-| `jira` | `author` は書けない (下) |
-
-- `assignee` と `unassigned` は一緒に書けない
-- label と login の綴りは、tracker によらず大文字と小文字を区別せずに比べる
-  - GitLab の label は大文字と小文字を区別するが、dispatcher の規則として揃える。trigger の評価は正規化した作業対象だけを見る (system.md §13) ので、tracker ごとに比べ方を変えない
-  - 誤って当たるのは、大文字と小文字だけが違う label を 2 つ持つ project に限られる
-- `tracker.kind` が `gitlab` なら、作業対象は種類が issue のものだけ (`issue_type` が `issue`)。同じ一覧に出る task・incident・test case は読まない
-- `tracker.kind` が `gitlab` なら `blocked` は書けない (名指しで失敗する)。GitLab の issue の依存 (blocks / is blocked by) は有償の tier の機能で、CE の API は依存を返さない。読むと常に 0 件になり、`blocked: false` が黙って全件に当たる
-- `status` と `type` は `jira` でだけ書ける (他の kind で書くと名指しで失敗する)
-
-`tracker.kind` が `jira` のときの述語の意味:
-
-| key | `jira` での意味 |
-|---|---|
-| `labels` | Jira の label。他の kind と同じく大文字と小文字を区別せずに比べる |
-| `assignee` | 担当者の accountId (Jira Cloud の user は accountId でしか一意に識別できない) |
-| `unassigned` | 担当者が居ない / 居る |
-| `author` | 書けない (名指しで失敗する)。worker を誰の書き込みで起動してよいかの線を、Jira の権限 (repo の push 権限と別の線) に引けない |
-| `milestone` | 書けない (名指しで失敗する)。sprint は無いことがあり、fixVersions は acli の一覧で読めない |
-| `blocked` | link type `Blocks` の inward ("is blocked by") の link のうち、相手の status の区分 (`statusCategory.key`) が `done` でないものが 1 つ以上あれば `true` |
-| `status` | status 名 (`fields.status.name`)。大文字と小文字を区別せずに比べる |
-| `type` | issue type 名 (`fields.issuetype.name`)。大文字と小文字を区別せずに比べる |
-
-- `jira` の作業対象は、project の全種類の issue (subtask・epic を含む)。絞るなら `type` を書く
-- `jira` の終端は、status の区分 (`status.statusCategory.key`) が `done` であること。Wontfix のような done 区分の status も終端
-- `status` と `type` の名前が実在するかは、loop の起動時・試運転・`doctor` で確かめる (§6・§5・§7.4)。tick の中では確かめない
-  - status 名は `project = "<project key>" AND status = "<名前>"` の検索の件数 (`--count`) を撃ち、JQL の失敗で見分ける (認証の失敗は §3 の分類で認証として返す)。acli は project の status の一覧を返さないので、JQL の値の検証による site の単位の検査にとどまる。他の project にだけある status 名は検査を通る
-  - JQL には project key と名前を `"` で囲んで書く (project key が JQL の予約語と重なっても読めるように)
-  - issue type 名は project の issue type (`acli jira project view --key <project key> --json` の `issueTypes`) と比べる
-- `blocked` を書いた trigger があると、tick ごとに open な一覧に加えて、依存を持つ open な issue を検索し (`issueLinkType = "is blocked by"`)、当たった issue を 1 件ずつ読み直して依存先の status の区分を見る
+案内の「issue 側の述語」。
 
 ### 2.3 CL 側の述語 (`on: cl` の `when`)
 
-CL の状態の語彙 (system.md §6) は、真偽の key で書く。`true` なら その状態の CL に、`false` なら その状態でない CL に当たる。
-
-| key | 語彙 | 当たる CL (`true` のとき) |
-|---|---|---|
-| `conflict` | `cl.conflict` | merge conflict を持つ。GitHub が conflict を計算し終えていない CL (`mergeable` が `UNKNOWN`) は、`true` にも `false` にも当たらない (次の tick で見直す) |
-| `review_unresolved` | `cl.review_unresolved` | collaborator が書いた未解決の review thread が 1 本以上ある。thread の書き手は、thread の最初の comment の作者 |
-| `ci_failed` | `cl.ci_failed` | head commit の checks の集計が失敗 (`FAILURE` か `ERROR`) している。checks が無いか、走っている途中なら失敗ではない |
-| `approved` | `cl.approved` | review で承認済み (`reviewDecision` が `APPROVED`) |
-
-絞り込み:
-
-| key | 型 | 当たる CL |
-|---|---|---|
-| `labels.all` / `labels.any` / `labels.none` | 文字列の列 | issue 側 (§2.2) と同じ |
-| `head` | 文字列 | head branch の名前が pattern に当たり、かつ head が同じ repo の branch である。pattern は Go の `path.Match` の綴り (`*` は `/` 以外の文字の列、`?` は `/` 以外の 1 文字、`[...]` は文字の組) |
-| `same_repo` | 真偽 | `true` なら head が同じ repo の branch (fork でない)、`false` なら fork の branch |
-| `author` | 文字列 | issue 側 (§2.2) と同じ |
-| `draft` | 真偽 | `true` なら draft、`false` なら draft でない |
-
-- `head` を書いたら、fork の CL には当たらない。fork からは誰でも同じ綴りの head branch を作れるため (system.md §6)。`head` と `same_repo: false` は一緒に書けない
-- head branch の名前は、大文字と小文字を区別して比べる (git と同じ)
-
-上の表は `tracker.kind` が `github` のときの GitHub の field で書いた。`gitlab` では、語彙と絞り込みを merge request の field に次のように写す。
-
-| 語彙 / 絞り込み | GitLab の field |
-|---|---|
-| `conflict` | `has_conflicts` が `true` なら conflict を持つ。そうでなく `detailed_merge_status` が `checking` / `unchecked` / `preparing` なら、計算し終えていないので `true` にも `false` にも当たらない (次の tick で見直す)。どちらでもなければ conflict を持たない。`detailed_merge_status` が無い応答は、対象の版より古い GitLab として読めない失敗にする |
-| `review_unresolved` | 解決できる (resolvable な note を持つ) discussion で、解決されていない (resolvable な note のどれかが未解決) もののうち、最初の note の作者が collaborator のものが 1 本以上ある。最初の note が system note の discussion は数えない |
-| `ci_failed` | head の pipeline (`head_pipeline`) の `status` が `failed`。`canceled` は失敗に数えない (人が意図して止めた pipeline に worker を送らない)。pipeline が無ければ失敗ではない |
-| `approved` | merge request の承認 (`/merge_requests/:iid/approvals`) の `approved`。CE では 1 人以上の承認、有償の tier では承認ルールの充足で、どちらも host の判断に従う |
-| `draft` | `draft` |
-| `same_repo` | `source_project_id` と `target_project_id` が同じ。source の fork が消えて `source_project_id` が null なら `false` (§2.4) |
-| `head` | `source_branch` |
-| `author` | issue 側 (§2.2) と同じ線 (access level が Developer 以上) |
-
-- `gitlab` の merge request は、open な一覧を読んだ後に 1 本ずつ、merge request 本体・承認・discussion を読み直す (`head_pipeline` は一覧の応答に無く、承認と discussion は別の endpoint にあるため)。CL 側の trigger を置くと、open な merge request 1 本につき 3 往復の API を毎 tick 撃つ
-- `gitlab` の merge request の終端は `state` が `merged` か `closed`。`locked` (merge の処理中) は終端にしない (merge に失敗すると `opened` に戻る)
+案内の「CL 側の述語」。
 
 ### 2.4 評価の規則
 
-- 作業対象ごとに trigger を宣言順に評価し、最初に当たった 1 つだけを採る。issue には `on: issue` の trigger だけを、CL には `on: cl` の trigger だけを当てる
-- 候補は、trigger の宣言順を先に、同じ trigger の中では作業対象の作成日時の古い順に並べる。作成日時が同じなら番号の小さい順
-  - `jira` では、作成日時の代わりに番号の小さい順に並べる。acli の一覧は作成日時を返さない (ADR 0010)
-- **曖昧な CL** (同じ repo の同じ head branch から、open な CL が 2 本以上ある) には、CL 側の trigger を当てない。fork の head branch は、fork ごとに別の branch として数える (fork は GitHub では head の repo の名前、GitLab では `source_project_id` で見分ける)
-- loop は、claim している作業対象 (走っている・止めている・確かめ待ち・再起動待ち) の workspace で checkout されている branch を head に持つ、同じ repo の CL にも CL 側の trigger を当てない (§6 の tick の手順)。試運転 (§5) は claim を持たないので、この除外は掛からない
-- open な一覧は、trigger に現れる種類のものだけを読む (`on: cl` の trigger が 1 つも無ければ CL の一覧を読まず、`on: issue` の trigger が無ければ issue の一覧を読まない)
-- head の repo が消えた fork の CL (GitHub の `headRepository` が null、GitLab の `source_project_id` が null) は、どの fork の branch か分からないので、曖昧さを数えるときに数えない
+案内の「評価の規則」。
 
 ### 2.5 `$VAR` による間接参照
 
-- 「`$VAR` で書ける」とした項目は、値の全体を `$NAME` (`NAME` は `[A-Za-z_][A-Za-z0-9_]*`) にすると、loop を起動した環境の変数 `NAME` の値に置き換わる
-- 変数が未設定か空なら、項目と変数を名指しして失敗する
-- 値の一部だけを置き換える書き方 (`acme/$NAME`) は持たない。`$` を含む値は、そのままの綴りとして読む
+案内の「`$VAR` による間接参照」。
 
 ### 2.6 hooks
 
-- `sh -c` で撃つ。cwd は作業対象の workspace
-- 環境変数は loop の環境に、次のものを足す
-
-| 変数 | 中身 |
-|---|---|
-| `CLAUDE_DISPATCHER_WORKSPACE` | workspace の絶対 path |
-| `CLAUDE_DISPATCHER_CLONE` | workflow 定義の dir の絶対 path |
-| `CLAUDE_DISPATCHER_KIND` | 作業対象の種類 (`issue` か `cl`) |
-| `CLAUDE_DISPATCHER_NUMBER` | 作業対象の番号 |
-
+案内の「hooks」。
 
 ### 2.7 template
 
-action と本文 (共通 prompt) は、worker を起動するたびに Go の text/template で描画する。
-
-| 変数 | 中身 |
-|---|---|
-| `.issue.number` | issue の番号 |
-| `.issue.title` | 題名 |
-| `.issue.url` | URL |
-| `.issue.labels` | label の綴りの列 |
-| `.issue.key` | issue の key (`WIDGETS-123`)。`tracker.kind` が `jira` のときだけある |
-| `.cl.number` | CL の番号 |
-| `.cl.title` | 題名 |
-| `.cl.url` | URL |
-| `.cl.labels` | label の綴りの列 |
-| `.cl.head` | head branch の名前 |
-| `.trigger.name` | 当たった trigger の名前 |
-| `.attempt` | 何回目の起動か (1 から) |
-| `.workspace` | workspace の絶対 path |
-
-- `.issue` は issue の worker にだけ、`.cl` は CL の worker にだけある
-- `jira` の `.issue.url` は `https://<site>/browse/<key>`、`.issue.labels` は Jira の label の綴りのまま。`.issue.key` を他の kind で書くと、未知の変数として検査 (§2.8) で落ちる
-- 未知の変数 (`.issue.body` など、CL の worker の `.issue`) と未知の関数は、描画の失敗にする。描画に失敗した attempt は失敗
-- workflow 定義の検査 (§2.8) で、action と本文を見本の変数 (どれも空でない値) で描画してみる。action はその trigger の種類の見本で、本文はどの worker にも渡るので、trigger に現れる種類すべての見本で描画する。描画できなければ検査で落とすので、作業対象を読んでから描画に失敗するのは、見本では通った分岐だけになる
-- 例: `/swat-skills:playbook-implementation issue #{{ .issue.number }} ({{ .issue.url }})`
+案内の「template」。
 
 ### 2.8 検査
 
-次の誤りは、項目の位置 (`triggers[0].when.labels.all` の形) を名指しして失敗させる。誤りが複数あれば、すべてを 1 行ずつ出す。
+何が誤りになるかは案内の「検査」。CLI の出力は次のとおり。
 
-- file が無い・読めない・front matter が無い・YAML として読めない (YAML の誤りの行番号も file の行番号で出す)
-- 未知の key (ADR 0009「未知の key は失敗させる」)
-- 型の誤り・必須の項目の欠落・未知の値 (`tracker.kind`・`triggers[].on`・`author`)
-- 空の文字列 (空の `assignee` や label を「条件なし」と取り違えないため)
-- 上の表の各項目の制約 (`polling.interval` の範囲・trigger の名前の綴りと重複・`assignee` と `unassigned` の併記・空の `labels.any` / `status.any` / `type.any`・`head` の pattern の綴り・`head` と `same_repo: false` の併記・空の `action`)
-- `$VAR` の未設定と、`tracker.token` に値そのものを書いたこと
-- `tracker.kind` が支えない宣言。key を書く順 (`triggers` を `tracker` より前に書くなど) によらず名指しする
-  - `gitlab`: `tracker.token`・`blocked` (§2.1・§2.2)
-  - `jira`: `tracker.token`・`author`・`milestone`・`on: cl` の trigger (§2.1・§2.2)。`tracker.host` の欠落は必須の項目の欠落
-  - `github` と `gitlab`: `status`・`type` (§2.2)
-  - `github`: `tracker.host` は未知の key
-- `jira` の次の誤りは、workflow 定義だけでは確かめられないので、loop の起動時・試運転・`doctor` の issue 置き場の確認 (§6) で名指しする。tick の中では確かめない
-  - acli の認証の site が `tracker.host` と違う (acli は active な account の site を読むため)
-  - `status` の status 名・`type` の issue type 名が実在しない
-- 同じ key を 1 つの対応表に 2 回書いたこと
-- action と本文の template を描画できないこと (§2.7。綴りの誤り・未知の変数・未知の関数)
+- 誤りは 1 件 1 行で、すべてを出す。行は `<workflow 定義の絶対 path>: ` で始まり、項目の誤りなら続けて項目の位置 (`triggers[0].when.labels.all` の形)・file の行番号 (` (<n> 行目)`。分からなければ付けない)・理由を出す
+  - 項目の位置を持たない誤り (file を読めない・front matter が無い・YAML として読めない・本文の template を描画できない) は、path の後ろに理由だけを出す。YAML の誤りの行番号は file の行番号で出す
+  - 誤りは file の中の順 (行番号の順) に並べる
+- 次の出力では、誤りの行の後ろに 1 行 ``書き方は `claude-dispatcher guide` を参照`` を足す。workflow 定義の誤りは案内を読めば直せるため
+  - `loop` の起動時と試運転 (§5): stderr
+  - `doctor` (§7.4): stdout。`NG` の行の後ろに、頭に何も付けずに出す
+- 次の出力では足さない
+  - tick の中の読み直しの失敗 (tick の error。§6)
+  - `status` と `paths` (§7.2・§7.3) の失敗
+  - 事前検査 (§2.9) の失敗
+
+| いつ | 落ちたら |
+|---|---|
+| `loop` の起動時 (§6) | 起動を失敗させる (exit 2) |
+| 試運転 (§5) | stdout に何も出さずに失敗させる (exit 2) |
+| tick の中 (§6) | その tick は何も起動しない |
+| `doctor` (§7.4) | `NG` の行に出し、以降は確かめない (exit 1) |
+| `status`・`paths` (§7.2・§7.3) | 失敗させる (exit 2) |
+
+- `jira` の、acli の認証の site と status 名・issue type 名の実在は、workflow 定義だけでは確かめられないので、issue 置き場の確認 (§6) で名指しする
 
 ### 2.9 事前検査
 
-trigger ごとに、action の先頭の skill か command が呼べるかを確かめる (system.md §8)。作業対象に依らずに確かめられるよう、描画の前の template を見る。
+探す置き場・名前の当て方・何が誤りになるかは案内の「事前検査」。CLI の出力は次のとおり。
 
-- action の先頭 (前の空白を除く) が `/` なら、空白までを名前とし、次の置き場の skill と command から探す
-  - **repo の `.claude/`**: workflow 定義の dir の `.claude/skills/<dir>/SKILL.md` と `.claude/commands/<名前>.md`
-  - **`~/.claude/`**: HOME の `.claude/skills/<dir>/SKILL.md` と `.claude/commands/<名前>.md`
-  - **plugin**: 次の 3 つから見つけた plugin の skill と command
-    - `~/.claude/plugins/installed_plugins.json` が挙げる plugin のうち、`scope` が `user` のものと、`project` で `projectPath` が workflow 定義の dir のもの。`project` の plugin は commit された `.claude/settings.json` で有効になり、clone の worktree である workspace でも読まれる。`local` の plugin は commit しない `.claude/settings.local.json` で有効になり、workspace では読まれないので数えない
-    - repo の `.claude/skills/` と `~/.claude/skills/` の直下の dir のうち、`.claude-plugin/plugin.json` を持つもの
-    - `claude.args` の `--plugin-dir <path>` (相対 path は workflow 定義の dir から)
-- 名前の当て方
-  - skill の名前は、`SKILL.md` の YAML の front matter の `name`。無ければ dir の名前
-  - command の名前は、`commands/` からの相対 path の `.md` を除き、`/` を `:` にしたもの (`commands/foo/bar.md` は `foo:bar`)。symlink の dir も辿る
-  - plugin の skill と command は `<plugin の名前>:<名前>` で呼ぶ。plugin の名前は `.claude-plugin/plugin.json` の `name`。front matter に `name` を持つ plugin の skill は、接頭辞の無い `<名前>` でも呼ぶ
-  - plugin の skill は、plugin の `skills/<dir>/SKILL.md` と、`plugin.json` の `skills` が挙げる path (その path の `SKILL.md`、無ければその下の `<dir>/SKILL.md`)。どちらも無い plugin は、root の `SKILL.md` を単一の skill として読む
-  - plugin の command は、plugin の `commands/`。`plugin.json` に `commands` があれば `commands/` を置き換える: path (か path の列) ならその path の command、対応表なら key が command の名前
-  - `plugin.json` の空の path は置き場にしない
-  - skill と plugin の dir を探す置き場 (`.claude/skills/`・plugin の `skills/`・`plugin.json` の `skills` が挙げる path) の直下は、dir (指す先が dir の symlink を含む) だけを skill か plugin の dir とみなす。直下の通常の file (`.DS_Store`・README 等) は飛ばし、読めなかった置き場に数えない
-  - repo の `.claude/skills/` と `~/.claude/skills/` の直下の dir は、`SKILL.md` を持てば skill の dir、`.claude-plugin/plugin.json` を持てば plugin の dir とする (両方を持つ dir は両方に数える)。`SKILL.md` を確かめられない (dir に権限が無い等) dir は、その失敗 1 件だけを読めなかった置き場に数え、`plugin.json` は確かめられたときだけ plugin の dir とする
-- action の先頭を template 変数で始める (前の空白を除いて `{{` で始まる) と、先頭の `/名前` を確かめられないので、その trigger を失敗させる
-- 先頭が `/` でも template 変数でもない action は、確かめない
 - 誤りは trigger を名指しして 1 件 1 行で出す
 - 置き場を読めなかったとき (無いのではなく、読み出しか解析に失敗したとき) は、見つからない理由の後ろに ` · 読めなかった置き場: <path> (<理由>), …` を足す
+  - skill と plugin の dir を探す置き場の直下の通常の file (`.DS_Store`・README 等) は飛ばし、読めなかった置き場に数えない
+  - repo の `.claude/skills/` と `~/.claude/skills/` の直下の dir で、`SKILL.md` を確かめられない (dir に権限が無い等) ものは、その失敗 1 件だけを読めなかった置き場に数え、`plugin.json` は確かめられたときだけ plugin の dir とする
 - 置き場を探す path の途中か置き場そのものが、dir であるはずなのに file のとき (`plugin.json` の `skills` が file を指す・`--plugin-dir` が file を指す・plugin の `.claude-plugin` が file 等。OS の返す理由は not a directory) は、読み出しの失敗ではなく設定の誤りとして、読めなかった置き場に載せず、見つからない理由の後ろに ` · 設定の誤り (dir でなく file を指す): <path>, …` を足す。`<path>` は file になっている path (`--plugin-dir` なら workflow 定義の dir から解いた path) で、その下の path を何通り探しても 1 度だけ載せる。両方あるときは設定の誤りを先に足す
+- 事前検査の失敗には、案内を指す行 (§2.8) を足さない。多くは skill の未導入で、書き方では解けない
 
 ```
 trigger implement: action の先頭の /playbook が見つからない (plugin・repo の .claude・~/.claude の skill と command)
@@ -334,10 +128,6 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 | 試運転 (§5) | 失敗させる (exit 2) |
 | tick の中 (§6) | その trigger だけを評価から外し、再起動もしない。他の trigger は評価して起動する (外した trigger にも当たる作業対象は、他の trigger の候補になる) |
 | `doctor` (§7.4) | `NG` の行に出す |
-
-- Claude Code に組み込みの command (`/review` など) は 3 つの置き場に無いので、見つからないと数える
-- plugin が有効か (settings の `enabledPlugins`) は見ない
-- 置き場は Claude Code の読み方より広めに取る (見つからないと取り違えて起動を止めない側に倒す)。広めに取った分は、worker の起動の後に claude が名前を解けずに失敗する
 
 ## 3. exit code
 
@@ -429,7 +219,7 @@ fix-ci	cl	#51	ログインの失敗を記録する
 - `jira` では、snapshot を作る前に issue 置き場を確かめる (§6 の「起動時の検査」の `jira` の行と同じもの)
 - 題名の制御文字 (タブ・改行・ESC など) は空白に置き換える
 
-失敗したら、stdout に何も出さず、stderr に理由を出して §3 の exit code で終わる。workflow 定義の誤りは 1 件 1 行で出す。
+失敗したら、stdout に何も出さず、stderr に理由を出して §3 の exit code で終わる。workflow 定義の誤りは 1 件 1 行で出し、後ろに案内を指す行を足す (§2.8)。
 
 ## 6. `loop`
 
@@ -828,7 +618,7 @@ triggers:
 
 **`doctor`**: 導入を確かめる。何も書かない。確かめたことを 1 件 1 行で、`ok` / `NG` / `警告` を頭に付けて stdout に出す。
 
-1. workflow 定義を読めて、検査 (§2.8) に通る。落ちたら以降は確かめない
+1. workflow 定義を読めて、検査 (§2.8) に通る。落ちたら誤りを 1 件 1 行の `NG` の行に出し、後ろに案内を指す行を足して (§2.8)、以降は確かめない
 2. tracker の CLI (gh・glab・acli) の認証が通り、issue 置き場が見える (open な作業対象を読める)。issue 置き場は `github` なら `<owner>/<name>`、`gitlab` なら `<host>/<path>`、`jira` なら `<site>/<project key>` で出す
    - `jira` は loop の起動時と同じ issue 置き場の確認 (§6) を通す。落ちたら理由を `NG` の行に出す (存在しない status 名と issue type 名は、1 つ 1 行で trigger と一緒に名指しする)
 3. tracker の CLI と `claude.command` を解決できる。`on: cl` の trigger があれば git も (loop の起動時の検査と同じ。§6)
@@ -874,3 +664,17 @@ claude-dispatcher v0.3.0 (<commit の hash>)
 - commit: Releases の binary は tag の commit。git の作業ツリーでの `go build` は build 情報の `vcs.revision`。`go install <module>@<版>` の binary は module cache から build するので commit を持たず `unknown`。VCS の情報が無い build も `unknown`
 
 exit: 0。
+
+## 9. `guide`
+
+```
+claude-dispatcher guide
+```
+
+案内 ([`internal/guide/guide.md`](../../internal/guide/guide.md)。workflow 定義の書き方・action が守る約束・導入の流れ) を stdout にそのまま出す。
+
+- workflow 定義も state dir も読まず、tracker の CLI も撃たない。`--version` (§8) と同じく、導入が壊れていても撃てる
+- `tracker.kind` で出し分けない。tracker の種類ごとの違いは案内の中の表に並べる
+- usage (`--help`・引数の誤り) の末尾に、案内を指す 1 行を出す
+
+exit: 0 / 2 = 引数の誤り (`guide` の後ろに引数を渡した)。
