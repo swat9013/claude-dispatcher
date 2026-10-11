@@ -327,56 +327,79 @@ func join(path, key string) string {
 func (c *checker) decode(root *yaml.Node, def *Definition) {
 	c.trackerKind = peekTrackerKind(root)
 	// top level は key を持たないので、欠落を行なしで名指しする
-	c.mapping(&yaml.Node{}, root, "", map[string]field{
+	c.mapping(&yaml.Node{}, root, "", c.topFields(def))
+}
+
+// 以下の *Fields は、対応表ごとに受ける key とその読み方の表。読み込みが受ける key を案内と突き合わせるテストが列挙する
+// (ADR 0012)。
+
+// topFields は front matter の top level の表。
+func (c *checker) topFields(def *Definition) map[string]field {
+	return map[string]field{
 		"tracker": {required: true, read: func(key, n *yaml.Node, path string) { c.tracker(key, n, path, &def.Tracker) }},
 		"polling": {read: func(key, n *yaml.Node, path string) { c.polling(key, n, path, &def.Interval) }},
 		"workspace": {read: func(key, n *yaml.Node, path string) {
-			c.mapping(key, n, path, map[string]field{
-				"root": {read: func(_, n *yaml.Node, path string) {
-					if s, ok := c.variableOrLiteral(n, path); ok {
-						def.WorkspaceRoot = c.absolute(n, path, def.Dir, s)
-					}
-				}},
-			})
+			c.mapping(key, n, path, c.workspaceFields(def))
 		}},
 		"hooks": {read: func(key, n *yaml.Node, path string) { c.hooks(key, n, path, &def.Hooks) }},
 		"limits": {read: func(key, n *yaml.Node, path string) {
-			c.mapping(key, n, path, map[string]field{
-				"max_concurrent": {read: func(_, n *yaml.Node, path string) {
-					if v, ok := c.positive(n, path); ok {
-						def.MaxConcurrent = v
-					}
-				}},
-				"max_attempts": {read: func(_, n *yaml.Node, path string) {
-					if v, ok := c.positive(n, path); ok {
-						def.MaxAttempts = v
-					}
-				}},
-				"max_retry_backoff": {read: func(_, n *yaml.Node, path string) {
-					if d, ok := c.duration(n, path); ok {
-						if d <= 0 {
-							c.fail(n, path, "0 より長くする")
-							return
-						}
-						def.MaxRetryBackoff = d
-					}
-				}},
-				"stall_timeout": {read: func(_, n *yaml.Node, path string) { c.timeout(n, path, &def.StallTimeout) }},
-				"run_timeout":   {read: func(_, n *yaml.Node, path string) { c.timeout(n, path, &def.RunTimeout) }},
-			})
+			c.mapping(key, n, path, c.limitsFields(def))
 		}},
 		"claude": {read: func(key, n *yaml.Node, path string) {
-			c.mapping(key, n, path, map[string]field{
-				"command": {read: func(_, n *yaml.Node, path string) {
-					if s, ok := c.str(n, path); ok {
-						def.Claude.Command = s
-					}
-				}},
-				"args": {read: func(_, n *yaml.Node, path string) { def.Claude.Args, _ = c.strList(n, path) }},
-			})
+			c.mapping(key, n, path, c.claudeFields(def))
 		}},
 		"triggers": {required: true, read: func(_, n *yaml.Node, path string) { def.Triggers = c.triggers(n, path) }},
-	})
+	}
+}
+
+// workspaceFields は workspace の表。
+func (c *checker) workspaceFields(def *Definition) map[string]field {
+	return map[string]field{
+		"root": {read: func(_, n *yaml.Node, path string) {
+			if s, ok := c.variableOrLiteral(n, path); ok {
+				def.WorkspaceRoot = c.absolute(n, path, def.Dir, s)
+			}
+		}},
+	}
+}
+
+// limitsFields は limits の表。
+func (c *checker) limitsFields(def *Definition) map[string]field {
+	return map[string]field{
+		"max_concurrent": {read: func(_, n *yaml.Node, path string) {
+			if v, ok := c.positive(n, path); ok {
+				def.MaxConcurrent = v
+			}
+		}},
+		"max_attempts": {read: func(_, n *yaml.Node, path string) {
+			if v, ok := c.positive(n, path); ok {
+				def.MaxAttempts = v
+			}
+		}},
+		"max_retry_backoff": {read: func(_, n *yaml.Node, path string) {
+			if d, ok := c.duration(n, path); ok {
+				if d <= 0 {
+					c.fail(n, path, "0 より長くする")
+					return
+				}
+				def.MaxRetryBackoff = d
+			}
+		}},
+		"stall_timeout": {read: func(_, n *yaml.Node, path string) { c.timeout(n, path, &def.StallTimeout) }},
+		"run_timeout":   {read: func(_, n *yaml.Node, path string) { c.timeout(n, path, &def.RunTimeout) }},
+	}
+}
+
+// claudeFields は claude の表。
+func (c *checker) claudeFields(def *Definition) map[string]field {
+	return map[string]field{
+		"command": {read: func(_, n *yaml.Node, path string) {
+			if s, ok := c.str(n, path); ok {
+				def.Claude.Command = s
+			}
+		}},
+		"args": {read: func(_, n *yaml.Node, path string) { def.Claude.Args, _ = c.strList(n, path) }},
+	}
 }
 
 // unsupported は、宣言 n を支えない tracker の種類とその理由の表 why に今の種類があれば、n を理由を添えて名指しで失敗させる。
@@ -431,10 +454,15 @@ func (c *checker) absolute(n *yaml.Node, path, dir, s string) string {
 }
 
 func (c *checker) hooks(owner, n *yaml.Node, path string, h *Hooks) {
+	c.mapping(owner, n, path, c.hooksFields(h))
+}
+
+// hooksFields は hooks の表。
+func (c *checker) hooksFields(h *Hooks) map[string]field {
 	script := func(target *string) field {
 		return field{read: func(_, n *yaml.Node, path string) { *target, _ = c.str(n, path) }}
 	}
-	c.mapping(owner, n, path, map[string]field{
+	return map[string]field{
 		"after_create":  script(&h.AfterCreate),
 		"before_run":    script(&h.BeforeRun),
 		"after_run":     script(&h.AfterRun),
@@ -448,7 +476,7 @@ func (c *checker) hooks(owner, n *yaml.Node, path string, h *Hooks) {
 				h.Timeout = d
 			}
 		}},
-	})
+	}
 }
 
 // duration は Go の duration の綴りの文字列を読む。
@@ -494,7 +522,16 @@ func (c *checker) tracker(owner, n *yaml.Node, path string, t *Tracker) {
 		t.Project.Host = gitlab.DefaultHost
 	}
 	hostWritten := false
-	c.mapping(owner, n, path, map[string]field{
+	c.mapping(owner, n, path, c.trackerFields(t, &hostWritten))
+	// jira の site は既定を持たない。mapping の必須は種類に依らないので、ここで欠落を名指しする
+	if c.trackerKind == Jira && !hostWritten && n.Kind == yaml.MappingNode {
+		c.fail(owner, join(path, "host"), "必須の項目が無い (tracker.kind: %s では Jira Cloud の site を書く)", Jira)
+	}
+}
+
+// trackerFields は tracker の表。host を読んだら hostWritten を立てる。
+func (c *checker) trackerFields(t *Tracker, hostWritten *bool) map[string]field {
+	return map[string]field{
 		// 種類の値は peekTrackerKind が読んだものを使う。ここでは読めなかった誤りを名指しする
 		"kind": {required: true, read: func(_, n *yaml.Node, path string) {
 			if s, ok := c.str(n, path); ok && c.trackerKind == "" {
@@ -512,7 +549,7 @@ func (c *checker) tracker(owner, n *yaml.Node, path string, t *Tracker) {
 			}
 		}},
 		"host": {read: func(key, n *yaml.Node, path string) {
-			hostWritten = true
+			*hostWritten = true
 			switch c.trackerKind {
 			case GitHub:
 				c.fail(key, path, "未知の key")
@@ -530,10 +567,6 @@ func (c *checker) tracker(owner, n *yaml.Node, path string, t *Tracker) {
 				t.Token, _ = c.variableOnly(n, path)
 			}
 		}},
-	})
-	// jira の site は既定を持たない。mapping の必須は種類に依らないので、ここで欠落を名指しする
-	if c.trackerKind == Jira && !hostWritten && n.Kind == yaml.MappingNode {
-		c.fail(owner, join(path, "host"), "必須の項目が無い (tracker.kind: %s では Jira Cloud の site を書く)", Jira)
 	}
 }
 
@@ -558,7 +591,12 @@ func parsed[T any](c *checker, n *yaml.Node, path string, parse func(string) (T,
 }
 
 func (c *checker) polling(owner, n *yaml.Node, path string, interval *time.Duration) {
-	c.mapping(owner, n, path, map[string]field{
+	c.mapping(owner, n, path, c.pollingFields(interval))
+}
+
+// pollingFields は polling の表。
+func (c *checker) pollingFields(interval *time.Duration) map[string]field {
+	return map[string]field{
 		"interval": {read: func(_, n *yaml.Node, path string) {
 			d, ok := c.duration(n, path)
 			switch {
@@ -569,7 +607,7 @@ func (c *checker) polling(owner, n *yaml.Node, path string, interval *time.Durat
 				*interval = d
 			}
 		}},
-	})
+	}
 }
 
 var triggerName = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
@@ -590,50 +628,62 @@ func (c *checker) triggers(n *yaml.Node, path string) []trigger.Trigger {
 		t := &triggers[i]
 		item = resolve(item)
 		// when と action は on の種類で読み方が変わるので、on を読んでから (key の順に関わらず) 読む
-		var when, whenKey, action *yaml.Node
-		var actionPath, whenPath string
-		c.mapping(item, item, at, map[string]field{
-			"name": {required: true, read: func(_, n *yaml.Node, path string) {
-				s, ok := c.str(n, path)
-				switch {
-				case !ok:
-				case !triggerName.MatchString(s):
-					c.fail(n, path, "%q: 名前は [A-Za-z0-9._-]+ で書く", s)
-				case names[s]:
-					c.fail(n, path, "%q: 名前が前の trigger と重なる", s)
-				default:
-					names[s] = true
-					t.Name = s
-				}
-			}},
-			"on": {required: true, read: func(_, n *yaml.Node, path string) {
-				if s, ok := c.str(n, path); ok {
-					switch kind := target.Kind(s); kind {
-					case target.KindIssue:
-						t.On = kind
-					case target.KindCL:
-						c.unsupported(n, path, unsupportedCL)
-						t.On = kind
-					default:
-						c.fail(n, path, "未知の値 %q (%s / %s)", s, target.KindIssue, target.KindCL)
-					}
-				}
-			}},
-			"when":   {read: func(key, n *yaml.Node, path string) { whenKey, when, whenPath = key, n, path }},
-			"action": {required: true, read: func(_, n *yaml.Node, path string) { action, actionPath = n, path }},
-		})
+		var later deferredItems
+		c.mapping(item, item, at, c.triggerFields(t, names, &later))
 		switch {
-		case when == nil:
+		case later.when == nil:
 		case t.On == target.KindIssue:
-			c.issuePredicate(whenKey, when, whenPath, &t.Issue)
+			c.issuePredicate(later.whenKey, later.when, later.whenPath, &t.Issue)
 		case t.On == target.KindCL:
-			c.clPredicate(whenKey, when, whenPath, &t.CL)
+			c.clPredicate(later.whenKey, later.when, later.whenPath, &t.CL)
 		}
-		if action != nil {
-			t.Action = c.action(action, actionPath, t.On)
+		if later.action != nil {
+			t.Action = c.action(later.action, later.actionPath, t.On)
 		}
 	}
 	return triggers
+}
+
+// deferredItems は trigger の項目のうち、on を読んでから読む when と action の node と位置。
+type deferredItems struct {
+	when, whenKey, action *yaml.Node
+	whenPath, actionPath  string
+}
+
+// triggerFields は trigger 1 つの表。name は names (前の trigger の名前) と突き合わせ、when と action は later に預ける。
+func (c *checker) triggerFields(t *trigger.Trigger, names map[string]bool, later *deferredItems) map[string]field {
+	return map[string]field{
+		"name": {required: true, read: func(_, n *yaml.Node, path string) {
+			s, ok := c.str(n, path)
+			switch {
+			case !ok:
+			case !triggerName.MatchString(s):
+				c.fail(n, path, "%q: 名前は [A-Za-z0-9._-]+ で書く", s)
+			case names[s]:
+				c.fail(n, path, "%q: 名前が前の trigger と重なる", s)
+			default:
+				names[s] = true
+				t.Name = s
+			}
+		}},
+		"on": {required: true, read: func(_, n *yaml.Node, path string) {
+			if s, ok := c.str(n, path); ok {
+				switch kind := target.Kind(s); kind {
+				case target.KindIssue:
+					t.On = kind
+				case target.KindCL:
+					c.unsupported(n, path, unsupportedCL)
+					t.On = kind
+				default:
+					c.fail(n, path, "未知の値 %q (%s / %s)", s, target.KindIssue, target.KindCL)
+				}
+			}
+		}},
+		"when": {read: func(key, n *yaml.Node, path string) {
+			later.whenKey, later.when, later.whenPath = key, n, path
+		}},
+		"action": {required: true, read: func(_, n *yaml.Node, path string) { later.action, later.actionPath = n, path }},
+	}
 }
 
 // action は trigger の action を読み、on の種類の見本で描画してみる。種類が読めていなければ描画は確かめない。
@@ -653,16 +703,24 @@ func (c *checker) action(n *yaml.Node, path string, kind target.Kind) string {
 
 func (c *checker) issuePredicate(owner, n *yaml.Node, path string, p *trigger.IssuePredicate) {
 	var assignee, unassigned *yaml.Node
-	c.mapping(owner, n, path, map[string]field{
+	c.mapping(owner, n, path, c.issuePredicateFields(p, &assignee, &unassigned))
+	if assignee != nil && unassigned != nil {
+		c.fail(assignee, path, "assignee と unassigned は一緒に書けない")
+	}
+}
+
+// issuePredicateFields は issue 側の述語の表。assignee と unassigned を読んだら、その node を預ける (併記の検査に使う)。
+func (c *checker) issuePredicateFields(p *trigger.IssuePredicate, assignee, unassigned **yaml.Node) map[string]field {
+	return map[string]field{
 		"labels": {read: func(key, n *yaml.Node, path string) {
 			c.labels(key, n, path, &p.LabelsAll, &p.LabelsAny, &p.LabelsNone)
 		}},
 		"assignee": {read: func(_, n *yaml.Node, path string) {
-			assignee = n
+			*assignee = n
 			p.Assignee, _ = c.str(n, path)
 		}},
 		"unassigned": {read: func(_, n *yaml.Node, path string) {
-			unassigned = n
+			*unassigned = n
 			if b, ok := c.boolean(n, path); ok {
 				p.Unassigned = &b
 			}
@@ -687,15 +745,20 @@ func (c *checker) issuePredicate(owner, n *yaml.Node, path string, p *trigger.Is
 			c.names(key, n, path, &p.TypeAny, &p.TypeNone)
 			c.unsupported(key, path, unsupportedStatusAndType)
 		}},
-	})
-	if assignee != nil && unassigned != nil {
-		c.fail(assignee, path, "assignee と unassigned は一緒に書けない")
 	}
 }
 
 func (c *checker) clPredicate(owner, n *yaml.Node, path string, p *trigger.CLPredicate) {
 	var head *yaml.Node
-	c.mapping(owner, n, path, map[string]field{
+	c.mapping(owner, n, path, c.clPredicateFields(p, &head))
+	if head != nil && p.SameRepo != nil && !*p.SameRepo {
+		c.fail(head, path, "head と same_repo: false は一緒に書けない (head は同じ repo の branch にだけ当たる)")
+	}
+}
+
+// clPredicateFields は CL 側の述語の表。head を読んだら、その node を預ける (same_repo との併記の検査に使う)。
+func (c *checker) clPredicateFields(p *trigger.CLPredicate, head **yaml.Node) map[string]field {
+	return map[string]field{
 		"conflict":          {read: func(_, n *yaml.Node, path string) { p.Conflict = c.condition(n, path) }},
 		"review_unresolved": {read: func(_, n *yaml.Node, path string) { p.ReviewUnresolved = c.condition(n, path) }},
 		"ci_failed":         {read: func(_, n *yaml.Node, path string) { p.CIFailed = c.condition(n, path) }},
@@ -704,7 +767,7 @@ func (c *checker) clPredicate(owner, n *yaml.Node, path string, p *trigger.CLPre
 			c.labels(key, n, path, &p.LabelsAll, &p.LabelsAny, &p.LabelsNone)
 		}},
 		"head": {read: func(_, n *yaml.Node, path string) {
-			head = n
+			*head = n
 			if s, ok := c.str(n, path); ok {
 				if _, err := pathpkg.Match(s, ""); err != nil {
 					c.fail(n, path, "%q: pattern の綴りの誤り (Go の path.Match の綴りで書く)", s)
@@ -715,27 +778,34 @@ func (c *checker) clPredicate(owner, n *yaml.Node, path string, p *trigger.CLPre
 		"same_repo": {read: func(_, n *yaml.Node, path string) { p.SameRepo = c.condition(n, path) }},
 		"author":    {read: func(_, n *yaml.Node, path string) { p.Author = c.author(n, path) }},
 		"draft":     {read: func(_, n *yaml.Node, path string) { p.Draft = c.condition(n, path) }},
-	})
-	if head != nil && p.SameRepo != nil && !*p.SameRepo {
-		c.fail(head, path, "head と same_repo: false は一緒に書けない (head は同じ repo の branch にだけ当たる)")
 	}
 }
 
 // labels は述語の labels (all / any / none) を読む。
 func (c *checker) labels(owner, n *yaml.Node, path string, all, anyOf, none *[]string) {
-	c.mapping(owner, n, path, map[string]field{
+	c.mapping(owner, n, path, c.labelsFields(all, anyOf, none))
+}
+
+// labelsFields は述語の labels の表。
+func (c *checker) labelsFields(all, anyOf, none *[]string) map[string]field {
+	return map[string]field{
 		"all":  {read: func(_, n *yaml.Node, path string) { *all, _ = c.strList(n, path) }},
 		"none": {read: func(_, n *yaml.Node, path string) { *none, _ = c.strList(n, path) }},
 		"any":  c.anyList(anyOf),
-	})
+	}
 }
 
 // names は述語の名前の条件 (status と type の any / none) を読む。
 func (c *checker) names(owner, n *yaml.Node, path string, anyOf, none *[]string) {
-	c.mapping(owner, n, path, map[string]field{
+	c.mapping(owner, n, path, c.namesFields(anyOf, none))
+}
+
+// namesFields は述語の名前の条件 (status と type) の表。
+func (c *checker) namesFields(anyOf, none *[]string) map[string]field {
+	return map[string]field{
 		"none": {read: func(_, n *yaml.Node, path string) { *none, _ = c.strList(n, path) }},
 		"any":  c.anyList(anyOf),
-	})
+	}
 }
 
 // anyList は any の列の読み方。空の列はどの作業対象にも当たらないので拒む。
