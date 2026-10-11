@@ -30,6 +30,9 @@ func TestEveryTemplatePointsToTheGuideInItsFrontMatter(t *testing.T) {
 	for kind, text := range templates {
 		t.Run(kind, func(t *testing.T) {
 			lines := frontMatter(text)
+			if lines == nil {
+				t.Fatalf("雛形に front matter が無いか、閉じていない:\n%s", text)
+			}
 			pointsToGuide := func(line string) bool {
 				return strings.HasPrefix(strings.TrimSpace(line), "#") && strings.Contains(line, "`claude-dispatcher guide`")
 			}

@@ -21,17 +21,20 @@ type nestedTable struct {
 	table keyTable
 }
 
-// section は案内の `### <heading>` の節の本文 (次の見出しの前まで)。節が無ければ空。
-func section(text, heading string) string {
-	start := strings.Index(text, "\n### "+heading+"\n")
+// section は案内の `### <heading>` の節の本文 (同じ深さか浅い次の見出しの前まで)。節が無ければ false。
+func section(text, heading string) (string, bool) {
+	marker := "\n### " + heading + "\n"
+	start := strings.Index(text, marker)
 	if start < 0 {
-		return ""
+		return "", false
 	}
-	body := text[start+len("\n### "+heading+"\n"):]
-	if end := strings.Index(body, "\n#"); end >= 0 {
-		body = body[:end]
+	body := text[start+len(marker):]
+	for _, next := range []string{"\n### ", "\n## "} {
+		if end := strings.Index(body, next); end >= 0 {
+			body = body[:end]
+		}
 	}
-	return body
+	return body, true
 }
 
 // leaves は表の key を、値が対応表でない key まで辿って、案内での path の綴りで返す。
@@ -83,7 +86,10 @@ func TestEveryKeyTheLoaderAcceptsAppearsInTheGuide(t *testing.T) {
 
 	var missing []string
 	for _, root := range roots {
-		body := section(text, root.section)
+		body, ok := section(text, root.section)
+		if !ok {
+			t.Fatalf("案内 (internal/guide/guide.md) に節 ### %s が無い", root.section)
+		}
 		for _, key := range root.table.leaves("") {
 			if !strings.Contains(body, "`"+key+"`") {
 				missing = append(missing, root.section+": "+key)

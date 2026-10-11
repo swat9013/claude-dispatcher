@@ -262,7 +262,7 @@ triggers:                    # 必須。1 つ以上
 - 候補は、trigger の宣言順を先に、同じ trigger の中では作業対象の作成日時の古い順に並べる。作成日時が同じなら番号の小さい順。`jira` では、作成日時の代わりに番号の小さい順 (acli の一覧は作成日時を返さない)
 - 空いている並列の枠 (`limits.max_concurrent` から、走っている worker と再起動待ちの数を引いた分) だけ、候補を先頭から起動する。起動の直前に作業対象を読み直し、終端になっているか trigger から外れていれば起動しない
 - **曖昧な CL** (同じ repo の同じ head branch から、open な CL が 2 本以上ある) には、CL 側の trigger を当てない。fork の head branch は、fork ごとに別の branch として数える (fork は GitHub では head の repo の名前、GitLab では `source_project_id` で見分ける)。head の repo が消えた fork の CL (GitHub の `headRepository` が null、GitLab の `source_project_id` が null) は、どの fork の branch か分からないので、曖昧さを数えるときに数えない
-- loop は、worker を割り当てている作業対象 (worker が走っている・止めている途中・終わった後の確かめ待ち・再起動待ち) の workspace で checkout されている branch を head に持つ、同じ repo の CL にも CL 側の trigger を当てない。issue の worker が CL を開いた後も作業を続けている間に、同じ branch へ CL の worker を重ねないため。試運転はこの除外を掛けない
+- loop は、worker を割り当てている作業対象 (worker が走っている・止めている・終わりを確かめ待ち・再起動待ちのどれか) の workspace で checkout されている branch を head に持つ、同じ repo の CL にも CL 側の trigger を当てない。issue の worker が CL を開いた後も作業を続けている間に、同じ branch へ CL の worker を重ねないため。試運転はこの除外を掛けない
 - open な一覧は、trigger に現れる種類のものだけを読む (`on: cl` の trigger が 1 つも無ければ CL の一覧を読まず、`on: issue` の trigger が無ければ issue の一覧を読まない)
 
 ### `$VAR` による間接参照
