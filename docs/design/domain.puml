@@ -1,0 +1,120 @@
+@startuml claude-dispatcher-domain
+' 記述規約:
+' 1. 全属性に {field} を付ける。PlantUML は () の有無でフィールドとメソッドを分けるので、括弧を含む属性が
+'    メソッド扱いされて画像から無言で消える (構文検査は exit 0 のまま)
+' 2. 検査は exit code で判定する。-tsvg は syntax error でもエラー画像を出して exit 0 を返しうるので、
+'    生成物の有無を成功の判定に使わない
+' 3. stereotype は正本の持ち主: «外部 store» / «loop の記憶» / «CLI の disk»。印の無いものは宣言
+hide circle
+hide empty members
+skinparam packageStyle rectangle
+
+class "project" as Project {
+  {field} scope key : issue 置き場から決まる
+}
+
+package "集約: workflow 定義 (project の宣言。tick ごとに読み直す)" as WorkflowAgg {
+  class "workflow 定義" as Definition {
+    {field} tracker.kind : github | gitlab | jira
+    {field} 並列上限・attempt の上限
+  }
+  class "trigger" as Trigger {
+    {field} 名前 : workflow 定義の中で一意
+    {field} on : issue | cl
+    {field} 述語 (when)
+    {field} action
+  }
+}
+
+package "外部 store (正本は dispatcher の外。dispatcher の集約に入れない)" as External {
+  class "tracker" as Tracker <<外部 store>>
+  class "CL host" as CLHost <<外部 store>>
+  class "issue 置き場" as IssuePlace <<外部 store>> {
+    {field} scope key : tracker ごとの粒度
+  }
+  class "CL 置き場" as CLPlace <<外部 store>>
+  abstract class "作業対象" as WorkTarget <<外部 store>> {
+    {field} Ref : 種類 (issue | cl) + 番号。scope key の中で一意
+    {field} open | 終端
+  }
+  class "issue" as Issue <<外部 store>> {
+    {field} label・assignee・milestone など
+  }
+  class "CL" as CL <<外部 store>> {
+    {field} head branch
+    {field} CL の状態の語彙 (conflict・未解決の review・CI の失敗・承認済み)
+  }
+}
+
+package "集約: loop (claim・attempt・打ち切りの記憶)" as LoopAgg {
+  class "loop" as Loop <<loop の記憶>> {
+    {field} scope key : 起動時の issue 置き場のもの
+  }
+  class "claim" as Claim <<loop の記憶>> {
+    {field} 作業対象 : Ref
+    {field} 段階 : 走っている | 止めている | 終わりを確かめ待ち | 再起動待ち
+    {field} attempt : 1 以上
+    {field} session id : attempt を通して 1 つ
+  }
+  class "打ち切り" as Abandoned <<loop の記憶>> {
+    {field} 作業対象 : Ref
+  }
+}
+
+package "集約: workspace" as WorkspaceAgg {
+  class "workspace" as Workspace <<CLI の disk>> {
+    {field} 作業対象 : Ref
+    {field} path : root の下で作業対象ごとに決まる
+  }
+}
+
+Project "1" -- "1" Definition
+Definition "1" *-- "1..*" Trigger : 宣言順
+Project "1" ..> "1" IssuePlace : ID参照 tracker.repo
+Project "1" ..> "0..1" CLPlace : ID参照
+Project "1" -- "0..1" Loop : 同じマシンの中
+
+Tracker "1" -- "*" IssuePlace
+CLHost "1" -- "*" CLPlace
+IssuePlace "1" -- "*" Issue
+CLPlace "1" -- "*" CL
+Issue --|> WorkTarget
+CL --|> WorkTarget
+
+Loop "1" *-- "*" Claim
+Loop "1" *-- "*" Abandoned
+Claim "0..1" ..> "1" WorkTarget : ID参照 Ref
+Abandoned "0..1" ..> "1" WorkTarget : ID参照 Ref
+Workspace "0..1" ..> "1" WorkTarget : ID参照 Ref
+Claim "*" ..> "1" Trigger : ID参照 名前 (起動した trigger)
+Abandoned "*" ..> "1" Trigger : ID参照 名前 (打ち切ったときの trigger)
+
+note right of Project
+  CL 置き場は、github・gitlab では issue 置き場と同じ場所。
+  jira では #114 まで無い
+end note
+
+note bottom of External
+  CLI はここに書かない。読むだけで、書くのは worker と人。
+  adapter がサービス固有の形を作業対象へ正規化して写す (Anti-Corruption Layer)。
+  1 つのサービスが tracker と CL host を兼ねうる (GitHub・GitLab)。Jira は tracker にだけなれる
+end note
+
+note top of Loop
+  同じ scope key の loop は、マシンの中で 1 本 (scope key の lock)。
+  候補 = いずれかの trigger に当たり ∧ claim されておらず ∧ 打ち切られていない作業対象。
+  snapshot (1 tick で読んだ作業対象の正規化像) は tick を跨いで持ち越さない
+end note
+
+note bottom of Claim
+  同じ作業対象に、claim と打ち切りは同時に立たない。
+  attempt は上限を超えない (上限に達したら打ち切りに移る)。
+  完了 = worker が終わった後に、起動した trigger から外れていること。完了で claim を解く
+end note
+
+note bottom of Workspace
+  終端の作業対象の workspace は残さない
+  (終端を観測したら消し、loop の起動時にも掃除する)。
+  attempt と loop の再起動を跨いで残る
+end note
+@enduml
