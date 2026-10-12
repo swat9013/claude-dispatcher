@@ -342,7 +342,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。
 - **特定の plugin には依存しない**
   - action が呼ぶ skill と command は、利用者が入れた plugin・repo の `.claude/`・`~/.claude/` のどれに置いてもよい
   - 事前検査 (§8) は、この 3 か所の skill と command から先頭の `/名前` を探す。plugin は、user scope で入れたものと、この repo に project scope で入れたものを数える (local scope の plugin は commit しない settings で有効になり、worker の workspace では読まれない)
-- **Claude Code の settings は CLI が書かない** (ADR 0004)。`doctor` は、worker が外部 store を操作するのに要りそうな entry を、使う役割 (tracker / CL host) ごとに、その役割を担うサービスの CLI (gh・glab・acli) の綴りで表示する
+- **Claude Code の settings は CLI が書かない** (ADR 0004)。`doctor` は、worker が外部 store を操作するのに要りそうな entry を、`tracker.kind` の provider が担う役割 (tracker / CL host) ごとに、その CLI (gh・glab・acli) の綴りで表示する
   - `jira` は CL を開く CLI を workflow 定義から決められない (CL 置き場の宣言は #114) ので、その entry も足すよう 1 行で示す
 - **`doctor` は、利用者の約束に頼る宣言を警告する**
   - `cl.approved` に action を当てている (merge を worker に任せうる)

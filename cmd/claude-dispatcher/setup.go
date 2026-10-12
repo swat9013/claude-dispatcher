@@ -107,15 +107,8 @@ type flaggedPlace struct {
 	place    provider.Place
 }
 
-// flagKinds は `setup --kind` で受ける種類を ` / ` で並べる。
-func flagKinds() string {
-	kinds := provider.SetupFlagKinds()
-	names := make([]string, len(kinds))
-	for i, k := range kinds {
-		names[i] = string(k)
-	}
-	return strings.Join(names, " / ")
-}
+// flagKinds は `setup --kind` で受ける種類を誤りの文言の綴りで並べる。
+func flagKinds() string { return provider.Join(provider.SetupFlagKinds()) }
 
 // place は --kind の flag から、その種類の provider の読み方で置き場を読む。flag で受けるのは provider が宣言した種類だけ。
 func (o setupOptions) place() (flaggedPlace, error) {

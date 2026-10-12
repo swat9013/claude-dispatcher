@@ -108,7 +108,7 @@ type harness struct {
 }
 
 func definition(interval time.Duration, maxConcurrent int) workflow.Definition {
-	return workflow.Definition{Interval: interval, MaxConcurrent: maxConcurrent, MaxAttempts: 1, MaxRetryBackoff: 5 * time.Minute,
+	return workflow.Definition{Tracker: githubTracker, Interval: interval, MaxConcurrent: maxConcurrent, MaxAttempts: 1, MaxRetryBackoff: 5 * time.Minute,
 		Triggers: []trigger.Trigger{{Name: "implement", On: target.KindIssue}}}
 }
 
@@ -545,3 +545,6 @@ func TestTickLineNamesAMergeRequestWithItsGitLabReference(t *testing.T) {
 		}
 	}
 }
+
+// githubTracker は、テストの workflow 定義の tracker (作業対象を人が読む行に出す呼び方を決める)。
+var githubTracker = workflow.Tracker{Kind: provider.GitHub}

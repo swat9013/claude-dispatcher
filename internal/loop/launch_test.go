@@ -87,7 +87,7 @@ func assertOneRecheckSkip(t *testing.T, skips []map[string]any, want map[string]
 // runLogging は tick を 1 回だけ回し、log.jsonl の行を log に書く。
 func (o oneTick) runLogging(t *testing.T, log io.Writer) ([]worker.Job, string) {
 	t.Helper()
-	def := workflow.Definition{Interval: time.Minute, MaxConcurrent: max(o.maxConcurrent, 1), MaxAttempts: 1, MaxRetryBackoff: 5 * time.Minute, Triggers: o.triggers}
+	def := workflow.Definition{Tracker: githubTracker, Interval: time.Minute, MaxConcurrent: max(o.maxConcurrent, 1), MaxAttempts: 1, MaxRetryBackoff: 5 * time.Minute, Triggers: o.triggers}
 	var stdout bytes.Buffer
 	var jobs []worker.Job
 	// tick の後に受ける停止要求で、起動した worker の終わりを待って止まる

@@ -4,8 +4,10 @@
 package provider
 
 import (
+	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/swat9013/claude-dispatcher/internal/target"
@@ -21,13 +23,32 @@ const (
 	Jira   Kind = "jira"
 )
 
-// Kinds は provider を持つ種類。誤りで候補を挙げる順と、setup が origin の host を問い合わせる順を兼ねる。
-var Kinds = []Kind{GitHub, GitLab, Jira}
+// Kinds は provider を持つ種類を、表 (providers) の順に返す。
+func Kinds() []Kind {
+	kinds := make([]Kind, len(providers))
+	for i, p := range providers {
+		kinds[i] = p.Kind
+	}
+	return kinds
+}
+
+// Join は種類の列を誤りの文言に出す綴り (`github / gitlab`) にする。
+func Join(kinds []Kind) string {
+	names := make([]string, len(kinds))
+	for i, k := range kinds {
+		names[i] = string(k)
+	}
+	return strings.Join(names, " / ")
+}
 
 // Of は種類の provider。表に無い種類なら false。
 func Of(kind Kind) (Provider, bool) {
-	p, ok := providers[kind]
-	return p, ok
+	for _, p := range providers {
+		if p.Kind == kind {
+			return p, true
+		}
+	}
+	return Provider{}, false
 }
 
 // Feature は、種類によって書けたり書けなかったりする workflow 定義の宣言。
@@ -84,11 +105,14 @@ type Host struct {
 
 // TrackerRole は issue 置き場の役割の宣言。
 type TrackerRole struct {
+	// KeyedIssues は issue を key (`WIDGETS-123`) で指すか。真なら `.issue.key` が使え、参照は IssueKey で組み立てる。偽なら
+	// 参照は Prefix と番号
+	KeyedIssues bool
+	Prefix      string
+	IssueKey    func(place Place, number int) string
 	// Supports は支える宣言。Declines は支えない宣言と、その理由の文言 (誤りの名指しに添える)
 	Supports []Feature
 	Declines map[Feature]string
-	// IssueKey は issue を key で指す種類の、番号の issue の key。nil なら issue を `#<番号>` で指し、`.issue.key` は使えない
-	IssueKey func(place Place, number int) string
 	// Settings は worker が issue 置き場を操作するのに要りそうな Claude Code の settings の entry
 	Settings []string
 }
@@ -125,15 +149,18 @@ func (p Provider) DeclineReason(f Feature) string {
 	return "tracker.kind: " + string(p.Kind) + " の provider に支える宣言が無い"
 }
 
-// Reference は作業対象を人が読む行に出す参照 (formats.md §5)。役割が呼び方を宣言していなければ `#<番号>`。
+// Reference は作業対象を人が読む行に出す参照 (formats.md §5)。呼び方は作業対象の種類の役割が宣言する。CL 置き場の役割を
+// 持たない種類の CL は、workflow 定義の検査が on: cl を弾くので届かない。届けば呼び出し側の誤りなので panic する。
 func (p Provider) Reference(place Place, ref target.Ref) string {
 	switch {
-	case ref.Kind == target.KindIssue && p.Tracker.IssueKey != nil:
+	case ref.Kind == target.KindIssue && p.Tracker.KeyedIssues:
 		return p.Tracker.IssueKey(place, ref.Number)
+	case ref.Kind == target.KindIssue:
+		return p.Tracker.Prefix + strconv.Itoa(ref.Number)
 	case ref.Kind == target.KindCL && p.CLHost != nil:
 		return p.CLHost.Prefix + strconv.Itoa(ref.Number)
 	}
-	return "#" + strconv.Itoa(ref.Number)
+	panic(fmt.Sprintf("tracker.kind: %s の provider は %s を指す役割を持たない", p.Kind, ref))
 }
 
 // Settings は provider が担う役割の settings の entry (issue 置き場・CL 置き場・共通の順)。
@@ -205,28 +232,35 @@ type Setup struct {
 	Flags string
 	// OwnsOrigin は cwd の clone の origin の host を、この種類の置き場と認めるか。nil なら認めない
 	OwnsOrigin func(host string) bool
+	// OriginFallback は、どの provider も認めない origin の host をこの種類の置き場と読むか。真にするのは 1 つだけ
+	OriginFallback bool
 	// CurrentPlace は cwd の clone の置き場を CLI で引く
 	CurrentPlace func(Runtime) (Place, error)
 	// Template は置き場を埋めた雛形
 	Template func(Place) string
 }
 
-// ForOrigin は origin の host を認める provider。Kinds の順に問い合わせ、最初に認めたものを返す。
+// ForOrigin は origin の host を認める provider。認める provider が無ければ、OriginFallback の provider。
 func ForOrigin(host string) (Provider, bool) {
-	for _, kind := range Kinds {
-		if p := providers[kind]; p.Setup.OwnsOrigin != nil && p.Setup.OwnsOrigin(host) {
+	for _, p := range providers {
+		if p.Setup.OwnsOrigin != nil && p.Setup.OwnsOrigin(host) {
+			return p, true
+		}
+	}
+	for _, p := range providers {
+		if p.Setup.OriginFallback {
 			return p, true
 		}
 	}
 	return Provider{}, false
 }
 
-// SetupFlagKinds は `setup --kind` で受ける種類 (Kinds の順)。
+// SetupFlagKinds は `setup --kind` で受ける種類 (表の順)。
 func SetupFlagKinds() []Kind {
 	var kinds []Kind
-	for _, kind := range Kinds {
-		if providers[kind].Setup.Flags != "" {
-			kinds = append(kinds, kind)
+	for _, p := range providers {
+		if p.Setup.Flags != "" {
+			kinds = append(kinds, p.Kind)
 		}
 	}
 	return kinds

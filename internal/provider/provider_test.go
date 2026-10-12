@@ -9,7 +9,7 @@ import (
 )
 
 func TestEveryKindHasAProviderThatDeclaresEveryField(t *testing.T) {
-	for _, kind := range provider.Kinds {
+	for _, kind := range provider.Kinds() {
 		t.Run(string(kind), func(t *testing.T) {
 			p, ok := provider.Of(kind)
 
@@ -25,10 +25,13 @@ func TestEveryKindHasAProviderThatDeclaresEveryField(t *testing.T) {
 			if p.CLHost != nil && p.CLHost.Prefix == "" {
 				t.Fatalf("provider %s が CL の呼び方を宣言していない", kind)
 			}
+			if p.Tracker.KeyedIssues != (p.Tracker.IssueKey != nil) || (!p.Tracker.KeyedIssues && p.Tracker.Prefix == "") {
+				t.Fatalf("provider %s の issue の呼び方が key の有無と合わない", kind)
+			}
 			if p.Host.Parse != nil && p.Host.Default == "" && p.Host.RequiredHint == "" {
 				t.Fatalf("provider %s の tracker.host は必須なのに、欠落の誤りに添える案内が無い", kind)
 			}
-			if p.Setup.OwnsOrigin != nil && (p.Setup.CurrentPlace == nil || p.Setup.Template == nil) {
+			if (p.Setup.OwnsOrigin != nil || p.Setup.OriginFallback) && (p.Setup.CurrentPlace == nil || p.Setup.Template == nil) {
 				t.Fatalf("provider %s は origin を認めるのに、clone から雛形を書けない", kind)
 			}
 			if p.Setup.Flags != "" && (p.Setup.Template == nil || p.Host.Parse == nil) {
@@ -39,7 +42,7 @@ func TestEveryKindHasAProviderThatDeclaresEveryField(t *testing.T) {
 }
 
 func TestEveryProviderEitherSupportsOrDeclinesEachDeclarationWithAReason(t *testing.T) {
-	for _, kind := range provider.Kinds {
+	for _, kind := range provider.Kinds() {
 		p, _ := provider.Of(kind)
 		for _, f := range provider.TrackerFeatures {
 			t.Run(string(kind)+"/"+string(f), func(t *testing.T) {
@@ -58,7 +61,7 @@ func TestEveryProviderEitherSupportsOrDeclinesEachDeclarationWithAReason(t *test
 }
 
 func TestAProviderWithoutTheCLHostRoleSaysWhyCLTriggersCannotBeWritten(t *testing.T) {
-	for _, kind := range provider.Kinds {
+	for _, kind := range provider.Kinds() {
 		p, _ := provider.Of(kind)
 
 		if p.CLHost == nil && (p.Supported(provider.CL) || p.NoCLHost == "") {
@@ -110,6 +113,27 @@ func TestOriginOnGitHubIsGitHubAndAnyOtherHostIsGitLab(t *testing.T) {
 		if !ok || p.Kind != want {
 			t.Fatalf("origin の host %s の種類 = %s (%v), want %s", host, p.Kind, ok, want)
 		}
+	}
+}
+
+func TestKindsAreListedOnceEach(t *testing.T) {
+	kinds := provider.Kinds()
+
+	if !slices.Equal(kinds, []provider.Kind{provider.GitHub, provider.GitLab, provider.Jira}) {
+		t.Fatalf("種類 = %v, want [github gitlab jira]", kinds)
+	}
+}
+
+func TestExactlyOneProviderReadsAnOriginNoProviderOwns(t *testing.T) {
+	var fallbacks []provider.Kind
+	for _, kind := range provider.Kinds() {
+		if p, _ := provider.Of(kind); p.Setup.OriginFallback {
+			fallbacks = append(fallbacks, kind)
+		}
+	}
+
+	if len(fallbacks) != 1 {
+		t.Fatalf("どの provider も認めない origin を読む種類 = %v, want 1 つ", fallbacks)
 	}
 }
 

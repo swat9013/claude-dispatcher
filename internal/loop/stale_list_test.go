@@ -43,7 +43,7 @@ type staleTicks struct {
 func (s staleTicks) run(t *testing.T) ([]worker.Job, []map[string]any) {
 	t.Helper()
 	const interval = time.Minute
-	def := workflow.Definition{Interval: interval, MaxConcurrent: 1, MaxAttempts: s.maxAttempts, MaxRetryBackoff: 5 * time.Minute, Triggers: s.triggers}
+	def := workflow.Definition{Tracker: githubTracker, Interval: interval, MaxConcurrent: 1, MaxAttempts: s.maxAttempts, MaxRetryBackoff: 5 * time.Minute, Triggers: s.triggers}
 	var (
 		start      = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 		tick       int

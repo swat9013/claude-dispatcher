@@ -596,6 +596,7 @@ func TestSetupRejectsMalformedJiraFlags(t *testing.T) {
 	for _, args := range [][]string{
 		{"--kind", "jira", "--host", jiraSite},
 		{"--kind", "linear", "--host", jiraSite, "--repo", jiraKey},
+		{"--kind", "github", "--host", "github.com", "--repo", "acme/widgets"},
 		{"--host", jiraSite, "--repo", jiraKey},
 		{"--kind", "jira", "--host", "https://" + jiraSite, "--repo", jiraKey},
 		{"--kind", "jira", "--host", jiraSite, "--repo", "acme/widgets"},

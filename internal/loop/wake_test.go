@@ -165,7 +165,7 @@ func TestWaitingRetryOfACLThatCannotRestartOutsideATickWakesTheLoopOnlyOnceBefor
 	var wakesBeforeSecondTick int
 	s := wakeLoop{
 		def: func(int) workflow.Definition {
-			return workflow.Definition{Interval: wakeInterval, MaxConcurrent: 1, MaxAttempts: 5, MaxRetryBackoff: 5 * time.Minute, Triggers: []trigger.Trigger{fixCI}}
+			return workflow.Definition{Tracker: githubTracker, Interval: wakeInterval, MaxConcurrent: 1, MaxAttempts: 5, MaxRetryBackoff: 5 * time.Minute, Triggers: []trigger.Trigger{fixCI}}
 		},
 		open:         []target.Item{cl},
 		read:         func(int, target.Ref) target.Item { return cl },
@@ -197,7 +197,7 @@ func TestWaitingRetryForASlotIsRestartedWhenAStoppedWorkerFreesTheSlot(t *testin
 			if tick >= 2 {
 				maxConcurrent = 1
 			}
-			return workflow.Definition{Interval: wakeInterval, MaxConcurrent: maxConcurrent, MaxAttempts: 5, MaxRetryBackoff: 5 * time.Minute, Triggers: []trigger.Trigger{readyTrigger}}
+			return workflow.Definition{Tracker: githubTracker, Interval: wakeInterval, MaxConcurrent: maxConcurrent, MaxAttempts: 5, MaxRetryBackoff: 5 * time.Minute, Triggers: []trigger.Trigger{readyTrigger}}
 		},
 		open: []target.Item{readyIssue(1), readyIssue(2)},
 		read: func(loaded int, ref target.Ref) target.Item {

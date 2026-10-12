@@ -11,7 +11,6 @@ import (
 	"regexp"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -91,14 +90,9 @@ func (t Tracker) Provider() provider.Provider {
 	return p
 }
 
-// Reference は作業対象を人が読む行に出す参照 (formats.md §5)。呼び方は provider の役割が宣言する。種類の無い設定
-// (テストの定義) では `#<番号>`。
+// Reference は作業対象を人が読む行に出す参照 (formats.md §5)。呼び方は provider の役割が宣言する。
 func (t Tracker) Reference(ref target.Ref) string {
-	p, ok := provider.Of(t.Kind)
-	if !ok {
-		return "#" + strconv.Itoa(ref.Number)
-	}
-	return p.Reference(t.Place, ref)
+	return t.Provider().Reference(t.Place, ref)
 }
 
 // 周期の既定と範囲 (formats.md §2.1)
@@ -401,7 +395,7 @@ func (c *checker) supports(n *yaml.Node, path string, f provider.Feature) bool {
 // でだけ使える)。
 func (c *checker) sample(kind target.Kind) target.Item {
 	item := render.Sample(kind)
-	if issue, ok := item.(target.Issue); ok && c.provider != nil && c.provider.Tracker.IssueKey != nil {
+	if issue, ok := item.(target.Issue); ok && c.provider != nil && c.provider.Tracker.KeyedIssues {
 		issue.Key = "KEY-1"
 		return issue
 	}
@@ -523,11 +517,7 @@ func (c *checker) trackerFields(t *Tracker, place *placeInput) map[string]field 
 		// 種類の値は peekProvider が読んだものを使う。ここでは読めなかった誤りを名指しする
 		"kind": {required: true, read: func(_, n *yaml.Node, path string) {
 			if s, ok := c.str(n, path); ok && c.provider == nil {
-				kinds := make([]string, len(provider.Kinds))
-				for i, k := range provider.Kinds {
-					kinds[i] = string(k)
-				}
-				c.fail(n, path, "未知の値 %q (%s)", s, strings.Join(kinds, " / "))
+				c.fail(n, path, "未知の値 %q (%s)", s, provider.Join(provider.Kinds()))
 			}
 		}},
 		"repo": {required: true, read: func(_, n *yaml.Node, path string) {
