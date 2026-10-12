@@ -78,8 +78,6 @@ var providers = []Provider{
 			return Parts{Issues: store, CLs: store}
 		},
 		Setup: Setup{
-			// どの provider も認めない host (github.com 以外) は、self-managed の GitLab と読む
-			OriginFallback: true,
 			CurrentPlace: func(rt Runtime) (Place, error) {
 				p, err := gitlab.CurrentProject(gitlab.Exec{Env: rt.Env, Timeout: rt.Timeout})
 				return Place{name: p.String(), value: p}, err
@@ -126,6 +124,9 @@ var providers = []Provider{
 		},
 	},
 }
+
+// originFallback は、どの provider も認めない origin の host (github.com 以外) を読む種類。self-managed の GitLab と読む
+const originFallback = GitLab
 
 // mustParse は、検査を通った値を parse し直す。通った値で失敗するのは呼び出し側の誤りなので panic する。
 func mustParse[T any](parse func(string) (T, error), s string) T {

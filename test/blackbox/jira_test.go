@@ -596,7 +596,6 @@ func TestSetupRejectsMalformedJiraFlags(t *testing.T) {
 	for _, args := range [][]string{
 		{"--kind", "jira", "--host", jiraSite},
 		{"--kind", "linear", "--host", jiraSite, "--repo", jiraKey},
-		{"--kind", "github", "--host", "github.com", "--repo", "acme/widgets"},
 		{"--host", jiraSite, "--repo", jiraKey},
 		{"--kind", "jira", "--host", "https://" + jiraSite, "--repo", jiraKey},
 		{"--kind", "jira", "--host", jiraSite, "--repo", "acme/widgets"},
@@ -615,5 +614,19 @@ func TestSetupRejectsMalformedJiraFlags(t *testing.T) {
 				t.Fatal("引数が誤っているのに雛形を書いた")
 			}
 		})
+	}
+}
+
+func TestSetupAcceptsTheKindFlagOnlyForKindsWrittenFromFlags(t *testing.T) {
+	s := newSandbox(t)
+	if err := os.Remove(s.workflowFile()); err != nil {
+		t.Fatal(err)
+	}
+
+	r := s.run("setup", "--kind", "github", "--host", "github.com", "--repo", "acme/widgets")
+
+	assertExit(t, r, 2)
+	if _, err := os.Stat(s.workflowFile()); err == nil {
+		t.Fatal("flag で受けない種類なのに雛形を書いた")
 	}
 }

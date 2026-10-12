@@ -22,27 +22,51 @@ type clsOnly struct{}
 func (clsOnly) OpenCLs() ([]target.Item, error)   { return []target.Item{target.CL{Number: 2}}, nil }
 func (clsOnly) ReadCL(n int) (target.Item, error) { return target.CL{Number: n}, nil }
 
-func TestStoreReadsEachKindFromThePlaceThatHoldsIt(t *testing.T) {
-	store := loop.Store{Issues: issuesOnly{}, CLs: clsOnly{}}
-	for _, ref := range []target.Ref{{Kind: target.KindIssue, Number: 5}, {Kind: target.KindCL, Number: 6}} {
-		t.Run(ref.String(), func(t *testing.T) {
-			open, openErr := store.Open(ref.Kind)
-			item, readErr := store.Read(ref)
+// refs は issue と CL の作業対象 1 件ずつ。
+var refs = []target.Ref{{Kind: target.KindIssue, Number: 5}, {Kind: target.KindCL, Number: 6}}
 
-			if openErr != nil || readErr != nil || len(open) != 1 || open[0].Ref().Kind != ref.Kind || item.Ref() != ref {
-				t.Fatalf("Open = %v, %v / Read = %v, %v, want %s の置き場から読む", open, openErr, item, readErr, ref.Kind)
+func TestStoreListsEachKindFromThePlaceThatHoldsIt(t *testing.T) {
+	store := loop.Store{Issues: issuesOnly{}, CLs: clsOnly{}}
+	for _, ref := range refs {
+		t.Run(string(ref.Kind), func(t *testing.T) {
+			open, err := store.Open(ref.Kind)
+
+			if err != nil || len(open) != 1 || open[0].Ref().Kind != ref.Kind {
+				t.Fatalf("Open(%s) = %v, %v, want %s の置き場の一覧", ref.Kind, open, err, ref.Kind)
 			}
 		})
 	}
 }
 
-func TestStoreWithoutACLPlaceRefusesToReadCLs(t *testing.T) {
+func TestStoreRereadsEachKindFromThePlaceThatHoldsIt(t *testing.T) {
+	store := loop.Store{Issues: issuesOnly{}, CLs: clsOnly{}}
+	for _, ref := range refs {
+		t.Run(ref.String(), func(t *testing.T) {
+			item, err := store.Read(ref)
+
+			if err != nil || item.Ref() != ref {
+				t.Fatalf("Read(%s) = %v, %v, want %s の置き場から読む", ref, item, err, ref.Kind)
+			}
+		})
+	}
+}
+
+func TestStoreWithoutACLPlaceRefusesToListCLs(t *testing.T) {
 	store := loop.Store{Issues: issuesOnly{}}
 
-	_, openErr := store.Open(target.KindCL)
-	_, readErr := store.Read(target.Ref{Kind: target.KindCL, Number: 1})
+	_, err := store.Open(target.KindCL)
 
-	if openErr == nil || readErr == nil {
-		t.Fatalf("CL 置き場の無い置き場で CL を読めた: Open の誤り = %v, Read の誤り = %v", openErr, readErr)
+	if err == nil {
+		t.Fatal("CL 置き場の無い置き場で CL の一覧を読めた")
+	}
+}
+
+func TestStoreWithoutACLPlaceRefusesToRereadACL(t *testing.T) {
+	store := loop.Store{Issues: issuesOnly{}}
+
+	_, err := store.Read(target.Ref{Kind: target.KindCL, Number: 1})
+
+	if err == nil {
+		t.Fatal("CL 置き場の無い置き場で CL を読み直せた")
 	}
 }

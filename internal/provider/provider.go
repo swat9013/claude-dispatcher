@@ -105,11 +105,12 @@ type Host struct {
 
 // TrackerRole は issue 置き場の役割の宣言。
 type TrackerRole struct {
-	// KeyedIssues は issue を key (`WIDGETS-123`) で指すか。真なら `.issue.key` が使え、参照は IssueKey で組み立てる。偽なら
-	// 参照は Prefix と番号
+	// KeyedIssues は issue を key (`WIDGETS-123`) で指すか。真なら `.issue.key` が使える
 	KeyedIssues bool
-	Prefix      string
-	IssueKey    func(place Place, number int) string
+	// Prefix は key で指さない種類の issue を、人が読む行に出すときに番号の前に置く綴り
+	Prefix string
+	// IssueKey は key で指す種類の、番号の issue の key
+	IssueKey func(place Place, number int) string
 	// Supports は支える宣言。Declines は支えない宣言と、その理由の文言 (誤りの名指しに添える)
 	Supports []Feature
 	Declines map[Feature]string
@@ -230,29 +231,24 @@ type Parts struct {
 type Setup struct {
 	// Flags は `setup --kind <種類>` で置き場を受けるときの flag の綴りの案内。"" なら flag で受けない
 	Flags string
-	// OwnsOrigin は cwd の clone の origin の host を、この種類の置き場と認めるか。nil なら認めない
+	// OwnsOrigin は cwd の clone の origin の host を、この種類の置き場と認めるか。nil なら認めない (どの provider も認めない
+	// host は originFallback の種類と読む)
 	OwnsOrigin func(host string) bool
-	// OriginFallback は、どの provider も認めない origin の host をこの種類の置き場と読むか。真にするのは 1 つだけ
-	OriginFallback bool
 	// CurrentPlace は cwd の clone の置き場を CLI で引く
 	CurrentPlace func(Runtime) (Place, error)
 	// Template は置き場を埋めた雛形
 	Template func(Place) string
 }
 
-// ForOrigin は origin の host を認める provider。認める provider が無ければ、OriginFallback の provider。
-func ForOrigin(host string) (Provider, bool) {
+// ForOrigin は origin の host を認める provider。認める provider が無ければ originFallback の provider。
+func ForOrigin(host string) Provider {
 	for _, p := range providers {
 		if p.Setup.OwnsOrigin != nil && p.Setup.OwnsOrigin(host) {
-			return p, true
+			return p
 		}
 	}
-	for _, p := range providers {
-		if p.Setup.OriginFallback {
-			return p, true
-		}
-	}
-	return Provider{}, false
+	p, _ := Of(originFallback)
+	return p
 }
 
 // SetupFlagKinds は `setup --kind` で受ける種類 (表の順)。

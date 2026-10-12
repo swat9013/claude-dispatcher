@@ -143,10 +143,7 @@ func scaffoldFromOrigin() (template, place string, err error) {
 		// URL は認証情報を含みうるので名指しに載せない
 		return "", "", fmt.Errorf("origin の URL: %w", err)
 	}
-	p, ok := provider.ForOrigin(host)
-	if !ok {
-		return "", "", fmt.Errorf("origin の host %s を認める tracker.kind が無い", host)
-	}
+	p := provider.ForOrigin(host)
 	current, err := p.Setup.CurrentPlace(commandEnvironment(p.Command).runtime())
 	if err != nil {
 		return "", "", err

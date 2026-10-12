@@ -31,7 +31,7 @@ func TestEveryKindHasAProviderThatDeclaresEveryField(t *testing.T) {
 			if p.Host.Parse != nil && p.Host.Default == "" && p.Host.RequiredHint == "" {
 				t.Fatalf("provider %s の tracker.host は必須なのに、欠落の誤りに添える案内が無い", kind)
 			}
-			if (p.Setup.OwnsOrigin != nil || p.Setup.OriginFallback) && (p.Setup.CurrentPlace == nil || p.Setup.Template == nil) {
+			if p.Setup.OwnsOrigin != nil && (p.Setup.CurrentPlace == nil || p.Setup.Template == nil) {
 				t.Fatalf("provider %s は origin を認めるのに、clone から雛形を書けない", kind)
 			}
 			if p.Setup.Flags != "" && (p.Setup.Template == nil || p.Host.Parse == nil) {
@@ -108,32 +108,19 @@ func TestAWorkItemIsReferredToTheWayItsRoleDeclares(t *testing.T) {
 
 func TestOriginOnGitHubIsGitHubAndAnyOtherHostIsGitLab(t *testing.T) {
 	for host, want := range map[string]provider.Kind{"github.com": provider.GitHub, "gitlab.com": provider.GitLab, "git.example.com": provider.GitLab} {
-		p, ok := provider.ForOrigin(host)
+		p := provider.ForOrigin(host)
 
-		if !ok || p.Kind != want {
-			t.Fatalf("origin の host %s の種類 = %s (%v), want %s", host, p.Kind, ok, want)
+		if p.Kind != want || p.Setup.CurrentPlace == nil || p.Setup.Template == nil {
+			t.Fatalf("origin の host %s の種類 = %s, want clone から雛形を書ける %s", host, p.Kind, want)
 		}
 	}
 }
 
-func TestKindsAreListedOnceEach(t *testing.T) {
+func TestNoKindHasTwoProviders(t *testing.T) {
 	kinds := provider.Kinds()
 
-	if !slices.Equal(kinds, []provider.Kind{provider.GitHub, provider.GitLab, provider.Jira}) {
-		t.Fatalf("種類 = %v, want [github gitlab jira]", kinds)
-	}
-}
-
-func TestExactlyOneProviderReadsAnOriginNoProviderOwns(t *testing.T) {
-	var fallbacks []provider.Kind
-	for _, kind := range provider.Kinds() {
-		if p, _ := provider.Of(kind); p.Setup.OriginFallback {
-			fallbacks = append(fallbacks, kind)
-		}
-	}
-
-	if len(fallbacks) != 1 {
-		t.Fatalf("どの provider も認めない origin を読む種類 = %v, want 1 つ", fallbacks)
+	if compacted := slices.Compact(slices.Sorted(slices.Values(kinds))); len(compacted) != len(kinds) {
+		t.Fatalf("種類 %v に重なりがある", kinds)
 	}
 }
 
