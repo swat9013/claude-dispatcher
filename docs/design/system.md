@@ -375,6 +375,7 @@ CLI の中で、呼び出し側から中身を隠す部品と、差し替えの�
 
 - **issue 置き場の部品と CL 置き場の部品は、workflow 定義から組み立てて、正規化した作業対象と分類済みの失敗を返す** (ADR 0008)
   - 正規化は SPEC §4.1.1 の Issue を土台にする。CL は、CL の状態の語彙と絞り込みに要る field を持つ
+  - adapter は、サービス固有の応答の形が部品の外へ漏れないよう、正規化した作業対象へ写す Anti-Corruption Layer にあたる。写すのは読むときだけで、写しを保存しない
   - issue と CL の紐づけは返さない (ADR 0009)
   - 失敗は 認証 / 見えない / 読み切れない / rate limit に分けて返す (SPEC §11.4)
   - scope key は issue 置き場の部品が返す。tracker ごとの粒度 (GitHub は owner と repo、GitLab は host と repo の path、Jira は site と project key) を部品の外に出さない

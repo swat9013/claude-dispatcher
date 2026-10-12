@@ -34,7 +34,7 @@ _Avoid_: state, cache
 
 **外部 store**:
 状態の正本が置かれる tracker (issue と label) と CL host (CL・review thread・checks・branch) の総称。
-_Avoid_: 台帳, database
+_Avoid_: 台帳, database, 保存先 (CLI は外部 store に書かず、読んで写すだけ)
 
 **利用者のセッション**:
 利用者が対話で動かす LLM のセッション。dispatcher の導入と workflow 定義の編集を手伝う。dispatcher が起動するものではなく、worker とは別物。
