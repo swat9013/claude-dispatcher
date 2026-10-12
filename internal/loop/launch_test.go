@@ -102,7 +102,7 @@ func (o oneTick) runLogging(t *testing.T, log io.Writer) ([]worker.Job, string) 
 				scopeKey: func() string { return startScope },
 				observe:  func() ([]target.Item, error) { return o.open, nil },
 				reread:   o.read,
-			}
+			}.store()
 		},
 		Workspaces: func(workflow.Definition) loop.Workspaces { return branchWorkspaces(o.branches) },
 		Launch: func(_ workflow.Definition, job worker.Job, events chan<- worker.Event) loop.Worker {

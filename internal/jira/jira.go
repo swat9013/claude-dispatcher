@@ -92,11 +92,8 @@ func NewStore(acli Runner, project Project, triggers []trigger.Trigger) Store {
 
 func (s Store) ScopeKey() string { return ScopeKey(s.project) }
 
-// Open は種類の open な作業対象を全件読む。Jira に CL は無い。失敗は *target.Failure。
-func (s Store) Open(kind target.Kind) ([]target.Item, error) {
-	if kind != target.KindIssue {
-		return nil, fmt.Errorf("作業対象の種類 %q は Jira の issue 置き場に無い", kind)
-	}
+// OpenIssues は open な issue を全件読む。失敗は *target.Failure。
+func (s Store) OpenIssues() ([]target.Item, error) {
 	issues, err := s.openIssues()
 	if err != nil {
 		return nil, s.fail(s.classify(err, target.Unavailable), err)
@@ -108,13 +105,11 @@ func (s Store) Open(kind target.Kind) ([]target.Item, error) {
 	return items, nil
 }
 
-// Read は作業対象 1 件を読み直す。消えた・別の project へ移った・見えなくなった issue は Closed として返す
+// ReadIssue は issue 1 件を読み直す。消えた・別の project へ移った・見えなくなった issue は Closed として返す
 // (formats.md §6)。失敗は *target.Failure。
-func (s Store) Read(ref target.Ref) (target.Item, error) {
-	if ref.Kind != target.KindIssue {
-		return nil, fmt.Errorf("作業対象の種類 %q は Jira の issue 置き場に無い", ref.Kind)
-	}
-	key := s.project.IssueKey(ref.Number)
+func (s Store) ReadIssue(number int) (target.Item, error) {
+	ref := target.Ref{Kind: target.KindIssue, Number: number}
+	key := s.project.IssueKey(number)
 	n, err := s.view(key)
 	if err == nil {
 		return s.itemFromView(ref, n), nil
@@ -389,15 +384,8 @@ func appendNames(names []Name, triggerName string, lists ...[]string) []Name {
 	return names
 }
 
-// Unknown は、trigger が書いた status 名か issue type 名が実在しないこと。1 件 1 行の Problems で名指しする。
-type Unknown struct {
-	Problems []string
-}
-
-func (u *Unknown) Error() string { return strings.Join(u.Problems, "\n") }
-
 // Confirm は起動時の issue 置き場の確認 (formats.md §6): acli の認証の site・open な一覧・status 名・issue type 名の順に
-// 確かめ、最初に落ちたもので返す。失敗は *target.Failure (認証・見えない・その他) か *Unknown。
+// 確かめ、最初に落ちたもので返す。失敗は *target.Failure (認証・見えない・その他) か *target.UnknownNames。
 func (s Store) Confirm(names Names) error {
 	out, err := s.authStatus()
 	if err != nil {
@@ -447,7 +435,7 @@ func (s Store) Confirm(names Names) error {
 		}
 	}
 	if len(problems) > 0 {
-		return &Unknown{Problems: problems}
+		return &target.UnknownNames{Problems: problems}
 	}
 	return nil
 }

@@ -17,13 +17,11 @@ import (
 	"time"
 
 	"github.com/swat9013/claude-dispatcher/internal/deps"
-	"github.com/swat9013/claude-dispatcher/internal/github"
-	"github.com/swat9013/claude-dispatcher/internal/gitlab"
 	"github.com/swat9013/claude-dispatcher/internal/guide"
-	"github.com/swat9013/claude-dispatcher/internal/jira"
 	"github.com/swat9013/claude-dispatcher/internal/loop"
 	"github.com/swat9013/claude-dispatcher/internal/precheck"
 	"github.com/swat9013/claude-dispatcher/internal/printable"
+	"github.com/swat9013/claude-dispatcher/internal/provider"
 	"github.com/swat9013/claude-dispatcher/internal/state"
 	"github.com/swat9013/claude-dispatcher/internal/status"
 	"github.com/swat9013/claude-dispatcher/internal/target"
@@ -143,58 +141,33 @@ func (e environment) getenv(key string) string { return deps.Getenv(e.env, key) 
 // commandTimeout は外部 CLI (gh / glab / acli / git) の 1 回の呼び出しの上限
 const commandTimeout = 120 * time.Second
 
-// gh は gh の撃ち方。token (workflow 定義の tracker.token) があれば gh に GH_TOKEN として渡す。
-func (e environment) gh(token string) github.Exec {
-	env := e.env
-	if token != "" {
-		env = deps.WithEnv(env, map[string]string{"GH_TOKEN": token})
-	}
-	return github.Exec{Env: env, Timeout: commandTimeout}
+// runtime は provider が組み立てる部品に渡す実行環境。
+func (e environment) runtime() provider.Runtime {
+	return provider.Runtime{Env: e.env, Timeout: commandTimeout}
 }
 
-// glab は glab の撃ち方。認証は glab 自身のもの (glab auth login の結果) を使う。
-func (e environment) glab() gitlab.Exec {
-	return gitlab.Exec{Env: e.env, Timeout: commandTimeout}
+// parts は workflow 定義の tracker.kind の provider で置き場の部品を組み立てる。
+func (e environment) parts(def workflow.Definition) provider.Parts {
+	return def.Tracker.Provider().Build(e.runtime(), provider.Setting{Place: def.Tracker.Place, Token: def.Tracker.Token, Triggers: def.Triggers})
 }
 
-// acli は acli の撃ち方。認証は acli 自身のもの (acli jira auth login の結果) を使う。
-func (e environment) acli() jira.Exec {
-	return jira.Exec{Env: e.env, Timeout: commandTimeout}
-}
-
-// store は workflow 定義の tracker.kind の adapter で置き場の部品を組み立てる。
+// store は loop が読む置き場。
 func (e environment) store(def workflow.Definition) loop.Store {
-	switch def.Tracker.Kind {
-	case workflow.GitLab:
-		return gitlab.NewStore(e.glab(), def.Tracker.Project)
-	case workflow.Jira:
-		return e.jiraStore(def)
-	}
-	return github.NewStore(e.gh(def.Tracker.Token), def.Tracker.Repo)
+	parts := e.parts(def)
+	return loop.Store{Issues: parts.Issues, CLs: parts.CLs}
 }
 
-// jiraStore は jira の issue 置き場の部品。
-func (e environment) jiraStore(def workflow.Definition) jira.Store {
-	return jira.NewStore(e.acli(), def.Tracker.JiraProject, def.Triggers)
-}
-
-// confirmPlace は起動時の issue 置き場の確認 (formats.md §6)。jira だけが持ち、他の種類は何もしない。
+// confirmPlace は起動時の issue 置き場の確認 (formats.md §6)。確認の手順を持たない種類は何もしない。
 func (e environment) confirmPlace(def workflow.Definition) error {
-	if def.Tracker.Kind != workflow.Jira {
-		return nil
+	if confirm := e.parts(def).Confirm; confirm != nil {
+		return confirm()
 	}
-	return e.jiraStore(def).Confirm(jira.NamesOf(def.Triggers))
+	return nil
 }
 
 // trackerCommand は workflow 定義の tracker.kind の CLI。
 func trackerCommand(def workflow.Definition) string {
-	switch def.Tracker.Kind {
-	case workflow.GitLab:
-		return "glab"
-	case workflow.Jira:
-		return "acli"
-	}
-	return "gh"
+	return def.Tracker.Provider().Command
 }
 
 // requiredCommands は loop が撃つ依存 CLI: tracker の CLI と claude.command。CL 側の trigger があれば、claim の workspace の
@@ -220,7 +193,7 @@ func (e environment) stateDir(def workflow.Definition) (scopeKey, dir string) {
 
 // failureExit は観測の失敗の exit code (formats.md §3)。
 func failureExit(err error) int {
-	var unknown *jira.Unknown
+	var unknown *target.UnknownNames
 	if errors.As(err, &unknown) {
 		return exitUsage
 	}

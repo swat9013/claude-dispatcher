@@ -122,27 +122,19 @@ func NewStore(glab Runner, project Project) Store { return Store{glab: glab, pro
 
 func (s Store) ScopeKey() string { return ScopeKey(s.project) }
 
-// Open は種類の open な作業対象を全件読む。失敗は *target.Failure。
-func (s Store) Open(kind target.Kind) ([]target.Item, error) {
-	switch kind {
-	case target.KindIssue:
-		return items(s.openIssues())
-	case target.KindCL:
-		return items(s.openMergeRequests())
-	}
-	return nil, fmt.Errorf("未知の作業対象の種類 %q", kind)
-}
+// OpenIssues は open な issue を全件読む。失敗は *target.Failure。
+func (s Store) OpenIssues() ([]target.Item, error) { return items(s.openIssues()) }
 
-// Read は作業対象 1 件を読み直す。失敗は *target.Failure。
-func (s Store) Read(ref target.Ref) (target.Item, error) {
-	switch ref.Kind {
-	case target.KindIssue:
-		return s.issue(ref.Number)
-	case target.KindCL:
-		cl, _, err := s.mergeRequest(ref.Number, collaborators{})
-		return cl, err
-	}
-	return nil, fmt.Errorf("未知の作業対象の種類 %q", ref.Kind)
+// ReadIssue は issue 1 件を読み直す。失敗は *target.Failure。
+func (s Store) ReadIssue(iid int) (target.Item, error) { return s.issue(iid) }
+
+// OpenCLs は open な merge request を全件読む。失敗は *target.Failure。
+func (s Store) OpenCLs() ([]target.Item, error) { return items(s.openMergeRequests()) }
+
+// ReadCL は merge request 1 件を読み直す。失敗は *target.Failure。
+func (s Store) ReadCL(iid int) (target.Item, error) {
+	cl, _, err := s.mergeRequest(iid, collaborators{})
+	return cl, err
 }
 
 func items[T target.Item](list []T, err error) ([]target.Item, error) {

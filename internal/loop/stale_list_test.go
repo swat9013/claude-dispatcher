@@ -72,7 +72,7 @@ func (s staleTicks) run(t *testing.T) ([]worker.Job, []map[string]any) {
 					}
 					return s.read(tick), nil
 				},
-			}
+			}.store()
 		},
 		Workspaces: func(workflow.Definition) loop.Workspaces { return noWorkspaces{} },
 		Launch: func(_ workflow.Definition, job worker.Job, events chan<- worker.Event) loop.Worker {

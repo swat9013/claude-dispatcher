@@ -81,7 +81,7 @@ func (s wakeLoop) run(t *testing.T) *wakeRun {
 				scopeKey: func() string { return startScope },
 				observe:  func() ([]target.Item, error) { return s.open, nil },
 				reread:   func(ref target.Ref) (target.Item, error) { return s.read(w.tick, ref), nil },
-			}
+			}.store()
 		},
 		Workspaces: func(workflow.Definition) loop.Workspaces { return noWorkspaces{} },
 		Launch: func(_ workflow.Definition, job worker.Job, events chan<- worker.Event) loop.Worker {

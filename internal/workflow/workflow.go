@@ -17,9 +17,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/swat9013/claude-dispatcher/internal/github"
-	"github.com/swat9013/claude-dispatcher/internal/gitlab"
-	"github.com/swat9013/claude-dispatcher/internal/jira"
+	"github.com/swat9013/claude-dispatcher/internal/provider"
 	"github.com/swat9013/claude-dispatcher/internal/render"
 	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/trigger"
@@ -75,48 +73,32 @@ func (d Definition) Kinds() []target.Kind {
 	return kinds
 }
 
-// TrackerKind は tracker の種類 (formats.md §2.1 の tracker.kind)。
-type TrackerKind string
-
-const (
-	GitHub TrackerKind = "github"
-	GitLab TrackerKind = "gitlab"
-	Jira   TrackerKind = "jira"
-)
-
-// Tracker は issue 置き場の設定。置き場は種類の field (github は Repo、gitlab は Project、jira は JiraProject) にだけ入る。
+// Tracker は issue 置き場の設定。
 type Tracker struct {
-	Kind TrackerKind
-	Repo github.Repo
-	// Project は gitlab の issue 置き場 (host と path)
-	Project gitlab.Project
-	// JiraProject は jira の issue 置き場 (site と project key)
-	JiraProject jira.Project
-	// Token は gh に GH_TOKEN として渡す token。書かれていなければ ""。gitlab では書けない
+	Kind provider.Kind
+	// Place は provider が tracker.repo と tracker.host から読んだ置き場
+	Place provider.Place
+	// Token は tracker.token の値。書かれていなければ ""。書けるのは provider が支えると宣言した種類だけ
 	Token string
 }
 
-// Reference は作業対象を人が読む行に出す参照 (formats.md §5)。GitLab の merge request は `!<番号>`、Jira の issue は key、
-// それ以外は `#<番号>`。GitLab は issue と merge request に別々に番号を振るので、同じ番号の issue と取り違えないよう綴りを分ける。
-func (t Tracker) Reference(ref target.Ref) string {
-	switch {
-	case t.Kind == GitLab && ref.Kind == target.KindCL:
-		return "!" + strconv.Itoa(ref.Number)
-	case t.Kind == Jira && ref.Kind == target.KindIssue:
-		return t.JiraProject.IssueKey(ref.Number)
+// Provider は tracker.kind の provider。検査に通った workflow 定義の種類は必ず provider を持つので、無ければ panic する。
+func (t Tracker) Provider() provider.Provider {
+	p, ok := provider.Of(t.Kind)
+	if !ok {
+		panic(fmt.Sprintf("tracker.kind %q の provider が無い (検査に通っていない workflow 定義)", t.Kind))
 	}
-	return "#" + strconv.Itoa(ref.Number)
+	return p
 }
 
-// Place は issue 置き場の表示名 (github は `owner/name`、gitlab は `<host>/<path>`、jira は `<site>/<project key>`)。
-func (t Tracker) Place() string {
-	switch t.Kind {
-	case GitLab:
-		return t.Project.String()
-	case Jira:
-		return t.JiraProject.String()
+// Reference は作業対象を人が読む行に出す参照 (formats.md §5)。呼び方は provider の役割が宣言する。種類の無い設定
+// (テストの定義) では `#<番号>`。
+func (t Tracker) Reference(ref target.Ref) string {
+	p, ok := provider.Of(t.Kind)
+	if !ok {
+		return "#" + strconv.Itoa(ref.Number)
 	}
-	return t.Repo.String()
+	return p.Reference(t.Place, ref)
 }
 
 // 周期の既定と範囲 (formats.md §2.1)
@@ -211,13 +193,13 @@ func split(raw []byte) (front []byte, body string, err error) {
 type checker struct {
 	getenv   func(string) string
 	problems []problem
-	// trackerKind は tracker の種類。種類に依る検査が key の順 (triggers を tracker より前に書くなど) に依らないよう、
-	// front matter を辿る前に読む。読めなければ "" で、種類に依る検査は撃たない (誤りは tracker.kind で名指しする)
-	trackerKind TrackerKind
+	// provider は tracker.kind の provider。種類に依る検査が key の順 (triggers を tracker より前に書くなど) に依らないよう、
+	// front matter を辿る前に引く。引けなければ nil で、種類に依る検査は撃たない (誤りは tracker.kind で名指しする)
+	provider *provider.Provider
 }
 
-// peekTrackerKind は front matter の tracker.kind を、他の項目を読む前に読む。既知の種類でなければ ""。
-func peekTrackerKind(root *yaml.Node) TrackerKind {
+// peekProvider は front matter の tracker.kind の provider を、他の項目を読む前に引く。provider を持つ種類でなければ nil。
+func peekProvider(root *yaml.Node) *provider.Provider {
 	value := func(n *yaml.Node, key string) *yaml.Node {
 		if n == nil || n.Kind != yaml.MappingNode {
 			return nil
@@ -231,13 +213,12 @@ func peekTrackerKind(root *yaml.Node) TrackerKind {
 	}
 	kind := value(value(root, "tracker"), "kind")
 	if kind == nil || kind.Kind != yaml.ScalarNode {
-		return ""
+		return nil
 	}
-	switch k := TrackerKind(kind.Value); k {
-	case GitHub, GitLab, Jira:
-		return k
+	if p, ok := provider.Of(provider.Kind(kind.Value)); ok {
+		return &p
 	}
-	return ""
+	return nil
 }
 
 // problem は誤り 1 件。line は file の行番号 (分からなければ 0)
@@ -325,7 +306,7 @@ func join(path, key string) string {
 }
 
 func (c *checker) decode(root *yaml.Node, def *Definition) {
-	c.trackerKind = peekTrackerKind(root)
+	c.provider = peekProvider(root)
 	// top level は key を持たないので、欠落を行なしで名指しする
 	c.mapping(&yaml.Node{}, root, "", c.topFields(def))
 }
@@ -402,35 +383,25 @@ func (c *checker) claudeFields(def *Definition) map[string]field {
 	}
 }
 
-// unsupported は、宣言 n を支えない tracker の種類とその理由の表 why に今の種類があれば、n を理由を添えて名指しで失敗させる。
-// 種類が読めていなければ何もしない (誤りは tracker.kind で名指しする)。
-func (c *checker) unsupported(n *yaml.Node, path string, why map[TrackerKind]string) {
-	if reason, ok := why[c.trackerKind]; ok {
-		c.fail(n, path, "tracker.kind: %s では書けない (%s)", c.trackerKind, reason)
+// supports は、tracker.kind の provider が宣言 f を支えるかを返す。支えなければ n を理由を添えて名指しで失敗させる
+// (formats.md §2.8)。支える宣言の無いものは支えない (fail closed)。種類が読めていなければ名指しせず (誤りは tracker.kind で
+// 名指しする)、支えるとも答えない。
+func (c *checker) supports(n *yaml.Node, path string, f provider.Feature) bool {
+	if c.provider == nil {
+		return false
 	}
+	if !c.provider.Supported(f) {
+		c.fail(n, path, "tracker.kind: %s では書けない (%s)", c.provider.Kind, c.provider.DeclineReason(f))
+		return false
+	}
+	return true
 }
 
-// 宣言ごとの、支えない tracker の種類と理由の表 (formats.md §2.8)
-var (
-	unsupportedToken = map[TrackerKind]string{
-		GitLab: "glab は glab auth login の認証を使う",
-		Jira:   "acli は acli jira auth login の認証を使う",
-	}
-	unsupportedCL        = map[TrackerKind]string{Jira: "Jira に CL は無い。issue 置き場と別の CL 置き場の宣言は #114"}
-	unsupportedAuthor    = map[TrackerKind]string{Jira: "worker を誰の書き込みで起動してよいかの線を、Jira の権限に引けない"}
-	unsupportedMilestone = map[TrackerKind]string{Jira: "sprint は無いことがあり、fixVersions は acli の一覧で読めない"}
-	unsupportedBlocked   = map[TrackerKind]string{GitLab: "GitLab の CE は issue の依存を API で返さないので、blocked: false が全件に当たる"}
-	// status と issue type は Jira の issue にだけある
-	unsupportedStatusAndType = map[TrackerKind]string{
-		GitHub: "status と issue type は Jira の issue にだけある",
-		GitLab: "status と issue type は Jira の issue にだけある",
-	}
-)
-
-// sample は kind の作業対象の、描画を確かめる見本。jira の issue には key を足す (`.issue.key` は jira でだけ使える)。
+// sample は kind の作業対象の、描画を確かめる見本。issue を key で指す種類の issue には key を足す (`.issue.key` はその種類
+// でだけ使える)。
 func (c *checker) sample(kind target.Kind) target.Item {
 	item := render.Sample(kind)
-	if issue, ok := item.(target.Issue); ok && c.trackerKind == Jira {
+	if issue, ok := item.(target.Issue); ok && c.provider != nil && c.provider.Tracker.IssueKey != nil {
 		issue.Key = "KEY-1"
 		return issue
 	}
@@ -514,56 +485,68 @@ func (c *checker) positive(n *yaml.Node, path string) (int, bool) {
 	return v, true
 }
 
-// tracker は tracker の項目を、先に読んだ種類 (c.trackerKind) の読み方で読む。種類が読めなければ repo と token は読まない
-// (誤りは tracker.kind で名指しする)。
+// tracker は tracker の項目を、先に引いた provider (c.provider) の読み方で読む。provider が無ければ repo・host・token は
+// 読まない (誤りは tracker.kind で名指しする)。repo と host がどちらも読めたら、provider が置き場にする。
 func (c *checker) tracker(owner, n *yaml.Node, path string, t *Tracker) {
-	t.Kind = c.trackerKind
-	if c.trackerKind == GitLab {
-		t.Project.Host = gitlab.DefaultHost
+	var place placeInput
+	c.mapping(owner, n, path, c.trackerFields(t, &place))
+	p := c.provider
+	if p == nil {
+		return
 	}
-	hostWritten := false
-	c.mapping(owner, n, path, c.trackerFields(t, &hostWritten))
-	// jira の site は既定を持たない。mapping の必須は種類に依らないので、ここで欠落を名指しする
-	if c.trackerKind == Jira && !hostWritten && n.Kind == yaml.MappingNode {
-		c.fail(owner, join(path, "host"), "必須の項目が無い (tracker.kind: %s では Jira Cloud の site を書く)", Jira)
+	t.Kind = p.Kind
+	if !place.hostWritten {
+		place.host, place.hostRead = p.Host.Default, true
+		// 既定を持たない host は必須。mapping の必須は種類に依らないので、ここで欠落を名指しする
+		if p.Host.Parse != nil && p.Host.Default == "" {
+			place.hostRead = false
+			if n.Kind == yaml.MappingNode {
+				c.fail(owner, join(path, "host"), "必須の項目が無い (tracker.kind: %s では %s)", p.Kind, p.Host.RequiredHint)
+			}
+		}
+	}
+	if place.repoRead && place.hostRead {
+		t.Place = p.NewPlace(place.host, place.repo)
 	}
 }
 
-// trackerFields は tracker の表。host を読んだら hostWritten を立てる。
-func (c *checker) trackerFields(t *Tracker, hostWritten *bool) map[string]field {
+// placeInput は tracker の表が読んだ repo と host。読めたものだけ repoRead と hostRead を立てる。
+type placeInput struct {
+	repo, host         string
+	repoRead, hostRead bool
+	hostWritten        bool
+}
+
+// trackerFields は tracker の表。repo と host は place に預ける。
+func (c *checker) trackerFields(t *Tracker, place *placeInput) map[string]field {
 	return map[string]field{
-		// 種類の値は peekTrackerKind が読んだものを使う。ここでは読めなかった誤りを名指しする
+		// 種類の値は peekProvider が読んだものを使う。ここでは読めなかった誤りを名指しする
 		"kind": {required: true, read: func(_, n *yaml.Node, path string) {
-			if s, ok := c.str(n, path); ok && c.trackerKind == "" {
-				c.fail(n, path, "未知の値 %q (%s / %s / %s)", s, GitHub, GitLab, Jira)
+			if s, ok := c.str(n, path); ok && c.provider == nil {
+				kinds := make([]string, len(provider.Kinds))
+				for i, k := range provider.Kinds {
+					kinds[i] = string(k)
+				}
+				c.fail(n, path, "未知の値 %q (%s)", s, strings.Join(kinds, " / "))
 			}
 		}},
 		"repo": {required: true, read: func(_, n *yaml.Node, path string) {
-			switch c.trackerKind {
-			case GitHub:
-				t.Repo, _ = parsed(c, n, path, github.ParseRepo)
-			case GitLab:
-				t.Project.Path, _ = parsed(c, n, path, gitlab.ParsePath)
-			case Jira:
-				t.JiraProject.Key, _ = parsed(c, n, path, jira.ParseKey)
+			if c.provider != nil {
+				place.repo, place.repoRead = parsed(c, n, path, c.provider.ParseRepo)
 			}
 		}},
 		"host": {read: func(key, n *yaml.Node, path string) {
-			*hostWritten = true
-			switch c.trackerKind {
-			case GitHub:
+			place.hostWritten = true
+			switch {
+			case c.provider == nil:
+			case c.provider.Host.Parse == nil:
 				c.fail(key, path, "未知の key")
-			case GitLab:
-				if host, ok := parsed(c, n, path, gitlab.ParseHost); ok {
-					t.Project.Host = host
-				}
-			case Jira:
-				t.JiraProject.Site, _ = parsed(c, n, path, jira.ParseSite)
+			default:
+				place.host, place.hostRead = parsed(c, n, path, c.provider.Host.Parse)
 			}
 		}},
 		"token": {read: func(key, n *yaml.Node, path string) {
-			c.unsupported(key, path, unsupportedToken)
-			if c.trackerKind == GitHub {
+			if c.supports(key, path, provider.Token) {
 				t.Token, _ = c.variableOnly(n, path)
 			}
 		}},
@@ -672,7 +655,7 @@ func (c *checker) triggerFields(t *trigger.Trigger, names map[string]bool, later
 				case target.KindIssue:
 					t.On = kind
 				case target.KindCL:
-					c.unsupported(n, path, unsupportedCL)
+					c.supports(n, path, provider.CL)
 					t.On = kind
 				default:
 					c.fail(n, path, "未知の値 %q (%s / %s)", s, target.KindIssue, target.KindCL)
@@ -727,23 +710,23 @@ func (c *checker) issuePredicateFields(p *trigger.IssuePredicate, assignee, unas
 		}},
 		"author": {read: func(key, n *yaml.Node, path string) {
 			p.Author = c.author(n, path)
-			c.unsupported(key, path, unsupportedAuthor)
+			c.supports(key, path, provider.Author)
 		}},
 		"milestone": {read: func(key, n *yaml.Node, path string) {
 			p.Milestone, _ = c.str(n, path)
-			c.unsupported(key, path, unsupportedMilestone)
+			c.supports(key, path, provider.Milestone)
 		}},
 		"blocked": {read: func(key, n *yaml.Node, path string) {
 			p.Blocked = c.condition(n, path)
-			c.unsupported(key, path, unsupportedBlocked)
+			c.supports(key, path, provider.Blocked)
 		}},
 		"status": {read: func(key, n *yaml.Node, path string) {
 			c.names(key, n, path, &p.StatusAny, &p.StatusNone)
-			c.unsupported(key, path, unsupportedStatusAndType)
+			c.supports(key, path, provider.Status)
 		}},
 		"type": {read: func(key, n *yaml.Node, path string) {
 			c.names(key, n, path, &p.TypeAny, &p.TypeNone)
-			c.unsupported(key, path, unsupportedStatusAndType)
+			c.supports(key, path, provider.Type)
 		}},
 	}
 }

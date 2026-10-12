@@ -40,7 +40,7 @@ func TestJiraDefinitionIsReadWithTheProjectKeyInUpperCase(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := def.Triggers[0].Issue
-	if def.Tracker.Place() != "acme.atlassian.net/WIDGETS" || strings.Join(p.StatusAny, ",") != "Ready for Agent" ||
+	if def.Tracker.Place.String() != "acme.atlassian.net/WIDGETS" || strings.Join(p.StatusAny, ",") != "Ready for Agent" ||
 		strings.Join(p.TypeNone, ",") != "Epic" || p.Blocked == nil {
 		t.Fatalf("読んだ定義 = %+v", def)
 	}

@@ -8,26 +8,11 @@ import (
 	"strings"
 
 	"github.com/swat9013/claude-dispatcher/internal/deps"
-	"github.com/swat9013/claude-dispatcher/internal/jira"
 	"github.com/swat9013/claude-dispatcher/internal/loop"
 	"github.com/swat9013/claude-dispatcher/internal/printable"
 	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/workflow"
 )
-
-// settingsEntries は、worker が tracker を操作するのに要りそうな Claude Code の settings の permissions.allow の entry。
-// tracker の CLI の綴りで書く
-var settingsEntries = map[workflow.TrackerKind][]string{
-	workflow.GitHub: {"Bash(gh issue:*)", "Bash(gh pr:*)", "Bash(git push:*)"},
-	workflow.GitLab: {"Bash(glab issue:*)", "Bash(glab mr:*)", "Bash(git push:*)"},
-	workflow.Jira:   {"Bash(acli jira workitem:*)", "Bash(git push:*)"},
-}
-
-// settingsNotes は entry の列の後に出す注記。jira は CL を開く CLI を workflow 定義から決められない (CL 置き場の宣言は
-// #114) ので、足すよう示す。entry と取り違えて settings に写されないよう、字下げせずに出す
-var settingsNotes = map[workflow.TrackerKind]string{
-	workflow.Jira: "CL を開く CLI (gh pr / glab mr) の entry も足す",
-}
 
 // runDoctor は `doctor [<workflow の path>]` を撃つ (formats.md §7.4)。何も書かない。確かめたことを 1 件 1 行で出し、
 // NG があれば exit 1 (警告では落とさない)。
@@ -61,12 +46,15 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	for _, w := range promiseWarnings(def) {
 		fmt.Fprintf(stdout, "警告 %s\n", w)
 	}
+	// worker が外部 store を操作するのに要りそうな entry を、provider が担う役割ごとに、その CLI の綴りで出す (system.md §11)
+	p := def.Tracker.Provider()
 	fmt.Fprintln(stdout, "settings の permissions.allow に要りそうな entry (CLI は書かない):")
-	for _, entry := range settingsEntries[def.Tracker.Kind] {
+	for _, entry := range p.Settings() {
 		fmt.Fprintf(stdout, "  %s\n", entry)
 	}
-	if note, ok := settingsNotes[def.Tracker.Kind]; ok {
-		fmt.Fprintln(stdout, note)
+	// 注記は entry と取り違えて settings に写されないよう、字下げせずに出す
+	if p.SettingsNote != "" {
+		fmt.Fprintln(stdout, p.SettingsNote)
 	}
 	if failed {
 		return exitFailed
@@ -74,25 +62,25 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// checkStore は issue 置き場を読めるかを確かめる。jira は loop の起動時と同じ確認 (formats.md §6) を通し、実在しない
-// status 名と issue type 名を 1 つ 1 行で名指しする。
+// checkStore は issue 置き場を読めるかを確かめる。確認の手順を持つ種類は loop の起動時と同じ確認 (formats.md §6) を通し、
+// workflow 定義が書いた名前のうち実在しないものを 1 つ 1 行で名指しする。
 func checkStore(e environment, def workflow.Definition, stdout io.Writer) bool {
 	if err := e.confirmPlace(def); err != nil {
-		var unknown *jira.Unknown
+		var unknown *target.UnknownNames
 		if errors.As(err, &unknown) {
 			for _, p := range unknown.Problems {
 				fmt.Fprintf(stdout, "NG   %s\n", printable.Line(p))
 			}
 			return false
 		}
-		fmt.Fprintf(stdout, "NG   issue 置き場 %s: %s\n", def.Tracker.Place(), printable.Line(err.Error()))
+		fmt.Fprintf(stdout, "NG   issue 置き場 %s: %s\n", def.Tracker.Place, printable.Line(err.Error()))
 		return false
 	}
 	if _, err := loop.OpenItems(e.store(def), def); err != nil {
-		fmt.Fprintf(stdout, "NG   issue 置き場 %s: %s\n", def.Tracker.Place(), printable.Line(err.Error()))
+		fmt.Fprintf(stdout, "NG   issue 置き場 %s: %s\n", def.Tracker.Place, printable.Line(err.Error()))
 		return false
 	}
-	fmt.Fprintf(stdout, "ok   issue 置き場 %s\n", def.Tracker.Place())
+	fmt.Fprintf(stdout, "ok   issue 置き場 %s\n", def.Tracker.Place)
 	return true
 }
 

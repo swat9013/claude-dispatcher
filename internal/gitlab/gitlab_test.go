@@ -55,7 +55,7 @@ func TestOpenIssuesReadsBothSpellingsOfThePaginatedOutput(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			store := gitlab.NewStore(glab{issuesEndpoint + "?": {stdout: stdout}, nonMember: notFound}, project)
 
-			items, err := store.Open(target.KindIssue)
+			items, err := store.OpenIssues()
 
 			if err != nil || len(items) != 3 {
 				t.Fatalf("items = %v, err = %v", items, err)
@@ -67,7 +67,7 @@ func TestOpenIssuesReadsBothSpellingsOfThePaginatedOutput(t *testing.T) {
 func TestIssueThatIsGoneIsReadAsClosed(t *testing.T) {
 	store := gitlab.NewStore(glab{issuesEndpoint + "/7": notFound}, project)
 
-	item, err := store.Read(target.Ref{Kind: target.KindIssue, Number: 7})
+	item, err := store.ReadIssue(7)
 
 	if err != nil || !item.Terminal() {
 		t.Fatalf("item = %v, err = %v", item, err)
@@ -77,7 +77,7 @@ func TestIssueThatIsGoneIsReadAsClosed(t *testing.T) {
 func TestHTMLNotFoundFromInFrontOfGitLabDoesNotReadTheIssueAsGone(t *testing.T) {
 	store := gitlab.NewStore(glab{issuesEndpoint + "/7": {stderr: "glab: HTTP 404\n"}}, project)
 
-	_, err := store.Read(target.Ref{Kind: target.KindIssue, Number: 7})
+	_, err := store.ReadIssue(7)
 
 	var failure *target.Failure
 	if !errors.As(err, &failure) || failure.Kind != target.Unavailable {
@@ -88,7 +88,7 @@ func TestHTMLNotFoundFromInFrontOfGitLabDoesNotReadTheIssueAsGone(t *testing.T) 
 func TestIssueOfAProjectThatIsNotVisibleFailsAsNotVisible(t *testing.T) {
 	store := gitlab.NewStore(glab{issuesEndpoint + "/7": {stderr: "glab: 404 Project Not Found (HTTP 404)"}}, project)
 
-	_, err := store.Read(target.Ref{Kind: target.KindIssue, Number: 7})
+	_, err := store.ReadIssue(7)
 
 	var failure *target.Failure
 	if !errors.As(err, &failure) || failure.Kind != target.NotVisible {
@@ -140,7 +140,7 @@ func TestForbiddenObservationIsUnavailableWithAShortReasonInsteadOfTheStderr(t *
 		t.Run(name, func(t *testing.T) {
 			store := gitlab.NewStore(glab{issuesEndpoint + "/7": {stderr: stderr}}, project)
 
-			_, err := store.Read(target.Ref{Kind: target.KindIssue, Number: 7})
+			_, err := store.ReadIssue(7)
 
 			var failure *target.Failure
 			if !errors.As(err, &failure) || failure.Kind != target.Unavailable {
@@ -204,7 +204,7 @@ func TestOtherFailuresKeepTheirKindAndTheStderr(t *testing.T) {
 		t.Run(strings.TrimSpace(stderr), func(t *testing.T) {
 			store := gitlab.NewStore(glab{issuesEndpoint + "/7": {stderr: stderr}}, project)
 
-			_, err := store.Read(target.Ref{Kind: target.KindIssue, Number: 7})
+			_, err := store.ReadIssue(7)
 
 			var failure *target.Failure
 			if !errors.As(err, &failure) || failure.Kind != kind || !strings.Contains(err.Error(), strings.TrimSpace(stderr)) {
@@ -227,7 +227,7 @@ func TestRepoViewFailureOtherThanForbiddenKeepsTheStderrEvenIfTheBodyMentions403
 func TestAuthorWhoIsNotAMemberIsNotACollaborator(t *testing.T) {
 	store := gitlab.NewStore(glab{issuesEndpoint + "/7": {stdout: issueJSON(7)}, nonMember: notFound}, project)
 
-	item, err := store.Read(target.Ref{Kind: target.KindIssue, Number: 7})
+	item, err := store.ReadIssue(7)
 
 	if err != nil || item.(target.Issue).AuthorIsCollaborator {
 		t.Fatalf("item = %v, err = %v", item, err)
@@ -249,7 +249,7 @@ func mergeRequest(fields string) glab {
 
 func readMergeRequest(t *testing.T, g glab) target.CL {
 	t.Helper()
-	item, err := gitlab.NewStore(g, project).Read(target.Ref{Kind: target.KindCL, Number: 7})
+	item, err := gitlab.NewStore(g, project).ReadCL(7)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -275,7 +275,7 @@ func TestMergeRequestThatLeftOpenedAfterTheListIsLeftOutOfTheOpenOnes(t *testing
 			g := mergeRequest(`"state":"` + state + `","source_project_id":7,"target_project_id":7,"detailed_merge_status":"mergeable"`)
 			g[mergeRequestsEndpoint+"?"] = response{stdout: `[{"iid":7}]`}
 
-			items, err := gitlab.NewStore(g, project).Open(target.KindCL)
+			items, err := gitlab.NewStore(g, project).OpenCLs()
 
 			if err != nil || len(items) != 0 {
 				t.Fatalf("items = %v, err = %v", items, err)
@@ -311,7 +311,7 @@ func TestMergeRequestWithoutDetailedMergeStatusFailsAsAGitLabOlderThanSupported(
 	// detailed_merge_status の無い GitLab は対象外。conflict を計算中の merge request を conflict なしと読まない
 	g := mergeRequest(`"state":"opened","source_project_id":7,"target_project_id":7,"merge_status":"unchecked"`)
 
-	_, err := gitlab.NewStore(g, project).Read(target.Ref{Kind: target.KindCL, Number: 7})
+	_, err := gitlab.NewStore(g, project).ReadCL(7)
 
 	var failure *target.Failure
 	if !errors.As(err, &failure) || failure.Kind != target.Unavailable || !strings.Contains(err.Error(), "detailed_merge_status") {
@@ -322,7 +322,7 @@ func TestMergeRequestWithoutDetailedMergeStatusFailsAsAGitLabOlderThanSupported(
 func TestMergeRequestThatIsGoneIsReadAsClosed(t *testing.T) {
 	store := gitlab.NewStore(glab{mergeRequestsEndpoint + "/7": notFound}, project)
 
-	item, err := store.Read(target.Ref{Kind: target.KindCL, Number: 7})
+	item, err := store.ReadCL(7)
 
 	if err != nil || !item.Terminal() {
 		t.Fatalf("item = %v, err = %v", item, err)

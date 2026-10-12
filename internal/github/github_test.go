@@ -41,7 +41,7 @@ func TestRepoThatGhCannotResolveIsNotFound(t *testing.T) {
 
 	store := github.NewStore(github.Exec{Env: []string{"PATH=" + filepath.Dir(gh)}, Timeout: 5 * time.Second}, github.Repo{Owner: "acme", Name: "x"})
 
-	_, err := store.Open(target.KindIssue)
+	_, err := store.OpenIssues()
 
 	var failure *target.Failure
 	if !errors.As(err, &failure) || failure.Kind != target.NotVisible {
@@ -67,7 +67,7 @@ func issueNode(number int, association string, blockers ...string) string {
 func openIssues(t *testing.T, nodes ...string) []target.Issue {
 	t.Helper()
 	store := github.NewStore(pages(`[{"data":{"repository":{"issues":{"nodes":[`+strings.Join(nodes, ",")+`]}}}}]`), github.Repo{Owner: "acme", Name: "widgets"})
-	items, err := store.Open(target.KindIssue)
+	items, err := store.OpenIssues()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +109,7 @@ func (r response) Run(...string) ([]byte, error) { return r.out, r.err }
 
 func reread(t *testing.T, r response) (target.Issue, error) {
 	t.Helper()
-	item, err := github.NewStore(r, github.Repo{Owner: "acme", Name: "widgets"}).Read(target.Ref{Kind: target.KindIssue, Number: 42})
+	item, err := github.NewStore(r, github.Repo{Owner: "acme", Name: "widgets"}).ReadIssue(42)
 	if err != nil {
 		return target.Issue{}, err
 	}
@@ -249,7 +249,7 @@ func TestGhFailuresAreClassifiedByTheStatusPositionAndTheMessage(t *testing.T) {
 		"gh: HTTP 429\n": target.Unavailable,
 	} {
 		t.Run(strings.TrimSpace(stderr), func(t *testing.T) {
-			_, err := github.NewStore(ghFailed(stderr), github.Repo{Owner: "acme", Name: "widgets"}).Open(target.KindIssue)
+			_, err := github.NewStore(ghFailed(stderr), github.Repo{Owner: "acme", Name: "widgets"}).OpenIssues()
 
 			var failure *target.Failure
 			if !errors.As(err, &failure) || failure.Kind != kind {
@@ -265,7 +265,7 @@ func TestCLWithMoreReviewThreadsThanOneRoundTripIsTruncated(t *testing.T) {
 		"reviewDecision":null,"labels":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":101,"nodes":[]},"commits":{"nodes":[]}}`
 	store := github.NewStore(pages(`[{"data":{"repository":{"pullRequests":{"nodes":[`+node+`]}}}}]`), github.Repo{Owner: "acme", Name: "widgets"})
 
-	_, err := store.Open(target.KindCL)
+	_, err := store.OpenCLs()
 
 	var failure *target.Failure
 	if !errors.As(err, &failure) || failure.Kind != target.Truncated {
@@ -282,7 +282,7 @@ func clNode(number int, extra string) string {
 
 func rereadCL(t *testing.T, r response) (target.CL, error) {
 	t.Helper()
-	item, err := github.NewStore(r, github.Repo{Owner: "acme", Name: "widgets"}).Read(target.Ref{Kind: target.KindCL, Number: 5})
+	item, err := github.NewStore(r, github.Repo{Owner: "acme", Name: "widgets"}).ReadCL(5)
 	if err != nil {
 		return target.CL{}, err
 	}

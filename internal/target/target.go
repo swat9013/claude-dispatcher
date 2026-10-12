@@ -176,3 +176,11 @@ func (f *Failure) Error() string {
 }
 
 func (f *Failure) Unwrap() error { return f.Err }
+
+// UnknownNames は、workflow 定義が書いた名前 (status 名・issue type 名など) が置き場に実在しないこと。1 件 1 行の Problems
+// で名指しする。workflow 定義の誤りなので、観測の失敗 (Failure) と分ける。
+type UnknownNames struct {
+	Problems []string
+}
+
+func (u *UnknownNames) Error() string { return strings.Join(u.Problems, "\n") }
