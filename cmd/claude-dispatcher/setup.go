@@ -9,11 +9,8 @@ import (
 	"strings"
 
 	"github.com/swat9013/claude-dispatcher/internal/deps"
-	"github.com/swat9013/claude-dispatcher/internal/github"
-	"github.com/swat9013/claude-dispatcher/internal/gitlab"
-	"github.com/swat9013/claude-dispatcher/internal/jira"
 	"github.com/swat9013/claude-dispatcher/internal/proc"
-	"github.com/swat9013/claude-dispatcher/internal/scaffold"
+	"github.com/swat9013/claude-dispatcher/internal/provider"
 )
 
 // runSetup は `setup [--kind jira --host <site> --repo <project key>] [<workflow の path>]` を撃つ (formats.md §7.4):
@@ -29,21 +26,21 @@ func runSetup(args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 	// flag の綴りは、file の有無に依らず確かめる
-	var jiraProject *jira.Project
+	var flagged *flaggedPlace
 	if flags.kind != "" {
-		p, err := flags.jiraProject()
+		f, err := flags.place()
 		if err != nil {
 			return usageError(stderr, "%v", err)
 		}
-		jiraProject = &p
+		flagged = &f
 	}
 	if _, err := os.Stat(path); err == nil {
 		fmt.Fprintf(stdout, "%s は既にあるので書かない\n", path)
 		return 0
 	}
 	var template, place string
-	if jiraProject != nil {
-		template, place = scaffold.Jira(jiraProject.Site, jiraProject.Key), jiraProject.String()
+	if flagged != nil {
+		template, place = flagged.provider.Setup.Template(flagged.place), flagged.place.String()
 	} else if template, place, err = scaffoldFromOrigin(); err != nil {
 		fmt.Fprintf(stderr, "issue 置き場を決められない: %v\n", err)
 		return exitFailed
@@ -66,7 +63,7 @@ func runSetup(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// setupOptions は setup の flag (`--kind jira --host <site> --repo <project key>`)。
+// setupOptions は setup の flag (`--kind <種類> --host <host> --repo <repo>`)。
 type setupOptions struct {
 	kind, host, repo string
 }
@@ -99,32 +96,42 @@ func setupFlags(args []string) (setupOptions, []string, error) {
 		*target = value
 	}
 	if o.kind == "" && (o.host != "" || o.repo != "") {
-		return o, nil, errors.New("--host と --repo は --kind jira と一緒にだけ書ける")
+		return o, nil, fmt.Errorf("--host と --repo は --kind %s と一緒にだけ書ける", flagKinds())
 	}
 	return o, rest, nil
 }
 
-// jiraProject は --kind jira の flag から Jira の project を読む。
-func (o setupOptions) jiraProject() (jira.Project, error) {
-	if o.kind != "jira" {
-		return jira.Project{}, fmt.Errorf("--kind は jira だけを受ける (%q)", o.kind)
-	}
-	if o.host == "" || o.repo == "" {
-		return jira.Project{}, errors.New("--kind jira には --host <site> と --repo <project key> が要る")
-	}
-	site, err := jira.ParseSite(o.host)
-	if err != nil {
-		return jira.Project{}, fmt.Errorf("--host %q: %w", o.host, err)
-	}
-	key, err := jira.ParseKey(o.repo)
-	if err != nil {
-		return jira.Project{}, fmt.Errorf("--repo %q: %w", o.repo, err)
-	}
-	return jira.Project{Site: site, Key: key}, nil
+// flaggedPlace は flag から読んだ置き場と、その種類の provider。
+type flaggedPlace struct {
+	provider provider.Provider
+	place    provider.Place
 }
 
-// scaffoldFromOrigin は cwd の clone の origin の host で tracker.kind を決め、issue 置き場を埋めたその種類の雛形と、issue 置き場の
-// 表示名を返す。host が github.com なら github、それ以外は gitlab。
+// flagKinds は `setup --kind` で受ける種類を誤りの文言の綴りで並べる。
+func flagKinds() string { return provider.Join(provider.SetupFlagKinds()) }
+
+// place は --kind の flag から、その種類の provider の読み方で置き場を読む。flag で受けるのは provider が宣言した種類だけ。
+func (o setupOptions) place() (flaggedPlace, error) {
+	p, ok := provider.Of(provider.Kind(o.kind))
+	if !ok || p.Setup.Flags == "" {
+		return flaggedPlace{}, fmt.Errorf("--kind は %s だけを受ける (%q)", flagKinds(), o.kind)
+	}
+	if o.host == "" || o.repo == "" {
+		return flaggedPlace{}, fmt.Errorf("--kind %s には %s が要る", p.Kind, p.Setup.Flags)
+	}
+	host, err := p.Host.Parse(o.host)
+	if err != nil {
+		return flaggedPlace{}, fmt.Errorf("--host %q: %w", o.host, err)
+	}
+	repo, err := p.ParseRepo(o.repo)
+	if err != nil {
+		return flaggedPlace{}, fmt.Errorf("--repo %q: %w", o.repo, err)
+	}
+	return flaggedPlace{provider: p, place: p.NewPlace(host, repo)}, nil
+}
+
+// scaffoldFromOrigin は cwd の clone の origin の host を認める provider で tracker.kind を決め、issue 置き場を埋めたその種類の
+// 雛形と、issue 置き場の表示名を返す (host が github.com なら github、それ以外は gitlab)。
 // PATH は撃つ CLI ごとに解決する (git の後、host で決まった tracker の CLI だけ)。
 func scaffoldFromOrigin() (template, place string, err error) {
 	origin, err := commandEnvironment("git").origin()
@@ -136,18 +143,12 @@ func scaffoldFromOrigin() (template, place string, err error) {
 		// URL は認証情報を含みうるので名指しに載せない
 		return "", "", fmt.Errorf("origin の URL: %w", err)
 	}
-	if host == "github.com" {
-		repo, err := github.CurrentRepo(commandEnvironment("gh").gh(""))
-		if err != nil {
-			return "", "", err
-		}
-		return scaffold.GitHub(repo.String()), repo.String(), nil
-	}
-	project, err := gitlab.CurrentProject(commandEnvironment("glab").glab())
+	p := provider.ForOrigin(host)
+	current, err := p.Setup.CurrentPlace(commandEnvironment(p.Command).runtime())
 	if err != nil {
 		return "", "", err
 	}
-	return scaffold.GitLab(project.Host, project.Path), project.String(), nil
+	return p.Setup.Template(current), current.String(), nil
 }
 
 // origin は cwd の clone の origin の URL。

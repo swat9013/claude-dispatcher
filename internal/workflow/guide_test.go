@@ -70,7 +70,7 @@ func TestEveryKeyTheLoaderAcceptsAppearsInTheGuide(t *testing.T) {
 		table   keyTable
 	}{
 		{"項目", keyTable{fields: c.topFields(def), nested: map[string]nestedTable{
-			"tracker":   {"tracker", keyTable{fields: c.trackerFields(&def.Tracker, new(bool))}},
+			"tracker":   {"tracker", keyTable{fields: c.trackerFields(&def.Tracker, &placeInput{})}},
 			"polling":   {"polling", keyTable{fields: c.pollingFields(&def.Interval)}},
 			"workspace": {"workspace", keyTable{fields: c.workspaceFields(def)}},
 			"hooks":     {"hooks", keyTable{fields: c.hooksFields(&def.Hooks)}},

@@ -58,7 +58,7 @@ func TestValidDefinitionIsRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if def.Tracker.Repo.String() != "acme/widgets" || def.Interval != workflow.DefaultInterval ||
+	if def.Tracker.Place.String() != "acme/widgets" || def.Interval != workflow.DefaultInterval ||
 		len(def.Triggers) != 1 || def.Triggers[0].Name != "implement" || def.Triggers[0].On != target.KindIssue ||
 		strings.Join(def.Triggers[0].Issue.LabelsAll, ",") != "ready-for-agent" {
 		t.Fatalf("読んだ定義 = %+v", def)
@@ -254,7 +254,7 @@ func TestVariableIsReplacedWithTheEnvironmentValue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if def.Tracker.Repo.String() != "other/gadgets" || def.Tracker.Token != "secret-1" {
+	if def.Tracker.Place.String() != "other/gadgets" || def.Tracker.Token != "secret-1" {
 		t.Fatalf("tracker = %+v", def.Tracker)
 	}
 }

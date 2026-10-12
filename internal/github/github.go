@@ -82,27 +82,17 @@ func NewStore(gh Runner, repo Repo) Store { return Store{gh: gh, repo: repo} }
 
 func (s Store) ScopeKey() string { return ScopeKey(s.repo) }
 
-// Open は種類の open な作業対象を全件読む。失敗は *target.Failure。
-func (s Store) Open(kind target.Kind) ([]target.Item, error) {
-	switch kind {
-	case target.KindIssue:
-		return items(s.openIssues())
-	case target.KindCL:
-		return items(s.openCLs())
-	}
-	return nil, fmt.Errorf("未知の作業対象の種類 %q", kind)
-}
+// OpenIssues は open な issue を全件読む。失敗は *target.Failure。
+func (s Store) OpenIssues() ([]target.Item, error) { return items(s.openIssues()) }
 
-// Read は作業対象 1 件を読み直す。失敗は *target.Failure。
-func (s Store) Read(ref target.Ref) (target.Item, error) {
-	switch ref.Kind {
-	case target.KindIssue:
-		return s.issue(ref.Number)
-	case target.KindCL:
-		return s.cl(ref.Number)
-	}
-	return nil, fmt.Errorf("未知の作業対象の種類 %q", ref.Kind)
-}
+// ReadIssue は issue 1 件を読み直す。失敗は *target.Failure。
+func (s Store) ReadIssue(number int) (target.Item, error) { return s.issue(number) }
+
+// OpenCLs は open な pull request を全件読む。失敗は *target.Failure。
+func (s Store) OpenCLs() ([]target.Item, error) { return items(s.openCLs()) }
+
+// ReadCL は pull request 1 件を読み直す。失敗は *target.Failure。
+func (s Store) ReadCL(number int) (target.Item, error) { return s.cl(number) }
 
 func items[T target.Item](list []T, err error) ([]target.Item, error) {
 	if err != nil {

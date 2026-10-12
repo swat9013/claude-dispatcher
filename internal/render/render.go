@@ -35,7 +35,7 @@ func (v Vars) data() map[string]any {
 			"url":    item.URL,
 			"labels": nonNil(item.Labels),
 		}
-		// key は key で指す tracker (Jira) の issue にだけ置く。他の tracker で `.issue.key` を書けば未知の変数になる
+		// key は issue を key で指す tracker の issue にだけ置く。他の tracker で `.issue.key` を書けば未知の変数になる
 		if item.Key != "" {
 			issue["key"] = item.Key
 		}

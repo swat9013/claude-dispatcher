@@ -14,6 +14,7 @@ import (
 
 	"github.com/swat9013/claude-dispatcher/internal/loop"
 	"github.com/swat9013/claude-dispatcher/internal/precheck"
+	"github.com/swat9013/claude-dispatcher/internal/provider"
 	"github.com/swat9013/claude-dispatcher/internal/status"
 	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/trigger"
@@ -38,16 +39,25 @@ type tickPlan struct {
 	blocked []string
 }
 
-// memoryStore は in-memory の issue 置き場。
+// memoryStore は in-memory の置き場。observe は作業対象の種類に依らず同じものを返す。
 type memoryStore struct {
 	scopeKey func() string
 	observe  func() ([]target.Item, error)
 	reread   func(ref target.Ref) (target.Item, error)
 }
 
-func (m memoryStore) ScopeKey() string                         { return m.scopeKey() }
-func (m memoryStore) Open(target.Kind) ([]target.Item, error)  { return m.observe() }
-func (m memoryStore) Read(ref target.Ref) (target.Item, error) { return m.reread(ref) }
+func (m memoryStore) ScopeKey() string                   { return m.scopeKey() }
+func (m memoryStore) OpenIssues() ([]target.Item, error) { return m.observe() }
+func (m memoryStore) OpenCLs() ([]target.Item, error)    { return m.observe() }
+func (m memoryStore) ReadIssue(n int) (target.Item, error) {
+	return m.reread(target.Ref{Kind: target.KindIssue, Number: n})
+}
+func (m memoryStore) ReadCL(n int) (target.Item, error) {
+	return m.reread(target.Ref{Kind: target.KindCL, Number: n})
+}
+
+// store は m を issue 置き場と CL 置き場の両方の部品にした置き場。
+func (m memoryStore) store() loop.Store { return loop.Store{Issues: m, CLs: m} }
 
 // noWorkspaces は workspace を持たない掃除の口。
 type noWorkspaces struct{}
@@ -98,7 +108,7 @@ type harness struct {
 }
 
 func definition(interval time.Duration, maxConcurrent int) workflow.Definition {
-	return workflow.Definition{Interval: interval, MaxConcurrent: maxConcurrent, MaxAttempts: 1, MaxRetryBackoff: 5 * time.Minute,
+	return workflow.Definition{Tracker: githubTracker, Interval: interval, MaxConcurrent: maxConcurrent, MaxAttempts: 1, MaxRetryBackoff: 5 * time.Minute,
 		Triggers: []trigger.Trigger{{Name: "implement", On: target.KindIssue}}}
 }
 
@@ -199,7 +209,7 @@ func (h *harness) run(t *testing.T) []string {
 					return nil, errors.New("gh の失敗")
 				}
 				return target.Issue{Number: ref.Number}, nil
-			}}
+			}}.store()
 		},
 		Workspaces: func(workflow.Definition) loop.Workspaces { return noWorkspaces{} },
 		Launch: func(_ workflow.Definition, job worker.Job, events chan<- worker.Event) loop.Worker {
@@ -405,7 +415,7 @@ func TestLineThatCannotBeWrittenToTheLogIsReportedOnStdout(t *testing.T) {
 		Definition: definition(time.Minute, 0),
 		Precheck:   noProblems,
 		Store: func(workflow.Definition) loop.Store {
-			return memoryStore{scopeKey: func() string { return startScope }, observe: func() ([]target.Item, error) { return nil, nil }}
+			return memoryStore{scopeKey: func() string { return startScope }, observe: func() ([]target.Item, error) { return nil, nil }}.store()
 		},
 		Workspaces:   func(workflow.Definition) loop.Workspaces { return noWorkspaces{} },
 		NewSessionID: func() (string, error) { return "", nil },
@@ -526,12 +536,15 @@ func TestTickLineNamesAMergeRequestWithItsGitLabReference(t *testing.T) {
 		{Trigger: &trigger.Trigger{Name: "fix-ci", On: target.KindCL}, Item: target.CL{Number: 7}},
 	}
 
-	for kind, want := range map[workflow.TrackerKind]string{
-		workflow.GitHub: "候補 2: implement issue #42, fix-ci cl #7",
-		workflow.GitLab: "候補 2: implement issue #42, fix-ci cl !7",
+	for kind, want := range map[provider.Kind]string{
+		provider.GitHub: "候補 2: implement issue #42, fix-ci cl #7",
+		provider.GitLab: "候補 2: implement issue #42, fix-ci cl !7",
 	} {
 		if got := loop.Summary(candidates, workflow.Tracker{Kind: kind}); got != want {
 			t.Errorf("%s: Summary = %q, want %q", kind, got, want)
 		}
 	}
 }
+
+// githubTracker は、テストの workflow 定義の tracker (作業対象を人が読む行に出す呼び方を決める)。
+var githubTracker = workflow.Tracker{Kind: provider.GitHub}

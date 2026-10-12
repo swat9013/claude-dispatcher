@@ -616,3 +616,17 @@ func TestSetupRejectsMalformedJiraFlags(t *testing.T) {
 		})
 	}
 }
+
+func TestSetupAcceptsTheKindFlagOnlyForKindsWrittenFromFlags(t *testing.T) {
+	s := newSandbox(t)
+	if err := os.Remove(s.workflowFile()); err != nil {
+		t.Fatal(err)
+	}
+
+	r := s.run("setup", "--kind", "github", "--host", "github.com", "--repo", "acme/widgets")
+
+	assertExit(t, r, 2)
+	if _, err := os.Stat(s.workflowFile()); err == nil {
+		t.Fatal("flag で受けない種類なのに雛形を書いた")
+	}
+}

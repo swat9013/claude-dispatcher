@@ -3,6 +3,7 @@
 package loop
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/swat9013/claude-dispatcher/internal/precheck"
+	"github.com/swat9013/claude-dispatcher/internal/provider"
 	"github.com/swat9013/claude-dispatcher/internal/status"
 	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/trigger"
@@ -20,14 +22,48 @@ import (
 	"github.com/swat9013/claude-dispatcher/internal/workflow"
 )
 
-// Store は issue 置き場と CL 置き場の部品 (system.md §13)。本番は gh の adapter、テストは in-memory。失敗は *target.Failure。
-type Store interface {
-	ScopeKey() string
-	// Open は種類の open な作業対象を全件読む
-	Open(kind target.Kind) ([]target.Item, error)
-	// Read は作業対象 1 件を読み直す。終端になっているか消えていれば Terminal
-	Read(ref target.Ref) (target.Item, error)
+// Store は loop が読む置き場: issue 置き場の部品と CL 置き場の部品 (system.md §13)。本番は provider が組み立てた adapter、
+// テストは in-memory。失敗は *target.Failure。
+type Store struct {
+	Issues provider.IssueStore
+	// CLs は CL 置き場の部品。CL 置き場の役割を持たない種類は nil
+	CLs provider.CLStore
 }
+
+// ScopeKey は issue 置き場を指す scope key。
+func (s Store) ScopeKey() string { return s.Issues.ScopeKey() }
+
+// Open は種類の open な作業対象を、その種類の置き場の部品で全件読む。
+func (s Store) Open(kind target.Kind) ([]target.Item, error) {
+	switch kind {
+	case target.KindIssue:
+		return s.Issues.OpenIssues()
+	case target.KindCL:
+		if s.CLs == nil {
+			return nil, errNoCLStore
+		}
+		return s.CLs.OpenCLs()
+	}
+	return nil, fmt.Errorf("未知の作業対象の種類 %q", kind)
+}
+
+// Read は作業対象 1 件を、その種類の置き場の部品で読み直す。終端になっているか消えていれば Terminal。
+func (s Store) Read(ref target.Ref) (target.Item, error) {
+	switch ref.Kind {
+	case target.KindIssue:
+		return s.Issues.ReadIssue(ref.Number)
+	case target.KindCL:
+		if s.CLs == nil {
+			return nil, errNoCLStore
+		}
+		return s.CLs.ReadCL(ref.Number)
+	}
+	return nil, fmt.Errorf("未知の作業対象の種類 %q", ref.Kind)
+}
+
+// errNoCLStore は CL 置き場の役割を持たない種類で CL を読もうとした誤り。workflow 定義の検査が on: cl を弾くので、起きれば
+// loop の誤り
+var errNoCLStore = errors.New("tracker.kind の provider は CL 置き場の役割を持たない")
 
 // Workspaces は workspace の掃除の口。
 type Workspaces interface {
