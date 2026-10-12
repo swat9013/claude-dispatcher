@@ -42,6 +42,14 @@ _Avoid_: エージェント (単独では worker と紛れる)
 
 ## 置き場
 
+**tracker**:
+issue 置き場を持つ外部 store のサービス (GitHub・GitLab・Jira)。issue と label の置き場になる。
+_Avoid_: issue tracker (tracker で足りる)
+
+**CL host**:
+CL 置き場を持つ外部 store のサービス (GitHub・GitLab)。CL・review thread・checks・branch の置き場になる。1 つのサービスが tracker と CL host を兼ねることがある (GitHub・GitLab)。Jira は tracker にだけなれる。
+_Avoid_: forge (GitHub や GitLab を指し、Jira を含まない語なので、役割の名前にならない)
+
 **issue 置き場**:
 dispatcher が issue を読む tracker 上の場所。
 _Avoid_: issue repo (tracker が GitHub 以外でも通る語にする)

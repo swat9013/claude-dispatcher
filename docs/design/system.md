@@ -254,10 +254,8 @@ SPEC §7・§8・§16 の状態機械を土台にする。
 
 - **front matter が持つもの**
   - tracker の種類 (`github` / `gitlab` / `jira`) と adapter の設定
-    - 書ける設定は種類ごとに決まる。種類が支えない設定は、検査で名指しして失敗させる。黙って通すと、条件が全件に当たるか、渡したつもりの設定が効かない
-      - `gitlab`: `blocked` の述語・`tracker.token`
-      - `jira`: `author` と `milestone` の述語・`tracker.token`・`on: cl` の trigger (issue 置き場と別の CL 置き場の宣言は #114)
-      - `github` と `gitlab`: `status` と `type` の述語
+    - 書ける設定は、`tracker.kind` のサービスが役割 (tracker / CL host) ごとに支えると宣言したものだけ。宣言の無い設定は、検査で名指しして失敗させる (fail closed)。黙って通すと、条件が全件に当たるか、渡したつもりの設定が効かない
+    - 種類ごとに何を書けるかは、案内の「tracker の種類ごとの違い」の表が正本
   - trigger の列
   - hooks
   - 並列上限・attempt の上限・backoff の上限・stall の上限・worker 1 回分の上限時間 (既定 1 時間。0 で無効)
@@ -344,7 +342,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。
 - **特定の plugin には依存しない**
   - action が呼ぶ skill と command は、利用者が入れた plugin・repo の `.claude/`・`~/.claude/` のどれに置いてもよい
   - 事前検査 (§8) は、この 3 か所の skill と command から先頭の `/名前` を探す。plugin は、user scope で入れたものと、この repo に project scope で入れたものを数える (local scope の plugin は commit しない settings で有効になり、worker の workspace では読まれない)
-- **Claude Code の settings は CLI が書かない** (ADR 0004)。`doctor` は、worker が tracker を操作するのに要りそうな entry を、`tracker.kind` の CLI (gh・glab・acli) の綴りで表示する
+- **Claude Code の settings は CLI が書かない** (ADR 0004)。`doctor` は、worker が外部 store を操作するのに要りそうな entry を、使う役割 (tracker / CL host) ごとに、その役割を担うサービスの CLI (gh・glab・acli) の綴りで表示する
   - `jira` は CL を開く CLI を workflow 定義から決められない (CL 置き場の宣言は #114) ので、その entry も足すよう 1 行で示す
 - **`doctor` は、利用者の約束に頼る宣言を警告する**
   - `cl.approved` に action を当てている (merge を worker に任せうる)
@@ -381,7 +379,12 @@ CLI の中で、呼び出し側から中身を隠す部品と、差し替えの�
   - 失敗は 認証 / 見えない / 読み切れない / rate limit に分けて返す (SPEC §11.4)
   - scope key は issue 置き場の部品が返す。tracker ごとの粒度 (GitHub は owner と repo、GitLab は host と repo の path、Jira は site と project key) を部品の外に出さない
   - Jira の作業対象の番号は issue の key (`WIDGETS-123`) の数字の部分。scope key が project key を含むので、scope の中で一意になる (ADR 0010)。project key を改名したら scope key が変わるので、workflow 定義を書き換えて loop を起動し直す
-  - どの adapter で組み立てるかは、workflow 定義の `tracker.kind` で決める
+  - どの adapter で組み立てるかは、workflow 定義の `tracker.kind` の provider が決める
+- **tracker の種類の知識は provider に閉じる**
+  - provider はサービス (github / gitlab / jira) ごとに 1 つ持つ。役割 (tracker / CL host) ごとに、支えるもの (設定・述語・template 変数)・作業対象の呼び方 (`#` / `!` / key)・Claude Code の settings の entry を宣言し、置き場の読み方と部品の組み立てを持つ
+  - workflow 定義の検査・`setup`・`doctor`・loop の組み立ては、種類で分岐せずに provider を引く。種類を足すときは provider を 1 つ足す
+  - 支える宣言の無いものは支えないものとして扱い、名指しで失敗させる (§8)
+  - provider は seam ではない。adapter を差し替える口ではなく、どの adapter を組むかを種類から引く表なので、テストの adapter を持たない
 - **起動部は、1 つの worker の起動・stream の読み取り・停止・回収を 1 つの部品に閉じる** (ADR 0005)
   - stream の event (起動・活動・終了) は中立の形で返す
   - 停止は process group ごと行い、上限時間か停止要求のどちらで止まったかを区別して返す
