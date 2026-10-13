@@ -438,6 +438,7 @@ issue#42  implement  1        running  5m10s  Edit internal/status/status.go
 | `type` の無い行 | 数えない |
 | それ以外 (`type: system` のすべての subtype と、知らない `type` を含む) | 数える |
 
+- 表は上から当て、最初に当たった行で決める
 - 数えないのは、止まっていても書かれる行と、中身を判定できない行だけにする。数えすぎた誤りは `limits.run_timeout` で止まるが、数えなさすぎた誤りは進んでいる worker の attempt を失わせるため。claude が新しく書き始めた `type` や subtype も数える
 - 64 KiB を超える行は tool の結果や発話の行で、heartbeat や通知の行は小さいので、`type` を見ずに数える。1 行は頭の 64 KiB までだけを持って判定する
 - 確認のたびに、前の確認で読み終えた offset から今の file の大きさまでの完結した行を、末尾の窓に限らずすべて見る。1 回に読む量に上限は置かない。今の attempt が書いた行だけを見る
