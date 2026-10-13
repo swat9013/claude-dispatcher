@@ -514,17 +514,16 @@ func TestJiraDoctorNamesThePlaceAndTheAcliEntries(t *testing.T) {
 	for _, want := range []string{
 		"ok   issue 置き場 " + jiraSite + "/" + jiraKey + "\n",
 		"ok   acli " + filepath.Join(s.binDir, "acli") + "\n",
-		"  Bash(acli jira workitem:*)\n",
-		"  Bash(git push:*)\n",
-		"\nCL を開く CLI (gh pr / glab mr) の entry も足す\n",
+		"  Bash(acli jira workitem:*)\n  Bash(git push:*)\n",
 	} {
 		if !strings.Contains(r.stdout, want) {
 			t.Errorf("stdout に %q が無い:\n%s", want, r.stdout)
 		}
 	}
-	if strings.Contains(r.stdout, "Bash(gh ") || strings.Contains(r.stdout, "Bash(glab ") {
-		t.Errorf("jira なのに gh か glab の entry を出した:\n%s", r.stdout)
+	if strings.Contains(r.stdout, "Bash(gh ") || strings.Contains(r.stdout, "Bash(glab ") || strings.Contains(r.stdout, "CL 置き場") {
+		t.Errorf("cl: の無い jira なのに CL 置き場か gh か glab の entry を出した:\n%s", r.stdout)
 	}
+	s.assertNoOtherTrackerCLI("cl: の無い jira なのに")
 }
 
 func TestJiraDoctorNamesEachUnknownStatus(t *testing.T) {
@@ -545,34 +544,19 @@ func TestJiraDoctorNamesEachUnknownStatus(t *testing.T) {
 
 func TestJiraSetupWritesTheSiteAndProjectKeyFromTheFlags(t *testing.T) {
 	s := newSandbox(t)
-	if err := os.Remove(s.workflowFile()); err != nil {
-		t.Fatal(err)
-	}
 
-	r := s.run("setup", "--kind", "jira", "--host="+jiraSite, "--repo", "widgets")
+	written := s.jiraSetupInGitHubClone()
 
-	assertExit(t, r, 0)
-	written, err := os.ReadFile(s.workflowFile())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := "tracker:\n  kind: jira\n  host: " + jiraSite + "\n  repo: WIDGETS\n"; !strings.Contains(string(written), want) {
+	if want := "tracker:\n  kind: jira\n  host: " + jiraSite + "\n  repo: WIDGETS\n"; !strings.Contains(written, want) {
 		t.Fatalf("雛形の tracker が %q でない:\n%s", want, written)
 	}
 	for _, wanted := range []string{"any: [Ready for Agent]", "claude-dispatcher/{{ .issue.key }}", "acli"} {
-		if !strings.Contains(string(written), wanted) {
+		if !strings.Contains(written, wanted) {
 			t.Errorf("jira の雛形に %q が無い:\n%s", wanted, written)
 		}
 	}
-	for _, unwanted := range []string{"\n    on: cl", "\n      type:"} {
-		if strings.Contains(string(written), unwanted) {
-			t.Errorf("jira の雛形に %q がある:\n%s", unwanted, written)
-		}
-	}
-	for _, name := range []string{"git", "gh", "glab", "acli"} {
-		if calls := s.calls(name); len(calls) != 0 {
-			t.Errorf("flag で決めたのに %s を撃った: %v", name, calls[0].Argv)
-		}
+	if strings.Contains(written, "\n      type:") {
+		t.Errorf("jira の雛形に type の述語がある:\n%s", written)
 	}
 }
 
@@ -581,15 +565,15 @@ func TestJiraSetupTemplateAloneLetsTheDryRunPassWithoutPlugins(t *testing.T) {
 	if err := os.RemoveAll(filepath.Join(s.home, ".claude")); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Remove(s.workflowFile()); err != nil {
-		t.Fatal(err)
-	}
-	assertExit(t, s.run("setup", "--kind", "jira", "--host", jiraSite, "--repo", jiraKey), 0)
+	s.jiraSetupInGitHubClone()
 	s.setJiraIssues(readyJiraIssue(42))
+	failing := readyCL(7)
+	failing.head, failing.checks = "claude-dispatcher/WIDGETS-42", "FAILURE"
+	s.setStore(nil, []cl{failing})
 
 	r := s.dryRun()
 
-	assertCandidates(t, r, jiraCandidate("implement", 42))
+	assertCandidates(t, r, jiraCandidate("implement", 42), "fix-ci\tcl\t#7\tcl 7")
 }
 
 func TestSetupRejectsMalformedJiraFlags(t *testing.T) {
