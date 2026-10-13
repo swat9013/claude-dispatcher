@@ -23,7 +23,7 @@ import (
 )
 
 // Store は loop が読む置き場: issue 置き場の部品と CL 置き場の部品 (system.md §13)。本番は provider が組み立てた adapter、
-// テストは in-memory。失敗は *target.Failure。
+// テストは in-memory。失敗は *target.Failure。一覧は *target.NonFatal を一覧とともに返しうる (OpenItems)。
 type Store struct {
 	Issues provider.IssueStore
 	// CLs は CL 置き場の部品。CL 置き場の役割を持たない種類は nil
@@ -315,7 +315,12 @@ func (l *loop) tick() {
 	}
 	l.def, l.blocked = def, l.o.Precheck(def)
 	open, err := OpenItems(store, def)
-	if err != nil {
+	var nonFatal *target.NonFatal
+	switch {
+	case errors.As(err, &nonFatal):
+		// 作業対象は読めた。補助の要求の失敗だけを残して tick を続ける (formats.md §3)
+		l.rec.error(target.Ref{}, oneLine(err))
+	case err != nil:
 		l.tickFailed(oneLine(err))
 		return
 	}
@@ -479,17 +484,23 @@ func refNames(refs []target.Ref) []string {
 	return names
 }
 
-// OpenItems は、workflow 定義の trigger に現れる種類の open な作業対象を置き場から全件読む。
+// OpenItems は、workflow 定義の trigger に現れる種類の open な作業対象を置き場から全件読む。置き場の部品が作業対象とともに
+// 処理を続けられる失敗 (*target.NonFatal) を返したら、作業対象を読み進め、その失敗をまとめて作業対象とともに返す。
 func OpenItems(store Store, def workflow.Definition) ([]target.Item, error) {
 	items := []target.Item{}
+	var nonFatal []error
 	for _, kind := range def.Kinds() {
 		open, err := store.Open(kind)
-		if err != nil {
+		var failure *target.NonFatal
+		switch {
+		case errors.As(err, &failure):
+			nonFatal = append(nonFatal, err)
+		case err != nil:
 			return nil, err
 		}
 		items = append(items, open...)
 	}
-	return items, nil
+	return items, errors.Join(nonFatal...)
 }
 
 // reconcile は走っている worker の作業対象を読み直し、終端になっていれば worker を止める。trigger から外れただけでは止めない。

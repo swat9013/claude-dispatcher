@@ -76,11 +76,18 @@ func checkStore(e environment, def workflow.Definition, stdout io.Writer) bool {
 		fmt.Fprintf(stdout, "NG   issue 置き場 %s: %s\n", def.Tracker.Place, printable.Line(err.Error()))
 		return false
 	}
-	if _, err := loop.OpenItems(e.store(def), def); err != nil {
+	// 処理を続けられる失敗 (*target.NonFatal) は、置き場を読めているので NG にせず、ok の行に理由を添える (formats.md §7.4)
+	var nonFatal *target.NonFatal
+	_, err := loop.OpenItems(e.store(def), def)
+	switch {
+	case errors.As(err, &nonFatal):
+		fmt.Fprintf(stdout, "ok   issue 置き場 %s (補助の要求が落ちた: %s)\n", def.Tracker.Place, printable.Line(nonFatal.Err.Error()))
+	case err != nil:
 		fmt.Fprintf(stdout, "NG   issue 置き場 %s: %s\n", def.Tracker.Place, printable.Line(err.Error()))
 		return false
+	default:
+		fmt.Fprintf(stdout, "ok   issue 置き場 %s\n", def.Tracker.Place)
 	}
-	fmt.Fprintf(stdout, "ok   issue 置き場 %s\n", def.Tracker.Place)
 	return true
 }
 

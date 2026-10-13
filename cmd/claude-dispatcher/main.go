@@ -339,7 +339,12 @@ func (e environment) workspaces(def workflow.Definition, hookLock *sync.Mutex) w
 func dryRunOnce(e environment, def workflow.Definition, stdout, stderr io.Writer) int {
 	store := e.store(def)
 	open, err := loop.OpenItems(store, def)
-	if err != nil {
+	var nonFatal *target.NonFatal
+	switch {
+	case errors.As(err, &nonFatal):
+		// 作業対象は読めた。補助の要求の失敗を stderr に 1 行で残して続ける (formats.md §5)
+		fmt.Fprintln(stderr, printable.Line(err.Error()))
+	case err != nil:
 		fmt.Fprintln(stderr, err)
 		return failureExit(err)
 	}

@@ -128,24 +128,34 @@ func (s Store) OpenIssues() ([]target.Item, error) { return items(s.openIssues()
 // ReadIssue は issue 1 件を読み直す。失敗は *target.Failure。
 func (s Store) ReadIssue(iid int) (target.Item, error) { return s.issue(iid) }
 
-// OpenCLs は open な merge request を全件読む。失敗は *target.Failure。
-func (s Store) OpenCLs() ([]target.Item, error) { return items(s.openMergeRequests()) }
+// OpenCLs は open な merge request を全件読む。失敗は *target.Failure。conflict の計算し直しの求めが落ちたときは、一覧とともに
+// *target.NonFatal を返す。
+func (s Store) OpenCLs() ([]target.Item, error) {
+	cls, err := s.openMergeRequests()
+	var nonFatal *target.NonFatal
+	if err != nil && !errors.As(err, &nonFatal) {
+		return nil, err
+	}
+	return asItems(cls), err
+}
 
 // ReadCL は merge request 1 件を読み直す。失敗は *target.Failure。
-func (s Store) ReadCL(iid int) (target.Item, error) {
-	cl, _, err := s.mergeRequest(iid, collaborators{})
-	return cl, err
-}
+func (s Store) ReadCL(iid int) (target.Item, error) { return s.mergeRequest(iid) }
 
 func items[T target.Item](list []T, err error) ([]target.Item, error) {
 	if err != nil {
 		return nil, err
 	}
+	return asItems(list), nil
+}
+
+// asItems は作業対象の列を target.Item の列にする。
+func asItems[T target.Item](list []T) []target.Item {
 	out := make([]target.Item, len(list))
 	for i, item := range list {
 		out[i] = item
 	}
-	return out, nil
+	return out
 }
 
 // pages は `glab api --paginate` の出力を要素の列として読む。glab は page ごとの配列を連ねて出すか、1 つの配列に結合して

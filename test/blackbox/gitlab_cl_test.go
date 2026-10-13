@@ -2,22 +2,26 @@ package blackbox_test
 
 import (
 	"encoding/json"
+	"slices"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/swat9013/claude-dispatcher/test/blackbox/stubwire"
 )
 
-// GitLab の merge request を CL 側の trigger の作業対象にする (formats.md §2.3 の gitlab の写像)。glab は stub で、REST の
-// 応答の形を返す。語彙と絞り込みの 1 つずつの意味は internal/trigger の単体テストが持ち、ここでは merge request の field から
+// GitLab の merge request を CL 側の trigger の作業対象にする (formats.md §2.3 の gitlab の写像)。glab は stub で、GraphQL と
+// REST の応答の形を返す。語彙と絞り込みの 1 つずつの意味は internal/trigger の単体テストが持ち、ここでは merge request の field から
 // 候補までの写像を見る。
 
 const (
 	// gitlabProjectID は issue 置き場 (= merge request の target) の project の id。gitlabForkID は fork の project の id
 	gitlabProjectID = 7
 	gitlabForkID    = 99
-	// gitlabOpenMRs は open な merge request の一覧の endpoint
-	gitlabOpenMRs = gitlabProject + "/merge_requests?state=opened&order_by=created_at&sort=asc&per_page=100"
+	// gitlabOpenMRsQuery は open な merge request の一覧の GraphQL の問い合わせの書き出し
+	gitlabOpenMRsQuery = "query OpenMergeRequests("
+	// gitlabReadMRQuery は merge request 1 本を読み直す GraphQL の問い合わせの書き出し
+	gitlabReadMRQuery = "query MergeRequest("
 	// developerID・reporterID は discussion の書き手の user id (access level は Developer・Reporter)
 	developerID = 501
 	reporterID  = 502
@@ -32,10 +36,9 @@ type glMR struct {
 	draft  bool
 	// authorID は作者の user id。0 なら developerID
 	authorID int
-	// hasConflicts は has_conflicts。mergeStatus は detailed_merge_status (空なら mergeable)
-	hasConflicts bool
-	mergeStatus  string
-	// pipeline は head_pipeline の status。空なら head_pipeline が無い
+	// mergeStatus は mergeStatusEnum (空なら CAN_BE_MERGED)
+	mergeStatus string
+	// pipeline は headPipeline の status。空なら headPipeline が無い
 	pipeline    string
 	approved    bool
 	discussions []glDiscussion
@@ -66,68 +69,83 @@ func (m glMR) json() map[string]any {
 	}
 	status := m.mergeStatus
 	if status == "" {
-		status = "mergeable"
+		status = "CAN_BE_MERGED"
 	}
 	var pipeline any
 	if m.pipeline != "" {
-		pipeline = map[string]any{"id": 1, "status": m.pipeline}
+		pipeline = map[string]any{"status": m.pipeline}
 	}
 	return map[string]any{
-		"id":                    800000 + m.iid,
-		"iid":                   m.iid,
-		"title":                 "cl " + strconv.Itoa(m.iid),
-		"web_url":               "https://" + gitlabHost + "/" + gitlabRepo + "/-/merge_requests/" + strconv.Itoa(m.iid),
-		"state":                 "opened",
-		"created_at":            createdAt(m.iid),
-		"labels":                []string{},
-		"draft":                 m.draft,
-		"source_branch":         m.branch,
-		"source_project_id":     source,
-		"target_project_id":     gitlabProjectID,
-		"has_conflicts":         m.hasConflicts,
-		"detailed_merge_status": status,
-		"head_pipeline":         pipeline,
-		"author":                map[string]any{"id": author, "username": "user" + strconv.Itoa(author)},
+		"iid":             strconv.Itoa(m.iid),
+		"title":           "cl " + strconv.Itoa(m.iid),
+		"webUrl":          "https://" + gitlabHost + "/" + gitlabRepo + "/-/merge_requests/" + strconv.Itoa(m.iid),
+		"state":           "opened",
+		"createdAt":       createdAt(m.iid),
+		"labels":          map[string]any{"pageInfo": map[string]any{"hasNextPage": false}, "nodes": []any{}},
+		"draft":           m.draft,
+		"sourceBranch":    m.branch,
+		"sourceProjectId": source,
+		"targetProjectId": gitlabProjectID,
+		"mergeStatusEnum": status,
+		"approved":        m.approved,
+		"headPipeline":    pipeline,
+		"author":          map[string]any{"id": userGID(author)},
+		"discussions":     map[string]any{"pageInfo": map[string]any{"hasNextPage": false, "endCursor": nil}, "nodes": m.discussionsJSON()},
 	}
 }
 
+// userGID は user の GraphQL の global ID。
+func userGID(id int) string { return "gid://gitlab/User/" + strconv.Itoa(id) }
+
+// accessLevels は note の作者の project での access level (GraphQL の maxAccessLevelOfAuthor)。載っていなければ member でない
+var accessLevels = map[int]string{developerID: "Developer", reporterID: "Reporter"}
+
+// discussionsJSON は discussion の列。解決済みかは discussion の単位で、どの note も解決済みのときに解決済み。
 func (m glMR) discussionsJSON() []map[string]any {
 	out := []map[string]any{}
-	for i, d := range m.discussions {
-		notes := []map[string]any{}
-		for j, n := range d.notes {
-			notes = append(notes, map[string]any{
-				"id": 100*i + j + 1, "system": n.system, "resolvable": true, "resolved": n.resolved,
-				"author": map[string]any{"id": n.authorID, "username": "user" + strconv.Itoa(n.authorID)},
-			})
+	for _, d := range m.discussions {
+		resolved := true
+		for _, n := range d.notes {
+			resolved = resolved && n.resolved
 		}
-		out = append(out, map[string]any{"id": "d" + strconv.Itoa(i), "individual_note": false, "notes": notes})
+		first := d.notes[0]
+		var access any
+		if level, ok := accessLevels[first.authorID]; ok {
+			access = level
+		}
+		note := map[string]any{"system": first.system, "author": map[string]any{"id": userGID(first.authorID)}, "maxAccessLevelOfAuthor": access}
+		out = append(out, map[string]any{"resolvable": true, "resolved": resolved, "notes": map[string]any{"nodes": []any{note}}})
 	}
 	return out
 }
 
 // glabStoreRules は glab が issues と mrs を返す応答 rule の列。merge request の作者と discussion の書き手の access level は、
-// developerID が Developer、reporterID が Reporter。
+// developerID が Developer、reporterID が Reporter。conflict の計算し直しの求めには空の一覧で答える。
 func glabStoreRules(issues []glIssue, mrs []glMR) []stubwire.Rule {
 	marshal := func(v any) string {
 		raw, _ := json.Marshal(v)
 		return string(raw)
 	}
-	rules := []stubwire.Rule{
-		{ArgsPrefix: glabAPI(gitlabProject + "/members/all/" + strconv.Itoa(developerID)), Stdout: `{"access_level":30}`},
-		{ArgsPrefix: glabAPI(gitlabProject + "/members/all/" + strconv.Itoa(reporterID)), Stdout: `{"access_level":20}`},
-	}
-	open := []map[string]any{}
+	nodes := []map[string]any{}
 	for _, m := range mrs {
-		base := gitlabProject + "/merge_requests/" + strconv.Itoa(m.iid)
-		rules = append(rules,
-			stubwire.Rule{ArgsPrefix: glabAPI(base), Stdout: marshal(m.json())},
-			stubwire.Rule{ArgsPrefix: glabAPI(base + "/approvals"), Stdout: marshal(map[string]any{"approved": m.approved})},
-			stubwire.Rule{ArgsPrefix: glabAPI("--paginate", base+"/discussions?per_page=100"), Stdout: marshal(m.discussionsJSON())},
-		)
-		open = append(open, m.json())
+		nodes = append(nodes, m.json())
 	}
-	rules = append(rules, stubwire.Rule{ArgsPrefix: glabAPI("--paginate", gitlabOpenMRs), Stdout: marshal(open)})
+	page := map[string]any{"data": map[string]any{"project": map[string]any{"mergeRequests": map[string]any{
+		"pageInfo": map[string]any{"hasNextPage": false, "endCursor": nil}, "nodes": nodes}}}}
+	rules := []stubwire.Rule{
+		{ArgsPrefix: glabAPI("graphql"), ArgsContain: []string{gitlabOpenMRsQuery}, Stdout: marshal(page)},
+	}
+	// 起動の直前の読み直し。変数 `iid=1` は `iid=12` の部分文字列なので、iid の大きい順に並べて先に当てる
+	byIIDDesc := slices.SortedFunc(slices.Values(mrs), func(a, b glMR) int { return b.iid - a.iid })
+	for _, m := range byIIDDesc {
+		single := map[string]any{"data": map[string]any{"project": map[string]any{"mergeRequest": m.json()}}}
+		rules = append(rules, stubwire.Rule{ArgsPrefix: glabAPI("graphql"), ArgsContain: []string{gitlabReadMRQuery, "iid=" + strconv.Itoa(m.iid)}, Stdout: marshal(single)})
+	}
+	rules = append(rules, []stubwire.Rule{
+		{ArgsPrefix: glabAPI(), ArgsContain: []string{gitlabProject + "/members/all?"},
+			Stdout: marshal([]map[string]any{{"id": developerID, "access_level": 30}, {"id": reporterID, "access_level": 20}})},
+		{ArgsPrefix: glabAPI(), ArgsContain: []string{"with_merge_status_recheck=true"}, Stdout: "[]"},
+	}...)
 	return append(rules, glabRules(issues...)...)
 }
 
@@ -146,7 +164,7 @@ func (s *sandbox) dryRunGitLabCL(triggers string, mrs ...glMR) runResult {
 
 func TestGitLabCLVocabularyIsReadFromTheMergeRequest(t *testing.T) {
 	conflicting, clean := readyMR(1), readyMR(2)
-	conflicting.hasConflicts = true
+	conflicting.mergeStatus = "CANNOT_BE_MERGED"
 	byDeveloper, resolved, byReporter, systemNote := readyMR(3), readyMR(4), readyMR(5), readyMR(6)
 	byDeveloper.discussions = []glDiscussion{{notes: []glNote{{authorID: developerID}}}}
 	resolved.discussions = []glDiscussion{{notes: []glNote{{authorID: developerID, resolved: true}}}}
@@ -159,7 +177,7 @@ func TestGitLabCLVocabularyIsReadFromTheMergeRequest(t *testing.T) {
 	laterNoteUnresolved := readyMR(12)
 	laterNoteUnresolved.discussions = []glDiscussion{{notes: []glNote{{authorID: developerID, resolved: true}, {authorID: reporterID}}}}
 	failed, passed := readyMR(7), readyMR(8)
-	failed.pipeline, passed.pipeline = "failed", "success"
+	failed.pipeline, passed.pipeline = "FAILED", "SUCCESS"
 	approved, unapproved := readyMR(9), readyMR(10)
 	approved.approved = true
 	for _, tc := range []struct {
@@ -191,7 +209,7 @@ func TestGitLabCLVocabularyIsReadFromTheMergeRequest(t *testing.T) {
 }
 
 func TestGitLabConflictThatIsStillBeingCheckedMatchesNeitherWay(t *testing.T) {
-	for _, status := range []string{"checking", "unchecked", "preparing"} {
+	for _, status := range []string{"UNCHECKED", "CHECKING", "CANNOT_BE_MERGED_RECHECK"} {
 		t.Run(status, func(t *testing.T) {
 			s := newSandbox(t)
 			pending := readyMR(1)
@@ -209,7 +227,7 @@ func TestGitLabConflictThatIsStillBeingCheckedMatchesNeitherWay(t *testing.T) {
 func TestGitLabCanceledPipelineIsNotAFailure(t *testing.T) {
 	s := newSandbox(t)
 	canceled, noPipeline := readyMR(1), readyMR(2)
-	canceled.pipeline = "canceled"
+	canceled.pipeline = "CANCELED"
 
 	r := s.dryRunGitLabCL(`
   - {name: fix, on: cl, when: {ci_failed: true}, action: /t}
@@ -248,4 +266,37 @@ func TestGitLabMergeRequestsFromTheSameBranchAreAmbiguousButAForkIsAnotherBranch
   - {name: u, on: cl, action: /t}`, first, second, fromFork)
 
 	assertCandidates(t, r, mrCandidate("t", 3))
+}
+
+func TestGitLabFailedRecheckRequestStillListsTheCandidatesAndNamesTheFailure(t *testing.T) {
+	s := newSandbox(t)
+	unchecked, clean := readyMR(1), readyMR(2)
+	unchecked.mergeStatus = "UNCHECKED"
+	s.writeWorkflowWithCommands(gitlabWorkflowWithTriggers(`
+  - {name: t, on: cl, action: /t}`))
+	recheckFails := stubwire.Rule{ArgsPrefix: glabAPI(), ArgsContain: []string{"with_merge_status_recheck=true"}, Stderr: "glab: HTTP 502\n", Exit: 1}
+	s.respondAll("glab", append([]stubwire.Rule{recheckFails}, glabStoreRules(nil, []glMR{unchecked, clean})...))
+
+	r := s.dryRun()
+
+	assertCandidates(t, r, mrCandidate("t", 1), mrCandidate("t", 2))
+	if !strings.Contains(r.stderr, "補助の要求が落ちた") {
+		t.Fatalf("stderr に計算し直しの求めの失敗が無い:\n%s", r.stderr)
+	}
+}
+
+func TestGitLabDoctorKeepsThePlaceOKAndNamesAFailedRecheckRequest(t *testing.T) {
+	s := newSandbox(t)
+	unchecked := readyMR(1)
+	unchecked.mergeStatus = "UNCHECKED"
+	s.writeWorkflowWithCommands(gitlabWorkflowWithTriggers(`
+  - {name: t, on: cl, when: {head: "worktree-issue-*"}, action: /t}`))
+	recheckFails := stubwire.Rule{ArgsPrefix: glabAPI(), ArgsContain: []string{"with_merge_status_recheck=true"}, Stderr: "glab: HTTP 502\n", Exit: 1}
+	s.respondAll("glab", append([]stubwire.Rule{recheckFails}, glabStoreRules(nil, []glMR{unchecked})...))
+
+	r := s.run("doctor")
+
+	if !strings.Contains(r.stdout, "ok   issue 置き場 "+gitlabScopeKey+" (補助の要求が落ちた: ") {
+		t.Fatalf("issue 置き場の ok の行に計算し直しの求めの失敗が無い:\n%s", r.stdout)
+	}
 }

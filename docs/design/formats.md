@@ -141,12 +141,14 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 | 4 | tracker の CLI (`tracker.kind` が `github` なら gh、`gitlab` なら glab、`jira` なら acli) の認証が通らない |
 
 - 観測の失敗は、issue 置き場の部品が 認証 / 見えない / 読み切れない / rate limit に分けて返す (system.md §13)
-  - 読み切れない: 1 往復で読む件数の上限を超えた (GitHub の issue の label・assignee・依存先、CL の label・review thread が 100 件を超えた)。切り詰めた像から候補を出さない
+  - 読み切れない: 1 往復で読む件数の上限を超えた (GitHub の issue の label・assignee・依存先、CL の label・review thread、GitLab の merge request の label が 100 件を超えた)。切り詰めた像から候補を出さない
+  - 観測の読み出しの結果を変えない補助の要求 (GitLab に conflict の計算し直しを求める、など) が落ちても、観測は失敗にしない。読み終えた作業対象で tick を続け、落ちたことを log.jsonl の `error` の行 (§4) に残す。補助の要求のために、関係の無い trigger までその tick に止めない
   - 外部 CLI (gh・glab・acli) と workspace の hooks (§2.6) の失敗のエラー文は、撃ったコマンド (hook はその名前)・exit code・stderr を載せる。stderr に HTML の本文 (`<!doctype html` か `<html` から後) があれば、status に依らずそこから後を落とし、落としたことを書き添える。reverse proxy・SSO・load balancer は HTML のページを返しうるので、tick の error・`doctor` の理由・`setup` (§7.4) のエラー文・log.jsonl (§4) の `end` の `failure`・`error` の `error` (hook の失敗の行き先) にページを丸ごと載せない
   - gh は、exit 4・status 401・message の `Bad credentials` を認証、status 404・message の `Could not resolve to a Repository` を見えない、status 429・message の `rate limit` を rate limit と見分ける
     - status は gh が status を出す位置でだけ読み、message の中の `HTTP 404` などには当てない。message は gh が印を付けて出す行 (と `gh api` の message の塊の続きの行) だけを読み、message の書き出しで当てる語 (`Bad credentials`・`Could not resolve to …`) は message の途中で触れただけのものには当てない。綴りの詳細は gh の版で変わりうるので、internal/github の apiStatusPattern のコメントが持つ
     - message の無い応答 (`gh api` は本文が JSON でないと status だけを出し、本文を stdout へ出す) は、status に依らずその他の失敗に置く。この応答は GitHub の手前の proxy・SSO の HTML でありうるので、その 401・404 を認証・見えないと読むと、token や repo の綴りという誤った手当てを示す
   - glab は HTTP の失敗をどれも exit 1 で返すので、stderr の status から、401 を認証、404 を見えない、429 を rate limit と見分ける。分けるのは `glab api` が本文の message (GitLab の JSON) とともに出した status だけで、message の無い応答 (`glab api` は status だけを出す) は status に依らずその他の失敗 (読めない) に置く。message の無い応答は GitLab の手前の proxy・load balancer の HTML でありうる。その 404 を issue が消えたと読むと、開いている issue を終端として扱ってしまう
+    - GraphQL の経路 (`glab api graphql`。merge request の読み出し) は、GitLab が GraphQL の `errors` で答えると、glab が status を出さずに message だけを出す (認証の失敗も `glab: Invalid token` の形になる)。message とともに status を出さなかった失敗 (message だけ・status だけ) では、REST で project を 1 回読み、その失敗を上の規則で分ける (認証・見えない・rate limit)。REST が通れば、GraphQL の失敗をその他の失敗 (読めない) に置く。GraphQL が `project` を null で返したら (project が見えない)、見えないとする
     - 読むのは glab が status を出す位置だけで、本文の中の `(HTTP 401)`・`403` などには当てない。位置は経路で違う (`glab api` は `glab:` で始まる行、`setup` の `glab repo view` は `<METHOD> <URL>: <status>` の形。綴りの詳細は glab の版で変わりうるので、internal/gitlab の statusPattern のコメントが持つ)
   - glab の HTTP 403 はその他の失敗 (読めない) に置き、理由には glab の stderr の代わりに `HTTP 403 で拒否された (接続元のネットワークか、token の権限)` を出す (撃った glab のコマンドと exit code は残す)。stderr が撃った要求を含む経路 (`setup` の `glab repo view`) では、その `<METHOD> <URL>` (本文の前まで) を理由に添えて、拒否した host を読めるようにする。stderr が URL を含まない経路 (`glab api`。tick の error・`doctor` の理由) は理由だけを出す
     - 403 は、GitLab の手前の reverse proxy の拒否 (IP の許可リスト・VPN 必須など) でも、GitLab の拒否 (token の scope の不足など) でも起きる。どちらかの分類に寄せると、もう一方で誤った手当てを示すので分類を増やさない。glab は remote から API の host を選ぶので、ssh の alias などから別の host を撃って拒否されうる (internal/gitlab の CurrentProject のコメント)。そのときに拒否した host を読めるよう URL を残す
@@ -203,7 +205,7 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 
 - `end` の `failure`: worker 自身の失敗の理由 (異常終了・hook の失敗・描画の失敗・起動できない・stall・上限時間の超過) の自由文。失敗したときだけ載せ、`completed` と `failed` で同じ形にする。`stopped` には載せない。`reason` には失敗を含めない
 
-- `error` の行を書く場面: `after_run` と `before_remove` の失敗・workspace を消せない (次の tick の掃除で消し直す)・終わった worker の作業対象を読み直せない (claim を持ったまま次の tick で読み直す)・起動しようとした作業対象を読み直せない (その tick は起動せず、次の tick で候補になれば試み直す)・打ち切った作業対象を読み直せない (打ち切りを保ち、次の tick で確かめ直す)・止める worker の process group に signal を送れない・worker log から attempt の最後の `result` を読めない (項目の型が違うときを含む)
+- `error` の行を書く場面: `after_run` と `before_remove` の失敗・workspace を消せない (次の tick の掃除で消し直す)・終わった worker の作業対象を読み直せない (claim を持ったまま次の tick で読み直す)・起動しようとした作業対象を読み直せない (その tick は起動せず、次の tick で候補になれば試み直す)・打ち切った作業対象を読み直せない (打ち切りを保ち、次の tick で確かめ直す)・止める worker の process group に signal を送れない・worker log から attempt の最後の `result` を読めない (項目の型が違うときを含む)・観測の補助の要求が落ちた (§3。`target` を持たない。読み終えた作業対象で tick を続け、次の tick で求め直す)
 - log.jsonl に行を書けなければ、そのことを stdout に出して続ける
 - `attempt` は、その行が指す claim の最後に起動した (起動しようとした) attempt
 - `end` の行の attempt の最後の `result` の要約: worker log (stream-json。§1) のうち、その attempt が追記した完結した行 (改行で終わる行) から、最後の `type: result` の行を読む。worker log は attempt を跨いで追記するので、前の attempt の `result` は読まない
@@ -235,6 +237,8 @@ fix-ci	cl	#51	ログインの失敗を記録する
 - 参照は tracker の綴りで書く: issue と GitHub の CL は `#<番号>`、GitLab の CL (merge request) は `!<番号>`、Jira の issue は key (`WIDGETS-123`)。GitLab では issue と merge request が別々に番号を振るので、同じ番号が両方にありうる
 - `jira` では、snapshot を作る前に issue 置き場を確かめる (§6 の「起動時の検査」の `jira` の行と同じもの)
 - 題名の制御文字 (タブ・改行・ESC など) は空白に置き換える
+
+観測の補助の要求が落ちたとき (§3) は失敗にせず、候補を出し、stderr に理由を出して exit 0 で終わる。
 
 失敗したら、stdout に何も出さず、stderr に理由を出して §3 の exit code で終わる。workflow 定義の誤りは 1 件 1 行で出し、後ろに案内を指す行を足す (§2.8)。
 
@@ -638,6 +642,7 @@ triggers:
 1. workflow 定義を読めて、検査 (§2.8) に通る。落ちたら誤りを 1 件 1 行の `NG` の行に出し、後ろに案内を指す行を足して (§2.8)、以降は確かめない
 2. tracker の CLI (gh・glab・acli) の認証が通り、issue 置き場が見える (open な作業対象を読める)。issue 置き場は `github` なら `<owner>/<name>`、`gitlab` なら `<host>/<path>`、`jira` なら `<site>/<project key>` で出す
    - `jira` は loop の起動時と同じ issue 置き場の確認 (§6) を通す。落ちたら理由を `NG` の行に出す (存在しない status 名と issue type 名は、1 つ 1 行で trigger と一緒に名指しする)
+   - 観測の補助の要求が落ちたとき (§3) は `NG` にせず、`ok` の行の後ろに ` (補助の要求が落ちた: <理由>)` を足す
 3. tracker の CLI と `claude.command` を解決できる。`on: cl` の trigger があれば git も (loop の起動時の検査と同じ。§6)
 4. 事前検査 (§2.9)。落ちた trigger ごとに `NG` の行
 5. 利用者の約束に頼る宣言を `警告` の行に出す (system.md §11)

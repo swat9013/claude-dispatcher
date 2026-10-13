@@ -2,6 +2,8 @@ package gitlab_test
 
 import (
 	"errors"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -11,8 +13,9 @@ import (
 	"github.com/swat9013/claude-dispatcher/internal/target"
 )
 
-// glab は endpoint (argv の最後) ごとに応答を返す Runner (glab の代役)。key が `?` で終われば query string を問わず当てる。
-// どれにも当たらなければ、読んだものが無い 404。
+// glab は endpoint ごとに応答を返す Runner (glab の代役)。REST の endpoint は argv の最後、GraphQL は
+// `graphql:<operation 名>?<変数>` (変数は `name=value` を `&` でつないだもの。query は除く)。key が `?` で終われば、`?` から後を
+// 問わず当てる。どれにも当たらなければ、どの分類にも当たらない失敗。
 type glab map[string]response
 
 type response struct {
@@ -21,7 +24,7 @@ type response struct {
 }
 
 func (g glab) Run(args ...string) ([]byte, error) {
-	endpoint := args[len(args)-1]
+	endpoint := endpointOf(args)
 	for key, r := range g {
 		if endpoint == key || strings.HasSuffix(key, "?") && strings.HasPrefix(endpoint, key) {
 			if r.stderr != "" {
@@ -32,6 +35,39 @@ func (g glab) Run(args ...string) ([]byte, error) {
 	}
 	// 登録の無い endpoint は、どの分類にも当たらない失敗にする (綴りを誤った endpoint を 404 の消えた扱いで通さない)
 	return nil, &proc.Error{Name: "glab", Args: args, Exit: 1, Stderr: "fake glab: no response for " + endpoint}
+}
+
+var operationName = regexp.MustCompile(`query (\w+)`)
+
+// endpointOf は glab の argv が撃つ endpoint。GraphQL なら operation 名と変数で綴る。
+func endpointOf(args []string) string {
+	if !slices.Contains(args, "graphql") {
+		return args[len(args)-1]
+	}
+	var operation string
+	var variables []string
+	for i, arg := range args {
+		if i == 0 || args[i-1] != "-f" {
+			continue
+		}
+		if query, ok := strings.CutPrefix(arg, "query="); ok {
+			operation = operationName.FindStringSubmatch(query)[1]
+		} else {
+			variables = append(variables, arg)
+		}
+	}
+	return "graphql:" + operation + "?" + strings.Join(variables, "&")
+}
+
+// recording は撃った endpoint を順に残す Runner。
+type recording struct {
+	glab
+	endpoints *[]string
+}
+
+func (r recording) Run(args ...string) ([]byte, error) {
+	*r.endpoints = append(*r.endpoints, endpointOf(args))
+	return r.glab.Run(args...)
 }
 
 var project = gitlab.Project{Host: "gitlab.example.com", Path: "acme/sub/widgets"}
@@ -230,101 +266,6 @@ func TestAuthorWhoIsNotAMemberIsNotACollaborator(t *testing.T) {
 	item, err := store.ReadIssue(7)
 
 	if err != nil || item.(target.Issue).AuthorIsCollaborator {
-		t.Fatalf("item = %v, err = %v", item, err)
-	}
-}
-
-const mergeRequestsEndpoint = "projects/acme%2Fsub%2Fwidgets/merge_requests"
-
-// mergeRequest は merge request 7 の本体を fields で返し、承認と discussion を空で返す glab。
-func mergeRequest(fields string) glab {
-	base := mergeRequestsEndpoint + "/7"
-	return glab{
-		base:                               {stdout: `{"iid":7,"author":{"id":1},` + fields + `}`},
-		base + "/approvals":                {stdout: `{"approved":false}`},
-		base + "/discussions?per_page=100": {stdout: `[]`},
-		nonMember:                          notFound,
-	}
-}
-
-func readMergeRequest(t *testing.T, g glab) target.CL {
-	t.Helper()
-	item, err := gitlab.NewStore(g, project).ReadCL(7)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return item.(target.CL)
-}
-
-func TestMergeRequestIsTerminalOnlyWhenMergedOrClosed(t *testing.T) {
-	for state, terminal := range map[string]bool{"merged": true, "closed": true, "opened": false, "locked": false} {
-		t.Run(state, func(t *testing.T) {
-			cl := readMergeRequest(t, mergeRequest(`"state":"`+state+`","source_project_id":7,"target_project_id":7,"detailed_merge_status":"mergeable"`))
-
-			if cl.Terminal() != terminal {
-				t.Fatalf("Terminal() = %v, want %v", cl.Terminal(), terminal)
-			}
-		})
-	}
-}
-
-func TestMergeRequestThatLeftOpenedAfterTheListIsLeftOutOfTheOpenOnes(t *testing.T) {
-	// locked (merge の処理中) は Read では終端にしないが、merge 中の branch へ手直しの worker を送らないよう一覧からは外す
-	for _, state := range []string{"merged", "closed", "locked"} {
-		t.Run(state, func(t *testing.T) {
-			g := mergeRequest(`"state":"` + state + `","source_project_id":7,"target_project_id":7,"detailed_merge_status":"mergeable"`)
-			g[mergeRequestsEndpoint+"?"] = response{stdout: `[{"iid":7}]`}
-
-			items, err := gitlab.NewStore(g, project).OpenCLs()
-
-			if err != nil || len(items) != 0 {
-				t.Fatalf("items = %v, err = %v", items, err)
-			}
-		})
-	}
-}
-
-func TestMergeRequestFromADeletedForkHasNoHeadRepo(t *testing.T) {
-	cl := readMergeRequest(t, mergeRequest(`"state":"opened","source_project_id":null,"target_project_id":7,"detailed_merge_status":"mergeable"`))
-
-	if cl.HeadRepo != "" || cl.SameRepo {
-		t.Fatalf("HeadRepo = %q, SameRepo = %v", cl.HeadRepo, cl.SameRepo)
-	}
-}
-
-func TestDetailedMergeStatusDecidesWhetherTheConflictIsStillBeingChecked(t *testing.T) {
-	for status, want := range map[string]target.Mergeability{
-		"checking": target.MergeUnknown, "unchecked": target.MergeUnknown, "preparing": target.MergeUnknown,
-		"mergeable": target.MergeClean, "ci_must_pass": target.MergeClean,
-	} {
-		t.Run(status, func(t *testing.T) {
-			cl := readMergeRequest(t, mergeRequest(`"state":"opened","source_project_id":7,"target_project_id":7,"detailed_merge_status":"`+status+`"`))
-
-			if cl.Mergeable != want {
-				t.Fatalf("Mergeable = %v, want %v", cl.Mergeable, want)
-			}
-		})
-	}
-}
-
-func TestMergeRequestWithoutDetailedMergeStatusFailsAsAGitLabOlderThanSupported(t *testing.T) {
-	// detailed_merge_status の無い GitLab は対象外。conflict を計算中の merge request を conflict なしと読まない
-	g := mergeRequest(`"state":"opened","source_project_id":7,"target_project_id":7,"merge_status":"unchecked"`)
-
-	_, err := gitlab.NewStore(g, project).ReadCL(7)
-
-	var failure *target.Failure
-	if !errors.As(err, &failure) || failure.Kind != target.Unavailable || !strings.Contains(err.Error(), "detailed_merge_status") {
-		t.Fatalf("err = %v", err)
-	}
-}
-
-func TestMergeRequestThatIsGoneIsReadAsClosed(t *testing.T) {
-	store := gitlab.NewStore(glab{mergeRequestsEndpoint + "/7": notFound}, project)
-
-	item, err := store.ReadCL(7)
-
-	if err != nil || !item.Terminal() {
 		t.Fatalf("item = %v, err = %v", item, err)
 	}
 }

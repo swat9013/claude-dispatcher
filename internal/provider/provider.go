@@ -199,7 +199,8 @@ type Setting struct {
 	Triggers []trigger.Trigger
 }
 
-// IssueStore は issue 置き場の部品 (system.md §13)。失敗は *target.Failure。
+// IssueStore は issue 置き場の部品 (system.md §13)。失敗は *target.Failure。一覧は、補助の要求だけが落ちたときに
+// *target.NonFatal を一覧とともに返しうる (受け手は一覧で処理を続ける)。
 type IssueStore interface {
 	// ScopeKey は issue 置き場を指す scope key
 	ScopeKey() string
@@ -209,7 +210,8 @@ type IssueStore interface {
 	ReadIssue(number int) (target.Item, error)
 }
 
-// CLStore は CL 置き場の部品 (system.md §13)。失敗は *target.Failure。
+// CLStore は CL 置き場の部品 (system.md §13)。失敗は *target.Failure。一覧は、補助の要求だけが落ちたときに
+// *target.NonFatal を一覧とともに返しうる (受け手は一覧で処理を続ける)。
 type CLStore interface {
 	// OpenCLs は open な CL を全件読む
 	OpenCLs() ([]target.Item, error)
