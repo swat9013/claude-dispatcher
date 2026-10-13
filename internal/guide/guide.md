@@ -292,7 +292,7 @@ triggers:                    # 必須。1 つ以上
 | key | GitLab の field |
 |---|---|
 | `conflict` | `mergeStatusEnum` が `CANNOT_BE_MERGED` なら conflict を持ち、`CAN_BE_MERGED` なら持たない。`UNCHECKED` / `CHECKING` / `CANNOT_BE_MERGED_RECHECK` なら、計算し終えていないので `true` にも `false` にも当たらない (次の tick で見直す)。それ以外の値は読めない失敗にする。draft の merge request でも同じに決める |
-| `review_unresolved` | 解決できる discussion (`resolvable`) で、解決されていない (`resolved` でない) もののうち、最初の note の作者が collaborator のものが 1 本以上ある。最初の note が system note の discussion は数えない。最初の note の作者が collaborator かは、その note の `maxAccessLevelOfAuthor` (project での access level) で決める |
+| `review_unresolved` | 解決できる discussion (`resolvable`) で、解決されていない (`resolved` でない) もののうち、最初の note の作者が collaborator のものが 1 本以上ある。最初の note が system note の discussion は数えない。最初の note の作者が collaborator かは、その note の `maxAccessLevelOfAuthor` (project での access level) で決める。access level の名前を読めなければ読めない失敗にする |
 | `ci_failed` | head の pipeline (`headPipeline`) の `status` が `FAILED`。`CANCELED` は失敗に数えない (人が意図して止めた pipeline に worker を送らない)。pipeline が無ければ失敗ではない |
 | `approved` | `approved`。CE では 1 人以上の承認、有償の tier では承認ルールの充足で、どちらも host の判断に従う |
 | `draft` | `draft` |

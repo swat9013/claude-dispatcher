@@ -238,7 +238,7 @@ fix-ci	cl	#51	ログインの失敗を記録する
 - `jira` では、snapshot を作る前に issue 置き場を確かめる (§6 の「起動時の検査」の `jira` の行と同じもの)
 - 題名の制御文字 (タブ・改行・ESC など) は空白に置き換える
 
-観測の補助の要求が落ちたとき (§3) は失敗にせず、候補を出し、stderr に理由を出して exit 0 で終わる。`doctor` (§7.4) も issue 置き場の確認を `NG` にせず、`ok` の行の後ろに ` (補助の要求が落ちた: <理由>)` を足す。
+観測の補助の要求が落ちたとき (§3) は失敗にせず、候補を出し、stderr に理由を出して exit 0 で終わる。
 
 失敗したら、stdout に何も出さず、stderr に理由を出して §3 の exit code で終わる。workflow 定義の誤りは 1 件 1 行で出し、後ろに案内を指す行を足す (§2.8)。
 
@@ -642,6 +642,7 @@ triggers:
 1. workflow 定義を読めて、検査 (§2.8) に通る。落ちたら誤りを 1 件 1 行の `NG` の行に出し、後ろに案内を指す行を足して (§2.8)、以降は確かめない
 2. tracker の CLI (gh・glab・acli) の認証が通り、issue 置き場が見える (open な作業対象を読める)。issue 置き場は `github` なら `<owner>/<name>`、`gitlab` なら `<host>/<path>`、`jira` なら `<site>/<project key>` で出す
    - `jira` は loop の起動時と同じ issue 置き場の確認 (§6) を通す。落ちたら理由を `NG` の行に出す (存在しない status 名と issue type 名は、1 つ 1 行で trigger と一緒に名指しする)
+   - 観測の補助の要求が落ちたとき (§3) は `NG` にせず、`ok` の行の後ろに ` (補助の要求が落ちた: <理由>)` を足す
 3. tracker の CLI と `claude.command` を解決できる。`on: cl` の trigger があれば git も (loop の起動時の検査と同じ。§6)
 4. 事前検査 (§2.9)。落ちた trigger ごとに `NG` の行
 5. 利用者の約束に頼る宣言を `警告` の行に出す (system.md §11)
