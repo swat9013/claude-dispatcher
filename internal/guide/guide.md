@@ -89,7 +89,7 @@ worker は action (と本文) の文面どおりに作業する。dispatcher が
 - **attempt が `limits.max_attempts` に達して失敗したら打ち切る**。打ち切った作業対象は、どの trigger に当たっても起動しない
   - 打ち切りは loop の memory にだけ持ち、tracker には書かない。loop の画面と `claude-dispatcher status` に解き方とともに出る
 - **次のときも失敗として数える**
-  - worker の stream に活動が `limits.stall_timeout` のあいだ書かれない (stall)
+  - worker の stream に progress (worker が進んでいる兆候の行) が `limits.stall_timeout` のあいだ書かれない (stall)
   - worker 1 回分が `limits.run_timeout` を超える
   - action か本文の描画、`hooks.after_create`・`hooks.before_run` が失敗する
 - **作業対象が終端になったら、走っている worker を止めて workspace を消す**。trigger から外れただけでは、走っている worker は止めない
@@ -131,7 +131,7 @@ limits:
   max_concurrent: 1          # 任意。並列上限。既定 1
   max_attempts: 3            # 任意。作業対象 1 件の attempt の上限。既定 3
   max_retry_backoff: 5m      # 任意。backoff の上限。既定 5m
-  stall_timeout: 15m         # 任意。worker の活動が途絶えてから止めるまで。既定 15m。0 で無効
+  stall_timeout: 15m         # 任意。worker の progress が途絶えてから止めるまで。既定 15m。0 で無効
   run_timeout: 1h            # 任意。worker 1 回分の上限時間。既定 1h。0 で無効
 claude:
   command: claude            # 任意。既定 claude
@@ -178,7 +178,7 @@ triggers:                    # 必須。1 つ以上
 | `limits.max_concurrent` | 整数 | 同時に走らせる worker の上限。1 以上。既定 1 |
 | `limits.max_attempts` | 整数 | 作業対象 1 件の attempt の上限。1 以上。既定 3。上限の attempt が失敗したら打ち切る |
 | `limits.max_retry_backoff` | 文字列 | backoff の上限。Go の duration の綴りで、0 より長い。既定 5m |
-| `limits.stall_timeout` | 文字列 | worker の stream (stdout の stream-json) に活動として数える行が書かれなくなってから、止めて失敗とするまでの時間。既定 15m。`0s` で無効。claude は tool の実行中は heartbeat (`tool_progress`) しか書かず、heartbeat は活動として数えないので、長い build や test を走らせる repo では長めにする |
+| `limits.stall_timeout` | 文字列 | worker の stream (stdout の stream-json) に progress (heartbeat (`tool_progress`)・rate limit の通知・読めない行を除いた行) が書かれなくなってから、止めて失敗とするまでの時間。既定 15m。`0s` で無効。claude が行を書かない区間 (長い build や test などの tool の実行・API の retry の backoff・compaction) より長くする |
 | `limits.run_timeout` | 文字列 | worker 1 回分の上限時間。起動からの経過が超えたら止めて失敗とする。既定 1h。`0s` で無効 |
 | `claude.command` | 文字列 | worker として起動する command。PATH から探す。既定 `claude` |
 | `claude.args` | 文字列の列 | command に、dispatcher が渡す引数 (上の「action が守る約束」の起動のコマンド) より前に渡す引数。既定は空。permission の扱い (`--permission-mode` など) はここで決める |

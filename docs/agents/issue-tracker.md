@@ -13,6 +13,14 @@ Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all o
 
 Infer the repo from `git remote -v`; `gh` does this automatically when run inside a clone.
 
+## issue を分けるか
+
+issue を起票するとき・triage や深掘りで分けるかを問われたとき・実装中に分けたくなったときに、issue 本文の「判定条件」の項目ごとに決める。
+
+- 同じ関数か、[`docs/design/`](../design/README.md) の正本の同じ箇所を直す条件同士は、同じ issue に残す。分けると、同じ箇所の書き換えが PR の間で conflict する
+- 他の条件を示す手段 (例: 振る舞いを示す test の仕組み) にすぎない条件は、示す先の条件と同じ issue に残す。手段だけを先に着地させても、示す対象が無く単独では価値が出ない
+- 直す code と正本の箇所が他の条件と重ならず、単独で着地して価値が出る条件だけを、別の issue に出す
+
 ## Pull requests as a triage surface
 
 **PRs as a request surface: no.** _(Set to `yes` if this repo treats external PRs as feature requests; `/triage` reads this flag.)_

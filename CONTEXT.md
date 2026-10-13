@@ -156,8 +156,16 @@ claim がどこまで進んだか。worker が走っている・止めている�
 _Avoid_: 状態 (状態 file と紛れる)
 
 **活動**:
-worker が今何をしているかを、worker の stream のうち worker の発話か行動 (tool の呼び出し・結果、開始・終わり) を表す最新の行から要約したもの。経過や通知 (heartbeat・rate limit) の行では変わらない。人が worker の様子を読む手掛かりで、途絶えた時間で stall を判定する。
+worker が今何をしているかを、worker の stream のうち worker の発話か行動 (tool の呼び出し・結果、開始・終わり) を表す最新の行から要約したもの。経過や通知 (heartbeat・rate limit) の行では変わらない。人が worker の様子を読む手掛かりで、stall の判定には使わない (progress を見る)。
 _Avoid_: 進捗, event
+
+**progress**:
+worker の stream のうち、worker が前に進んでいる兆候として数える行。止まっていても書かれる行 (heartbeat・rate limit の通知) と、中身を判定できない行を除いたすべて。途絶えた時間で stall を判定する。
+_Avoid_: liveness (heartbeat を含む「生きている」の意味とずれる), 活動 (表示のための要約で、数える行が違う), 進捗
+
+**stall**:
+worker の progress が、決めた時間 (stall の上限) のあいだ途絶えること。loop はその worker を止め、失敗として扱う。
+_Avoid_: hang, timeout (worker 1 回分の上限時間と紛れる)
 
 **ログの行**:
 loop が人に向けて出す 1 行。tick・起動・終了・再起動・停止・error などの出来事を 1 件ずつ書く。機械向けの記録とも、worker の stream とも別物。
