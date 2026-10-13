@@ -3,7 +3,6 @@ package provider
 import (
 	"fmt"
 
-	"github.com/swat9013/claude-dispatcher/internal/deps"
 	"github.com/swat9013/claude-dispatcher/internal/github"
 	"github.com/swat9013/claude-dispatcher/internal/gitlab"
 	"github.com/swat9013/claude-dispatcher/internal/jira"
@@ -28,18 +27,15 @@ var providers = []Provider{
 			return Place{name: r.String(), value: r}
 		},
 		Tracker: TrackerRole{
-			Supports: []Feature{Token, Author, Milestone, Blocked},
-			Declines: map[Feature]string{Status: statusAndType, Type: statusAndType},
-			Prefix:   "#",
-			Settings: []string{"Bash(gh issue:*)"},
+			Supports:      []Feature{Token, Author, Milestone, Blocked},
+			Declines:      map[Feature]string{Status: statusAndType, Type: statusAndType},
+			TokenVariable: "GH_TOKEN",
+			Prefix:        "#",
+			Settings:      []string{"Bash(gh issue:*)"},
 		},
 		CLHost: &CLHostRole{Prefix: "#", Settings: []string{"Bash(gh pr:*)"}},
 		Build: func(rt Runtime, s Setting) Parts {
-			env := rt.Env
-			if s.Token != "" {
-				env = deps.WithEnv(env, map[string]string{"GH_TOKEN": s.Token})
-			}
-			store := github.NewStore(github.Exec{Env: env, Timeout: rt.Timeout}, s.Place.value.(github.Repo))
+			store := github.NewStore(github.Exec{Env: rt.Env, Timeout: rt.Timeout}, s.Place.value.(github.Repo))
 			return Parts{Issues: store, CLs: store}
 		},
 		Setup: Setup{
@@ -61,15 +57,15 @@ var providers = []Provider{
 			return Place{name: p.String(), value: p}
 		},
 		Tracker: TrackerRole{
-			Supports: []Feature{Author, Milestone},
+			Supports: []Feature{Token, Author, Milestone},
 			Declines: map[Feature]string{
-				Token:   "glab は glab auth login の認証を使う",
 				Blocked: "GitLab の CE は issue の依存を API で返さないので、blocked: false が全件に当たる",
 				Status:  statusAndType,
 				Type:    statusAndType,
 			},
-			Prefix:   "#",
-			Settings: []string{"Bash(glab issue:*)"},
+			TokenVariable: "GITLAB_TOKEN",
+			Prefix:        "#",
+			Settings:      []string{"Bash(glab issue:*)"},
 		},
 		// GitLab は issue と merge request に別々に番号を振るので、同じ番号の issue と取り違えないよう綴りを分ける
 		CLHost: &CLHostRole{Prefix: "!", Settings: []string{"Bash(glab mr:*)"}},

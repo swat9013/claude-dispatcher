@@ -60,6 +60,36 @@ func TestEveryProviderEitherSupportsOrDeclinesEachDeclarationWithAReason(t *test
 	}
 }
 
+func TestAProviderThatSupportsTheTokenNamesTheVariableItsCommandReads(t *testing.T) {
+	for _, kind := range provider.Kinds() {
+		p, _ := provider.Of(kind)
+
+		if p.Supported(provider.Token) != (p.Tracker.TokenVariable != "") {
+			t.Fatalf("%s: tracker.token を支える (%v) のに渡す環境変数 %q の宣言が合わない", kind, p.Supported(provider.Token), p.Tracker.TokenVariable)
+		}
+	}
+}
+
+func TestTheTokenIsSetOverTheVariableAlreadyInTheEnvironment(t *testing.T) {
+	p, _ := provider.Of(provider.GitLab)
+
+	env := p.WithToken([]string{"GITLAB_TOKEN=loop-own", "HOME=/home/u"}, "secret-1")
+
+	if !slices.Equal(env, []string{"HOME=/home/u", "GITLAB_TOKEN=secret-1"}) {
+		t.Fatalf("env = %v", env)
+	}
+}
+
+func TestNoTokenLeavesTheEnvironmentAsItIs(t *testing.T) {
+	p, _ := provider.Of(provider.GitHub)
+
+	env := p.WithToken([]string{"GH_TOKEN=loop-own"}, "")
+
+	if !slices.Equal(env, []string{"GH_TOKEN=loop-own"}) {
+		t.Fatalf("env = %v", env)
+	}
+}
+
 func TestAProviderWithoutTheCLHostRoleSaysWhyCLTriggersCannotBeWritten(t *testing.T) {
 	for _, kind := range provider.Kinds() {
 		p, _ := provider.Of(kind)

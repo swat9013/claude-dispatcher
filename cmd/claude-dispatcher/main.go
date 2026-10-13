@@ -146,9 +146,15 @@ func (e environment) runtime() provider.Runtime {
 	return provider.Runtime{Env: e.env, Timeout: commandTimeout}
 }
 
+// withToken は workflow 定義の tracker.token を、tracker の CLI が読む環境変数に置いた環境 (system.md §8)。置き場の
+// 部品・worker・hooks のどれもこの環境で撃つ。tracker.token が書かれていなければ e のまま。
+func (e environment) withToken(def workflow.Definition) environment {
+	return environment{env: def.Tracker.Provider().WithToken(e.env, def.Tracker.Token)}
+}
+
 // parts は workflow 定義の tracker.kind の provider で置き場の部品を組み立てる。
 func (e environment) parts(def workflow.Definition) provider.Parts {
-	return def.Tracker.Provider().Build(e.runtime(), provider.Setting{Place: def.Tracker.Place, Token: def.Tracker.Token, Triggers: def.Triggers})
+	return def.Tracker.Provider().Build(e.withToken(def).runtime(), provider.Setting{Place: def.Tracker.Place, Triggers: def.Triggers})
 }
 
 // store は loop が読む置き場。
@@ -309,7 +315,7 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 		Store:      e.store,
 		Workspaces: func(def workflow.Definition) loop.Workspaces { return e.workspaces(def, hookLock) },
 		Launch: func(def workflow.Definition, job worker.Job, events chan<- worker.Event) loop.Worker {
-			return worker.Runner{Workspaces: e.workspaces(def, hookLock), Definition: def, Env: e.env, StateDir: dir}.Start(job, events)
+			return worker.Runner{Workspaces: e.workspaces(def, hookLock), Definition: def, Env: e.withToken(def).env, StateDir: dir}.Start(job, events)
 		},
 		NewSessionID: worker.NewSessionID,
 		Publish:      publish,
@@ -325,11 +331,11 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 	})
 }
 
-// workspaces は workflow 定義の workspace の置き場と hooks。hooks には loop の環境を渡す。hookLock は loop が 1 つ
-// 持つ、after_create と before_remove を直列に撃つ lock。
+// workspaces は workflow 定義の workspace の置き場と hooks。hooks には loop の環境に tracker.token を置いた環境を渡す。
+// hookLock は loop が 1 つ持つ、after_create と before_remove を直列に撃つ lock。
 func (e environment) workspaces(def workflow.Definition, hookLock *sync.Mutex) workspace.Manager {
 	h := def.Hooks
-	return workspace.Manager{Root: def.WorkspaceRoot, Clone: def.Dir, Env: e.env, HookLock: hookLock, Hooks: workspace.Hooks{
+	return workspace.Manager{Root: def.WorkspaceRoot, Clone: def.Dir, Env: e.withToken(def).env, HookLock: hookLock, Hooks: workspace.Hooks{
 		AfterCreate: h.AfterCreate, BeforeRun: h.BeforeRun, AfterRun: h.AfterRun, BeforeRemove: h.BeforeRemove, Timeout: h.Timeout,
 	}}
 }

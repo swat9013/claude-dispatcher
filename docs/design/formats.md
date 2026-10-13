@@ -152,7 +152,7 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
     - 読むのは glab が status を出す位置だけで、本文の中の `(HTTP 401)`・`403` などには当てない。位置は経路で違う (`glab api` は `glab:` で始まる行、`setup` の `glab repo view` は `<METHOD> <URL>: <status>` の形。綴りの詳細は glab の版で変わりうるので、internal/gitlab の statusPattern のコメントが持つ)
   - glab の HTTP 403 はその他の失敗 (読めない) に置き、理由には glab の stderr の代わりに `HTTP 403 で拒否された (接続元のネットワークか、token の権限)` を出す (撃った glab のコマンドと exit code は残す)。stderr が撃った要求を含む経路 (`setup` の `glab repo view`) では、その `<METHOD> <URL>` (本文の前まで) を理由に添えて、拒否した host を読めるようにする。stderr が URL を含まない経路 (`glab api`。tick の error・`doctor` の理由) は理由だけを出す
     - 403 は、GitLab の手前の reverse proxy の拒否 (IP の許可リスト・VPN 必須など) でも、GitLab の拒否 (token の scope の不足など) でも起きる。どちらかの分類に寄せると、もう一方で誤った手当てを示すので分類を増やさない。glab は remote から API の host を選ぶので、ssh の alias などから別の host を撃って拒否されうる (internal/gitlab の CurrentProject のコメント)。そのときに拒否した host を読めるよう URL を残す
-  - `gitlab` の `author` の判定は作者の access level を project の member の API で読む。この API は認証が要るので、glab が未認証なら public な project でも認証の失敗になる
+  - `gitlab` の `author` の判定は作者の access level を project の member の API で読む。この API は認証が要るので、glab が未認証 (`glab auth login` も `tracker.token` も無い) なら public な project でも認証の失敗になる
   - acli はどの失敗も exit 1 で返し、文言は Jira の言語の設定で訳されるので、文言では分けない。読み出しが落ちたら `acli jira auth status` を撃ち、落ちれば認証の失敗とする。通れば、起動時の issue 置き場の確認 (§5・§6・§7.4) では見えない (exit 2)、tick の中ではその他の失敗 (tick の error) とする
     - rate limit は見分けられず、その他の失敗に入る。tick の error として残り、次の周期で読み直す
     - `acli jira auth status` は server に問い合わせる。network が落ちていると、これも落ちて認証の失敗になる

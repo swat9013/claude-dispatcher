@@ -161,6 +161,24 @@ func TestWorkspaceIsCreatedWithHooksBeforeTheWorkerRuns(t *testing.T) {
 	}
 }
 
+func TestTokenFromTheWorkflowDefinitionReachesTheWorkerAndTheHooksInPlaceOfTheLoopsOwn(t *testing.T) {
+	s := newSandbox(t)
+	workflow := strings.Replace(s.workerWorkflow(""), "  repo: acme/widgets\n", "  repo: acme/widgets\n  token: $WIDGETS_TOKEN\n", 1)
+	s.writeWorkflowWithCommands(strings.Replace(workflow, "before_run: pwd >", `before_run: echo "$GH_TOKEN" >`, 1))
+	s.setIssues(readyIssue(42))
+	s.onClaude(stubwire.Rule{ReleaseFile: s.releaseFile()})
+
+	s.startLoopWithEnv(map[string]string{"WIDGETS_TOKEN": "secret-1", "GH_TOKEN": "loop-own"})
+
+	s.waitEvents("start", 1)
+	if got := s.waitCalls("claude", 1, "claude の呼び出しが記録されない")[0].Env["GH_TOKEN"]; got != "secret-1" {
+		t.Fatalf("worker の GH_TOKEN = %q, want secret-1", got)
+	}
+	if got := strings.TrimSpace(string(mustRead(t, s.mark("before_run-42")))); got != "secret-1" {
+		t.Fatalf("before_run の GH_TOKEN = %q, want secret-1", got)
+	}
+}
+
 func TestWorkerGetsTheCommonPromptAsSystemPromptAndTheActionAsTheUserPrompt(t *testing.T) {
 	s := newSandbox(t)
 	s.writeWorkflowWithCommands(s.workerWorkflow("claude:\n  args: [--permission-mode, auto]\n"))

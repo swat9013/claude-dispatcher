@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/swat9013/claude-dispatcher/internal/deps"
 	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/trigger"
 )
@@ -114,6 +115,8 @@ type TrackerRole struct {
 	// Supports は支える宣言。Declines は支えない宣言と、その理由の文言 (誤りの名指しに添える)
 	Supports []Feature
 	Declines map[Feature]string
+	// TokenVariable は tracker.token を渡す環境変数の名前 (役割を担う CLI が読むもの)。tracker.token を支えない種類は ""
+	TokenVariable string
 	// Settings は worker が issue 置き場を操作するのに要りそうな Claude Code の settings の entry
 	Settings []string
 }
@@ -148,6 +151,19 @@ func (p Provider) DeclineReason(f Feature) string {
 		return reason
 	}
 	return "tracker.kind: " + string(p.Kind) + " の provider に支える宣言が無い"
+}
+
+// WithToken は env に tracker.token の値 token を、CLI が読む環境変数として置いた env を返す (system.md §8)。env に同じ
+// 変数が既にあっても token で上書きする。token が "" なら env のまま。tracker.token を支えない種類の token は、workflow
+// 定義の検査が弾くので届かない。届けば呼び出し側の誤りなので panic する。
+func (p Provider) WithToken(env []string, token string) []string {
+	if token == "" {
+		return env
+	}
+	if p.Tracker.TokenVariable == "" {
+		panic(fmt.Sprintf("tracker.kind: %s の provider は tracker.token を渡す環境変数を持たない", p.Kind))
+	}
+	return deps.WithEnv(env, map[string]string{p.Tracker.TokenVariable: token})
 }
 
 // Reference は作業対象を人が読む行に出す参照 (formats.md §5)。呼び方は作業対象の種類の役割が宣言する。CL 置き場の役割を
@@ -193,9 +209,7 @@ type Runtime struct {
 
 // Setting は workflow 定義のうち、部品の組み立てに要るもの。
 type Setting struct {
-	Place Place
-	// Token は tracker.token の値。書かれていなければ ""
-	Token    string
+	Place    Place
 	Triggers []trigger.Trigger
 }
 
