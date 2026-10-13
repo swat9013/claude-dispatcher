@@ -205,7 +205,7 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 
 - `end` の `failure`: worker 自身の失敗の理由 (異常終了・hook の失敗・描画の失敗・起動できない・stall・上限時間の超過) の自由文。失敗したときだけ載せ、`completed` と `failed` で同じ形にする。`stopped` には載せない。`reason` には失敗を含めない
 
-- `error` の行を書く場面: `after_run` と `before_remove` の失敗・workspace を消せない (次の tick の掃除で消し直す)・終わった worker の作業対象を読み直せない (claim を持ったまま次の tick で読み直す)・起動しようとした作業対象を読み直せない (その tick は起動せず、次の tick で候補になれば試み直す)・打ち切った作業対象を読み直せない (打ち切りを保ち、次の tick で確かめ直す)・止める worker の process group に signal を送れない・worker log から attempt の最後の `result` を読めない (項目の型が違うときを含む)
+- `error` の行を書く場面: `after_run` と `before_remove` の失敗・workspace を消せない (次の tick の掃除で消し直す)・終わった worker の作業対象を読み直せない (claim を持ったまま次の tick で読み直す)・起動しようとした作業対象を読み直せない (その tick は起動せず、次の tick で候補になれば試み直す)・打ち切った作業対象を読み直せない (打ち切りを保ち、次の tick で確かめ直す)・止める worker の process group に signal を送れない・worker log から attempt の最後の `result` を読めない (項目の型が違うときを含む)・観測の補助の要求が落ちた (§3。`target` を持たない。読み終えた作業対象で tick を続け、次の tick で求め直す)
 - log.jsonl に行を書けなければ、そのことを stdout に出して続ける
 - `attempt` は、その行が指す claim の最後に起動した (起動しようとした) attempt
 - `end` の行の attempt の最後の `result` の要約: worker log (stream-json。§1) のうち、その attempt が追記した完結した行 (改行で終わる行) から、最後の `type: result` の行を読む。worker log は attempt を跨いで追記するので、前の attempt の `result` は読まない
@@ -237,6 +237,8 @@ fix-ci	cl	#51	ログインの失敗を記録する
 - 参照は tracker の綴りで書く: issue と GitHub の CL は `#<番号>`、GitLab の CL (merge request) は `!<番号>`、Jira の issue は key (`WIDGETS-123`)。GitLab では issue と merge request が別々に番号を振るので、同じ番号が両方にありうる
 - `jira` では、snapshot を作る前に issue 置き場を確かめる (§6 の「起動時の検査」の `jira` の行と同じもの)
 - 題名の制御文字 (タブ・改行・ESC など) は空白に置き換える
+
+観測の補助の要求が落ちたとき (§3) は失敗にせず、候補を出し、stderr に理由を出して exit 0 で終わる。`doctor` (§7.4) も issue 置き場の確認を `NG` にせず、`ok` の行の後ろに ` (補助の要求が落ちた: <理由>)` を足す。
 
 失敗したら、stdout に何も出さず、stderr に理由を出して §3 の exit code で終わる。workflow 定義の誤りは 1 件 1 行で出し、後ろに案内を指す行を足す (§2.8)。
 
