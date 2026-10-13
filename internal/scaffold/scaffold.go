@@ -48,6 +48,10 @@ func GitLabCL(host, path string) CLHost {
 // Jira は site を tracker.host に、project key を tracker.repo に、cl を cl: に埋めた jira の雛形。CL 側の trigger と CL を
 // 操作する CLI は cl のものを書く。
 func Jira(site, key string, cl CLHost) string {
+	if cl.block == "" {
+		// GitHubCL / GitLabCL を通らないゼロ値は、空の cl: と CL 側の trigger の無い雛形を黙って書く。呼び出し側の誤り
+		panic("CL 置き場の綴りが空 (GitHubCL か GitLabCL で作る)")
+	}
 	return strings.NewReplacer(
 		"{{HOST}}", site, "{{REPO}}", key, "{{CL}}", cl.block, "{{CL_TRIGGERS}}\n", cl.triggers,
 		"{{CL_NOUN}}", cl.noun, "{{CL_CLI}}", cl.cli, "{{CL_CREATE}}", cl.create,
