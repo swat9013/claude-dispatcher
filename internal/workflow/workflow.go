@@ -102,16 +102,17 @@ func mustProvider(kind provider.Kind) provider.Provider {
 	return p
 }
 
-// CLHost は CL 置き場の役割を担う provider と CL 置き場 (system.md §13)。cl: があればその種類と置き場、無ければ tracker.kind
-// の provider が CL 置き場の役割を持つときだけ issue 置き場と同じ場所。CL 置き場が無ければ false。
-func (d Definition) CLHost() (provider.Provider, provider.Place, bool) {
+// CLHost は CL 置き場の役割を担う provider と CL 置き場 (system.md §13)。cl: があればその種類と置き場、無ければ issue 置き場と
+// 同じ場所。検査に通った workflow 定義は CL 置き場をちょうど 1 つ持つ (ADR 0015) ので、無ければ panic する。
+func (d Definition) CLHost() (provider.Provider, provider.Place) {
 	if p, place, ok := d.SeparateCLHost(); ok {
-		return p, place, true
+		return p, place
 	}
-	if p := d.Tracker.Provider(); p.CLHost != nil {
-		return p, d.Tracker.Place, true
+	p := d.Tracker.Provider()
+	if p.CLHost == nil {
+		panic(fmt.Sprintf("tracker.kind %q の workflow 定義に CL 置き場が無い (検査に通っていない workflow 定義)", d.Tracker.Kind))
 	}
-	return provider.Provider{}, provider.Place{}, false
+	return p, d.Tracker.Place
 }
 
 // SeparateCLHost は issue 置き場と別の CL 置き場 (cl:) の provider と置き場。cl: が無ければ false。
@@ -122,29 +123,23 @@ func (d Definition) SeparateCLHost() (provider.Provider, provider.Place, bool) {
 	return mustProvider(d.CL.Kind), d.CL.Place, true
 }
 
-// CLPlace は CL 置き場を指す綴り (`<種類> <置き場>`)。CL 置き場が無ければ ""。読み直した定義の CL 置き場が起動時と同じかを
-// 比べるのに使う。
+// CLPlace は CL 置き場を指す綴り (`<種類> <置き場>`)。読み直した定義の CL 置き場が起動時と同じかを比べるのに使う。
 func (d Definition) CLPlace() string {
-	p, place, ok := d.CLHost()
-	if !ok {
-		return ""
-	}
+	p, place := d.CLHost()
 	return string(p.Kind) + " " + place.String()
 }
 
 // Settings は worker が外部 store を操作するのに要りそうな Claude Code の settings の entry。役割ごとに、その役割を担う
 // provider から引く (system.md §11)。
 func (d Definition) Settings() []string {
-	var clHost *provider.CLHostRole
-	if p, _, ok := d.CLHost(); ok {
-		clHost = p.CLHost
-	}
-	return provider.Settings(d.Tracker.Provider().Tracker, clHost)
+	clHost, _ := d.CLHost()
+	return provider.Settings(d.Tracker.Provider().Tracker, *clHost.CLHost)
 }
 
 // Reference は作業対象を人が読む行に出す参照 (formats.md §5)。呼び方は、作業対象の置き場の役割を担う provider が宣言する。
 func (d Definition) Reference(ref target.Ref) string {
-	if p, place, ok := d.CLHost(); ok && ref.Kind == target.KindCL {
+	if ref.Kind == target.KindCL {
+		p, place := d.CLHost()
 		return p.Reference(place, ref)
 	}
 	return d.Tracker.Provider().Reference(d.Tracker.Place, ref)
@@ -246,7 +241,8 @@ type checker struct {
 	// front matter を辿る前に引く。引けなければ nil で、種類に依る検査は撃たない (誤りは tracker.kind で名指しする)
 	provider *provider.Provider
 	// clHost は CL 置き場の役割を担う provider (tracker.kind の provider が役割を持てばそれ、持たなければ cl.kind の
-	// provider)。provider と同じく front matter を辿る前に引く。引けなければ nil。clHostKey はその種類を書いた key
+	// provider)。provider と同じく front matter を辿る前に引く。引けなければ nil で、CL 側の宣言の検査は撃たない (誤りは
+	// cl か cl.kind で名指しする)。clHostKey はその種類を書いた key
 	clHost    *provider.Provider
 	clHostKey string
 	// clWritten は cl: を書いたか
@@ -382,6 +378,11 @@ func (c *checker) decode(root *yaml.Node, def *Definition) {
 	c.peekProviders(root)
 	// top level は key を持たないので、欠落を行なしで名指しする
 	c.mapping(&yaml.Node{}, root, "", c.topFields(def))
+	// issue 置き場の provider が CL 置き場の役割を持たなければ、CL 置き場は cl: でしか決まらない。project の CL 置き場は
+	// ちょうど 1 つなので必須にする (ADR 0015)。mapping の必須は種類に依らないので、ここで欠落を名指しする
+	if c.provider != nil && c.provider.CLHost == nil && !c.clWritten && root.Kind == yaml.MappingNode {
+		c.fail(&yaml.Node{}, "cl", "必須の項目が無い (tracker.kind: %s では、CL を出す %s の repo を宣言する)", c.provider.Kind, provider.Join(provider.CLHostKinds()))
+	}
 }
 
 // 以下の *Fields は、対応表ごとに受ける key とその読み方の表。読み込みが受ける key を案内と突き合わせるテストが列挙する
@@ -790,10 +791,6 @@ func (c *checker) triggerFields(t *trigger.Trigger, names map[string]bool, later
 				case target.KindIssue:
 					t.On = kind
 				case target.KindCL:
-					// cl: を書いて種類を誤ったときは、誤りを cl.kind で名指しする
-					if c.provider != nil && c.clHost == nil && !c.clWritten {
-						c.fail(n, path, "CL 置き場が無い (tracker.kind: %s では cl: で %s の CL 置き場を宣言する)", c.provider.Kind, provider.Join(provider.CLHostKinds()))
-					}
 					t.On = kind
 				default:
 					c.fail(n, path, "未知の値 %q (%s / %s)", s, target.KindIssue, target.KindCL)

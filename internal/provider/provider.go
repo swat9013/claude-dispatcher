@@ -160,12 +160,9 @@ type CLHostRole struct {
 var CommonSettings = []string{"Bash(git push:*)"}
 
 // Settings は worker が外部 store を操作するのに要りそうな settings の entry (issue 置き場の役割・CL 置き場の役割・共通の
-// 順)。clHost は CL 置き場の役割を担う provider の役割で、CL 置き場が無ければ nil。
-func Settings(tracker TrackerRole, clHost *CLHostRole) []string {
-	entries := append([]string{}, tracker.Settings...)
-	if clHost != nil {
-		entries = append(entries, clHost.Settings...)
-	}
+// 順)。clHost は CL 置き場の役割を担う provider の役割。
+func Settings(tracker TrackerRole, clHost CLHostRole) []string {
+	entries := append(append([]string{}, tracker.Settings...), clHost.Settings...)
 	return append(entries, CommonSettings...)
 }
 

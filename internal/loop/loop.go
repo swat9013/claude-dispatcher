@@ -26,7 +26,7 @@ import (
 // テストは in-memory。失敗は *target.Failure。一覧は *target.NonFatal を一覧とともに返しうる (OpenItems)。
 type Store struct {
 	Issues provider.IssueStore
-	// CLs は CL 置き場の部品。CL 置き場の役割を持たない種類は nil
+	// CLs は CL 置き場の部品。検査に通った workflow 定義は CL 置き場をちょうど 1 つ持つ (ADR 0015) ので、いつも組まれる
 	CLs provider.CLStore
 }
 
@@ -61,9 +61,9 @@ func (s Store) Read(ref target.Ref) (target.Item, error) {
 	return nil, fmt.Errorf("未知の作業対象の種類 %q", ref.Kind)
 }
 
-// errNoCLStore は CL 置き場の無い workflow 定義で CL を読もうとした誤り。検査が CL 置き場の無い定義の on: cl を弾き、tick は
-// CL 置き場が起動時と違う版を採らないので、起きれば loop の誤り
-var errNoCLStore = errors.New("workflow 定義に CL 置き場が無い")
+// errNoCLStore は CL 置き場の部品が組まれていない Store で CL を読もうとした誤り。検査に通った workflow 定義は CL 置き場を
+// ちょうど 1 つ持つ (ADR 0015) ので、起きれば Store を組んだ側の誤り
+var errNoCLStore = errors.New("CL 置き場の部品が組まれていない")
 
 // Workspaces は workspace の掃除の口。
 type Workspaces interface {
