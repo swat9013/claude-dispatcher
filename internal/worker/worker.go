@@ -215,9 +215,12 @@ func sessionArgs(job Job) []string {
 // streamWatch は stream の file を確かめ、活動と、progress を最後に見た時刻 (stall の検知に使う) を追う (formats.md §6)。
 // 活動と progress は別々に読む。活動の表示を変えても stall の判定は変わらない。
 type streamWatch struct {
-	file *os.File
+	// path は stream の file の path。大きさも中身も path で確かめる (置き換えを縮みとして見る)
+	path string
 	size int64
-	// progressed は progress を最後に見た時刻。まだ見ていなければ attempt を見始めた時刻
+	// started は attempt を見始めた時刻 (上限時間の起点)
+	started time.Time
+	// progressed は progress を最後に見た時刻。まだ見ていなければ started
 	progressed time.Time
 	// scanned は progress を見終えた行の終わりの offset。前の attempt の行と、見終えた行を見直さない
 	scanned int64
@@ -231,39 +234,40 @@ type streamWatch struct {
 }
 
 // newStreamWatch は、stream の file の offset より後 (今の attempt が書く行) を started から見始める streamWatch。
-func newStreamWatch(stream *os.File, offset int64, started time.Time, workspace string) *streamWatch {
-	return &streamWatch{file: stream, size: offset, progressed: started, scanned: offset, summarized: offset, workspace: workspace}
+func newStreamWatch(path string, offset int64, started time.Time, workspace string) *streamWatch {
+	return &streamWatch{path: path, size: offset, started: started, progressed: started, scanned: offset, summarized: offset, workspace: workspace}
 }
 
 // check は now の時点で stream の file を確かめる。前の確認から書かれた行に progress があれば stall の時計を now に戻し、
 // 活動が変われば changed を true で返す。読めなかった後は、伸びていなくても読み直す。file を読めなければ (大きさを
-// 確かめられない・中身を読み出せない のどちらも)、時計を戻さず、その理由を活動にする。
+// 確かめられない・中身を読み出せない のどちらも)、時計も読み終えた offset も進めず、その理由を活動にする。
 func (w *streamWatch) check(now time.Time) (activity string, changed bool) {
-	info, err := w.file.Stat()
+	info, err := os.Stat(w.path)
 	if err != nil {
 		return w.unreadable(err)
 	}
-	if info.Size() == w.size && w.readError == "" {
+	size := info.Size()
+	if size == w.size && w.readError == "" {
 		return "", false
 	}
+	scanned, summarized := w.scanned, w.summarized
 	// 縮んだら (truncate・置き換え)、縮んだ後の行を頭から見る
-	if info.Size() < w.size {
-		w.scanned, w.summarized = 0, 0
+	if size < w.size {
+		scanned, summarized = 0, 0
 	}
-	w.size = info.Size()
-	found, scanned, err := scanProgress(w.file.Name(), w.scanned, w.size)
+	found, scanned, err := scanProgress(w.path, scanned, size)
 	if err != nil {
 		return w.unreadable(err)
 	}
-	w.scanned = scanned
+	activity, changed, summarized, err = summarizeLatest(w.path, size, summarized, w.workspace)
+	if err != nil {
+		return w.unreadable(err)
+	}
+	// 両方を読めたときだけ進める。片方だけ進めると、読めないあいだに時計を戻すか、見ていない行を見たことにする
+	w.size, w.scanned, w.summarized, w.readError = size, scanned, summarized, ""
 	if found {
 		w.progressed = now
 	}
-	activity, changed, err = w.activity()
-	if err != nil {
-		return w.unreadable(err)
-	}
-	w.readError = ""
 	return activity, changed
 }
 
@@ -277,22 +281,20 @@ func (w *streamWatch) unreadable(err error) (activity string, changed bool) {
 	return message, true
 }
 
-// activity は前に確かめてから完結した行を新しい側から見て、活動として数える最初の行を要約する。数える行が無ければ
-// changed が false。
-func (w *streamWatch) activity() (summary string, changed bool, err error) {
-	lines, end, err := completeLines(w.file.Name(), w.size, w.summarized)
+// summarizeLatest は file の size までのうち after より後に完結した行を新しい側から見て、活動として数える最初の行を
+// 要約する。数える行が無ければ changed が false。end は要約を終えた offset (次の after)。
+func summarizeLatest(file string, size, after int64, workspace string) (summary string, changed bool, end int64, err error) {
+	lines, end, err := completeLines(file, size, after)
 	if err != nil {
-		return "", false, err
+		return "", false, after, err
 	}
-	if end > w.summarized {
-		w.summarized = end
-	}
+	end = max(end, after)
 	for i := len(lines) - 1; i >= 0; i-- {
-		if summary, ok := Summarize(lines[i], w.workspace); ok {
-			return summary, true, nil
+		if summary, ok := Summarize(lines[i], workspace); ok {
+			return summary, true, end, nil
 		}
 	}
-	return "", false, nil
+	return "", false, end, nil
 }
 
 // sinceProgress は progress を最後に見てから now までの時間。
@@ -320,9 +322,8 @@ func (r Runner) render(job Job, workspacePath string) (action, promptFile string
 func (r Runner) wait(cmd *exec.Cmd, run *Run, stream *os.File, offset int64) Result {
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
-	started := time.Now()
 	ticker := time.NewTicker(watchInterval)
-	result, ended := r.watch(done, run, newStreamWatch(stream, offset, started, cmd.Dir), started, ticker.C)
+	result, ended := r.watch(done, run, newStreamWatch(stream.Name(), offset, time.Now(), cmd.Dir), ticker.C)
 	ticker.Stop()
 	if ended {
 		return r.exited(cmd, Result{})
@@ -347,7 +348,7 @@ func (r Runner) wait(cmd *exec.Cmd, run *Run, stream *os.File, offset int64) Res
 // watch は claude が終わるまで待つ (ended が true)。先に止める理由ができたら、その理由を持った result を返す。
 // ticks が届くたびに、その時刻で stream の file を確かめ、活動を更新して、stall と上限時間を当てる。stall は progress が
 // 途絶えた時間で見る。stall と上限時間は、どちらかが有効なときだけ当てる。
-func (r Runner) watch(done <-chan error, run *Run, w *streamWatch, started time.Time, ticks <-chan time.Time) (result Result, ended bool) {
+func (r Runner) watch(done <-chan error, run *Run, w *streamWatch, ticks <-chan time.Time) (result Result, ended bool) {
 	for {
 		select {
 		case <-done:
@@ -358,7 +359,7 @@ func (r Runner) watch(done <-chan error, run *Run, w *streamWatch, started time.
 			if activity, changed := w.check(now); changed {
 				run.setActivity(status.Activity{At: now, Summary: activity})
 			}
-			if reason := r.overdue(now.Sub(started), w.sinceProgress(now), w.readError); reason != "" {
+			if reason := r.overdue(now.Sub(w.started), w.sinceProgress(now), w.readError); reason != "" {
 				return Result{Failure: reason}, false
 			}
 		}

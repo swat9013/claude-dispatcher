@@ -15,14 +15,15 @@ const progressLineLimit = 64 << 10
 // isProgress は stream-json の 1 行 (progressLineLimit 以下) が progress か (formats.md §6 の progress の表)。止まっていても
 // 書かれる行 (heartbeat・rate limit の通知) と、中身を判定できない行だけを数えない。
 func isProgress(line []byte) bool {
+	// type は文字列に限らない。文字列でない type も「知らない type」として数える
 	var l struct {
-		Type string `json:"type"`
+		Type any `json:"type"`
 	}
 	if err := json.Unmarshal(line, &l); err != nil {
 		return false
 	}
 	switch l.Type {
-	case "", "tool_progress", "rate_limit_event":
+	case nil, "", "tool_progress", "rate_limit_event":
 		return false
 	}
 	return true

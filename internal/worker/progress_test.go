@@ -21,6 +21,7 @@ func TestLinesThatCountAsProgress(t *testing.T) {
 		`{"type":"system","subtype":"thinking_tokens"}`,
 		`{"type":"system","subtype":"permission_check_status"}`,
 		`{"type":"stream_event"}`,
+		`{"type":42}`,
 	} {
 		if !isProgress([]byte(line)) {
 			t.Errorf("isProgress(%s) = false, want 数える", line)
@@ -36,7 +37,6 @@ func TestLinesThatDoNotCountAsProgress(t *testing.T) {
 		`plain text`,
 		``,
 		`[1]`,
-		`{"type":42}`,
 		`{"message":{}}`,
 		`{"type":""}`,
 		`{"type":null}`,
