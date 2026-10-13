@@ -291,7 +291,7 @@ triggers:                    # 必須。1 つ以上
 
 | key | GitLab の field |
 |---|---|
-| `conflict` | `mergeStatusEnum` が `CANNOT_BE_MERGED` なら conflict を持ち、`CAN_BE_MERGED` なら持たない。`UNCHECKED` / `CHECKING` / `CANNOT_BE_MERGED_RECHECK` なら、計算し終えていないので `true` にも `false` にも当たらない (次の tick で見直す)。それ以外の値は読めない失敗にする。`detailedMergeStatus` と `conflicts` は使わない (draft の merge request では `detailedMergeStatus` が `DRAFT_STATUS` になって計算中かが隠れ、`conflicts` は `CANNOT_BE_MERGED_RECHECK` で `false` を返す) |
+| `conflict` | `mergeStatusEnum` が `CANNOT_BE_MERGED` なら conflict を持ち、`CAN_BE_MERGED` なら持たない。`UNCHECKED` / `CHECKING` / `CANNOT_BE_MERGED_RECHECK` なら、計算し終えていないので `true` にも `false` にも当たらない (次の tick で見直す)。それ以外の値は読めない失敗にする。draft の merge request でも同じに決める |
 | `review_unresolved` | 解決できる discussion (`resolvable`) で、解決されていない (`resolved` でない) もののうち、最初の note の作者が collaborator のものが 1 本以上ある。最初の note が system note の discussion は数えない。最初の note の作者が collaborator かは、その note の `maxAccessLevelOfAuthor` (project での access level) で決める |
 | `ci_failed` | head の pipeline (`headPipeline`) の `status` が `FAILED`。`CANCELED` は失敗に数えない (人が意図して止めた pipeline に worker を送らない)。pipeline が無ければ失敗ではない |
 | `approved` | `approved`。CE では 1 人以上の承認、有償の tier では承認ルールの充足で、どちらも host の判断に従う |
@@ -301,9 +301,9 @@ triggers:                    # 必須。1 つ以上
 | `author` | issue 側と同じ線 (access level が Developer 以上) |
 
 - `gitlab` の merge request は、open な一覧を GraphQL の問い合わせ (10 本ごとに 1 往復) で、承認・pipeline・discussion とまとめて読む。CL 側の trigger を置くと、毎 tick、次の往復を撃つ
-  - 一覧の page の数だけ GraphQL を 1 往復。page を 10 本に絞るのは、1 本ごとに discussion まで読む問い合わせが GitLab の問い合わせの時間の上限 (既定 30 秒) に届かないようにするため。discussion が 100 本を超えた merge request は、その残りを 100 本ごとに 1 往復で読み足す
+  - 一覧の page の数だけ GraphQL を 1 往復。discussion が 100 本を超えた merge request は、その残りを 100 本ごとに 1 往復で読み足す
   - merge request の作者の access level を、その観測でまだ読んでいない作者について、100 人ごとに 1 往復で読む (REST の project の member の API)
-  - conflict を計算し終えていない merge request があれば、10 本ごとに 1 往復で、GitLab に計算し直させる (REST の merge request の一覧の `with_merge_status_recheck`)。GraphQL の読み出しは計算し直しを起こさないので、これが無いと計算し終えないまま残る。結果は次の tick で読む。GitLab が計算し直すのは、glab の user が project で Developer 以上の access level を持つときだけ
+  - conflict を計算し終えていない merge request があれば、100 本ごとに 1 往復で、GitLab に計算し直させる (REST の merge request の一覧の `with_merge_status_recheck`)。GraphQL の読み出しは計算し直しを起こさないので、これが無いと計算し終えないまま残る。結果は次の tick で読む。計算し直しの求めが失敗しても、観測は失敗にせず、その merge request は conflict を決められないまま次の tick で求め直す。GitLab が計算し直すのは、glab の user が project で Developer 以上の access level を持つときだけ
 - `gitlab` の merge request の終端は `state` が `merged` か `closed`。`locked` (merge の処理中) は終端にしない (merge に失敗すると `opened` に戻る)
 
 ### 評価の規則

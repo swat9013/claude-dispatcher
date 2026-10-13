@@ -2,6 +2,7 @@ package gitlab
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -16,7 +17,8 @@ const connectionSize = 100
 
 // mergeRequestPageSize は open な merge request の一覧を 1 往復で読む本数。1 本ごとに discussion を connectionSize 本まで
 // 読むので、page を大きくすると GitLab の問い合わせの時間の上限 (既定 30 秒) に届く。open な merge request が 100 本を超える
-// self-managed の GitLab で、100 本と 50 本の page は時間切れで落ち、20 本の page は 7 秒台で通った
+// self-managed の GitLab で、100 本と 50 本の page は時間切れで落ちた。20 本の page は通ったが最も遅い page が 19 秒で上限に
+// 近く、10 本の page は最も遅い page が 12 秒だった
 const mergeRequestPageSize = 10
 
 // discussionFields は discussion 1 本のうち読むもの。書き手と system note かは最初の note で決まるので、note は先頭だけを読む
@@ -136,13 +138,15 @@ func (s Store) graphql(query string, data any, variables ...variable) error {
 
 // graphqlFailure は GraphQL の失敗を分類する。GitLab が GraphQL の errors で答えると、glab は status を出さずに message だけを
 // 出す (認証の失敗も)。message とともに status を出さなかった失敗は、REST で project を 1 回読み、その失敗で分類する。REST が
-// 通れば読めない (formats.md §3)。
+// 通れば読めない (formats.md §3)。REST も落ちたら、分類は REST の失敗で決め、エラー文には GraphQL の失敗も載せる。
 func (s Store) graphqlFailure(err error) *target.Failure {
 	if readFailure(err).apiMessageGiven {
 		return s.fail(classify(err), err)
 	}
 	if _, probe := s.get("projects/" + url.PathEscape(s.project.Path)); probe != nil {
-		return s.fail(classify(probe), probe)
+		failure := s.fail(classify(probe), probe)
+		failure.Err = errors.Join(summarizeForbidden(err), failure.Err)
+		return failure
 	}
 	return s.fail(target.Unavailable, err)
 }
@@ -181,7 +185,12 @@ func (s Store) openMergeRequests() ([]target.CL, error) {
 		}
 		after = page.PageInfo.EndCursor
 	}
-	return s.normalizeMergeRequests(nodes)
+	cls, err := s.readCLs(nodes)
+	if err != nil {
+		return nil, err
+	}
+	s.requestRecheck(cls)
+	return cls, nil
 }
 
 // mergeRequest は merge request 1 本を読み直す。merge か close されていれば Closed。消えたものも Closed として返す。locked
@@ -200,16 +209,16 @@ func (s Store) mergeRequest(iid int) (target.CL, error) {
 	case data.Project.MergeRequest == nil, data.Project.MergeRequest.State == "merged", data.Project.MergeRequest.State == "closed":
 		return target.CL{Number: iid, Closed: true}, nil
 	}
-	cls, err := s.normalizeMergeRequests([]mergeRequestNode{*data.Project.MergeRequest})
+	cls, err := s.readCLs([]mergeRequestNode{*data.Project.MergeRequest})
 	if err != nil {
 		return target.CL{}, err
 	}
+	s.requestRecheck(cls)
 	return cls[0], nil
 }
 
-// normalizeMergeRequests は open な merge request を CL の形に写す。discussion の続きと作者の access level を読み足し、
-// conflict を計算し終えていないものには GitLab に計算し直させる (結果は次の観測で読む)。
-func (s Store) normalizeMergeRequests(nodes []mergeRequestNode) ([]target.CL, error) {
+// readCLs は open な merge request の discussion の続きと作者の access level を読み足し、CL の形に写す。
+func (s Store) readCLs(nodes []mergeRequestNode) ([]target.CL, error) {
 	authors := make([]int, len(nodes))
 	for i := range nodes {
 		if err := s.readRemainingDiscussions(&nodes[i]); err != nil {
@@ -226,19 +235,12 @@ func (s Store) normalizeMergeRequests(nodes []mergeRequestNode) ([]target.CL, er
 		return nil, err
 	}
 	cls := make([]target.CL, len(nodes))
-	var unchecked []int
 	for i, n := range nodes {
 		cl, err := s.normalizeMergeRequest(n, known[authors[i]])
 		if err != nil {
 			return nil, err
 		}
-		if cl.Mergeable == target.MergeUnknown {
-			unchecked = append(unchecked, cl.Number)
-		}
 		cls[i] = cl
-	}
-	if err := s.recheckMergeability(unchecked); err != nil {
-		return nil, err
 	}
 	return cls, nil
 }
@@ -314,21 +316,28 @@ func (s Store) readCollaborators(userIDs []int) (collaborators, error) {
 	return known, nil
 }
 
-// recheckMergeability は merge request に conflict の計算し直しを GitLab に求める (REST の一覧の with_merge_status_recheck)。
-// GraphQL の読み出しは計算し直しを起こさないので、これが無いと計算し終えないまま残る。GitLab が計算し直すのは、glab の user が
-// Developer 以上のときだけ。一覧の page と同じ本数ずつ求める (計算し直しを求める本数が多いと応答が遅れ、手前の proxy が 502 で
-// 打ち切りうる)。
-func (s Store) recheckMergeability(iids []int) error {
-	for batch := range chunks(iids, mergeRequestPageSize) {
+// requestRecheck は、conflict を計算し終えていない CL について、計算し直しを GitLab に求める (REST の一覧の
+// with_merge_status_recheck。結果は次の観測で読む)。GraphQL の読み出しは計算し直しを起こさないので、これが無いと計算し終えない
+// まま残る。GitLab が計算し直すのは、glab の user が Developer 以上のときだけ。
+//
+// 求めが落ちても観測は失敗にしない。読み終えた CL は正しく、落ちた分の CL は conflict を決められないまま次の観測で求め直される
+// ので、conflict と関係の無い trigger までその tick に止めない (guide.md の gitlab の merge request の往復)。
+func (s Store) requestRecheck(cls []target.CL) {
+	var iids []int
+	for _, cl := range cls {
+		if cl.Mergeable == target.MergeUnknown {
+			iids = append(iids, cl.Number)
+		}
+	}
+	for batch := range chunks(iids, connectionSize) {
 		query := make([]string, len(batch))
 		for i, iid := range batch {
 			query[i] = "iids[]=" + strconv.Itoa(iid)
 		}
 		if _, err := s.get(s.endpoint("merge_requests?" + strings.Join(query, "&") + "&with_merge_status_recheck=true&per_page=" + strconv.Itoa(connectionSize))); err != nil {
-			return s.fail(classify(err), err)
+			return
 		}
 	}
-	return nil
 }
 
 // chunks は list を size 個ずつに分ける。
@@ -394,8 +403,9 @@ var mergeability = map[string]target.Mergeability{
 	"CANNOT_BE_MERGED_RECHECK": target.MergeUnknown,
 }
 
-// collaboratorAccess は collaborator と数える access level の名前 (maxAccessLevelOfAuthor)。Developer 以上 (developerAccess)
-var collaboratorAccess = map[string]bool{"Developer": true, "Maintainer": true, "Owner": true}
+// accessLevels は maxAccessLevelOfAuthor の名前を、REST の member の access_level の値に写す。collaborator かは
+// developerAccess と比べて決める (REST の member の読み出しと同じ線)。載っていない名前は Developer より下として扱う
+var accessLevels = map[string]int{"Developer": 30, "Maintainer": 40, "Owner": 50}
 
 // reviewUnresolved は、collaborator が書いた未解決の discussion が 1 本以上あるか (cl.review_unresolved)。discussion の書き手は
 // 最初の note の作者で、最初の note が system note の discussion は数えない。
@@ -405,7 +415,7 @@ func reviewUnresolved(discussions []discussionNode) bool {
 			continue
 		}
 		first := d.Notes.Nodes[0]
-		if !first.System && first.MaxAccessLevelOfAuthor != nil && collaboratorAccess[*first.MaxAccessLevelOfAuthor] {
+		if !first.System && first.MaxAccessLevelOfAuthor != nil && accessLevels[*first.MaxAccessLevelOfAuthor] >= developerAccess {
 			return true
 		}
 	}

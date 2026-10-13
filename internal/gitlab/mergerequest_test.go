@@ -389,8 +389,9 @@ func TestGraphQLFailureWithoutAStatusIsClassifiedByReadingTheProjectOverREST(t *
 		project response
 		want    target.FailureKind
 	}{
-		"REST も認証で落ちる": {response{stderr: "glab: 401 Unauthorized (HTTP 401)"}, target.Auth},
-		"REST は通る":     {response{stdout: `{"id":7}`}, target.Unavailable},
+		"REST も認証で落ちる":         {response{stderr: "glab: 401 Unauthorized (HTTP 401)"}, target.Auth},
+		"REST で project が見えない": {response{stderr: "glab: 404 Project Not Found (HTTP 404)"}, target.NotVisible},
+		"REST は通る":             {response{stdout: `{"id":7}`}, target.Unavailable},
 	} {
 		t.Run(name, func(t *testing.T) {
 			g := glab{openMergeRequests: {stderr: "glab: Invalid token\n"}, projectEndpoint: tc.project}
@@ -402,5 +403,43 @@ func TestGraphQLFailureWithoutAStatusIsClassifiedByReadingTheProjectOverREST(t *
 				t.Fatalf("err = %v, want %v", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestReasonOfAGraphQLFailureKeepsTheGraphQLMessageWhenTheRESTProbeAlsoFails(t *testing.T) {
+	g := glab{openMergeRequests: {stderr: "glab: Invalid token\n"}, projectEndpoint: {stderr: "glab: 401 Unauthorized (HTTP 401)"}}
+
+	_, err := gitlab.NewStore(g, project).OpenCLs()
+
+	if err == nil || !strings.Contains(err.Error(), "Invalid token") || !strings.Contains(err.Error(), "401 Unauthorized") {
+		t.Fatalf("err = %v, want GraphQL と REST の両方の失敗を載せる", err)
+	}
+}
+
+func TestGraphQLFailureWithAStatusIsClassifiedWithoutTheRESTProbe(t *testing.T) {
+	// 登録の無い REST の project を撃てば読めないの失敗になるので、認証と分類されたなら probe を撃っていない
+	g := glab{openMergeRequests: {stderr: "glab: 401 Unauthorized (HTTP 401)"}}
+
+	_, err := gitlab.NewStore(g, project).OpenCLs()
+
+	var failure *target.Failure
+	if !errors.As(err, &failure) || failure.Kind != target.Auth {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestFailedRecheckRequestLeavesTheConflictUndecidedWithoutFailingTheObservation(t *testing.T) {
+	unchecked := openMR(1)
+	unchecked.mergeStatus = "UNCHECKED"
+	g := glab{
+		openMergeRequests: listPage(t, "", unchecked, openMR(2)),
+		membersEndpoint:   members(t, map[int]int{1: 30}),
+		recheckEndpoint:   {stderr: "glab: HTTP 502\n"},
+	}
+
+	items, err := gitlab.NewStore(g, project).OpenCLs()
+
+	if err != nil || len(items) != 2 || items[0].(target.CL).Mergeable != target.MergeUnknown {
+		t.Fatalf("items = %v, err = %v", items, err)
 	}
 }
