@@ -315,6 +315,22 @@ func TestTickWhoseScopeKeyDiffersFromTheStartDoesNotObserve(t *testing.T) {
 	}
 }
 
+func TestTickWhoseCLPlaceDiffersFromTheStartDoesNotObserve(t *testing.T) {
+	// 起動時は github (issue 置き場と同じ場所が CL 置き場)。読み直した版は CL 置き場を持たない
+	withoutCLPlace := func(maxConcurrent int) (workflow.Definition, error) {
+		def := definition(time.Minute, maxConcurrent)
+		def.Tracker = workflow.Tracker{Kind: provider.Jira}
+		return def, nil
+	}
+	h := &harness{plans: []tickPlan{{load: withoutCLPlace}}}
+
+	lines := h.run(t)
+
+	if !strings.Contains(lines[0], "tick error · workflow 定義の CL 置き場") || h.reads != 0 {
+		t.Fatalf("CL 置き場が違う版を採った (読んだ回数 %d):\n%s", h.reads, h.stdout.String())
+	}
+}
+
 var rateLimited = &target.Failure{Kind: target.RateLimit, Place: "acme/widgets", Err: errors.New("API rate limit exceeded")}
 
 func TestFailedObservationIsReportedWithItsKind(t *testing.T) {

@@ -49,12 +49,8 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	}
 	// worker が外部 store を操作するのに要りそうな entry を、役割ごとに、その役割を担う provider の CLI の綴りで出す
 	// (system.md §11)
-	var clHost *provider.CLHostRole
-	if p, _, ok := def.CLHost(); ok {
-		clHost = p.CLHost
-	}
 	fmt.Fprintln(stdout, "settings の permissions.allow に要りそうな entry (CLI は書かない):")
-	for _, entry := range provider.Settings(def.Tracker.Provider().Tracker, clHost) {
+	for _, entry := range def.Settings() {
 		fmt.Fprintf(stdout, "  %s\n", entry)
 	}
 	if failed {
@@ -79,21 +75,22 @@ func checkStore(e environment, def workflow.Definition, stdout io.Writer) bool {
 	}
 	store := e.store(def)
 	var err error
-	if def.CL == nil {
-		_, err = loop.OpenItems(store, def)
-	} else {
+	if _, _, separate := def.SeparateCLHost(); separate {
 		// CL は別の置き場にあり、checkCLPlace の行で確かめる
 		_, err = store.Open(target.KindIssue)
+	} else {
+		_, err = loop.OpenItems(store, def)
 	}
 	return placeLine(stdout, "issue 置き場", def.Tracker.Place, err)
 }
 
 // checkCLPlace は cl: の CL 置き場を、loop の起動時と同じ確認 (formats.md §6) で読めるかを確かめる。cl: が無ければ何も出さない。
 func checkCLPlace(e environment, def workflow.Definition, stdout io.Writer) bool {
-	if def.CL == nil {
+	_, place, ok := def.SeparateCLHost()
+	if !ok {
 		return true
 	}
-	return placeLine(stdout, "CL 置き場", def.CL.Place, e.readSeparateCLs(def))
+	return placeLine(stdout, "CL 置き場", place, e.readSeparateCLs(def))
 }
 
 // placeLine は置き場を読んだ結果 err を、name の置き場の 1 行に出す。処理を続けられる失敗 (*target.NonFatal) は、置き場を

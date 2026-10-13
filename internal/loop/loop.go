@@ -61,9 +61,9 @@ func (s Store) Read(ref target.Ref) (target.Item, error) {
 	return nil, fmt.Errorf("未知の作業対象の種類 %q", ref.Kind)
 }
 
-// errNoCLStore は CL 置き場の役割を持たない種類で CL を読もうとした誤り。workflow 定義の検査が on: cl を弾くので、起きれば
-// loop の誤り
-var errNoCLStore = errors.New("tracker.kind の provider は CL 置き場の役割を持たない")
+// errNoCLStore は CL 置き場の無い workflow 定義で CL を読もうとした誤り。検査が CL 置き場の無い定義の on: cl を弾き、tick は
+// CL 置き場が起動時と違う版を採らないので、起きれば loop の誤り
+var errNoCLStore = errors.New("workflow 定義に CL 置き場が無い")
 
 // Workspaces は workspace の掃除の口。
 type Workspaces interface {
@@ -311,6 +311,11 @@ func (l *loop) tick() {
 	if key := store.ScopeKey(); key != l.o.ScopeKey {
 		// 別の置き場を指す版は採らない。この tick は掃除も起動もせず、次の tick の突き合わせは採っていた版の置き場を読む
 		l.tickFailed(fmt.Sprintf("workflow 定義の scope key %s が起動時の %s と違う (loop を起動し直す)", key, l.o.ScopeKey))
+		return
+	}
+	if place, start := def.CLPlace(), l.o.Definition.CLPlace(); place != start {
+		// claim している CL を、起動時と別の CL 置き場で読み直さない
+		l.tickFailed(fmt.Sprintf("workflow 定義の CL 置き場 %q が起動時の %q と違う (loop を起動し直す)", place, start))
 		return
 	}
 	l.def, l.blocked = def, l.o.Precheck(def)

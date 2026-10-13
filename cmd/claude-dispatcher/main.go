@@ -153,9 +153,13 @@ func (e environment) trackerParts(def workflow.Definition) provider.Parts {
 
 // separateCLs は cl: の CL 置き場の部品を、cl.kind の provider で組み立てる。cl: は token を持たず、CL 置き場の CLI 自身の
 // 認証を使う。
-func (e environment) separateCLs(def workflow.Definition) provider.CLStore {
-	p, place, _ := def.CLHost()
-	return p.Build(e.runtime(), provider.Setting{Place: place, Triggers: def.Triggers}).CLs
+// cl: が無ければ false。
+func (e environment) separateCLs(def workflow.Definition) (provider.CLStore, bool) {
+	p, place, ok := def.SeparateCLHost()
+	if !ok {
+		return nil, false
+	}
+	return p.Build(e.runtime(), provider.Setting{Place: place, Triggers: def.Triggers}).CLs, true
 }
 
 // store は loop が読む置き場。issue 置き場の部品は tracker.kind の provider から、CL 置き場の部品は cl: があれば cl.kind の
@@ -163,8 +167,8 @@ func (e environment) separateCLs(def workflow.Definition) provider.CLStore {
 func (e environment) store(def workflow.Definition) loop.Store {
 	parts := e.trackerParts(def)
 	cls := parts.CLs
-	if def.CL != nil {
-		cls = e.separateCLs(def)
+	if separate, ok := e.separateCLs(def); ok {
+		cls = separate
 	}
 	return loop.Store{Issues: parts.Issues, CLs: cls}
 }
@@ -173,9 +177,6 @@ func (e environment) store(def workflow.Definition) loop.Store {
 func (e environment) confirmPlace(def workflow.Definition) error {
 	if err := e.confirmIssuePlace(def); err != nil {
 		return err
-	}
-	if def.CL == nil {
-		return nil
 	}
 	err := e.readSeparateCLs(def)
 	var nonFatal *target.NonFatal
@@ -194,17 +195,20 @@ func (e environment) confirmIssuePlace(def workflow.Definition) error {
 	return nil
 }
 
-// readSeparateCLs は cl: の CL 置き場の open な一覧を 1 回読む (formats.md §6 の CL 置き場の確認)。
+// readSeparateCLs は cl: の CL 置き場の open な一覧を 1 回読む (formats.md §6 の CL 置き場の確認)。cl: が無ければ何もしない。
 func (e environment) readSeparateCLs(def workflow.Definition) error {
-	_, err := e.separateCLs(def).OpenCLs()
+	cls, ok := e.separateCLs(def)
+	if !ok {
+		return nil
+	}
+	_, err := cls.OpenCLs()
 	return err
 }
 
 // placeCommands は置き場の CLI: tracker の CLI と、cl: があれば CL 置き場の CLI。
 func placeCommands(def workflow.Definition) []string {
 	commands := []string{def.Tracker.Provider().Command}
-	if def.CL != nil {
-		p, _, _ := def.CLHost()
+	if p, _, ok := def.SeparateCLHost(); ok {
 		commands = append(commands, p.Command)
 	}
 	return commands

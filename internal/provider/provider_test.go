@@ -41,20 +41,19 @@ func TestEveryKindHasAProviderThatDeclaresEveryField(t *testing.T) {
 	}
 }
 
+// roleDeclarations は provider の役割 1 つの宣言と、その役割が支えるかを宣言する宣言の全件。
+type roleDeclarations struct {
+	name     string
+	declared provider.Declarations
+	features []provider.Feature
+}
+
 func TestEveryRoleEitherSupportsOrDeclinesEachOfItsDeclarationsWithAReason(t *testing.T) {
 	for _, kind := range provider.Kinds() {
 		p, _ := provider.Of(kind)
-		roles := []struct {
-			name     string
-			declared provider.Declarations
-			features []provider.Feature
-		}{{"tracker", p.Tracker.Declarations, provider.TrackerFeatures}}
+		roles := []roleDeclarations{{"tracker", p.Tracker.Declarations, provider.TrackerFeatures}}
 		if p.CLHost != nil {
-			roles = append(roles, struct {
-				name     string
-				declared provider.Declarations
-				features []provider.Feature
-			}{"CL host", p.CLHost.Declarations, provider.CLHostFeatures})
+			roles = append(roles, roleDeclarations{"CL host", p.CLHost.Declarations, provider.CLHostFeatures})
 		}
 		for _, role := range roles {
 			for _, f := range role.features {

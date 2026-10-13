@@ -105,13 +105,41 @@ func mustProvider(kind provider.Kind) provider.Provider {
 // CLHost は CL 置き場の役割を担う provider と CL 置き場 (system.md §13)。cl: があればその種類と置き場、無ければ tracker.kind
 // の provider が CL 置き場の役割を持つときだけ issue 置き場と同じ場所。CL 置き場が無ければ false。
 func (d Definition) CLHost() (provider.Provider, provider.Place, bool) {
-	if d.CL != nil {
-		return mustProvider(d.CL.Kind), d.CL.Place, true
+	if p, place, ok := d.SeparateCLHost(); ok {
+		return p, place, true
 	}
 	if p := d.Tracker.Provider(); p.CLHost != nil {
 		return p, d.Tracker.Place, true
 	}
 	return provider.Provider{}, provider.Place{}, false
+}
+
+// SeparateCLHost は issue 置き場と別の CL 置き場 (cl:) の provider と置き場。cl: が無ければ false。
+func (d Definition) SeparateCLHost() (provider.Provider, provider.Place, bool) {
+	if d.CL == nil {
+		return provider.Provider{}, provider.Place{}, false
+	}
+	return mustProvider(d.CL.Kind), d.CL.Place, true
+}
+
+// CLPlace は CL 置き場を指す綴り (`<種類> <置き場>`)。CL 置き場が無ければ ""。読み直した定義の CL 置き場が起動時と同じかを
+// 比べるのに使う。
+func (d Definition) CLPlace() string {
+	p, place, ok := d.CLHost()
+	if !ok {
+		return ""
+	}
+	return string(p.Kind) + " " + place.String()
+}
+
+// Settings は worker が外部 store を操作するのに要りそうな Claude Code の settings の entry。役割ごとに、その役割を担う
+// provider から引く (system.md §11)。
+func (d Definition) Settings() []string {
+	var clHost *provider.CLHostRole
+	if p, _, ok := d.CLHost(); ok {
+		clHost = p.CLHost
+	}
+	return provider.Settings(d.Tracker.Provider().Tracker, clHost)
 }
 
 // Reference は作業対象を人が読む行に出す参照 (formats.md §5)。呼び方は、作業対象の置き場の役割を担う provider が宣言する。
@@ -565,12 +593,12 @@ func (c *checker) tracker(owner, n *yaml.Node, path string, t *Tracker) {
 // cl は cl の項目を、先に引いた CL 置き場の provider (c.clHost) の読み方で読む。provider が無ければ置き場を読まない (誤りは
 // cl.kind で名指しする)。
 func (c *checker) cl(owner, n *yaml.Node, path string) *CL {
-	var in clInput
+	var in placeInput
 	c.mapping(owner, n, path, c.clFields(&in))
 	if c.clHost == nil {
 		return nil
 	}
-	place, ok := c.place(owner, n, path, "cl.kind", c.clHost, &in.place)
+	place, ok := c.place(owner, n, path, "cl.kind", c.clHost, &in)
 	if !ok {
 		return nil
 	}
@@ -620,14 +648,9 @@ func (c *checker) trackerFields(t *Tracker, place *placeInput) map[string]field 
 	return fields
 }
 
-// clInput は cl の表が読んだもの。
-type clInput struct {
-	place placeInput
-}
-
-// clFields は cl の表。repo と host は in に預ける。token は持たない (CL 置き場の CLI 自身の認証を使う)。
-func (c *checker) clFields(in *clInput) map[string]field {
-	fields := c.placeFields(c.clHost, &in.place)
+// clFields は cl の表。repo と host は place に預ける。token は持たない (CL 置き場の CLI 自身の認証を使う)。
+func (c *checker) clFields(place *placeInput) map[string]field {
+	fields := c.placeFields(c.clHost, place)
 	// 種類の値は peekProviders が読んだものを使う。ここでは CL 置き場にならない種類の誤りを名指しする
 	fields["kind"] = field{required: true, read: func(_, n *yaml.Node, path string) {
 		s, ok := c.str(n, path)

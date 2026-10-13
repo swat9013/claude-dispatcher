@@ -43,7 +43,7 @@ var providers = []Provider{
 			Declarations: Declarations{Supports: []Feature{Author}},
 			Settings:     []string{"Bash(gh pr:*)"},
 			Scaffold: func(p Place) scaffold.CLHost {
-				return scaffold.CLHost{Kind: string(GitHub), Repo: p.value.(github.Repo).String()}
+				return scaffold.GitHubCL(p.value.(github.Repo).String())
 			},
 		},
 		Build: func(rt Runtime, s Setting) Parts {
@@ -93,7 +93,7 @@ var providers = []Provider{
 			Settings:     []string{"Bash(glab mr:*)"},
 			Scaffold: func(p Place) scaffold.CLHost {
 				project := p.value.(gitlab.Project)
-				return scaffold.CLHost{Kind: string(GitLab), Host: project.Host, Repo: project.Path}
+				return scaffold.GitLabCL(project.Host, project.Path)
 			},
 		},
 		Build: func(rt Runtime, s Setting) Parts {
