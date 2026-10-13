@@ -338,7 +338,7 @@ claude-dispatcher loop [<workflow の path>]
 
    - `<session>` は、前の attempt で session を始めていれば同じ id で `--resume <uuid>` (止めた session の続きから始まる)、始めていなければ `--session-id <uuid>`
    - action は `--` の後ろに置く (`-` で始まる action を option と読ませない)
-   - stream に活動 (下の「活動」) として数える行が `limits.stall_timeout` のあいだ書かれないか、起動からの経過が `limits.run_timeout` を超えたら、process group を止めて失敗とする (止め方は 2 回目の停止要求と同じ)。止める判断と停止要求が重なったら、停止要求で止めたことにする
+   - stream に progress (下の「progress」) が `limits.stall_timeout` のあいだ書かれないか、起動からの経過が `limits.run_timeout` を超えたら、process group を止めて失敗とする (止め方は 2 回目の停止要求と同じ)。止める判断と停止要求が重なったら、停止要求で止めたことにする
 
 4. 終わったら (止めたときを含む)、worker log からその attempt の最後の `result` を読んで `end` の行に要約を載せ (§4)、`after_run` を撃ち、作業対象を読み直す。終端か、起動した trigger から外れていれば `completed` として claim を解き、当たったままなら `failed` として再起動 (上) に回す
    - 当たるかをまだ決められなければ (conflict を計算中の CL)、完了とも失敗とも数えない。log.jsonl に `verify_wait` の行 (§4) を書き、人が読む行に `確かめ待ち` を出して、claim を持ったまま次の tick で確かめ直す
@@ -426,7 +426,26 @@ issue#42  implement  1        running  5m10s  Edit internal/status/status.go
 - 前に確かめてから完結した行を新しい側から見て、活動として数える最初の行を要約する。数える行が無ければ活動は変えない
 - 活動は今の attempt が書いた行だけから取る (worker log は attempt を跨いで追記する)。同じ行を活動として出し直さない
 - stream の file を読めなければ、`stream を読めない: <理由>` を活動にする。活動の表示のためには worker を止めない
-- stall (`limits.stall_timeout`) の時計は、活動として数える行を見つけるたびに戻す。要約が直前と同じでも戻す。数えない行・64 KiB を超える行・読めないあいだの stream では戻らないので、その状態が `limits.stall_timeout` 続けば stall で止める。読めないまま stall で止めたときは、失敗の理由に読めない理由を添える
+- 活動は stall の判定に使わない。stall の時計は下の progress で戻す
+- **progress**: worker の stream のうち、worker が進んでいる兆候として stall (`limits.stall_timeout`) の時計を戻す行。活動の表とは別に決める (活動の表示を変えても stall の判定は変わらない)
+
+| stream の行 | progress |
+|---|---|
+| 改行を含めて 64 KiB を超える行 | `type` を見ずに数える |
+| `type: tool_progress` (tool の実行中の heartbeat) | 数えない |
+| `type: rate_limit_event` | 数えない |
+| JSON として読めない行 | 数えない |
+| `type` の無い行 | 数えない |
+| それ以外 (`type: system` のすべての subtype と、知らない `type` を含む) | 数える |
+
+- 表は上から当て、最初に当たった行で決める
+- 数えないのは、止まっていても書かれる行と、中身を判定できない行だけにする。数えすぎた誤りは `limits.run_timeout` で止まるが、数えなさすぎた誤りは進んでいる worker の attempt を失わせるため。claude が新しく書き始めた `type` や subtype も数える
+- 64 KiB を超える行は tool の結果や発話の行で、heartbeat や通知の行は小さいので、`type` を見ずに数える。1 行は頭の 64 KiB までだけを持って判定する
+- 確認のたびに、前の確認で読み終えた offset から今の file の大きさまでの完結した行を、末尾の窓に限らずすべて見る。1 回に読む量に上限は置かない。今の attempt が書いた行だけを見る
+- 見た行に progress が 1 行でもあれば、stall の時計をその確認の時刻に戻す
+- stream の file が前の確認より縮んだら (truncate・置き換え)、progress と活動の読み終えた offset を 0 に戻し、縮んだ後の行を頭から見る。縮んだこと自体では時計を戻さない
+- stream の file を読めなければ (大きさを確かめられない・中身を読み出せない のどちらも)、時計を戻さず、`stream を読めない: <理由>` を活動にする。その状態が `limits.stall_timeout` 続けば stall で止め、失敗の理由に読めない理由を添える。読めなかった後は、伸びていなくても読み直す
+- 行の書かれない区間 (長い tool の実行・API の retry の backoff・compaction・`-p` の終わりに background の作業を待つ区間) が `limits.stall_timeout` より長いと、進んでいても stall で止まる。区間を見分ける行は確かめられていないので、`limits.stall_timeout` を区間より長くして吸収する
 
 **停止**: SIGINT / SIGTERM / SIGHUP を同じに扱う。
 
