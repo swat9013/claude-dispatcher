@@ -170,9 +170,9 @@ func jiraRules(issues ...jiraIssue) []stubwire.Rule {
 	)
 }
 
-// setJiraIssues は acli が issues を返し、cl: の CL 置き場 (gh) が open な CL を 1 件も返さないようにする。CL を返させるなら、
-// 後から setStore で gh の応答を差し替える。
-func (s *sandbox) setJiraIssues(issues ...jiraIssue) {
+// setJiraPlaces は jira の workflow 定義の 2 つの置き場を用意する: issue 置き場 (acli) は issues を返し、cl: の CL 置き場
+// (gh) は open な CL を 1 件も返さない。CL を返させるなら、この後に setStore で gh の応答を差し替える。
+func (s *sandbox) setJiraPlaces(issues ...jiraIssue) {
 	s.t.Helper()
 	s.respondAll("acli", jiraRules(issues...))
 	s.setStore(nil, nil)
@@ -239,7 +239,7 @@ func TestJiraDryRunListsTheIssuesInTheStatusByNumberWithTheirKeys(t *testing.T) 
 	triage := readyJiraIssue(44)
 	triage.status = "Needs Triage"
 	// acli の一覧は作成日時を返さないので、一覧の順に依らず番号の小さい順に並ぶ
-	s.setJiraIssues(readyJiraIssue(43), triage, readyJiraIssue(9))
+	s.setJiraPlaces(readyJiraIssue(43), triage, readyJiraIssue(9))
 
 	r := s.dryRun()
 
@@ -263,7 +263,7 @@ func TestJiraPredicatesAreEvaluatedOnTheAcliResponses(t *testing.T) {
 	inReview.issueType, inReview.status = "Subtask", "In Review"
 	mine := readyJiraIssue(13)
 	mine.assignee, mine.labels = "557058:abc", []string{"backend"}
-	s.setJiraIssues(blockedByOpen, blockedByDone, inReview, mine)
+	s.setJiraPlaces(blockedByOpen, blockedByDone, inReview, mine)
 
 	r := s.dryRun()
 
@@ -275,7 +275,7 @@ func TestJiraBlockersAreNotReadWithoutABlockedPredicate(t *testing.T) {
 	s.writeWorkflowWithCommands(jiraWorkflow)
 	blocked := readyJiraIssue(10)
 	blocked.blockers = []bool{false}
-	s.setJiraIssues(blocked)
+	s.setJiraPlaces(blocked)
 
 	assertCandidates(t, s.dryRun(), jiraCandidate("implement", 10))
 
@@ -295,7 +295,7 @@ func TestJiraUnknownStatusAndTypeNamesAreNamedBeforeObserving(t *testing.T) {
 			s.writeWorkflowWithCommands(jiraWorkflowWithTriggers(`
   - {name: implement, on: issue, when: {status: {any: [Ready for Agnet]}}, action: /implement}
   - {name: epics, on: issue, when: {type: {none: [Epik]}}, action: /epics}`))
-			s.setJiraIssues(readyJiraIssue(42))
+			s.setJiraPlaces(readyJiraIssue(42))
 
 			r := s.run(args...)
 
@@ -377,7 +377,7 @@ func (s *sandbox) jiraWorkerWorkflow() string {
 func TestJiraLoopLaunchesAWorkerAndCompletesWhenTheStatusMoves(t *testing.T) {
 	s := newSandbox(t)
 	s.writeWorkflowWithCommands(s.jiraWorkerWorkflow())
-	s.setJiraIssues(readyJiraIssue(42))
+	s.setJiraPlaces(readyJiraIssue(42))
 	moved := readyJiraIssue(42)
 	moved.status = "In Review"
 	s.onClaude(stubwire.Rule{Writes: []stubwire.FileWrite{s.jiraResponses(moved)}})
@@ -408,7 +408,7 @@ func TestJiraLoopLaunchesAWorkerAndCompletesWhenTheStatusMoves(t *testing.T) {
 func TestJiraIssueThatVanishesIsTreatedAsTerminal(t *testing.T) {
 	s := newSandbox(t)
 	s.writeWorkflowWithCommands(s.jiraWorkerWorkflow())
-	s.setJiraIssues(readyJiraIssue(42))
+	s.setJiraPlaces(readyJiraIssue(42))
 	vanished := readyJiraIssue(42)
 	vanished.gone = true
 	s.onClaude(stubwire.Rule{Writes: []stubwire.FileWrite{s.jiraResponses(vanished)}})
@@ -424,7 +424,7 @@ func TestJiraIssueThatVanishesIsTreatedAsTerminal(t *testing.T) {
 func TestJiraIssueThatFailsToBeViewedButIsStillOpenIsNotTreatedAsTerminal(t *testing.T) {
 	s := newSandbox(t)
 	s.writeWorkflowWithCommands(s.jiraWorkerWorkflow())
-	s.setJiraIssues(readyJiraIssue(42))
+	s.setJiraPlaces(readyJiraIssue(42))
 	unreadable := readyJiraIssue(42)
 	unreadable.viewFails = true
 	s.onClaude(stubwire.Rule{Writes: []stubwire.FileWrite{s.jiraResponses(unreadable)}})
@@ -461,7 +461,7 @@ func (s *sandbox) staleListAfterOneFailedView() stubwire.FileWrite {
 func TestJiraIssueWhoseViewFailsOnceWhileTheListIsStaleIsNotTreatedAsTerminal(t *testing.T) {
 	s := newSandbox(t)
 	s.writeWorkflowWithCommands(s.jiraWorkerWorkflow())
-	s.setJiraIssues(readyJiraIssue(42))
+	s.setJiraPlaces(readyJiraIssue(42))
 	s.onClaude(stubwire.Rule{Writes: []stubwire.FileWrite{s.staleListAfterOneFailedView()}})
 
 	loop := s.startLoop()
@@ -475,7 +475,7 @@ func TestJiraIssueWhoseViewFailsOnceWhileTheListIsStaleIsNotTreatedAsTerminal(t 
 func TestJiraIssueMovedToAnotherProjectIsTreatedAsTerminal(t *testing.T) {
 	s := newSandbox(t)
 	s.writeWorkflowWithCommands(s.jiraWorkerWorkflow())
-	s.setJiraIssues(readyJiraIssue(42))
+	s.setJiraPlaces(readyJiraIssue(42))
 	// 移した先の issue (旧 key の転送で返る)。一覧には出ない
 	moved, _ := json.Marshal(map[string]any{"key": "GADGETS-7", "fields": map[string]any{"summary": "moved", "status": jiraStatus(readyStatus, false), "issuetype": map[string]any{"name": "Task"}}})
 	rules := append([]stubwire.Rule{{ArgsPrefix: []string{"jira", "workitem", "view", "WIDGETS-42"}, Stdout: string(moved)}}, jiraRules()...)
@@ -523,7 +523,7 @@ func TestJiraScopeKeyIsTheLowercasedSiteAndProjectKey(t *testing.T) {
 func TestJiraDoctorNamesBothPlacesAndTheEntriesOfEachRole(t *testing.T) {
 	s := newSandbox(t)
 	s.writeWorkflowWithCommands(jiraWorkflow)
-	s.setJiraIssues()
+	s.setJiraPlaces()
 
 	r := s.run("doctor")
 
@@ -547,7 +547,7 @@ func TestJiraDoctorNamesEachUnknownStatus(t *testing.T) {
 	s := newSandbox(t)
 	s.writeWorkflowWithCommands(jiraWorkflowWithTriggers(`
   - {name: implement, on: issue, when: {status: {any: [Redy, Ready for Agent, Todo]}}, action: /implement}`))
-	s.setJiraIssues()
+	s.setJiraPlaces()
 
 	r := s.run("doctor")
 
@@ -583,7 +583,7 @@ func TestJiraSetupTemplateAloneLetsTheDryRunPassWithoutPlugins(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.jiraSetupInGitHubClone()
-	s.setJiraIssues(readyJiraIssue(42))
+	s.setJiraPlaces(readyJiraIssue(42))
 	failing := readyCL(7)
 	failing.head, failing.checks = "claude-dispatcher/WIDGETS-42", "FAILURE"
 	s.setStore(nil, []cl{failing})

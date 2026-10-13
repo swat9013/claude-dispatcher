@@ -39,9 +39,6 @@ func (s Store) Open(kind target.Kind) ([]target.Item, error) {
 	case target.KindIssue:
 		return s.Issues.OpenIssues()
 	case target.KindCL:
-		if s.CLs == nil {
-			return nil, errNoCLStore
-		}
 		return s.CLs.OpenCLs()
 	}
 	return nil, fmt.Errorf("未知の作業対象の種類 %q", kind)
@@ -53,17 +50,10 @@ func (s Store) Read(ref target.Ref) (target.Item, error) {
 	case target.KindIssue:
 		return s.Issues.ReadIssue(ref.Number)
 	case target.KindCL:
-		if s.CLs == nil {
-			return nil, errNoCLStore
-		}
 		return s.CLs.ReadCL(ref.Number)
 	}
 	return nil, fmt.Errorf("未知の作業対象の種類 %q", ref.Kind)
 }
-
-// errNoCLStore は CL 置き場の部品が組まれていない Store で CL を読もうとした誤り。検査に通った workflow 定義は CL 置き場を
-// ちょうど 1 つ持つ (ADR 0015) ので、起きれば Store を組んだ側の誤り
-var errNoCLStore = errors.New("CL 置き場の部品が組まれていない")
 
 // Workspaces は workspace の掃除の口。
 type Workspaces interface {

@@ -26,7 +26,7 @@ func failingCL(number int) cl {
 func TestJiraWithAGitHubCLHostRunsCLTriggersOnTheGitHubCLs(t *testing.T) {
 	s := newSandbox(t)
 	s.writeWorkflowWithCommands(jiraFixCI)
-	s.setJiraIssues(readyJiraIssue(42))
+	s.setJiraPlaces(readyJiraIssue(42))
 	s.setStore(nil, []cl{failingCL(7), readyCL(8)})
 
 	r := s.dryRun()
@@ -48,7 +48,7 @@ func TestJiraConfirmsTheCLHostEvenWithoutCLTriggers(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			s := newSandbox(t)
 			s.writeWorkflowWithCommands(jiraWorkflow)
-			s.setJiraIssues(readyJiraIssue(42))
+			s.setJiraPlaces(readyJiraIssue(42))
 			s.failGh(c.stderr, 1)
 
 			for _, args := range [][]string{{"loop", "--dry-run"}, {"loop"}} {
@@ -69,7 +69,7 @@ func TestJiraConfirmsTheCLHostEvenWithoutCLTriggers(t *testing.T) {
 func TestJiraDoctorNamesTheCLHostItCannotRead(t *testing.T) {
 	s := newSandbox(t)
 	s.writeWorkflowWithCommands(jiraFixCI)
-	s.setJiraIssues()
+	s.setJiraPlaces()
 	s.failGh("HTTP 401: Bad credentials", 1)
 
 	r := s.run("doctor")

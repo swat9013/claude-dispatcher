@@ -168,13 +168,36 @@ func TestATrackerThatHostsCLsIsItsOwnCLHost(t *testing.T) {
 	}
 }
 
-func TestJiraWithoutTheCLDeclarationIsNamedAsMissing(t *testing.T) {
-	withoutCL := strings.Replace(validJira, "cl:\n  kind: github\n  repo: acme/widgets\n", "", 1)
+func TestAMissingCLDeclarationIsNamedOnlyWhenNothingElseExplainsIt(t *testing.T) {
+	const githubCL = "cl:\n  kind: github\n  repo: acme/widgets\n"
+	const missing = "cl: 必須の項目が無い"
+	cases := []struct {
+		name     string
+		workflow string
+		// named は誤りに現れる綴り、unnamed は現れない綴り
+		named, unnamed []string
+	}{
+		{"jira で cl: を書かない", strings.Replace(validJira, githubCL, "", 1), []string{missing, "tracker.kind: jira"}, nil},
+		// 値の無い cl: は空の対応表として読み、欠落は中の項目で名指しする
+		{"jira で cl: を値なしで書く", strings.Replace(validJira, githubCL, "cl:\n", 1), []string{"cl.kind", "cl.repo"}, []string{missing}},
+		{"jira で cl.kind を誤る", strings.Replace(validJira, "  kind: github\n", "  kind: bitbucket\n", 1), []string{"cl.kind"}, []string{missing}},
+		{"tracker.kind が未知", strings.Replace(strings.Replace(validJira, githubCL, "", 1), "kind: jira", "kind: linear", 1), []string{"tracker.kind"}, []string{missing}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := strings.Join(problems(t, c.workflow), "\n")
 
-	got := strings.Join(problems(t, withoutCL), "\n")
-
-	if !strings.Contains(got, "cl: 必須の項目が無い") || !strings.Contains(got, "jira") {
-		t.Fatalf("誤りが cl の欠落を名指ししていない:\n%s", got)
+			for _, name := range c.named {
+				if !strings.Contains(got, name) {
+					t.Errorf("誤りが %q を名指ししていない:\n%s", name, got)
+				}
+			}
+			for _, name := range c.unnamed {
+				if strings.Contains(got, name) {
+					t.Errorf("誤りが %q を名指しした:\n%s", name, got)
+				}
+			}
+		})
 	}
 }
 
