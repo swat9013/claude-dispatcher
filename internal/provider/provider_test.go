@@ -23,6 +23,9 @@ func TestEveryKindHasAProviderThatDeclaresEveryField(t *testing.T) {
 			if len(p.Tracker.Settings) == 0 || (p.CLHost != nil && len(p.CLHost.Settings) == 0) {
 				t.Fatalf("provider %s が役割の settings の entry を宣言していない", kind)
 			}
+			if slices.Contains(p.Tracker.Supports, provider.CL) || slices.Contains(p.Tracker.Supports, provider.Token) {
+				t.Fatalf("provider %s が Supports に on: cl か tracker.token を書いている (CLHost と TokenVariable から導く)", kind)
+			}
 			if p.CLHost != nil && p.CLHost.Prefix == "" {
 				t.Fatalf("provider %s が CL の呼び方を宣言していない", kind)
 			}

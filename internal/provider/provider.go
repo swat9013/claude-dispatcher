@@ -159,10 +159,13 @@ func (p Provider) DeclineReason(f Feature) string {
 
 // WithToken は env に tracker.token の値 token を、CLI が読む環境変数として置いた env を返す (system.md §8)。env に同じ
 // 変数が既にあっても token で上書きする。token が "" なら env のまま。tracker.token を支えない種類 (TokenVariable が "")
-// の token は、workflow 定義の検査が弾くので届かない。
+// の token は、workflow 定義の検査が弾くので届かない。届けば呼び出し側の誤りなので panic する。
 func (p Provider) WithToken(env []string, token string) []string {
 	if token == "" {
 		return env
+	}
+	if p.Tracker.TokenVariable == "" {
+		panic(fmt.Sprintf("tracker.kind: %s の provider は tracker.token を渡す環境変数を持たない", p.Kind))
 	}
 	return deps.WithEnv(env, map[string]string{p.Tracker.TokenVariable: token})
 }
