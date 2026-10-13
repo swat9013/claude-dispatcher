@@ -254,8 +254,8 @@ SPEC §7・§8・§16 の状態機械を土台にする。
 
 - **front matter が持つもの**
   - tracker の種類 (`github` / `gitlab` / `jira`) と adapter の設定
-    - 書ける設定は、`tracker.kind` のサービスが役割 (tracker / CL host) ごとに支えると宣言したものだけ。宣言の無い設定は、検査で名指しして失敗させる (fail closed)。黙って通すと、条件が全件に当たるか、渡したつもりの設定が効かない
-    - 種類ごとに何を書けるかは、案内の「tracker の種類ごとの違い」の表が正本
+    - 書ける設定は、その設定が属する置き場の役割 (tracker / CL host) を担うサービスが支えると宣言したものだけ (§13)。宣言の無い設定は、検査で名指しして失敗させる (fail closed)。黙って通すと、条件が全件に当たるか、渡したつもりの設定が効かない
+    - 種類ごとに何を書けるかは、案内の「置き場のサービスごとの違い」の表が正本
   - trigger の列
   - hooks
   - 並列上限・attempt の上限・backoff の上限・stall の上限・worker 1 回分の上限時間 (既定 1 時間。0 で無効)
@@ -313,7 +313,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。
   - 雛形は `--permission-mode auto` を置く
   - permission 層を外すかどうかは利用者が決める
 - **依存 CLI (tracker の CLI・claude・git) の path は CLI が自分でも解決する**。最小の PATH の shell (ssh 越しなど) から起動されても動くようにする
-  - 解決するのは workflow 定義が撃つ CLI だけ。tracker の CLI は `tracker.kind` で決まる (`github` は gh、`gitlab` は glab、`jira` は acli)。使わない tracker の CLI が無いことは、PATH を書き換える理由にしない
+  - 解決するのは workflow 定義が撃つ CLI だけ。tracker の CLI は `tracker.kind` で決まる (`github` は gh、`gitlab` は glab、`jira` は acli)。`cl:` を書いたら `cl.kind` の CLI (gh か glab) も撃つ。使わない置き場の CLI が無いことは、PATH を書き換える理由にしない
 - **試運転**
   - 1 tick 分の読み直し・事前検査・trigger の評価までを通し、起動する直前で止めて、起動するはずの作業対象と trigger を示す
   - state dir に何も書かない
@@ -342,8 +342,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。
 - **特定の plugin には依存しない**
   - action が呼ぶ skill と command は、利用者が入れた plugin・repo の `.claude/`・`~/.claude/` のどれに置いてもよい
   - 事前検査 (§8) は、この 3 か所の skill と command から先頭の `/名前` を探す。plugin は、user scope で入れたものと、この repo に project scope で入れたものを数える (local scope の plugin は commit しない settings で有効になり、worker の workspace では読まれない)
-- **Claude Code の settings は CLI が書かない** (ADR 0004)。`doctor` は、worker が外部 store を操作するのに要りそうな entry を、`tracker.kind` の provider が担う役割 (tracker / CL host) ごとに、その CLI (gh・glab・acli) の綴りで表示する
-  - `jira` は CL を開く CLI を workflow 定義から決められない (CL 置き場の宣言は #114) ので、その entry も足すよう 1 行で示す
+- **Claude Code の settings は CLI が書かない** (ADR 0004)。`doctor` は、worker が外部 store を操作するのに要りそうな entry を、役割 (tracker / CL host) ごとに、その役割を担う provider の CLI (gh・glab・acli) の綴りで表示する。`jira` の CL host の役割は `cl.kind` の provider が担う
 - **`doctor` は、利用者の約束に頼る宣言を警告する**
   - `cl.approved` に action を当てている (merge を worker に任せうる)
   - CL 側の trigger に、head branch の pattern・label・同じ repo の branch のどの絞り込みも無い (人の CL や fork の CL に worker を送りうる)
