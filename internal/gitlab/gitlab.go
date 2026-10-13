@@ -132,10 +132,7 @@ func (s Store) ReadIssue(iid int) (target.Item, error) { return s.issue(iid) }
 func (s Store) OpenCLs() ([]target.Item, error) { return items(s.openMergeRequests()) }
 
 // ReadCL は merge request 1 件を読み直す。失敗は *target.Failure。
-func (s Store) ReadCL(iid int) (target.Item, error) {
-	cl, _, err := s.mergeRequest(iid, collaborators{})
-	return cl, err
-}
+func (s Store) ReadCL(iid int) (target.Item, error) { return s.mergeRequest(iid) }
 
 func items[T target.Item](list []T, err error) ([]target.Item, error) {
 	if err != nil {

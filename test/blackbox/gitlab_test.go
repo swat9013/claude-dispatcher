@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -167,6 +168,17 @@ func (s *sandbox) assertGlabOnlyReads() {
 		args := c.Argv[1:]
 		if len(args) < 4 || args[0] != "api" || args[1] != "--hostname" || args[2] != gitlabHost {
 			s.t.Fatalf("glab の呼び出し %q が api --hostname %s で始まらない", args, gitlabHost)
+		}
+		if args[3] == "graphql" {
+			// GraphQL は POST で撃つので field を持つ。書き込み (mutation) でなく問い合わせ (query) であることを見る
+			isQuery := func(arg string) bool {
+				query, ok := strings.CutPrefix(arg, "query=")
+				return ok && strings.HasPrefix(strings.TrimSpace(query), "query ")
+			}
+			if !slices.ContainsFunc(args, isQuery) {
+				s.t.Fatalf("glab の GraphQL の呼び出し %q が query でない", args)
+			}
+			continue
 		}
 		for _, arg := range args {
 			switch arg {
@@ -516,7 +528,7 @@ func TestGitLabSetupTemplateAloneLetsTheDryRunPassWithoutPlugins(t *testing.T) {
 	}
 	s.respond("git", gitlabOrigin)
 	conflicting := readyMR(5)
-	conflicting.branch, conflicting.hasConflicts = "claude-dispatcher/issue-5", true
+	conflicting.branch, conflicting.mergeStatus = "claude-dispatcher/issue-5", "CANNOT_BE_MERGED"
 	s.respondAll("glab", append([]stubwire.Rule{gitlabRepoView}, glabStoreRules([]glIssue{readyGitLabIssue(42)}, []glMR{conflicting})...))
 	assertExit(t, s.run("setup"), 0)
 
