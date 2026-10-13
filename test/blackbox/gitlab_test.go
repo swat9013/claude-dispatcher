@@ -156,8 +156,10 @@ func (s *sandbox) glabResponses(issues ...glIssue) stubwire.FileWrite {
 	return stubwire.FileWrite{Path: stubwire.ResponsesFile(s.stubRoot, "glab"), Content: string(raw)}
 }
 
-// assertGlabOnlyReads は glab の呼び出しがどれも REST の GET (`api --hostname <host> …`) で、method を変える flag
-// (`-f` / `-F` / `--field` / `--raw-field` / `-X` / `--method`) を持たないことを確かめる。field を渡すと glab は POST を撃つ。
+// assertGlabOnlyReads は glab の呼び出しがどれも `api --hostname <host> …` で、REST なら method を変える flag
+// (`-f` / `-F` / `--field` / `--raw-field` / `-X` / `--method`) を持たない GET (field を渡すと glab は POST を撃つ)、GraphQL
+// (POST で field を渡す) なら mutation でなく query であることを確かめる。GET の副作用 (GitLab に conflict の計算し直しを求める
+// with_merge_status_recheck) は見分けない
 func (s *sandbox) assertGlabOnlyReads() {
 	s.t.Helper()
 	calls := s.calls("glab")

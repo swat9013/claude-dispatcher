@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -294,7 +295,7 @@ func (s Store) readCollaborators(userIDs []int) (collaborators, error) {
 			unread = append(unread, id)
 		}
 	}
-	for batch := range chunks(unread, connectionSize) {
+	for batch := range slices.Chunk(unread, connectionSize) {
 		query := make([]string, len(batch))
 		for i, id := range batch {
 			query[i] = "user_ids[]=" + strconv.Itoa(id)
@@ -332,7 +333,7 @@ func (s Store) requestRecheck(cls []target.CL) error {
 		}
 	}
 	var failed []string
-	for batch := range chunks(iids, connectionSize) {
+	for batch := range slices.Chunk(iids, connectionSize) {
 		query := make([]string, len(batch))
 		for i, iid := range batch {
 			query[i] = "iids[]=" + strconv.Itoa(iid)
@@ -347,17 +348,6 @@ func (s Store) requestRecheck(cls []target.CL) error {
 	return errors.New(strings.Join(failed, " / "))
 }
 
-// chunks は list を size 個ずつに分ける。
-func chunks(list []int, size int) func(yield func([]int) bool) {
-	return func(yield func([]int) bool) {
-		for start := 0; start < len(list); start += size {
-			if !yield(list[start:min(start+size, len(list))]) {
-				return
-			}
-		}
-	}
-}
-
 // normalizeMergeRequest は open な merge request 1 本を CL の形に写す。authorIsCollaborator は作者が collaborator か。
 func (s Store) normalizeMergeRequest(n mergeRequestNode, authorIsCollaborator bool) (target.CL, error) {
 	iid, err := strconv.Atoi(n.IID)
@@ -370,6 +360,10 @@ func (s Store) normalizeMergeRequest(n mergeRequestNode, authorIsCollaborator bo
 	mergeable, ok := mergeability[n.MergeStatusEnum]
 	if !ok {
 		return target.CL{}, s.fail(target.Unavailable, fmt.Errorf("merge request !%d の mergeStatusEnum %q を読めない", iid, n.MergeStatusEnum))
+	}
+	reviewUnresolved, err := reviewUnresolved(n.Discussions.Nodes)
+	if err != nil {
+		return target.CL{}, s.fail(target.Unavailable, fmt.Errorf("merge request !%d の %w", iid, err))
 	}
 	labels := make([]string, len(n.Labels.Nodes))
 	for i, l := range n.Labels.Nodes {
@@ -386,7 +380,7 @@ func (s Store) normalizeMergeRequest(n mergeRequestNode, authorIsCollaborator bo
 		SameRepo:             n.SourceProjectID != nil && *n.SourceProjectID == n.TargetProjectID,
 		Draft:                n.Draft,
 		Mergeable:            mergeable,
-		ReviewUnresolved:     reviewUnresolved(n.Discussions.Nodes),
+		ReviewUnresolved:     reviewUnresolved,
 		// CANCELED は人が意図して止めた pipeline なので失敗に数えない。pipeline が無ければ失敗ではない
 		CIFailed: n.HeadPipeline != nil && n.HeadPipeline.Status == "FAILED",
 		Approved: n.Approved,
@@ -411,23 +405,31 @@ var mergeability = map[string]target.Mergeability{
 }
 
 // accessLevels は maxAccessLevelOfAuthor の名前を、GitLab の access level の値 (REST の member の access_level) に写す。
-// collaborator かは developerAccess と比べて決める (REST の member の読み出しと同じ線)。載っていない名前は 0 (member でない) と
-// して扱う
+// collaborator かは developerAccess と比べて決める (REST の member の読み出しと同じ線)。member でなければ名前は null。載っていない
+// 名前は、collaborator かを黙って誤らないよう読めない失敗にする (mergeStatusEnum と同じ)
 var accessLevels = map[string]int{
-	"Minimal Access": 5, "Guest": 10, "Planner": 15, "Reporter": 20, "Developer": developerAccess, "Maintainer": 40, "Owner": 50,
+	"Minimal Access": 5, "Guest": 10, "Planner": 15, "Reporter": 20, "Security Manager": 25, "Developer": developerAccess,
+	"Maintainer": 40, "Owner": 50,
 }
 
 // reviewUnresolved は、collaborator が書いた未解決の discussion が 1 本以上あるか (cl.review_unresolved)。discussion の書き手は
-// 最初の note の作者で、最初の note が system note の discussion は数えない。
-func reviewUnresolved(discussions []discussionNode) bool {
+// 最初の note の作者で、最初の note が system note の discussion は数えない。書き手の access level の名前を読めなければ失敗。
+func reviewUnresolved(discussions []discussionNode) (bool, error) {
 	for _, d := range discussions {
 		if !d.Resolvable || d.Resolved || len(d.Notes.Nodes) == 0 {
 			continue
 		}
 		first := d.Notes.Nodes[0]
-		if !first.System && first.MaxAccessLevelOfAuthor != nil && accessLevels[*first.MaxAccessLevelOfAuthor] >= developerAccess {
-			return true
+		if first.System || first.MaxAccessLevelOfAuthor == nil {
+			continue
+		}
+		level, ok := accessLevels[*first.MaxAccessLevelOfAuthor]
+		if !ok {
+			return false, fmt.Errorf("discussion の書き手の access level %q を読めない", *first.MaxAccessLevelOfAuthor)
+		}
+		if level >= developerAccess {
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }

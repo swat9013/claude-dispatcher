@@ -136,7 +136,6 @@ func readMR(t *testing.T, m mr) (target.Item, error) {
 	g := glab{
 		"graphql:MergeRequest?" + fullPath + "&iid=" + strconv.Itoa(m.iid): single(t, &m),
 		membersEndpoint: members(t, map[int]int{1: 30}),
-		recheckEndpoint: {stdout: "[]"},
 	}
 	return gitlab.NewStore(g, project).ReadCL(m.iid)
 }
@@ -279,6 +278,18 @@ func TestReviewUnresolvedCountsOnlyDiscussionsStartedByDeveloperOrAbove(t *testi
 				t.Fatalf("ReviewUnresolved = %v, want %v", cl.ReviewUnresolved, want)
 			}
 		})
+	}
+}
+
+func TestUnknownAccessLevelOfADiscussionAuthorFailsAsUnavailable(t *testing.T) {
+	m := openMR(7)
+	m.discussions = []discussion{{authorID: 5, access: "Something New"}}
+
+	_, err := readMR(t, m)
+
+	var failure *target.Failure
+	if !errors.As(err, &failure) || failure.Kind != target.Unavailable || !strings.Contains(err.Error(), "Something New") {
+		t.Fatalf("err = %v", err)
 	}
 }
 

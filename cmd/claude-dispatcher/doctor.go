@@ -76,7 +76,7 @@ func checkStore(e environment, def workflow.Definition, stdout io.Writer) bool {
 		fmt.Fprintf(stdout, "NG   issue 置き場 %s: %s\n", def.Tracker.Place, printable.Line(err.Error()))
 		return false
 	}
-	// 処理を続けられる失敗 (*target.NonFatal) は、置き場を読めているので NG にせず、ok の行に理由を添える (formats.md §5)
+	// 処理を続けられる失敗 (*target.NonFatal) は、置き場を読めているので NG にせず、ok の行に理由を添える (formats.md §7.4)
 	var nonFatal *target.NonFatal
 	_, err := loop.OpenItems(e.store(def), def)
 	switch {
