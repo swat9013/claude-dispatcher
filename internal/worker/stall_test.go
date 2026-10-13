@@ -3,26 +3,26 @@ package worker
 import (
 	"os"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/swat9013/claude-dispatcher/internal/workflow"
 )
 
-// stall の判定 (formats.md §6 の worker の起動と活動)。stall の時計は活動として数える行でだけ戻る。
+// stall の判定 (formats.md §6 の progress)。stall の時計は progress の行で戻り、活動の表示とは別に読む。
 
 const heartbeat = `{"type":"tool_progress","tool_name":"Bash","elapsed_time_seconds":30,"heartbeat":true}` + "\n"
+
+const taskProgress = `{"type":"system","subtype":"task_progress"}` + "\n"
 
 // stallClock は空の stream を started から見始めた streamWatch と、stall の上限が stall の Runner を作る。
 func stallClock(t *testing.T, started time.Time, stall time.Duration) (*streamWatch, Runner) {
 	t.Helper()
-	w := &streamWatch{file: streamFile(t, ""), active: started, workspace: "/work"}
-	return w, Runner{Definition: workflow.Definition{StallTimeout: stall}}
+	return newStreamWatch(streamFile(t, ""), 0, started, "/work"), Runner{Definition: workflow.Definition{StallTimeout: stall}}
 }
 
-// appendAt は stream に line を追記し、now の時点で w に確かめさせる。
-func appendAt(t *testing.T, w *streamWatch, line string, now time.Time) {
+// write は stream に line を追記する (worker が書くのと同じく、loop が開いた file とは別に開いて書く)。
+func write(t *testing.T, w *streamWatch, line string) {
 	t.Helper()
 	f, err := os.OpenFile(w.file.Name(), os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
@@ -32,20 +32,13 @@ func appendAt(t *testing.T, w *streamWatch, line string, now time.Time) {
 	if _, err := f.WriteString(line); err != nil {
 		t.Fatal(err)
 	}
-	observeAt(t, w, now)
 }
 
-// observeAt は now の時点で w に stream の file を確かめさせ、活動を返す。活動が変わらなければ ok が false。
-func observeAt(t *testing.T, w *streamWatch, now time.Time) (summary string, ok bool) {
+// appendAt は stream に line を追記し、now の時点で w に確かめさせる。
+func appendAt(t *testing.T, w *streamWatch, line string, now time.Time) {
 	t.Helper()
-	grew, err := w.observe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !grew {
-		return "", false
-	}
-	return w.activity(now)
+	write(t, w, line)
+	w.check(now)
 }
 
 func TestWorkerWritingOnlyHeartbeatsStallsAfterTheStallTimeout(t *testing.T) {
@@ -55,49 +48,44 @@ func TestWorkerWritingOnlyHeartbeatsStallsAfterTheStallTimeout(t *testing.T) {
 		appendAt(t, w, heartbeat, started.Add(time.Duration(s)*time.Second))
 	}
 
-	reason := r.overdue(90*time.Second, w.inactiveFor(started.Add(90*time.Second)), w.readError)
+	reason := r.overdue(90*time.Second, w.sinceProgress(started.Add(90*time.Second)), w.readError)
 
 	if !strings.Contains(reason, "stall") {
 		t.Fatalf("heartbeat だけが 90s 続いて stall の上限 1m を過ぎたのに止めない: %q", reason)
 	}
 }
 
-func TestWatchStopsAWorkerThatWritesOnlyHeartbeats(t *testing.T) {
-	stream := streamFile(t, "")
-	writer, err := os.OpenFile(stream.Name(), os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		t.Fatal(err)
+func TestProgressThatIsNotActivityResetsTheStallClock(t *testing.T) {
+	started := time.Now()
+	w, _ := stallClock(t, started, time.Minute)
+	appendAt(t, w, text("前"), started.Add(10*time.Second))
+
+	write(t, w, taskProgress)
+	activity, changed := w.check(started.Add(50 * time.Second))
+
+	if changed {
+		t.Fatalf("活動 = %q; want task_progress は活動を変えない", activity)
 	}
-	defer writer.Close()
-	// heartbeat を stall の上限より細かく書き続ける (file は伸び続ける)
-	quit := make(chan struct{})
-	var writing sync.WaitGroup
-	writing.Add(1)
-	defer writing.Wait()
-	defer close(quit)
-	go func() {
-		defer writing.Done()
-		for {
-			select {
-			case <-quit:
-				return
-			case <-time.After(20 * time.Millisecond):
-				_, _ = writer.WriteString(heartbeat)
-			}
-		}
-	}()
-	r := Runner{Definition: workflow.Definition{StallTimeout: 500 * time.Millisecond}}
-	run := &Run{stop: make(chan struct{})}
-	defer time.AfterFunc(10*time.Second, run.Stop).Stop()
-
-	result, ended := r.watch(make(chan error), run, stream, 0, "/work")
-
-	if ended || !strings.Contains(result.Failure, "stall") {
-		t.Fatalf("watch = %+v, ended %v; want heartbeat だけが続くので stall で止める", result, ended)
+	if got := w.sinceProgress(started.Add(70 * time.Second)); got != 20*time.Second {
+		t.Fatalf("progress が途絶えた時間 = %s, want task_progress で時計が戻って 20s", got)
 	}
 }
 
-func TestLineCountedAsActivityResetsTheStallClockEvenWithTheSameSummary(t *testing.T) {
+func TestProgressPushedOutOfTheActivityTailStillResetsTheStallClock(t *testing.T) {
+	started := time.Now()
+	w, _ := stallClock(t, started, time.Minute)
+	read := `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/work/big.go"}}]}}` + "\n"
+
+	// 1 回の確認のあいだに、progress の後へ 64 KiB を超える heartbeat が続く
+	write(t, w, read+strings.Repeat(heartbeat, tailLimit/len(heartbeat)+1))
+	w.check(started.Add(50 * time.Second))
+
+	if got := w.sinceProgress(started.Add(70 * time.Second)); got != 20*time.Second {
+		t.Fatalf("progress が途絶えた時間 = %s, want 末尾の窓から押し出された tool_use で時計が戻って 20s", got)
+	}
+}
+
+func TestProgressWithTheSameSummaryResetsTheStallClock(t *testing.T) {
 	started := time.Now()
 	w, _ := stallClock(t, started, time.Minute)
 	appendAt(t, w, text("同じ"), started.Add(10*time.Second))
@@ -105,8 +93,43 @@ func TestLineCountedAsActivityResetsTheStallClockEvenWithTheSameSummary(t *testi
 
 	appendAt(t, w, text("同じ"), started.Add(50*time.Second))
 
-	if got := w.inactiveFor(started.Add(70 * time.Second)); got != 20*time.Second {
-		t.Fatalf("活動が途絶えた時間 = %s, want 直前と同じ要約の行で時計が戻って 20s", got)
+	if got := w.sinceProgress(started.Add(70 * time.Second)); got != 20*time.Second {
+		t.Fatalf("progress が途絶えた時間 = %s, want 直前と同じ要約の行で時計が戻って 20s", got)
+	}
+}
+
+func TestShrinkingTheStreamDoesNotResetTheStallClock(t *testing.T) {
+	started := time.Now()
+	w, _ := stallClock(t, started, time.Minute)
+	appendAt(t, w, text("前"), started.Add(10*time.Second))
+
+	if err := os.Truncate(w.file.Name(), 0); err != nil {
+		t.Fatal(err)
+	}
+	w.check(started.Add(30 * time.Second))
+
+	if got := w.sinceProgress(started.Add(30 * time.Second)); got != 20*time.Second {
+		t.Fatalf("progress が途絶えた時間 = %s, want 縮んだこと自体では戻らず 20s", got)
+	}
+}
+
+func TestProgressWrittenAfterTheStreamShrankResetsTheStallClock(t *testing.T) {
+	started := time.Now()
+	w, _ := stallClock(t, started, time.Minute)
+	appendAt(t, w, text("前の長い行"), started.Add(10*time.Second))
+	if err := os.Truncate(w.file.Name(), 0); err != nil {
+		t.Fatal(err)
+	}
+	w.check(started.Add(20 * time.Second))
+
+	write(t, w, text("後"))
+	activity, changed := w.check(started.Add(30 * time.Second))
+
+	if got := w.sinceProgress(started.Add(30 * time.Second)); got != 0 {
+		t.Fatalf("progress が途絶えた時間 = %s, want 縮んだ後に書かれた行で時計が戻って 0s", got)
+	}
+	if !changed || activity != "後" {
+		t.Fatalf("活動 = %q, %v; want 縮んだ後の行を頭から見て 後", activity, changed)
 	}
 }
 
@@ -127,13 +150,122 @@ func TestStallClockDoesNotResetWhileTheStreamCannotBeRead(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	summary, ok := observeAt(t, w, started.Add(30*time.Second))
+	activity, changed := w.check(started.Add(30 * time.Second))
 
-	if !ok || !strings.HasPrefix(summary, "stream を読めない") {
-		t.Fatalf("活動 = %q, %v; want stream を読めない", summary, ok)
+	if !changed || !strings.HasPrefix(activity, "stream を読めない") {
+		t.Fatalf("活動 = %q, %v; want stream を読めない", activity, changed)
 	}
-	if got := w.inactiveFor(started.Add(30 * time.Second)); got != 20*time.Second {
-		t.Fatalf("活動が途絶えた時間 = %s, want 読めないあいだは戻らず 20s", got)
+	if got := w.sinceProgress(started.Add(30 * time.Second)); got != 20*time.Second {
+		t.Fatalf("progress が途絶えた時間 = %s, want 読めないあいだは戻らず 20s", got)
+	}
+}
+
+func TestStallClockDoesNotResetWhileTheStreamCannotBeStatted(t *testing.T) {
+	started := time.Now()
+	w, _ := stallClock(t, started, time.Minute)
+	appendAt(t, w, text("前"), started.Add(10*time.Second))
+	write(t, w, text("後"))
+	w.file.Close()
+
+	activity, changed := w.check(started.Add(30 * time.Second))
+
+	if !changed || !strings.HasPrefix(activity, "stream を読めない") {
+		t.Fatalf("活動 = %q, %v; want stream を読めない", activity, changed)
+	}
+	if got := w.sinceProgress(started.Add(30 * time.Second)); got != 20*time.Second {
+		t.Fatalf("progress が途絶えた時間 = %s, want 大きさを確かめられないあいだは戻らず 20s", got)
+	}
+}
+
+func TestStreamIsReadAgainAfterItCouldNotBeReadEvenWithoutGrowing(t *testing.T) {
+	started := time.Now()
+	w, _ := stallClock(t, started, time.Minute)
+	// 名前を外すと読み出せず、戻すと伸びないまま読める
+	aside := w.file.Name() + ".aside"
+	write(t, w, text("後"))
+	if err := os.Rename(w.file.Name(), aside); err != nil {
+		t.Fatal(err)
+	}
+	w.check(started.Add(10 * time.Second))
+	if err := os.Rename(aside, w.file.Name()); err != nil {
+		t.Fatal(err)
+	}
+
+	activity, changed := w.check(started.Add(20 * time.Second))
+
+	if got := w.sinceProgress(started.Add(20 * time.Second)); got != 0 {
+		t.Fatalf("progress が途絶えた時間 = %s, want 読み直して、読めないあいだに書かれた行で時計が戻って 0s", got)
+	}
+	if !changed || activity != "後" || w.readError != "" {
+		t.Fatalf("活動 = %q, %v, 読めない理由 %q; want 読み直して 後", activity, changed, w.readError)
+	}
+}
+
+// watchAt は watch を別の goroutine で走らせ、ticks の時刻で確かめさせる。watch が途中で終われば、その時点で返す。
+func watchAt(t *testing.T, r Runner, w *streamWatch, started time.Time, ticks ...time.Time) (result Result, ended bool, returned bool) {
+	t.Helper()
+	tick := make(chan time.Time)
+	type outcome struct {
+		result Result
+		ended  bool
+	}
+	out := make(chan outcome, 1)
+	run := &Run{stop: make(chan struct{})}
+	go func() {
+		result, ended := r.watch(make(chan error), run, w, started, tick)
+		out <- outcome{result, ended}
+	}()
+	for _, now := range ticks {
+		select {
+		case tick <- now:
+		case o := <-out:
+			return o.result, o.ended, true
+		}
+	}
+	// 最後の確認を済ませたかを、もう 1 回送れるかで確かめる (送れれば最後の確認では終わっていない)
+	select {
+	case o := <-out:
+		return o.result, o.ended, true
+	case tick <- ticks[len(ticks)-1]:
+		run.Stop()
+		<-out
+		return Result{}, false, false
+	}
+}
+
+func TestWatchStopsAWorkerThatWritesOnlyHeartbeats(t *testing.T) {
+	started := time.Now()
+	w, r := stallClock(t, started, time.Minute)
+	write(t, w, heartbeat)
+
+	result, ended, returned := watchAt(t, r, w, started, started.Add(30*time.Second), started.Add(61*time.Second))
+
+	if !returned || ended || !strings.Contains(result.Failure, "stall") {
+		t.Fatalf("watch = %+v, ended %v, 返った %v; want heartbeat だけが続くので stall で止める", result, ended, returned)
+	}
+}
+
+func TestWatchWaitsForTheStallTimeoutWhenTheStreamCannotBeStatted(t *testing.T) {
+	started := time.Now()
+	w, r := stallClock(t, started, time.Minute)
+	w.file.Close()
+
+	_, _, returned := watchAt(t, r, w, started, started.Add(250*time.Millisecond), started.Add(59*time.Second))
+
+	if returned {
+		t.Fatal("大きさを確かめられないだけで、stall の上限を待たずに止めた")
+	}
+}
+
+func TestWatchStallsWithTheReasonWhenTheStreamCannotBeStattedPastTheTimeout(t *testing.T) {
+	started := time.Now()
+	w, r := stallClock(t, started, time.Minute)
+	w.file.Close()
+
+	result, _, returned := watchAt(t, r, w, started, started.Add(250*time.Millisecond), started.Add(61*time.Second))
+
+	if !returned || !strings.Contains(result.Failure, "stall") || !strings.Contains(result.Failure, "stream を読めない") {
+		t.Fatalf("watch = %+v, 返った %v; want stall で止め、読めない理由を添える", result, returned)
 	}
 }
 
