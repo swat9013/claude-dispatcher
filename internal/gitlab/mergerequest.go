@@ -2,6 +2,7 @@ package gitlab
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -188,7 +189,9 @@ func (s Store) openMergeRequests() ([]target.CL, error) {
 	if err != nil {
 		return nil, err
 	}
-	s.requestRecheck(cls)
+	if err := s.requestRecheck(cls); err != nil {
+		return cls, &target.NonFatal{Place: s.project.String(), Err: err}
+	}
 	return cls, nil
 }
 
@@ -212,7 +215,6 @@ func (s Store) mergeRequest(iid int) (target.CL, error) {
 	if err != nil {
 		return target.CL{}, err
 	}
-	s.requestRecheck(cls)
 	return cls[0], nil
 }
 
@@ -317,25 +319,32 @@ func (s Store) readCollaborators(userIDs []int) (collaborators, error) {
 
 // requestRecheck は、conflict を計算し終えていない CL について、計算し直しを GitLab に求める (REST の一覧の
 // with_merge_status_recheck。結果は次の観測で読む)。GraphQL の読み出しは計算し直しを起こさないので、これが無いと計算し終えない
-// まま残る。GitLab が計算し直すのは、glab の user が Developer 以上のときだけ。
+// まま残る。GitLab が計算し直すのは、glab の user が Developer 以上のときだけ。求めるのは一覧の観測だけで、起動の直前の読み直し
+// では求めない (次の観測の一覧で求める)。
 //
-// 求めが落ちても観測は失敗にしない。読み終えた CL は正しく、落ちた分の CL は conflict を決められないまま次の観測で求め直される
-// ので、conflict と関係の無い trigger までその tick に止めない (guide.md の gitlab の merge request の往復)。
-func (s Store) requestRecheck(cls []target.CL) {
+// 落ちた束があっても残りの束は求め、落ちた束の失敗を 1 行にまとめて返す。呼び出し側は観測を失敗にせず、処理を続けられる失敗として
+// 返す (formats.md §3)。
+func (s Store) requestRecheck(cls []target.CL) error {
 	var iids []int
 	for _, cl := range cls {
 		if cl.Mergeable == target.MergeUnknown {
 			iids = append(iids, cl.Number)
 		}
 	}
+	var failed []string
 	for batch := range chunks(iids, connectionSize) {
 		query := make([]string, len(batch))
 		for i, iid := range batch {
 			query[i] = "iids[]=" + strconv.Itoa(iid)
 		}
-		// 落ちた束があっても、残りの束は求める (束ごとに独立した求め)
-		_, _ = s.get(s.endpoint("merge_requests?" + strings.Join(query, "&") + "&with_merge_status_recheck=true&per_page=" + strconv.Itoa(connectionSize)))
+		if _, err := s.get(s.endpoint("merge_requests?" + strings.Join(query, "&") + "&with_merge_status_recheck=true&per_page=" + strconv.Itoa(connectionSize))); err != nil {
+			failed = append(failed, fmt.Sprintf("conflict の計算し直しの求め (!%d から %d 本): %v", batch[0], len(batch), summarizeForbidden(err)))
+		}
 	}
+	if len(failed) == 0 {
+		return nil
+	}
+	return errors.New(strings.Join(failed, " / "))
 }
 
 // chunks は list を size 個ずつに分ける。

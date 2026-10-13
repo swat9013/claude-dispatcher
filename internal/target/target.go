@@ -177,6 +177,20 @@ func (f *Failure) Error() string {
 
 func (f *Failure) Unwrap() error { return f.Err }
 
+// NonFatal は、作業対象は読めたが、観測の結果を変えない補助の要求 (GitLab に conflict の計算し直しを求める、など) が落ちた
+// こと (formats.md §3)。置き場の部品は読んだ作業対象とともに返す。受け手は作業対象で処理を続け、この失敗を運用者に見せる。
+type NonFatal struct {
+	// Place は読もうとした置き場 (`acme/widgets` など)
+	Place string
+	Err   error
+}
+
+func (n *NonFatal) Error() string {
+	return fmt.Sprintf("置き場 %s の補助の要求が落ちた: %v", n.Place, n.Err)
+}
+
+func (n *NonFatal) Unwrap() error { return n.Err }
+
 // UnknownNames は、workflow 定義が書いた名前 (status 名・issue type 名など) が置き場に実在しないこと。1 件 1 行の Problems
 // で名指しする。workflow 定義の誤りなので、観測の失敗 (Failure) と分ける。
 type UnknownNames struct {

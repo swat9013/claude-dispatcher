@@ -33,6 +33,8 @@ type tickPlan struct {
 	scope string
 	// fail が nil でなければ、置き場の観測がこの失敗を返す
 	fail error
+	// nonFatal が nil でなければ、置き場の観測が作業対象とともにこの処理を続けられる失敗を返す
+	nonFatal error
 	// stopDuring が nil でなければ、この tick の観測の途中に停止要求を送る
 	stopDuring os.Signal
 	// blocked はこの tick の事前検査に落ちる trigger の名前
@@ -199,7 +201,7 @@ func (h *harness) run(t *testing.T) []string {
 				for i, n := range numbers {
 					issues[i] = target.Issue{Number: n}
 				}
-				return issues, nil
+				return issues, plan.nonFatal
 			}, reread: func(ref target.Ref) (target.Item, error) {
 				if !slices.ContainsFunc(h.jobs, func(j worker.Job) bool { return j.Item.Ref() == ref }) {
 					return target.Issue{Number: ref.Number}, nil
@@ -322,6 +324,18 @@ func TestFailedObservationIsReportedWithItsKind(t *testing.T) {
 
 	if !strings.HasSuffix(lines[0], "tick error · 置き場 acme/widgets を観測できない (rate limit): API rate limit exceeded") {
 		t.Fatalf("出力:\n%s", h.stdout.String())
+	}
+}
+
+func TestNonFatalObservationFailureLeavesAnErrorLineAndTheTickGoesOn(t *testing.T) {
+	recheckFailed := &target.NonFatal{Place: "acme/widgets", Err: errors.New("HTTP 502")}
+	h := &harness{plans: []tickPlan{{load: good(time.Minute), nonFatal: recheckFailed}}}
+
+	h.run(t)
+
+	out := h.stdout.String()
+	if !strings.Contains(out, "error: 置き場 acme/widgets の補助の要求が落ちた: HTTP 502") || !strings.Contains(out, "tick ok · 候補 1: implement issue #1") {
+		t.Fatalf("出力:\n%s", out)
 	}
 }
 

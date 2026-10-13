@@ -428,7 +428,7 @@ func TestGraphQLFailureWithAStatusIsClassifiedWithoutTheRESTProbe(t *testing.T) 
 	}
 }
 
-func TestFailedRecheckRequestLeavesTheConflictUndecidedWithoutFailingTheObservation(t *testing.T) {
+func TestFailedRecheckRequestReturnsTheMergeRequestsWithANonFatalFailure(t *testing.T) {
 	unchecked := openMR(1)
 	unchecked.mergeStatus = "UNCHECKED"
 	g := glab{
@@ -439,8 +439,28 @@ func TestFailedRecheckRequestLeavesTheConflictUndecidedWithoutFailingTheObservat
 
 	items, err := gitlab.NewStore(g, project).OpenCLs()
 
-	if err != nil || len(items) != 2 || items[0].(target.CL).Mergeable != target.MergeUnknown {
-		t.Fatalf("items = %v, err = %v", items, err)
+	var nonFatal *target.NonFatal
+	if !errors.As(err, &nonFatal) || len(items) != 2 || items[0].(target.CL).Mergeable != target.MergeUnknown {
+		t.Fatalf("items = %v, err = %v, want 一覧と処理を続けられる失敗", items, err)
+	}
+}
+
+func TestRereadDoesNotAskForARecheck(t *testing.T) {
+	// 計算し直しは一覧の観測で求める
+	m := openMR(7)
+	m.mergeStatus = "UNCHECKED"
+	var endpoints []string
+	g := recording{glab{
+		"graphql:MergeRequest?" + fullPath + "&iid=7": single(t, &m),
+		membersEndpoint: members(t, map[int]int{1: 30}),
+		recheckEndpoint: {stdout: "[]"},
+	}, &endpoints}
+
+	item, err := gitlab.NewStore(g, project).ReadCL(7)
+
+	asked := slices.ContainsFunc(endpoints, func(e string) bool { return strings.Contains(e, "with_merge_status_recheck") })
+	if err != nil || item.(target.CL).Mergeable != target.MergeUnknown || asked {
+		t.Fatalf("item = %v, err = %v, endpoints = %q", item, err, endpoints)
 	}
 }
 

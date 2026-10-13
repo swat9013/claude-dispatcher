@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/swat9013/claude-dispatcher/test/blackbox/stubwire"
@@ -265,4 +266,37 @@ func TestGitLabMergeRequestsFromTheSameBranchAreAmbiguousButAForkIsAnotherBranch
   - {name: u, on: cl, action: /t}`, first, second, fromFork)
 
 	assertCandidates(t, r, mrCandidate("t", 3))
+}
+
+func TestGitLabFailedRecheckRequestStillListsTheCandidatesAndNamesTheFailure(t *testing.T) {
+	s := newSandbox(t)
+	unchecked, clean := readyMR(1), readyMR(2)
+	unchecked.mergeStatus = "UNCHECKED"
+	s.writeWorkflowWithCommands(gitlabWorkflowWithTriggers(`
+  - {name: t, on: cl, action: /t}`))
+	recheckFails := stubwire.Rule{ArgsPrefix: glabAPI(), ArgsContain: []string{"with_merge_status_recheck=true"}, Stderr: "glab: HTTP 502\n", Exit: 1}
+	s.respondAll("glab", append([]stubwire.Rule{recheckFails}, glabStoreRules(nil, []glMR{unchecked, clean})...))
+
+	r := s.dryRun()
+
+	assertCandidates(t, r, mrCandidate("t", 1), mrCandidate("t", 2))
+	if !strings.Contains(r.stderr, "補助の要求が落ちた") {
+		t.Fatalf("stderr に計算し直しの求めの失敗が無い:\n%s", r.stderr)
+	}
+}
+
+func TestGitLabDoctorKeepsThePlaceOKAndNamesAFailedRecheckRequest(t *testing.T) {
+	s := newSandbox(t)
+	unchecked := readyMR(1)
+	unchecked.mergeStatus = "UNCHECKED"
+	s.writeWorkflowWithCommands(gitlabWorkflowWithTriggers(`
+  - {name: t, on: cl, when: {head: "worktree-issue-*"}, action: /t}`))
+	recheckFails := stubwire.Rule{ArgsPrefix: glabAPI(), ArgsContain: []string{"with_merge_status_recheck=true"}, Stderr: "glab: HTTP 502\n", Exit: 1}
+	s.respondAll("glab", append([]stubwire.Rule{recheckFails}, glabStoreRules(nil, []glMR{unchecked})...))
+
+	r := s.run("doctor")
+
+	if !strings.Contains(r.stdout, "ok   issue 置き場 "+gitlabScopeKey+" (補助の要求が落ちた: ") {
+		t.Fatalf("issue 置き場の ok の行に計算し直しの求めの失敗が無い:\n%s", r.stdout)
+	}
 }
