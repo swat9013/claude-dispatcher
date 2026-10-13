@@ -378,6 +378,7 @@ CLI の中で、呼び出し側から中身を隠す部品と、差し替えの�
   - adapter は、サービス固有の応答の形が部品の外へ漏れないよう、正規化した作業対象へ写す Anti-Corruption Layer にあたる。写すのは読むときだけで、写しを保存しない
   - issue と CL の紐づけは返さない (ADR 0009)
   - 失敗は 認証 / 見えない / 読み切れない / rate limit に分けて返す (SPEC §11.4)
+  - 一覧は読めたが、観測の結果を変えない補助の要求 (GitLab に conflict の計算し直しを求める、など) が落ちたときは、一覧とともに処理を続けられる失敗 (non-fatal) を返す。loop は一覧で tick を続け、その失敗を log.jsonl の `error` の行に残す (formats.md §3)
   - scope key は issue 置き場の部品が返す。tracker ごとの粒度 (GitHub は owner と repo、GitLab は host と repo の path、Jira は site と project key) を部品の外に出さない
   - Jira の作業対象の番号は issue の key (`WIDGETS-123`) の数字の部分。scope key が project key を含むので、scope の中で一意になる (ADR 0010)。project key を改名したら scope key が変わるので、workflow 定義を書き換えて loop を起動し直す
   - どの adapter で組み立てるかは、workflow 定義の `tracker.kind` の provider が決める
