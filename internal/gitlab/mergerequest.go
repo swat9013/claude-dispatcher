@@ -2,7 +2,6 @@ package gitlab
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -144,9 +143,9 @@ func (s Store) graphqlFailure(err error) *target.Failure {
 		return s.fail(classify(err), err)
 	}
 	if _, probe := s.get("projects/" + url.PathEscape(s.project.Path)); probe != nil {
-		failure := s.fail(classify(probe), probe)
-		failure.Err = errors.Join(summarizeForbidden(err), failure.Err)
-		return failure
+		// 2 つの失敗を 1 行に並べる。s.fail は 1 つ目の glab の失敗だけを 403 の理由に置き換えるので通さない
+		joined := fmt.Errorf("GraphQL の問い合わせ: %w / REST の project の読み出し: %w", summarizeForbidden(err), summarizeForbidden(probe))
+		return &target.Failure{Kind: classify(probe), Place: s.project.String(), Err: joined}
 	}
 	return s.fail(target.Unavailable, err)
 }
@@ -334,9 +333,8 @@ func (s Store) requestRecheck(cls []target.CL) {
 		for i, iid := range batch {
 			query[i] = "iids[]=" + strconv.Itoa(iid)
 		}
-		if _, err := s.get(s.endpoint("merge_requests?" + strings.Join(query, "&") + "&with_merge_status_recheck=true&per_page=" + strconv.Itoa(connectionSize))); err != nil {
-			return
-		}
+		// 落ちた束があっても、残りの束は求める (束ごとに独立した求め)
+		_, _ = s.get(s.endpoint("merge_requests?" + strings.Join(query, "&") + "&with_merge_status_recheck=true&per_page=" + strconv.Itoa(connectionSize)))
 	}
 }
 
@@ -403,9 +401,12 @@ var mergeability = map[string]target.Mergeability{
 	"CANNOT_BE_MERGED_RECHECK": target.MergeUnknown,
 }
 
-// accessLevels は maxAccessLevelOfAuthor の名前を、REST の member の access_level の値に写す。collaborator かは
-// developerAccess と比べて決める (REST の member の読み出しと同じ線)。載っていない名前は Developer より下として扱う
-var accessLevels = map[string]int{"Developer": 30, "Maintainer": 40, "Owner": 50}
+// accessLevels は maxAccessLevelOfAuthor の名前を、GitLab の access level の値 (REST の member の access_level) に写す。
+// collaborator かは developerAccess と比べて決める (REST の member の読み出しと同じ線)。載っていない名前は 0 (member でない) と
+// して扱う
+var accessLevels = map[string]int{
+	"Minimal Access": 5, "Guest": 10, "Planner": 15, "Reporter": 20, "Developer": developerAccess, "Maintainer": 40, "Owner": 50,
+}
 
 // reviewUnresolved は、collaborator が書いた未解決の discussion が 1 本以上あるか (cl.review_unresolved)。discussion の書き手は
 // 最初の note の作者で、最初の note が system note の discussion は数えない。

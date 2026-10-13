@@ -443,3 +443,25 @@ func TestFailedRecheckRequestLeavesTheConflictUndecidedWithoutFailingTheObservat
 		t.Fatalf("items = %v, err = %v", items, err)
 	}
 }
+
+func TestRecheckIsAskedOncePerHundredUndecidedMergeRequests(t *testing.T) {
+	var undecided []mr
+	for iid := 1; iid <= 101; iid++ {
+		m := openMR(iid)
+		m.mergeStatus = "UNCHECKED"
+		undecided = append(undecided, m)
+	}
+	var endpoints []string
+	g := recording{glab{
+		openMergeRequests: listPage(t, "", undecided...),
+		membersEndpoint:   members(t, map[int]int{1: 30}),
+		recheckEndpoint:   {stdout: "[]"},
+	}, &endpoints}
+
+	_, err := gitlab.NewStore(g, project).OpenCLs()
+
+	rechecks := slices.DeleteFunc(endpoints, func(e string) bool { return !strings.Contains(e, "with_merge_status_recheck") })
+	if err != nil || len(rechecks) != 2 {
+		t.Fatalf("計算し直しの求め = %d 回, err = %v, want 2 回 (100 本と 1 本)", len(rechecks), err)
+	}
+}
