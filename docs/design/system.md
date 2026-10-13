@@ -315,7 +315,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。
   - 雛形は `--permission-mode auto` を置く
   - permission 層を外すかどうかは利用者が決める
 - **依存 CLI (置き場の CLI・claude・git) の path は CLI が自分でも解決する**。最小の PATH の shell (ssh 越しなど) から起動されても動くようにする
-  - 解決するのは workflow 定義が撃つ CLI だけ。tracker の CLI は `tracker.kind` で決まる (`github` は gh、`gitlab` は glab、`jira` は acli)。`cl:` を書いたら `cl.kind` の CLI (gh か glab) も撃つ。使わない置き場の CLI が無いことは、PATH を書き換える理由にしない
+  - 解決するのは workflow 定義が撃つ CLI だけ。tracker の CLI は `tracker.kind` で決まる (`github` は gh、`gitlab` は glab、`jira` は acli)。`jira` では `cl.kind` の CLI (gh か glab) も撃つ。使わない置き場の CLI が無いことは、PATH を書き換える理由にしない
 - **試運転**
   - 1 tick 分の読み直し・事前検査・trigger の評価までを通し、起動する直前で止めて、起動するはずの作業対象と trigger を示す
   - state dir に何も書かない
@@ -359,7 +359,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。
 - **SPEC §13.7 の HTTP API と dashboard**: 観測は loop の画面・状態 file・`status` で足りる
 - **GitHub・GitLab・Jira 以外の tracker / CL host**: tracker の adapter を足す形で広げる (§13)。scope key の粒度は adapter が決める
   - GitLab と GitHub は、issue 置き場と同じ場所を CL 置き場とする構成だけを扱う。issue 置き場と別の CL 置き場を宣言できるのは `tracker.kind: jira` のときだけ (`cl:`)
-  - Jira は Jira Cloud の issue 置き場だけを扱う。Jira に CL 置き場は無く、CL 側の trigger を書くには `cl:` で GitHub か GitLab の CL 置き場を宣言する
+  - Jira は Jira Cloud の issue 置き場だけを扱う。Jira に CL 置き場は無いので、`cl:` で GitHub か GitLab の CL 置き場をかならず宣言する。project の CL 置き場はちょうど 1 つ (ADR 0015)
   - Jira Data Center / Server は扱わない (acli が Jira Cloud だけを扱う)
 - **1 つの Jira project を複数の repo で分けて回す区分** (component・JQL・board): 1 つの Jira project は 1 本の loop と 1 つの実装 repo で回す。同じ project の 2 本目の loop は scope key の lock で止まる (§9)
 
@@ -386,7 +386,7 @@ CLI の中で、呼び出し側から中身を隠す部品と、差し替えの�
 - **tracker の種類の知識は provider に閉じる**
   - provider はサービス (github / gitlab / jira) ごとに 1 つ持つ。役割 (tracker / CL host) ごとに、支えるもの (設定・述語・template 変数)・作業対象の呼び方 (`#` / `!` / key)・Claude Code の settings の entry を宣言し、置き場の読み方と部品の組み立てを持つ
   - workflow 定義の検査・`setup`・`doctor`・loop の組み立ては、種類で分岐せずに provider を引く。種類を足すときは provider を 1 つ足す
-  - 宣言を書けるかは、その宣言が属する置き場の役割を担う provider の、その役割の宣言で決める。issue 側の述語と `tracker.*` は issue 置き場の provider が、CL 側の述語は CL 置き場の provider が決める。`on: cl` は CL 置き場の provider が居るかで決まる (github・gitlab は issue 置き場と同じ provider、jira は `cl:` の `kind` の provider)
+  - 宣言を書けるかは、その宣言が属する置き場の役割を担う provider の、その役割の宣言で決める。issue 側の述語と `tracker.*` は issue 置き場の provider が、CL 側の述語は CL 置き場の provider が決める。CL 置き場の provider は、github・gitlab では issue 置き場と同じ provider、jira では `cl:` の `kind` の provider。issue 置き場の provider が CL 置き場の役割を持たなければ `cl:` を必須にし、どの workflow 定義にも CL 置き場の provider がちょうど 1 つある (ADR 0015)
   - 支える宣言の無いものは支えないものとして扱い、名指しで失敗させる (§8)
   - provider は seam ではない。adapter を差し替える口ではなく、どの adapter を組むかを種類から引く表なので、テストの adapter を持たない
 - **起動部は、1 つの worker の起動・stream の読み取り・停止・回収を 1 つの部品に閉じる** (ADR 0005)

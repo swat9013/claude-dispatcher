@@ -235,7 +235,7 @@ fix-ci	cl	#51	ログインの失敗を記録する
 
 - 列はタブで区切る: trigger の名前・作業対象の種類 (`issue` / `cl`)・参照・題名
 - 参照は tracker の綴りで書く: issue と GitHub の CL は `#<番号>`、GitLab の CL (merge request) は `!<番号>`、Jira の issue は key (`WIDGETS-123`)。GitLab では issue と merge request が別々に番号を振るので、同じ番号が両方にありうる
-- `jira` では、snapshot を作る前に issue 置き場を確かめる (§6 の「起動時の検査」の `jira` の行と同じもの)。`cl:` を書いていれば、続けて CL 置き場も確かめる (同じく §6)
+- `jira` では、snapshot を作る前に issue 置き場を確かめる (§6 の「起動時の検査」の `jira` の行と同じもの)。続けて `cl:` の CL 置き場も確かめる (同じく §6)
 - 題名の制御文字 (タブ・改行・ESC など) は空白に置き換える
 
 観測の補助の要求が落ちたとき (§3) は失敗にせず、候補を出し、stderr に理由を出して exit 0 で終わる。
@@ -257,9 +257,9 @@ claude-dispatcher loop [<workflow の path>]
 | 引数の数と flag | 2 |
 | workflow 定義を読めて、検査に通る (§2.8) | 2 |
 | 事前検査 (§2.9) に通る | 2 |
-| tracker の CLI (`tracker.kind` が `github` なら gh、`gitlab` なら glab、`jira` なら acli)・`cl:` を書いていれば `cl.kind` の CLI (gh か glab)・`claude.command` を解決できる (PATH と、よく使われる置き場)。`on: cl` の trigger があれば git も | 1 |
+| tracker の CLI (`tracker.kind` が `github` なら gh、`gitlab` なら glab、`jira` なら acli)・`jira` では `cl.kind` の CLI (gh か glab)・`claude.command` を解決できる (PATH と、よく使われる置き場)。`on: cl` の trigger があれば git も | 1 |
 | `jira` だけ: issue 置き場の確認 (下) | 下 |
-| `cl:` を書いていれば: CL 置き場の確認 (下)。`on: cl` の trigger が無くても撃つ | 下 |
+| `jira` だけ: `cl:` の CL 置き場の確認 (下)。`on: cl` の trigger が無くても撃つ | 下 |
 | state dir を作れる | 1 |
 | 同じ scope key の loop が走っていない (`loop.lock` を取れる) | 3 |
 
@@ -649,10 +649,10 @@ triggers:
 
 1. workflow 定義を読めて、検査 (§2.8) に通る。落ちたら誤りを 1 件 1 行の `NG` の行に出し、後ろに案内を指す行を足して (§2.8)、以降は確かめない
 2. tracker の CLI (gh・glab・acli) の認証が通り、issue 置き場が見える (open な作業対象を読める)。issue 置き場は `github` なら `<owner>/<name>`、`gitlab` なら `<host>/<path>`、`jira` なら `<site>/<project key>` で出す
-   - `cl:` を書いていれば、続けて loop の起動時と同じ CL 置き場の確認 (§6) を通し、`ok   CL 置き場 <置き場>` か `NG   CL 置き場 <置き場>: <理由>` の行を出す。置き場は `cl.kind` が `github` なら `<owner>/<name>`、`gitlab` なら `<host>/<path>` で出す
+   - `jira` は、続けて loop の起動時と同じ `cl:` の CL 置き場の確認 (§6) を通し、`ok   CL 置き場 <置き場>` か `NG   CL 置き場 <置き場>: <理由>` の行を出す。置き場は `cl.kind` が `github` なら `<owner>/<name>`、`gitlab` なら `<host>/<path>` で出す
    - `jira` は loop の起動時と同じ issue 置き場の確認 (§6) を通す。落ちたら理由を `NG` の行に出す (存在しない status 名と issue type 名は、1 つ 1 行で trigger と一緒に名指しする)
    - 観測の補助の要求が落ちたとき (§3) は `NG` にせず、`ok` の行の後ろに ` (補助の要求が落ちた: <理由>)` を足す
-3. tracker の CLI・`cl:` を書いていれば `cl.kind` の CLI・`claude.command` を解決できる。`on: cl` の trigger があれば git も (loop の起動時の検査と同じ。§6)
+3. tracker の CLI・`jira` では `cl.kind` の CLI・`claude.command` を解決できる。`on: cl` の trigger があれば git も (loop の起動時の検査と同じ。§6)
 4. 事前検査 (§2.9)。落ちた trigger ごとに `NG` の行
 5. 利用者の約束に頼る宣言を `警告` の行に出す (system.md §11)
    - `approved: true` の CL 側の trigger (merge を worker に任せうる)
@@ -660,7 +660,7 @@ triggers:
 6. Claude Code の settings (`permissions.allow`) に要りそうな entry を、issue 置き場の役割・CL 置き場の役割・共通の順に表示する。各役割の entry は、その置き場の provider (CL 置き場は `github`・`gitlab` では `tracker.kind`、`jira` では `cl.kind`) から引く。CLI は settings を書かない (ADR 0004)
    - `github`: `Bash(gh issue:*)`・`Bash(gh pr:*)`・`Bash(git push:*)`
    - `gitlab`: `Bash(glab issue:*)`・`Bash(glab mr:*)`・`Bash(git push:*)`
-   - `jira`: `Bash(acli jira workitem:*)` と、`cl:` を書いていれば `cl.kind` の CL 置き場の entry (`Bash(gh pr:*)` か `Bash(glab mr:*)`) と、`Bash(git push:*)`
+   - `jira`: `Bash(acli jira workitem:*)` と、`cl.kind` の CL 置き場の entry (`Bash(gh pr:*)` か `Bash(glab mr:*)`) と、`Bash(git push:*)`
 
 ```
 ok   workflow 定義 /path/to/WORKFLOW.md

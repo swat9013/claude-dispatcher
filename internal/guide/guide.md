@@ -168,7 +168,7 @@ triggers:                    # 必須。1 つ以上
 | `tracker.host` | 文字列 | `gitlab` と `jira` でだけ書ける。`$VAR` で書ける。`github` で書くと未知の key<br>- `gitlab`: GitLab の host 名 (`gitlab.example.com`)。既定 `gitlab.com`<br>- `jira`: Jira Cloud の site (`acme.atlassian.net`)。既定を持たず必須。綴りは `[A-Za-z0-9.-]+` |
 | `tracker.repo` | 文字列 | issue 置き場。`github` は `<owner>/<name>`、`gitlab` は `<group>/<name>` の段数を問わない path (`acme/sub/widgets`。どの段も `[A-Za-z0-9._-]+`)、`jira` は Jira の project key (`WIDGETS`。`[A-Za-z][A-Za-z0-9_]*`。大文字に揃えて読む)。`$VAR` で書ける |
 | `tracker.token` | 文字列 | `github` でだけ書ける。gh に環境変数 `GH_TOKEN` として渡す token。`$VAR` でだけ書ける (値そのものを書かない)。省くと、loop を起動した環境の認証を gh がそのまま使う。ssh 越しの shell などで gh の認証を取れないときに使う |
-| `cl` | 対応表 | issue 置き場と別の CL 置き場。`tracker.kind: jira` でだけ書ける (`github`・`gitlab` は issue 置き場と同じ場所が CL 置き場)。CL 側の trigger (`on: cl`) を書くなら要る。書いたら、`on: cl` の trigger が無くても、`loop` の起動時・試運転・`doctor` で CL 置き場の open な一覧を 1 回読んで確かめる。token は持たず、gh / glab 自身の認証 (`gh auth login` / `glab auth login`) を使う |
+| `cl` | 対応表 | issue 置き場と別の CL 置き場 (worker が CL を出す repo)。`tracker.kind: jira` でだけ書け、そのときは必須 (`github`・`gitlab` は issue 置き場と同じ場所が CL 置き場)。`on: cl` の trigger が無くても、`loop` の起動時・試運転・`doctor` で CL 置き場の open な一覧を 1 回読んで確かめる。token は持たず、gh / glab 自身の認証 (`gh auth login` / `glab auth login`) を使う |
 | `cl.kind` | 文字列 | 必須。CL 置き場の種類。`github` (gh で読む) か `gitlab` (glab で読む) |
 | `cl.host` | 文字列 | `cl.kind: gitlab` でだけ書ける。GitLab の host 名。既定 `gitlab.com`。`$VAR` で書ける。`github` で書くと未知の key |
 | `cl.repo` | 文字列 | 必須。CL 置き場。綴りは `tracker.repo` の `github` (`<owner>/<name>`)・`gitlab` (`<group>/…/<name>`) と同じ。`$VAR` で書ける |
@@ -188,7 +188,7 @@ triggers:                    # 必須。1 つ以上
 | `claude.args` | 文字列の列 | command に、dispatcher が渡す引数 (上の「action が守る約束」の起動のコマンド) より前に渡す引数。既定は空。permission の扱い (`--permission-mode` など) はここで決める |
 | `triggers` | 列 | trigger の宣言。1 つ以上。宣言順が起動の優先順 (先頭の trigger ほど先に起動する) |
 | `triggers[].name` | 文字列 | trigger の名前。`[A-Za-z0-9._-]+`。trigger の間で重複しない |
-| `triggers[].on` | 文字列 | 作業対象の種類。`issue` か `cl` (`gitlab` では merge request)。`cl` は CL 置き場があるときだけ書ける (`jira` では `cl:` を書いたときだけ) |
+| `triggers[].on` | 文字列 | 作業対象の種類。`issue` か `cl` (`gitlab` では merge request)。`cl` は CL 置き場の CL に当たる (`jira` では `cl:` の CL 置き場) |
 | `triggers[].when` | 対応表 | 述語。書いた条件はすべて AND で評価する。書ける key は `on` で変わる (下の「issue 側の述語」「CL 側の述語」)。省くと、その種類の open な作業対象のすべてに当たる |
 | `triggers[].action` | 文字列 | worker に渡す prompt の template (下の「template」)。空にできない |
 
@@ -202,7 +202,7 @@ triggers:                    # 必須。1 つ以上
 | `tracker.host` | issue | 書けない | 任意 (既定 `gitlab.com`) | 必須 (Jira Cloud の site) |
 | `tracker.repo` | issue | `<owner>/<name>` | `<group>/…/<name>` | project key |
 | `tracker.token` | issue | 書ける | 書けない | 書けない |
-| `cl:` | issue | 書けない | 書けない | 書ける |
+| `cl:` | issue | 書けない | 書けない | 必須 |
 | issue 側の `author` | issue | 書ける | 書ける | 書けない |
 | issue 側の `milestone` | issue | 書ける | 書ける | 書けない |
 | issue 側の `blocked` | issue | 書ける | 書けない | 書ける |
@@ -215,7 +215,7 @@ triggers:                    # 必須。1 つ以上
 
 - `github`・`gitlab` の `cl:`: issue 置き場と同じ場所が CL 置き場なので、別の CL 置き場を宣言しない
 - `gitlab` の `blocked`: GitLab の issue の依存は有償の tier の機能で、CE の API は依存を返さない。読むと常に 0 件になり、`blocked: false` が黙って全件に当たるため
-- Jira を CL 置き場にすること: Jira に CL は無い。`tracker.kind: jira` で CL 側の trigger を書くには、`cl:` で GitHub か GitLab の CL 置き場を宣言する
+- Jira を CL 置き場にすること: Jira に CL は無い。`tracker.kind: jira` では、`cl:` で GitHub か GitLab の CL 置き場をかならず宣言する
 - `jira` の `author`: worker を誰の書き込みで起動してよいかの線を、Jira の権限 (repo の push 権限と別の線) に引けないため
 - `jira` の `milestone`: sprint は無いことがあり、fixVersions は acli の一覧で読めないため
 
@@ -382,7 +382,7 @@ workflow 定義の次のものが誤りで、項目の位置 (`triggers[0].when.
 - 上の表の各項目の制約 (`polling.interval` の範囲・trigger の名前の綴りと重複・`assignee` と `unassigned` の併記・空の `labels.any` / `status.any` / `type.any`・`head` の pattern の綴り・`head` と `same_repo: false` の併記・空の `action`)
 - `$VAR` の未設定と、`tracker.token` に値そのものを書いたこと
 - 置き場のサービスが支えない宣言 (上の「置き場のサービスごとの違い」)。key を書く順 (`triggers` を `tracker` や `cl` より前に書くなど) によらず名指しする
-- `cl.kind` に CL 置き場にならない種類 (`jira`) を書いたこと
+- `tracker.kind: jira` で `cl` を書かないこと・`cl.kind` に CL 置き場にならない種類 (`jira`) を書いたこと
 - action と本文の template を描画できないこと (綴りの誤り・未知の変数・未知の関数)
 - `jira` の次の誤りは、workflow 定義だけでは確かめられないので、`loop` の起動時・試運転・`doctor` で issue 置き場を確かめるときに名指しする。tick の中では確かめない
   - acli の認証の site が `tracker.host` と違う
