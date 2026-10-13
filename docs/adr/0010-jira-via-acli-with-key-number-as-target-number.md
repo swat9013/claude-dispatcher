@@ -1,6 +1,6 @@
 # ADR 0010: Jira を acli で読み、issue の key の番号を作業対象の番号にする
 
-- Status: Accepted
+- Status: Accepted (Context の「`tracker.token` は gh に環境変数で渡すだけ」は ADR 0014 が置き換えた。`tracker.token` は gitlab でも書け、置き場の CLI・worker・hooks のすべてに渡す。jira で書けない部分は残る)
 - Date: 2026-10-06
 
 ## Context
