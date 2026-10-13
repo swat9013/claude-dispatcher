@@ -64,6 +64,10 @@ func unreadableUntilRestored(t *testing.T, w *streamWatch) (restore func()) {
 	if err := os.Mkdir(w.path, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// dir の大きさは file system で違う。前に読めた大きさと同じだと、確かめても伸びていないとして読み出さない
+	if info, err := os.Stat(w.path); err != nil || info.Size() == w.size {
+		t.Fatalf("dir の大きさ %v が前に読めた大きさ %d と同じか、確かめられない (%v)。stream の中身の大きさを変える", info, w.size, err)
+	}
 	return func() {
 		t.Helper()
 		if err := os.Remove(w.path); err != nil {
@@ -274,19 +278,17 @@ func TestProgressWrittenWhileTheStreamCouldNotBeReadResetsTheStallClockOnceItCan
 
 func TestStreamThatCouldNotBeReadIsReadAgainEvenWithoutGrowing(t *testing.T) {
 	started := time.Now()
-	w, _ := stallClock(t, started, time.Minute)
+	w, r := stallClock(t, started, time.Minute)
 	appendAt(t, w, text("前の行")+text("前の行"), started.Add(10*time.Second))
-	// 大きさは読めた時と同じまま、中身を読み出せなくして戻す
+	// 中身を読み出せなくしてから、読めた時と同じ file に戻す (戻した後の確認では、file は伸びていない)
 	restore := unreadableUntilRestored(t, w)
 	w.check(started.Add(20 * time.Second))
 	restore()
+
 	w.check(started.Add(30 * time.Second))
-	unreadableUntilRestored(t, w)
 
-	activity, changed := w.check(started.Add(40 * time.Second))
-
-	if !changed || !strings.HasPrefix(activity, "stream を読めない") {
-		t.Fatalf("活動 = %q, %v; want 伸びていなくても読み直して読めたので、また読めなくなったことを出し直す", activity, changed)
+	if reason := r.overdue(time.Hour, w.sinceProgress(started.Add(80*time.Second)), w.readError); strings.Contains(reason, "読めない") {
+		t.Fatalf("理由 = %q, want 伸びていなくても読み直して読めたので、stall の理由に読めない理由を添えない", reason)
 	}
 }
 

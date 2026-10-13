@@ -195,7 +195,7 @@ func (r Runner) launch(job Job, run *Run, workspacePath string, started func(pid
 		return Result{Failure: fmt.Sprintf("%s を起動できない: %v", claude.Command, err)}
 	}
 	started(cmd.Process.Pid, workspacePath)
-	result := r.wait(cmd, run, stream, before.Size())
+	result := r.wait(cmd, run, stream.Name(), before.Size())
 	// claude の process が終わった後に読むので、claude が書く result の行はそろっている
 	result.ResultSummary, err = summarizeLastResult(stream.Name(), before.Size())
 	if err != nil {
@@ -319,11 +319,11 @@ func (r Runner) render(job Job, workspacePath string) (action, promptFile string
 }
 
 // wait は起動した claude が終わるか、止められるか、stall か上限時間で止めるまで待つ。
-func (r Runner) wait(cmd *exec.Cmd, run *Run, stream *os.File, offset int64) Result {
+func (r Runner) wait(cmd *exec.Cmd, run *Run, stream string, offset int64) Result {
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	ticker := time.NewTicker(watchInterval)
-	result, ended := r.watch(done, run, newStreamWatch(stream.Name(), offset, time.Now(), cmd.Dir), ticker.C)
+	result, ended := r.watch(done, run, newStreamWatch(stream, offset, time.Now(), cmd.Dir), ticker.C)
 	ticker.Stop()
 	if ended {
 		return r.exited(cmd, Result{})
