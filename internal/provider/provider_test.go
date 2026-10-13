@@ -4,6 +4,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/swat9013/claude-dispatcher/internal/deps"
 	"github.com/swat9013/claude-dispatcher/internal/provider"
 	"github.com/swat9013/claude-dispatcher/internal/target"
 )
@@ -46,7 +47,7 @@ func TestEveryProviderEitherSupportsOrDeclinesEachDeclarationWithAReason(t *test
 		p, _ := provider.Of(kind)
 		for _, f := range provider.TrackerFeatures {
 			t.Run(string(kind)+"/"+string(f), func(t *testing.T) {
-				supported := slices.Contains(p.Tracker.Supports, f)
+				supported := p.Supported(f)
 				reason, declined := p.Tracker.Declines[f]
 
 				if supported == declined {
@@ -60,23 +61,13 @@ func TestEveryProviderEitherSupportsOrDeclinesEachDeclarationWithAReason(t *test
 	}
 }
 
-func TestAProviderThatSupportsTheTokenNamesTheVariableItsCommandReads(t *testing.T) {
-	for _, kind := range provider.Kinds() {
-		p, _ := provider.Of(kind)
-
-		if p.Supported(provider.Token) != (p.Tracker.TokenVariable != "") {
-			t.Fatalf("%s: tracker.token を支える (%v) のに渡す環境変数 %q の宣言が合わない", kind, p.Supported(provider.Token), p.Tracker.TokenVariable)
-		}
-	}
-}
-
 func TestTheTokenIsSetOverTheVariableAlreadyInTheEnvironment(t *testing.T) {
 	p, _ := provider.Of(provider.GitLab)
 
 	env := p.WithToken([]string{"GITLAB_TOKEN=loop-own", "HOME=/home/u"}, "secret-1")
 
-	if !slices.Equal(env, []string{"HOME=/home/u", "GITLAB_TOKEN=secret-1"}) {
-		t.Fatalf("env = %v", env)
+	if deps.Getenv(env, "GITLAB_TOKEN") != "secret-1" || deps.Getenv(env, "HOME") != "/home/u" || len(env) != 2 {
+		t.Fatalf("env = %v, want GITLAB_TOKEN を secret-1 に置き換え、HOME は残す", env)
 	}
 }
 

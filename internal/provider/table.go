@@ -27,7 +27,7 @@ var providers = []Provider{
 			return Place{name: r.String(), value: r}
 		},
 		Tracker: TrackerRole{
-			Supports:      []Feature{Token, Author, Milestone, Blocked},
+			Supports:      []Feature{Author, Milestone, Blocked},
 			Declines:      map[Feature]string{Status: statusAndType, Type: statusAndType},
 			TokenVariable: "GH_TOKEN",
 			Prefix:        "#",
@@ -57,7 +57,7 @@ var providers = []Provider{
 			return Place{name: p.String(), value: p}
 		},
 		Tracker: TrackerRole{
-			Supports: []Feature{Token, Author, Milestone},
+			Supports: []Feature{Author, Milestone},
 			Declines: map[Feature]string{
 				Blocked: "GitLab の CE は issue の依存を API で返さないので、blocked: false が全件に当たる",
 				Status:  statusAndType,

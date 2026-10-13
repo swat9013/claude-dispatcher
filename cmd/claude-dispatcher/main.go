@@ -147,7 +147,7 @@ func (e environment) runtime() provider.Runtime {
 }
 
 // withToken は workflow 定義の tracker.token を、tracker の CLI が読む環境変数に置いた環境 (system.md §8)。置き場の
-// 部品・worker・hooks のどれもこの環境で撃つ。tracker.token が書かれていなければ e のまま。
+// 部品 (parts) と workspace (workspaces。hooks と worker) の組み立てが当てる。tracker.token が書かれていなければ e のまま。
 func (e environment) withToken(def workflow.Definition) environment {
 	return environment{env: def.Tracker.Provider().WithToken(e.env, def.Tracker.Token)}
 }
@@ -315,7 +315,9 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 		Store:      e.store,
 		Workspaces: func(def workflow.Definition) loop.Workspaces { return e.workspaces(def, hookLock) },
 		Launch: func(def workflow.Definition, job worker.Job, events chan<- worker.Event) loop.Worker {
-			return worker.Runner{Workspaces: e.workspaces(def, hookLock), Definition: def, Env: e.withToken(def).env, StateDir: dir}.Start(job, events)
+			// worker には hooks と同じ環境 (tracker.token を置いたもの) を渡す
+			workspaces := e.workspaces(def, hookLock)
+			return worker.Runner{Workspaces: workspaces, Definition: def, Env: workspaces.Env, StateDir: dir}.Start(job, events)
 		},
 		NewSessionID: worker.NewSessionID,
 		Publish:      publish,

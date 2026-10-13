@@ -78,7 +78,7 @@ type Runner struct {
 	Workspaces workspace.Manager
 	// Definition は起動の仕方 (claude.command / args) と、stall と上限時間の上限を持つ workflow 定義
 	Definition workflow.Definition
-	// Env は worker に渡す環境 (loop の環境)
+	// Env は worker に渡す環境 (loop の環境に tracker.token を置いたもの。system.md §8)
 	Env []string
 	// StateDir は描画した共通 prompt と worker log を置く state dir
 	StateDir string

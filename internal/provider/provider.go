@@ -112,10 +112,11 @@ type TrackerRole struct {
 	Prefix string
 	// IssueKey は key で指す種類の、番号の issue の key
 	IssueKey func(place Place, number int) string
-	// Supports は支える宣言。Declines は支えない宣言と、その理由の文言 (誤りの名指しに添える)
+	// Supports は支える宣言 (tracker.token を除く)。Declines は支えない宣言と、その理由の文言 (誤りの名指しに添える)
 	Supports []Feature
 	Declines map[Feature]string
-	// TokenVariable は tracker.token を渡す環境変数の名前 (役割を担う CLI が読むもの)。tracker.token を支えない種類は ""
+	// TokenVariable は tracker.token を渡す環境変数の名前 (役割を担う CLI が読むもの)。"" でない種類だけが tracker.token を
+	// 支える
 	TokenVariable string
 	// Settings は worker が issue 置き場を操作するのに要りそうな Claude Code の settings の entry
 	Settings []string
@@ -132,11 +133,14 @@ type CLHostRole struct {
 // CommonSettings は役割に依らず worker が使いそうな settings の entry。
 var CommonSettings = []string{"Bash(git push:*)"}
 
-// Supported は宣言 f を支えるか。on: cl は CL 置き場の役割を持つかで決まり、他は issue 置き場の役割の宣言に従う。支える
-// 宣言の無いものは支えない (fail closed)。
+// Supported は宣言 f を支えるか。on: cl は CL 置き場の役割を持つか、tracker.token は渡す環境変数を持つかで決まり、他は
+// issue 置き場の役割の宣言に従う。支える宣言の無いものは支えない (fail closed)。
 func (p Provider) Supported(f Feature) bool {
-	if f == CL {
+	switch f {
+	case CL:
 		return p.CLHost != nil
+	case Token:
+		return p.Tracker.TokenVariable != ""
 	}
 	return slices.Contains(p.Tracker.Supports, f)
 }
@@ -154,14 +158,11 @@ func (p Provider) DeclineReason(f Feature) string {
 }
 
 // WithToken は env に tracker.token の値 token を、CLI が読む環境変数として置いた env を返す (system.md §8)。env に同じ
-// 変数が既にあっても token で上書きする。token が "" なら env のまま。tracker.token を支えない種類の token は、workflow
-// 定義の検査が弾くので届かない。届けば呼び出し側の誤りなので panic する。
+// 変数が既にあっても token で上書きする。token が "" なら env のまま。tracker.token を支えない種類 (TokenVariable が "")
+// の token は、workflow 定義の検査が弾くので届かない。
 func (p Provider) WithToken(env []string, token string) []string {
 	if token == "" {
 		return env
-	}
-	if p.Tracker.TokenVariable == "" {
-		panic(fmt.Sprintf("tracker.kind: %s の provider は tracker.token を渡す環境変数を持たない", p.Kind))
 	}
 	return deps.WithEnv(env, map[string]string{p.Tracker.TokenVariable: token})
 }
