@@ -25,6 +25,12 @@ When set to `yes`, PRs run through the same labels and states as issues, using t
 
 GitHub shares one number space across issues and PRs, so a bare `#42` may be either: resolve with `gh pr view 42` and fall back to `gh issue view 42`.
 
+## follow-up issue の深さ
+
+- 測り方: github-sub-issue
+- 上限: 2
+- 計画的な分解の親の label: なし
+
 ## When a skill says "publish to the issue tracker"
 
 Create a GitHub issue.
