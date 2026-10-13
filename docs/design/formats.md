@@ -581,6 +581,8 @@ exit: 0 = 書いた・既にある / 2 = 引数の誤り / 1 = repo を決めら
 
 汎用の action (実装・conflict・review・CI) を置く。action は先頭に skill を書かない文で、plugin の無い環境でも事前検査 (§2.9) に通る。承認済みの CL (`approved: true`) に当てる trigger は置かない (merge を worker に任せるかは利用者が決める)。
 
+- 雛形の action は、利用者の運用方針 (issue の識別子を CL の題名・本文・commit に書くか、など) を決めない。dispatcher の機構が要るもの (CL 側の trigger の `head` が当たる branch 名) だけを求める
+
 ```markdown
 ---
 tracker:
