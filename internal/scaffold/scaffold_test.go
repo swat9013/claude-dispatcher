@@ -25,7 +25,7 @@ func TestEveryTemplatePointsToTheGuideInItsFrontMatter(t *testing.T) {
 	templates := map[string]string{
 		"github": GitHub("acme/widgets"),
 		"gitlab": GitLab("gitlab.example.com", "acme/widgets"),
-		"jira":   Jira("acme.atlassian.net", "WIDGETS"),
+		"jira":   Jira("acme.atlassian.net", "WIDGETS", CLHost{Kind: "gitlab", Host: "gitlab.example.com", Repo: "acme/widgets"}),
 	}
 	for kind, text := range templates {
 		t.Run(kind, func(t *testing.T) {

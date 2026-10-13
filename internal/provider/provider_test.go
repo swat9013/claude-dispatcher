@@ -22,8 +22,8 @@ func TestEveryKindHasAProviderThatDeclaresEveryField(t *testing.T) {
 			if len(p.Tracker.Settings) == 0 || (p.CLHost != nil && len(p.CLHost.Settings) == 0) {
 				t.Fatalf("provider %s が役割の settings の entry を宣言していない", kind)
 			}
-			if p.CLHost != nil && p.CLHost.Prefix == "" {
-				t.Fatalf("provider %s が CL の呼び方を宣言していない", kind)
+			if p.CLHost != nil && (p.CLHost.Prefix == "" || p.CLHost.Scaffold == nil) {
+				t.Fatalf("provider %s が CL の呼び方か、雛形に CL 置き場を書く方法を宣言していない", kind)
 			}
 			if p.Tracker.KeyedIssues != (p.Tracker.IssueKey != nil) || (!p.Tracker.KeyedIssues && p.Tracker.Prefix == "") {
 				t.Fatalf("provider %s の issue の呼び方が key の有無と合わない", kind)

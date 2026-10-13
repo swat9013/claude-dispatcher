@@ -10,6 +10,7 @@ import (
 	"github.com/swat9013/claude-dispatcher/internal/deps"
 	"github.com/swat9013/claude-dispatcher/internal/loop"
 	"github.com/swat9013/claude-dispatcher/internal/printable"
+	"github.com/swat9013/claude-dispatcher/internal/provider"
 	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/workflow"
 )
@@ -38,7 +39,7 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	e := definitionEnvironment(def)
 	fmt.Fprintf(stdout, "ok   workflow 定義 %s\n", abs)
 	failed := false
-	for _, check := range []func(environment, workflow.Definition, io.Writer) bool{checkStore, checkCommands, checkPrecheck} {
+	for _, check := range []func(environment, workflow.Definition, io.Writer) bool{checkStore, checkCLPlace, checkCommands, checkPrecheck} {
 		if !check(e, def, stdout) {
 			failed = true
 		}
@@ -46,15 +47,15 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	for _, w := range promiseWarnings(def) {
 		fmt.Fprintf(stdout, "警告 %s\n", w)
 	}
-	// worker が外部 store を操作するのに要りそうな entry を、provider が担う役割ごとに、その CLI の綴りで出す (system.md §11)
-	p := def.Tracker.Provider()
-	fmt.Fprintln(stdout, "settings の permissions.allow に要りそうな entry (CLI は書かない):")
-	for _, entry := range p.Settings() {
-		fmt.Fprintf(stdout, "  %s\n", entry)
+	// worker が外部 store を操作するのに要りそうな entry を、役割ごとに、その役割を担う provider の CLI の綴りで出す
+	// (system.md §11)
+	var clHost *provider.CLHostRole
+	if p, _, ok := def.CLHost(); ok {
+		clHost = p.CLHost
 	}
-	// 注記は entry と取り違えて settings に写されないよう、字下げせずに出す
-	if p.SettingsNote != "" {
-		fmt.Fprintln(stdout, p.SettingsNote)
+	fmt.Fprintln(stdout, "settings の permissions.allow に要りそうな entry (CLI は書かない):")
+	for _, entry := range provider.Settings(def.Tracker.Provider().Tracker, clHost) {
+		fmt.Fprintf(stdout, "  %s\n", entry)
 	}
 	if failed {
 		return exitFailed
@@ -63,9 +64,9 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 }
 
 // checkStore は issue 置き場を読めるかを確かめる。確認の手順を持つ種類は loop の起動時と同じ確認 (formats.md §6) を通し、
-// workflow 定義が書いた名前のうち実在しないものを 1 つ 1 行で名指しする。
+// workflow 定義が書いた名前のうち実在しないものを 1 つ 1 行で名指しする。cl: の CL 置き場は checkCLPlace が確かめる。
 func checkStore(e environment, def workflow.Definition, stdout io.Writer) bool {
-	if err := e.confirmPlace(def); err != nil {
+	if err := e.confirmIssuePlace(def); err != nil {
 		var unknown *target.UnknownNames
 		if errors.As(err, &unknown) {
 			for _, p := range unknown.Problems {
@@ -76,17 +77,37 @@ func checkStore(e environment, def workflow.Definition, stdout io.Writer) bool {
 		fmt.Fprintf(stdout, "NG   issue 置き場 %s: %s\n", def.Tracker.Place, printable.Line(err.Error()))
 		return false
 	}
-	// 処理を続けられる失敗 (*target.NonFatal) は、置き場を読めているので NG にせず、ok の行に理由を添える (formats.md §7.4)
+	store := e.store(def)
+	var err error
+	if def.CL == nil {
+		_, err = loop.OpenItems(store, def)
+	} else {
+		// CL は別の置き場にあり、checkCLPlace の行で確かめる
+		_, err = store.Open(target.KindIssue)
+	}
+	return placeLine(stdout, "issue 置き場", def.Tracker.Place, err)
+}
+
+// checkCLPlace は cl: の CL 置き場を、loop の起動時と同じ確認 (formats.md §6) で読めるかを確かめる。cl: が無ければ何も出さない。
+func checkCLPlace(e environment, def workflow.Definition, stdout io.Writer) bool {
+	if def.CL == nil {
+		return true
+	}
+	return placeLine(stdout, "CL 置き場", def.CL.Place, e.readSeparateCLs(def))
+}
+
+// placeLine は置き場を読んだ結果 err を、name の置き場の 1 行に出す。処理を続けられる失敗 (*target.NonFatal) は、置き場を
+// 読めているので NG にせず、ok の行に理由を添える (formats.md §7.4)。
+func placeLine(stdout io.Writer, name string, place provider.Place, err error) bool {
 	var nonFatal *target.NonFatal
-	_, err := loop.OpenItems(e.store(def), def)
 	switch {
 	case errors.As(err, &nonFatal):
-		fmt.Fprintf(stdout, "ok   issue 置き場 %s (補助の要求が落ちた: %s)\n", def.Tracker.Place, printable.Line(nonFatal.Err.Error()))
+		fmt.Fprintf(stdout, "ok   %s %s (補助の要求が落ちた: %s)\n", name, place, printable.Line(nonFatal.Err.Error()))
 	case err != nil:
-		fmt.Fprintf(stdout, "NG   issue 置き場 %s: %s\n", def.Tracker.Place, printable.Line(err.Error()))
+		fmt.Fprintf(stdout, "NG   %s %s: %s\n", name, place, printable.Line(err.Error()))
 		return false
 	default:
-		fmt.Fprintf(stdout, "ok   issue 置き場 %s\n", def.Tracker.Place)
+		fmt.Fprintf(stdout, "ok   %s %s\n", name, place)
 	}
 	return true
 }

@@ -554,7 +554,7 @@ func TestTickLineNamesAMergeRequestWithItsGitLabReference(t *testing.T) {
 		provider.GitHub: "候補 2: implement issue #42, fix-ci cl #7",
 		provider.GitLab: "候補 2: implement issue #42, fix-ci cl !7",
 	} {
-		if got := loop.Summary(candidates, workflow.Tracker{Kind: kind}); got != want {
+		if got := loop.Summary(candidates, workflow.Definition{Tracker: workflow.Tracker{Kind: kind}}); got != want {
 			t.Errorf("%s: Summary = %q, want %q", kind, got, want)
 		}
 	}

@@ -97,7 +97,7 @@ func TestJiraDoctorWithACLHostNamesBothPlacesAndTheCLHostEntries(t *testing.T) {
 		}
 	}
 	if strings.Contains(r.stdout, "Bash(gh issue") || strings.Contains(r.stdout, "entry も足す") {
-		t.Errorf("CL 置き場の役割でない entry か、#114 前の注記を出した:\n%s", r.stdout)
+		t.Errorf("CL 置き場の役割でない entry か、CL を開く CLI を足させる注記を出した:\n%s", r.stdout)
 	}
 }
 

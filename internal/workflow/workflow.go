@@ -27,6 +27,8 @@ type Definition struct {
 	// Dir は workflow 定義の file がある dir の絶対 path
 	Dir     string
 	Tracker Tracker
+	// CL は issue 置き場と別の CL 置き場 (cl:)。書かれていなければ nil。書けるのは CL 置き場の役割を持たない種類 (jira) だけ
+	CL *CL
 	// Interval は tick の周期
 	Interval time.Duration
 	// WorkspaceRoot は workspace を置く dir の絶対 path
@@ -81,18 +83,43 @@ type Tracker struct {
 	Token string
 }
 
-// Provider は tracker.kind の provider。検査に通った workflow 定義の種類は必ず provider を持つので、無ければ panic する。
-func (t Tracker) Provider() provider.Provider {
-	p, ok := provider.Of(t.Kind)
+// Provider は tracker.kind の provider。
+func (t Tracker) Provider() provider.Provider { return mustProvider(t.Kind) }
+
+// CL は cl: の CL 置き場の設定。token は持たず、CL 置き場の CLI 自身の認証を使う。
+type CL struct {
+	Kind provider.Kind
+	// Place は cl.kind の provider が cl.repo と cl.host から読んだ置き場
+	Place provider.Place
+}
+
+// mustProvider は検査に通った workflow 定義の種類の provider。検査に通った種類は必ず provider を持つので、無ければ panic する。
+func mustProvider(kind provider.Kind) provider.Provider {
+	p, ok := provider.Of(kind)
 	if !ok {
-		panic(fmt.Sprintf("tracker.kind %q の provider が無い (検査に通っていない workflow 定義)", t.Kind))
+		panic(fmt.Sprintf("種類 %q の provider が無い (検査に通っていない workflow 定義)", kind))
 	}
 	return p
 }
 
-// Reference は作業対象を人が読む行に出す参照 (formats.md §5)。呼び方は provider の役割が宣言する。
-func (t Tracker) Reference(ref target.Ref) string {
-	return t.Provider().Reference(t.Place, ref)
+// CLHost は CL 置き場の役割を担う provider と CL 置き場 (system.md §13)。cl: があればその種類と置き場、無ければ tracker.kind
+// の provider が CL 置き場の役割を持つときだけ issue 置き場と同じ場所。CL 置き場が無ければ false。
+func (d Definition) CLHost() (provider.Provider, provider.Place, bool) {
+	if d.CL != nil {
+		return mustProvider(d.CL.Kind), d.CL.Place, true
+	}
+	if p := d.Tracker.Provider(); p.CLHost != nil {
+		return p, d.Tracker.Place, true
+	}
+	return provider.Provider{}, provider.Place{}, false
+}
+
+// Reference は作業対象を人が読む行に出す参照 (formats.md §5)。呼び方は、作業対象の置き場の役割を担う provider が宣言する。
+func (d Definition) Reference(ref target.Ref) string {
+	if p, place, ok := d.CLHost(); ok && ref.Kind == target.KindCL {
+		return p.Reference(place, ref)
+	}
+	return d.Tracker.Provider().Reference(d.Tracker.Place, ref)
 }
 
 // 周期の既定と範囲 (formats.md §2.1)
@@ -190,22 +217,30 @@ type checker struct {
 	// provider は tracker.kind の provider。種類に依る検査が key の順 (triggers を tracker より前に書くなど) に依らないよう、
 	// front matter を辿る前に引く。引けなければ nil で、種類に依る検査は撃たない (誤りは tracker.kind で名指しする)
 	provider *provider.Provider
+	// clHost は CL 置き場の役割を担う provider (tracker.kind の provider が役割を持てばそれ、持たなければ cl.kind の
+	// provider)。provider と同じく front matter を辿る前に引く。引けなければ nil。clHostKey はその種類を書いた key
+	clHost    *provider.Provider
+	clHostKey string
+	// clWritten は cl: を書いたか
+	clWritten bool
 }
 
-// peekProvider は front matter の tracker.kind の provider を、他の項目を読む前に引く。provider を持つ種類でなければ nil。
-func peekProvider(root *yaml.Node) *provider.Provider {
-	value := func(n *yaml.Node, key string) *yaml.Node {
-		if n == nil || n.Kind != yaml.MappingNode {
-			return nil
-		}
-		for i := 0; i+1 < len(n.Content); i += 2 {
-			if n.Content[i].Value == key {
-				return resolve(n.Content[i+1])
-			}
-		}
+// peek は対応表 n の key の値を、alias を辿って返す。n が対応表でないか key が無ければ nil。
+func peek(n *yaml.Node, key string) *yaml.Node {
+	if n == nil || n.Kind != yaml.MappingNode {
 		return nil
 	}
-	kind := value(value(root, "tracker"), "kind")
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		if n.Content[i].Value == key {
+			return resolve(n.Content[i+1])
+		}
+	}
+	return nil
+}
+
+// peekKind は対応表 n の kind の値の provider。provider を持つ種類でなければ nil。
+func peekKind(n *yaml.Node) *provider.Provider {
+	kind := peek(n, "kind")
 	if kind == nil || kind.Kind != yaml.ScalarNode {
 		return nil
 	}
@@ -213,6 +248,22 @@ func peekProvider(root *yaml.Node) *provider.Provider {
 		return &p
 	}
 	return nil
+}
+
+// peekProviders は tracker.kind の provider と CL 置き場の役割を担う provider を、他の項目を読む前に引く。
+func (c *checker) peekProviders(root *yaml.Node) {
+	c.provider = peekKind(peek(root, "tracker"))
+	cl := peek(root, "cl")
+	c.clWritten = cl != nil
+	switch {
+	case c.provider == nil:
+	case c.provider.CLHost != nil:
+		c.clHost, c.clHostKey = c.provider, "tracker.kind"
+	default:
+		if p := peekKind(cl); p != nil && p.CLHost != nil {
+			c.clHost, c.clHostKey = p, "cl.kind"
+		}
+	}
 }
 
 // problem は誤り 1 件。line は file の行番号 (分からなければ 0)
@@ -300,7 +351,7 @@ func join(path, key string) string {
 }
 
 func (c *checker) decode(root *yaml.Node, def *Definition) {
-	c.provider = peekProvider(root)
+	c.peekProviders(root)
 	// top level は key を持たないので、欠落を行なしで名指しする
 	c.mapping(&yaml.Node{}, root, "", c.topFields(def))
 }
@@ -312,6 +363,11 @@ func (c *checker) decode(root *yaml.Node, def *Definition) {
 func (c *checker) topFields(def *Definition) map[string]field {
 	return map[string]field{
 		"tracker": {required: true, read: func(key, n *yaml.Node, path string) { c.tracker(key, n, path, &def.Tracker) }},
+		"cl": {read: func(key, n *yaml.Node, path string) {
+			if c.supports(key, path, provider.CLPlace) {
+				def.CL = c.cl(key, n, path)
+			}
+		}},
 		"polling": {read: func(key, n *yaml.Node, path string) { c.polling(key, n, path, &def.Interval) }},
 		"workspace": {read: func(key, n *yaml.Node, path string) {
 			c.mapping(key, n, path, c.workspaceFields(def))
@@ -377,15 +433,30 @@ func (c *checker) claudeFields(def *Definition) map[string]field {
 	}
 }
 
-// supports は、tracker.kind の provider が宣言 f を支えるかを返す。支えなければ n を理由を添えて名指しで失敗させる
-// (formats.md §2.8)。支える宣言の無いものは支えない (fail closed)。種類が読めていなければ名指しせず (誤りは tracker.kind で
-// 名指しする)、支えるとも答えない。
+// supports は、issue 置き場の役割を担う provider (tracker.kind) が宣言 f を支えるかを返す。支えなければ n を理由を添えて
+// 名指しで失敗させる (formats.md §2.8)。支える宣言の無いものは支えない (fail closed)。種類が読めていなければ名指しせず (誤りは
+// tracker.kind で名指しする)、支えるとも答えない。
 func (c *checker) supports(n *yaml.Node, path string, f provider.Feature) bool {
 	if c.provider == nil {
 		return false
 	}
-	if !c.provider.Supported(f) {
-		c.fail(n, path, "tracker.kind: %s では書けない (%s)", c.provider.Kind, c.provider.DeclineReason(f))
+	return c.declared(n, path, "tracker.kind", c.provider.Kind, c.provider.Tracker.Declarations, f)
+}
+
+// clSupports は supports の CL 置き場の役割の版。CL 置き場の役割を担う provider が引けていなければ名指しせず (誤りは on: cl
+// か cl.kind で名指しする)、支えるとも答えない。
+func (c *checker) clSupports(n *yaml.Node, path string, f provider.Feature) bool {
+	if c.clHost == nil {
+		return false
+	}
+	return c.declared(n, path, c.clHostKey, c.clHost.Kind, c.clHost.CLHost.Declarations, f)
+}
+
+// declared は役割の宣言 d が f を支えるかを返し、支えなければ、種類を書いた key (key) と種類 (kind) と理由を添えて n を
+// 名指しする。
+func (c *checker) declared(n *yaml.Node, path, key string, kind provider.Kind, d provider.Declarations, f provider.Feature) bool {
+	if !d.Supported(f) {
+		c.fail(n, path, "%s: %s では書けない (%s)", key, kind, d.DeclineReason(f))
 		return false
 	}
 	return true
@@ -484,24 +555,45 @@ func (c *checker) positive(n *yaml.Node, path string) (int, bool) {
 func (c *checker) tracker(owner, n *yaml.Node, path string, t *Tracker) {
 	var place placeInput
 	c.mapping(owner, n, path, c.trackerFields(t, &place))
-	p := c.provider
-	if p == nil {
+	if c.provider == nil {
 		return
 	}
-	t.Kind = p.Kind
-	if !place.hostWritten {
-		place.host, place.hostRead = p.Host.Default, true
+	t.Kind = c.provider.Kind
+	t.Place, _ = c.place(owner, n, path, "tracker.kind", c.provider, &place)
+}
+
+// cl は cl の項目を、先に引いた CL 置き場の provider (c.clHost) の読み方で読む。provider が無ければ置き場を読まない (誤りは
+// cl.kind で名指しする)。
+func (c *checker) cl(owner, n *yaml.Node, path string) *CL {
+	var in clInput
+	c.mapping(owner, n, path, c.clFields(&in))
+	if c.clHost == nil {
+		return nil
+	}
+	place, ok := c.place(owner, n, path, "cl.kind", c.clHost, &in.place)
+	if !ok {
+		return nil
+	}
+	return &CL{Kind: c.clHost.Kind, Place: place}
+}
+
+// place は対応表 (tracker か cl) が読んだ repo と host を、種類 p の置き場にする。host を書かなければ既定を使い、既定を
+// 持たない host の欠落を名指しする (key は種類を書いた key)。repo と host がどちらも読めたときだけ true。
+func (c *checker) place(owner, n *yaml.Node, path, key string, p *provider.Provider, in *placeInput) (provider.Place, bool) {
+	if !in.hostWritten {
+		in.host, in.hostRead = p.Host.Default, true
 		// 既定を持たない host は必須。mapping の必須は種類に依らないので、ここで欠落を名指しする
 		if p.Host.Parse != nil && p.Host.Default == "" {
-			place.hostRead = false
+			in.hostRead = false
 			if n.Kind == yaml.MappingNode {
-				c.fail(owner, join(path, "host"), "必須の項目が無い (tracker.kind: %s では %s)", p.Kind, p.Host.RequiredHint)
+				c.fail(owner, join(path, "host"), "必須の項目が無い (%s: %s では %s)", key, p.Kind, p.Host.RequiredHint)
 			}
 		}
 	}
-	if place.repoRead && place.hostRead {
-		t.Place = p.NewPlace(place.host, place.repo)
+	if !in.repoRead || !in.hostRead {
+		return provider.Place{}, false
 	}
+	return p.NewPlace(in.host, in.repo), true
 }
 
 // placeInput は tracker の表が読んだ repo と host。読めたものだけ repoRead と hostRead を立てる。
@@ -513,31 +605,61 @@ type placeInput struct {
 
 // trackerFields は tracker の表。repo と host は place に預ける。
 func (c *checker) trackerFields(t *Tracker, place *placeInput) map[string]field {
+	fields := c.placeFields(c.provider, place)
+	// 種類の値は peekProviders が読んだものを使う。ここでは読めなかった誤りを名指しする
+	fields["kind"] = field{required: true, read: func(_, n *yaml.Node, path string) {
+		if s, ok := c.str(n, path); ok && c.provider == nil {
+			c.fail(n, path, "未知の値 %q (%s)", s, provider.Join(provider.Kinds()))
+		}
+	}}
+	fields["token"] = field{read: func(key, n *yaml.Node, path string) {
+		if c.supports(key, path, provider.Token) {
+			t.Token, _ = c.variableOnly(n, path)
+		}
+	}}
+	return fields
+}
+
+// clInput は cl の表が読んだもの。
+type clInput struct {
+	place placeInput
+}
+
+// clFields は cl の表。repo と host は in に預ける。token は持たない (CL 置き場の CLI 自身の認証を使う)。
+func (c *checker) clFields(in *clInput) map[string]field {
+	fields := c.placeFields(c.clHost, &in.place)
+	// 種類の値は peekProviders が読んだものを使う。ここでは CL 置き場にならない種類の誤りを名指しする
+	fields["kind"] = field{required: true, read: func(_, n *yaml.Node, path string) {
+		s, ok := c.str(n, path)
+		kinds := provider.CLHostKinds()
+		switch _, known := provider.Of(provider.Kind(s)); {
+		case !ok || slices.Contains(kinds, provider.Kind(s)):
+		case known:
+			c.fail(n, path, "%q は CL 置き場にならない (%s)", s, provider.Join(kinds))
+		default:
+			c.fail(n, path, "未知の値 %q (%s)", s, provider.Join(kinds))
+		}
+	}}
+	return fields
+}
+
+// placeFields は置き場を指す表 (tracker と cl) の repo と host を、種類 p の読み方で読んで place に預ける。p が無ければ
+// 読まない (誤りは種類の key で名指しする)。
+func (c *checker) placeFields(p *provider.Provider, place *placeInput) map[string]field {
 	return map[string]field{
-		// 種類の値は peekProvider が読んだものを使う。ここでは読めなかった誤りを名指しする
-		"kind": {required: true, read: func(_, n *yaml.Node, path string) {
-			if s, ok := c.str(n, path); ok && c.provider == nil {
-				c.fail(n, path, "未知の値 %q (%s)", s, provider.Join(provider.Kinds()))
-			}
-		}},
 		"repo": {required: true, read: func(_, n *yaml.Node, path string) {
-			if c.provider != nil {
-				place.repo, place.repoRead = parsed(c, n, path, c.provider.ParseRepo)
+			if p != nil {
+				place.repo, place.repoRead = parsed(c, n, path, p.ParseRepo)
 			}
 		}},
 		"host": {read: func(key, n *yaml.Node, path string) {
 			place.hostWritten = true
 			switch {
-			case c.provider == nil:
-			case c.provider.Host.Parse == nil:
+			case p == nil:
+			case p.Host.Parse == nil:
 				c.fail(key, path, "未知の key")
 			default:
-				place.host, place.hostRead = parsed(c, n, path, c.provider.Host.Parse)
-			}
-		}},
-		"token": {read: func(key, n *yaml.Node, path string) {
-			if c.supports(key, path, provider.Token) {
-				t.Token, _ = c.variableOnly(n, path)
+				place.host, place.hostRead = parsed(c, n, path, p.Host.Parse)
 			}
 		}},
 	}
@@ -645,7 +767,10 @@ func (c *checker) triggerFields(t *trigger.Trigger, names map[string]bool, later
 				case target.KindIssue:
 					t.On = kind
 				case target.KindCL:
-					c.supports(n, path, provider.CL)
+					// cl: を書いて種類を誤ったときは、誤りを cl.kind で名指しする
+					if c.provider != nil && c.clHost == nil && !c.clWritten {
+						c.fail(n, path, "CL 置き場が無い (tracker.kind: %s では cl: で %s の CL 置き場を宣言する)", c.provider.Kind, provider.Join(provider.CLHostKinds()))
+					}
 					t.On = kind
 				default:
 					c.fail(n, path, "未知の値 %q (%s / %s)", s, target.KindIssue, target.KindCL)
@@ -749,8 +874,11 @@ func (c *checker) clPredicateFields(p *trigger.CLPredicate, head **yaml.Node) ma
 			}
 		}},
 		"same_repo": {read: func(_, n *yaml.Node, path string) { p.SameRepo = c.condition(n, path) }},
-		"author":    {read: func(_, n *yaml.Node, path string) { p.Author = c.author(n, path) }},
-		"draft":     {read: func(_, n *yaml.Node, path string) { p.Draft = c.condition(n, path) }},
+		"author": {read: func(key, n *yaml.Node, path string) {
+			p.Author = c.author(n, path)
+			c.clSupports(key, path, provider.Author)
+		}},
+		"draft": {read: func(_, n *yaml.Node, path string) { p.Draft = c.condition(n, path) }},
 	}
 }
 
