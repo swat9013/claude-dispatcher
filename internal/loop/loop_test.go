@@ -321,40 +321,26 @@ func TestTickWhoseScopeKeyDiffersFromTheStartDoesNotObserve(t *testing.T) {
 	}
 }
 
-func TestTickWhoseCLPlaceDiffersFromTheStartDoesNotObserve(t *testing.T) {
-	// 起動時は github (issue 置き場と同じ場所が CL 置き場)。読み直した版は CL 置き場を持たない
-	withoutCLPlace := func(maxConcurrent int) (workflow.Definition, error) {
-		def := definition(time.Minute, maxConcurrent)
-		def.Tracker = workflow.Tracker{Kind: provider.Jira}
-		return def, nil
-	}
-	h := &harness{plans: []tickPlan{{load: withoutCLPlace}}}
-
-	lines := h.run(t)
-
-	if !strings.Contains(lines[0], "tick error · workflow 定義の CL 置き場") || h.reads != 0 {
-		t.Fatalf("CL 置き場が違う版を採った (読んだ回数 %d):\n%s", h.reads, h.stdout.String())
-	}
-}
-
-// jiraWithCL は cl: に GitLab の path の CL 置き場を宣言した jira の定義の版。path が空なら cl: を書かない。
+// jiraWithCL は cl: に GitLab の path の CL 置き場を宣言した jira の定義の版。
 func jiraWithCL(path string) func(int) (workflow.Definition, error) {
 	return func(maxConcurrent int) (workflow.Definition, error) {
 		def := definition(time.Minute, maxConcurrent)
 		jira, _ := provider.Of(provider.Jira)
+		gitlab, _ := provider.Of(provider.GitLab)
 		def.Tracker = workflow.Tracker{Kind: provider.Jira, Place: jira.NewPlace("acme.atlassian.net", "WIDGETS")}
-		if path != "" {
-			gitlab, _ := provider.Of(provider.GitLab)
-			def.CL = &workflow.CL{Kind: provider.GitLab, Place: gitlab.NewPlace("gitlab.com", path)}
-		}
+		def.CL = &workflow.CL{Kind: provider.GitLab, Place: gitlab.NewPlace("gitlab.com", path)}
 		return def, nil
 	}
 }
 
-func TestTickWhoseCLDeclarationChangedFromTheStartDoesNotObserve(t *testing.T) {
-	for name, reloaded := range map[string]string{"別の置き場にする": "acme/other", "消す": ""} {
+func TestTickWhoseCLPlaceDiffersFromTheStartDoesNotObserve(t *testing.T) {
+	// scope key は plan が決めるので、どの版も起動時と同じ scope key を返す
+	for name, start := range map[string]func(int) (workflow.Definition, error){
+		"CL 置き場の種類が変わる (github の issue 置き場と同じ場所 → jira の cl: の gitlab)": good(time.Minute),
+		"cl: を別の置き場にする": jiraWithCL("acme/other"),
+	} {
 		t.Run(name, func(t *testing.T) {
-			h := &harness{start: jiraWithCL("acme/widgets"), plans: []tickPlan{{load: jiraWithCL(reloaded)}}}
+			h := &harness{start: start, plans: []tickPlan{{load: jiraWithCL("acme/widgets")}}}
 
 			lines := h.run(t)
 

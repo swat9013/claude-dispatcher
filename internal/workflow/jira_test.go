@@ -14,6 +14,9 @@ tracker:
   kind: jira
   host: acme.atlassian.net
   repo: widgets
+cl:
+  kind: github
+  repo: acme/widgets
 triggers:
   - name: implement
     on: issue
@@ -30,7 +33,7 @@ triggers:
 `
 
 func jiraWithTriggers(triggers string) string {
-	return "---\ntracker:\n  kind: jira\n  host: acme.atlassian.net\n  repo: WIDGETS\ntriggers:" + triggers + "\n---\n"
+	return "---\ntracker:\n  kind: jira\n  host: acme.atlassian.net\n  repo: WIDGETS\ncl:\n  kind: github\n  repo: acme/widgets\ntriggers:" + triggers + "\n---\n"
 }
 
 func TestJiraDefinitionIsReadWithTheProjectKeyInUpperCase(t *testing.T) {
@@ -122,9 +125,9 @@ func TestJiraWithAGitHubCLHostReadsCLTriggersRegardlessOfKeyOrder(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, place, ok := def.CLHost()
-	if !ok || p.Kind != "github" || place.String() != "acme/widgets" || def.Triggers[0].CL.Author == "" {
-		t.Fatalf("CL 置き場 = %v %v %v, 定義 = %+v", p.Kind, place, ok, def)
+	p, place := def.CLHost()
+	if p.Kind != "github" || place.String() != "acme/widgets" || def.Triggers[0].CL.Author == "" {
+		t.Fatalf("CL 置き場 = %v %v, 定義 = %+v", p.Kind, place, def)
 	}
 }
 
@@ -134,7 +137,7 @@ func TestAGitLabCLHostDefaultsTheHostToGitLabCom(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, place, _ := def.CLHost(); place.String() != "gitlab.com/acme/widgets" {
+	if _, place := def.CLHost(); place.String() != "gitlab.com/acme/widgets" {
 		t.Fatalf("CL 置き場 = %v", place)
 	}
 }
@@ -158,21 +161,20 @@ func TestATrackerThatHostsCLsIsItsOwnCLHost(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	p, place, ok := def.CLHost()
+	p, place := def.CLHost()
 
-	if !ok || p.Kind != "github" || place.String() != "acme/widgets" || def.CL != nil {
-		t.Fatalf("CL 置き場 = %v %v %v, cl: = %+v", p.Kind, place, ok, def.CL)
+	if p.Kind != "github" || place.String() != "acme/widgets" || def.CL != nil {
+		t.Fatalf("CL 置き場 = %v %v, cl: = %+v", p.Kind, place, def.CL)
 	}
 }
 
-func TestJiraWithoutCLHasNoCLHost(t *testing.T) {
-	def, err := load(t, validJira, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestJiraWithoutTheCLDeclarationIsNamedAsMissing(t *testing.T) {
+	withoutCL := strings.Replace(validJira, "cl:\n  kind: github\n  repo: acme/widgets\n", "", 1)
 
-	if _, _, ok := def.CLHost(); ok {
-		t.Fatal("cl: の無い jira に CL 置き場がある")
+	got := strings.Join(problems(t, withoutCL), "\n")
+
+	if !strings.Contains(got, "cl: 必須の項目が無い") || !strings.Contains(got, "jira") {
+		t.Fatalf("誤りが cl の欠落を名指ししていない:\n%s", got)
 	}
 }
 
@@ -183,7 +185,6 @@ func TestCLDeclarationsThatCannotBeWrittenAreNamed(t *testing.T) {
 		workflow string
 		names    []string
 	}{
-		{"jira の cl: 無しの on: cl", jiraWithTriggers("\n  - {name: f, on: cl, action: /f}"), []string{"triggers[0].on", "cl:"}},
 		{"github の cl:", githubWithCL, []string{"cl", "tracker.kind: github"}},
 		{"cl.kind に jira", withCLKind("jira"), []string{"cl.kind", "jira"}},
 		{"cl.kind の未知の値", withCLKind("bitbucket"), []string{"cl.kind", "bitbucket"}},

@@ -33,9 +33,15 @@ const (
 // jiraTracker は jira の issue 置き場を指す tracker の宣言。repo は小文字で書き、大文字に揃うことも通す。
 const jiraTracker = "tracker:\n  kind: jira\n  host: " + jiraSite + "\n  repo: widgets\n"
 
+// githubCL は GitHub の CL 置き場を指す cl: の宣言。jira の workflow 定義には必須 (ADR 0015)。
+const githubCL = "cl:\n  kind: github\n  repo: acme/widgets\n"
+
+// jiraPlaces は jira の issue 置き場と、GitHub の CL 置き場の宣言。
+const jiraPlaces = jiraTracker + githubCL
+
 // jiraWorkflowWithTriggers は trigger の宣言だけを差し替えた jira の workflow 定義。
 func jiraWorkflowWithTriggers(triggers string) string {
-	return "---\n" + jiraTracker + "triggers:" + triggers + "\n---\n共通 prompt\n"
+	return "---\n" + jiraPlaces + "triggers:" + triggers + "\n---\n共通 prompt\n"
 }
 
 // jiraWorkflow は status が Ready for Agent の issue に当たる trigger 1 つだけの、jira の workflow 定義。
@@ -164,10 +170,12 @@ func jiraRules(issues ...jiraIssue) []stubwire.Rule {
 	)
 }
 
-// setJiraIssues は acli が issues を返すようにする。
+// setJiraIssues は acli が issues を返し、cl: の CL 置き場 (gh) が open な CL を 1 件も返さないようにする。CL を返させるなら、
+// 後から setStore で gh の応答を差し替える。
 func (s *sandbox) setJiraIssues(issues ...jiraIssue) {
 	s.t.Helper()
 	s.respondAll("acli", jiraRules(issues...))
+	s.setStore(nil, nil)
 }
 
 // jiraResponses は jiraRules を acli の応答 file の中身にしたもの。worker の代役が issue を書き換えるときに使う。
@@ -201,10 +209,19 @@ func (s *sandbox) assertAcliOnlyReads() {
 	}
 }
 
-// assertNoOtherTrackerCLI は gh も glab も撃っていないことを確かめる。
-func (s *sandbox) assertNoOtherTrackerCLI(why string) {
+// assertCLHostOnlyListed は、CL 側の trigger の無い jira の workflow 定義で、cl: の CL 置き場 (gh) を open な CL の一覧の
+// 読み出し (CL 置き場の確認) にだけ撃ち、glab を撃っていないことを確かめる。
+func (s *sandbox) assertCLHostOnlyListed(why string) {
 	s.t.Helper()
-	s.assertNoGh(why)
+	calls := s.calls("gh")
+	if len(calls) == 0 {
+		s.t.Fatalf("%s CL 置き場を確かめていない (gh を撃っていない)", why)
+	}
+	for _, c := range calls {
+		if !slices.ContainsFunc(c.Argv, func(arg string) bool { return strings.Contains(arg, clListQuery) }) {
+			s.t.Fatalf("%s gh を CL の一覧の読み出し以外に撃った: %q", why, c.Argv[1:])
+		}
+	}
 	s.assertNoGlab(why)
 }
 
@@ -228,7 +245,7 @@ func TestJiraDryRunListsTheIssuesInTheStatusByNumberWithTheirKeys(t *testing.T) 
 
 	assertCandidates(t, r, jiraCandidate("implement", 9), jiraCandidate("implement", 43))
 	s.assertAcliOnlyReads()
-	s.assertNoOtherTrackerCLI("jira の issue 置き場なのに")
+	s.assertCLHostOnlyListed("CL 側の trigger が無いのに")
 }
 
 func TestJiraPredicatesAreEvaluatedOnTheAcliResponses(t *testing.T) {
@@ -345,7 +362,7 @@ func TestJiraObservationFailuresAreClassifiedByTheAuthStatus(t *testing.T) {
 func (s *sandbox) jiraWorkerWorkflow() string {
 	w := s.workerWorkflow("")
 	for _, r := range [][2]string{
-		{"tracker:\n  kind: github\n  repo: acme/widgets\n", jiraTracker},
+		{"tracker:\n  kind: github\n  repo: acme/widgets\n", jiraPlaces},
 		{"when: {labels: {all: [ready-for-agent]}}", "when: {status: {any: [Ready for Agent]}}"},
 		{"/implement issue #{{ .issue.number }}", "/implement {{ .issue.key }}"},
 	} {
@@ -385,7 +402,7 @@ func TestJiraLoopLaunchesAWorkerAndCompletesWhenTheStatusMoves(t *testing.T) {
 		t.Fatalf("tick の行の候補が key で出ていない:\n%s", loop.stdout.String())
 	}
 	s.assertAcliOnlyReads()
-	s.assertNoOtherTrackerCLI("jira の issue 置き場なのに")
+	s.assertCLHostOnlyListed("CL 側の trigger が無いのに")
 }
 
 func TestJiraIssueThatVanishesIsTreatedAsTerminal(t *testing.T) {
@@ -486,7 +503,7 @@ triggers:
 
 	r := s.runWithEnv(map[string]string{"JIRA_TOKEN": "secret"}, "loop", "--dry-run")
 
-	s.assertRejected(r, "triggers[0].when.author", "triggers[0].when.milestone", "triggers[1].on", "tracker.token")
+	s.assertRejected(r, "triggers[0].when.author", "triggers[0].when.milestone", "tracker.token", "cl: 必須の項目が無い")
 	s.assertNoAcli("workflow 定義が誤っているのに")
 }
 
@@ -503,7 +520,7 @@ func TestJiraScopeKeyIsTheLowercasedSiteAndProjectKey(t *testing.T) {
 	s.assertNoAcli("paths なのに")
 }
 
-func TestJiraDoctorNamesThePlaceAndTheAcliEntries(t *testing.T) {
+func TestJiraDoctorNamesBothPlacesAndTheEntriesOfEachRole(t *testing.T) {
 	s := newSandbox(t)
 	s.writeWorkflowWithCommands(jiraWorkflow)
 	s.setJiraIssues()
@@ -512,18 +529,18 @@ func TestJiraDoctorNamesThePlaceAndTheAcliEntries(t *testing.T) {
 
 	assertExit(t, r, 0)
 	for _, want := range []string{
-		"ok   issue 置き場 " + jiraSite + "/" + jiraKey + "\n",
+		"ok   issue 置き場 " + jiraSite + "/" + jiraKey + "\nok   CL 置き場 acme/widgets\n",
 		"ok   acli " + filepath.Join(s.binDir, "acli") + "\n",
-		"  Bash(acli jira workitem:*)\n  Bash(git push:*)\n",
+		"ok   gh " + filepath.Join(s.binDir, "gh") + "\n",
+		"  Bash(acli jira workitem:*)\n  Bash(gh pr:*)\n  Bash(git push:*)\n",
 	} {
 		if !strings.Contains(r.stdout, want) {
 			t.Errorf("stdout に %q が無い:\n%s", want, r.stdout)
 		}
 	}
-	if strings.Contains(r.stdout, "Bash(gh ") || strings.Contains(r.stdout, "Bash(glab ") || strings.Contains(r.stdout, "CL 置き場") {
-		t.Errorf("cl: の無い jira なのに CL 置き場か gh か glab の entry を出した:\n%s", r.stdout)
+	if strings.Contains(r.stdout, "Bash(gh issue") || strings.Contains(r.stdout, "Bash(glab ") {
+		t.Errorf("issue 置き場でも CL 置き場でもない役割の entry を出した:\n%s", r.stdout)
 	}
-	s.assertNoOtherTrackerCLI("cl: の無い jira なのに")
 }
 
 func TestJiraDoctorNamesEachUnknownStatus(t *testing.T) {

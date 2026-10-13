@@ -2,26 +2,17 @@ package blackbox_test
 
 import (
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/swat9013/claude-dispatcher/test/blackbox/stubwire"
 )
 
-// Jira の issue 置き場と、cl: で宣言した別の CL 置き場 (案内の「項目」の cl、formats.md §6 の CL 置き場の確認)。issue は
-// acli、CL は gh の stub が返す。
+// Jira の issue 置き場と、cl: で宣言した別の CL 置き場 (案内の「項目」の cl、formats.md §6 の CL 置き場の確認、ADR 0015)。
+// issue は acli、CL は gh の stub が返す。
 
-// githubCL は GitHub の CL 置き場を指す cl: の宣言。
-const githubCL = "cl:\n  kind: github\n  repo: acme/widgets\n"
-
-// jiraWorkflowWithCL は cl: に GitHub の CL 置き場を宣言し、trigger の宣言だけを差し替えた jira の workflow 定義。
-func jiraWorkflowWithCL(triggers string) string {
-	return "---\n" + jiraTracker + githubCL + "triggers:" + triggers + "\n---\n共通 prompt\n"
-}
-
-// jiraFixCI は issue の trigger と、CI の落ちた CL に当たる trigger を置いた、cl: のある jira の workflow 定義。
-var jiraFixCI = jiraWorkflowWithCL(`
+// jiraFixCI は issue の trigger と、CI の落ちた CL に当たる trigger を置いた jira の workflow 定義。
+var jiraFixCI = jiraWorkflowWithTriggers(`
   - {name: implement, on: issue, when: {status: {any: [Ready for Agent]}}, action: "/implement {{ .issue.key }}"}
   - {name: fix-ci, on: cl, when: {ci_failed: true, author: collaborator}, action: "/fix-ci {{ .cl.number }}"}`)
 
@@ -44,7 +35,7 @@ func TestJiraWithAGitHubCLHostRunsCLTriggersOnTheGitHubCLs(t *testing.T) {
 	s.assertAcliOnlyReads()
 }
 
-func TestJiraWithACLHostConfirmsTheCLHostEvenWithoutCLTriggers(t *testing.T) {
+func TestJiraConfirmsTheCLHostEvenWithoutCLTriggers(t *testing.T) {
 	cases := []struct {
 		name   string
 		stderr string
@@ -56,8 +47,7 @@ func TestJiraWithACLHostConfirmsTheCLHostEvenWithoutCLTriggers(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			s := newSandbox(t)
-			s.writeWorkflowWithCommands(jiraWorkflowWithCL(`
-  - {name: implement, on: issue, when: {status: {any: [Ready for Agent]}}, action: "/implement {{ .issue.key }}"}`))
+			s.writeWorkflowWithCommands(jiraWorkflow)
 			s.setJiraIssues(readyJiraIssue(42))
 			s.failGh(c.stderr, 1)
 
@@ -76,31 +66,6 @@ func TestJiraWithACLHostConfirmsTheCLHostEvenWithoutCLTriggers(t *testing.T) {
 	}
 }
 
-func TestJiraDoctorWithACLHostNamesBothPlacesAndTheCLHostEntries(t *testing.T) {
-	s := newSandbox(t)
-	s.writeWorkflowWithCommands(jiraFixCI)
-	s.setJiraIssues()
-	s.setStore(nil, nil)
-
-	r := s.run("doctor")
-
-	assertExit(t, r, 0)
-	for _, want := range []string{
-		"ok   issue 置き場 " + jiraSite + "/" + jiraKey + "\nok   CL 置き場 acme/widgets\n",
-		"ok   acli " + filepath.Join(s.binDir, "acli") + "\n",
-		"ok   gh " + filepath.Join(s.binDir, "gh") + "\n",
-		"ok   git ",
-		"  Bash(acli jira workitem:*)\n  Bash(gh pr:*)\n  Bash(git push:*)\n",
-	} {
-		if !strings.Contains(r.stdout, want) {
-			t.Errorf("stdout に %q が無い:\n%s", want, r.stdout)
-		}
-	}
-	if strings.Contains(r.stdout, "Bash(gh issue") || strings.Contains(r.stdout, "entry も足す") {
-		t.Errorf("CL 置き場の役割でない entry か、CL を開く CLI を足させる注記を出した:\n%s", r.stdout)
-	}
-}
-
 func TestJiraDoctorNamesTheCLHostItCannotRead(t *testing.T) {
 	s := newSandbox(t)
 	s.writeWorkflowWithCommands(jiraFixCI)
@@ -115,14 +80,13 @@ func TestJiraDoctorNamesTheCLHostItCannotRead(t *testing.T) {
 	}
 }
 
-func TestJiraRejectsCLTriggersWithoutACLHostAndPointsToTheCLDeclaration(t *testing.T) {
+func TestJiraRejectsAWorkflowWithoutTheCLDeclaration(t *testing.T) {
 	s := newSandbox(t)
-	s.writeWorkflowWithCommands(jiraWorkflowWithTriggers(`
-  - {name: fix, on: cl, action: /fix}`))
+	s.writeWorkflowWithCommands(strings.Replace(jiraWorkflow, githubCL, "", 1))
 
 	r := s.dryRun()
 
-	s.assertRejected(r, "triggers[0].on", "cl:")
+	s.assertRejected(r, "cl: 必須の項目が無い")
 	s.assertNoAcli("workflow 定義が誤っているのに")
 }
 
