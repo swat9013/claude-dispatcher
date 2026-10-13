@@ -142,6 +142,7 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 
 - 観測の失敗は、issue 置き場の部品が 認証 / 見えない / 読み切れない / rate limit に分けて返す (system.md §13)
   - 読み切れない: 1 往復で読む件数の上限を超えた (GitHub の issue の label・assignee・依存先、CL の label・review thread、GitLab の merge request の label が 100 件を超えた)。切り詰めた像から候補を出さない
+  - 観測の読み出しの結果を変えない補助の要求 (GitLab に conflict の計算し直しを求める、など) が落ちても、観測は失敗にしない。読み終えた作業対象で tick を続け、落ちたことを log.jsonl の `error` の行 (§4) に残す。補助の要求のために、関係の無い trigger までその tick に止めない
   - 外部 CLI (gh・glab・acli) と workspace の hooks (§2.6) の失敗のエラー文は、撃ったコマンド (hook はその名前)・exit code・stderr を載せる。stderr に HTML の本文 (`<!doctype html` か `<html` から後) があれば、status に依らずそこから後を落とし、落としたことを書き添える。reverse proxy・SSO・load balancer は HTML のページを返しうるので、tick の error・`doctor` の理由・`setup` (§7.4) のエラー文・log.jsonl (§4) の `end` の `failure`・`error` の `error` (hook の失敗の行き先) にページを丸ごと載せない
   - gh は、exit 4・status 401・message の `Bad credentials` を認証、status 404・message の `Could not resolve to a Repository` を見えない、status 429・message の `rate limit` を rate limit と見分ける
     - status は gh が status を出す位置でだけ読み、message の中の `HTTP 404` などには当てない。message は gh が印を付けて出す行 (と `gh api` の message の塊の続きの行) だけを読み、message の書き出しで当てる語 (`Bad credentials`・`Could not resolve to …`) は message の途中で触れただけのものには当てない。綴りの詳細は gh の版で変わりうるので、internal/github の apiStatusPattern のコメントが持つ
