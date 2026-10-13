@@ -104,7 +104,7 @@ worker に渡るもの:
 
 ## workflow 定義の書き方
 
-実装 repo の中に置く。tick ごとに読み直すので、直せば loop を起動し直さずに効く。ただし issue 置き場 (`tracker.kind`・`tracker.host`・`tracker.repo`) を変えたら、loop を起動し直すまで、どの tick も何も起動しない。
+実装 repo の中に置く。tick ごとに読み直すので、直せば loop を起動し直さずに効く。ただし issue 置き場 (`tracker.kind`・`tracker.host`・`tracker.repo`) か CL 置き場 (`cl`) を変えたら、loop を起動し直すまで、どの tick も何も起動しない。
 
 file は YAML の front matter と本文からなる。
 

@@ -278,6 +278,7 @@ claude-dispatcher loop [<workflow の path>]
 
 - 読み直した workflow 定義が検査に落ちたら、その tick は何も起動しない (#74 Q38)。周期は、最後に検査に通った版のものを使う
 - 読み直した workflow 定義の scope key が起動時と違えば、その tick は何も起動しない (lock は起動時の scope key で取っている)
+- 読み直した workflow 定義の CL 置き場 (`cl:` を書き足す・消す・別の置き場にする) が起動時と違っても、その tick は何も起動しない。claim している CL を、起動時と別の CL 置き場で読み直さないため
 
 **tick の手順** (system.md §7):
 

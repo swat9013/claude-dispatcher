@@ -312,7 +312,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。
 - **permission posture は workflow 定義の起動引数が決める**
   - 雛形は `--permission-mode auto` を置く
   - permission 層を外すかどうかは利用者が決める
-- **依存 CLI (tracker の CLI・claude・git) の path は CLI が自分でも解決する**。最小の PATH の shell (ssh 越しなど) から起動されても動くようにする
+- **依存 CLI (置き場の CLI・claude・git) の path は CLI が自分でも解決する**。最小の PATH の shell (ssh 越しなど) から起動されても動くようにする
   - 解決するのは workflow 定義が撃つ CLI だけ。tracker の CLI は `tracker.kind` で決まる (`github` は gh、`gitlab` は glab、`jira` は acli)。`cl:` を書いたら `cl.kind` の CLI (gh か glab) も撃つ。使わない置き場の CLI が無いことは、PATH を書き換える理由にしない
 - **試運転**
   - 1 tick 分の読み直し・事前検査・trigger の評価までを通し、起動する直前で止めて、起動するはずの作業対象と trigger を示す
@@ -380,7 +380,7 @@ CLI の中で、呼び出し側から中身を隠す部品と、差し替えの�
   - 一覧は読めたが、観測の結果を変えない補助の要求 (GitLab に conflict の計算し直しを求める、など) が落ちたときは、一覧とともに処理を続けられる失敗 (non-fatal) を返す。loop は一覧で tick を続け、その失敗を log.jsonl の `error` の行に残す (formats.md §3)
   - scope key は issue 置き場の部品が返す。tracker ごとの粒度 (GitHub は owner と repo、GitLab は host と repo の path、Jira は site と project key) を部品の外に出さない
   - Jira の作業対象の番号は issue の key (`WIDGETS-123`) の数字の部分。scope key が project key を含むので、scope の中で一意になる (ADR 0010)。project key を改名したら scope key が変わるので、workflow 定義を書き換えて loop を起動し直す
-  - どの adapter で組み立てるかは、workflow 定義の `tracker.kind` の provider が決める
+  - どの adapter で組み立てるかは、置き場の役割を担う provider が決める。issue 置き場の部品は `tracker.kind` の provider、CL 置き場の部品は CL 置き場の役割を担う provider (github・gitlab では `tracker.kind`、jira では `cl.kind`) が組み立てる
 - **tracker の種類の知識は provider に閉じる**
   - provider はサービス (github / gitlab / jira) ごとに 1 つ持つ。役割 (tracker / CL host) ごとに、支えるもの (設定・述語・template 変数)・作業対象の呼び方 (`#` / `!` / key)・Claude Code の settings の entry を宣言し、置き場の読み方と部品の組み立てを持つ
   - workflow 定義の検査・`setup`・`doctor`・loop の組み立ては、種類で分岐せずに provider を引く。種類を足すときは provider を 1 つ足す
