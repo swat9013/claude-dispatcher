@@ -209,6 +209,31 @@ func TestReadingAPlaceFromAWrittenHostAndRepoMakesThePlace(t *testing.T) {
 	}
 }
 
+func TestReadingAPlaceWithoutAHostUsesTheDefaultOfTheKind(t *testing.T) {
+	for _, kind := range []provider.Kind{provider.GitHub, provider.GitLab} {
+		t.Run(string(kind), func(t *testing.T) {
+			p, _ := provider.Of(kind)
+
+			place, err := p.ReadPlace("", "acme/widgets")
+
+			if err != nil || place.String() != placeOf(t, p).String() {
+				t.Fatalf("置き場 = %q, err = %v, want %q", place, err, placeOf(t, p))
+			}
+		})
+	}
+}
+
+func TestReadingAPlaceWithoutARequiredHostIsAnErrorOnTheHost(t *testing.T) {
+	p, _ := provider.Of(provider.Jira)
+
+	_, err := p.ReadPlace("", "WIDGETS")
+
+	var placeErr *provider.PlaceError
+	if !errors.As(err, &placeErr) || placeErr.Field != provider.HostField {
+		t.Fatalf("err = %v, want host の誤り", err)
+	}
+}
+
 // placeOf は p の見本の置き場。
 func placeOf(t *testing.T, p provider.Provider) provider.Place {
 	t.Helper()

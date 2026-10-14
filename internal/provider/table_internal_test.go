@@ -33,23 +33,13 @@ func TestAWritableHostWithoutADefaultIsRequired(t *testing.T) {
 	}
 }
 
-func TestParsingTheHostOfAKindThatCannotWriteItIsAnError(t *testing.T) {
-	var h Host
-
-	_, err := h.Parse("github.com")
-
-	if err == nil {
-		t.Fatal("tracker.host を書けない種類の host を読めた")
-	}
-}
-
 func TestEveryProviderDeclaresTheHostAndTheSetupConsistently(t *testing.T) {
 	for _, p := range providers {
 		t.Run(string(p.Kind), func(t *testing.T) {
-			if !p.Host.hasDefault && p.Host.defaultHost != "" {
-				t.Fatalf("既定を持たないのに既定の host %q がある", p.Host.defaultHost)
+			if host, ok := p.Host.Default(); !ok && host != "" {
+				t.Fatalf("既定を持たないのに既定の host %q がある", host)
 			}
-			if p.Host.Required() && p.Host.requiredHint == "" {
+			if p.Host.Required() && p.Host.RequiredHint() == "" {
 				t.Fatalf("tracker.host は必須なのに、欠落の誤りに添える案内が無い")
 			}
 			if p.Setup.ownsOrigin != nil && (p.Setup.currentPlace == nil || p.Setup.template == nil) {

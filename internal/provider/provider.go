@@ -229,7 +229,7 @@ func (p Provider) Reference(place Place, ref target.Ref) string {
 	panic(fmt.Sprintf("tracker.kind: %s の provider は %s を指す役割を持たない", p.Kind, ref))
 }
 
-// PlaceField は置き場を指す項目 (host か repo)。setup の flag の名前 (`--host`・`--repo`) と同じ綴り。
+// PlaceField は置き場を指す項目 (host か repo)。
 type PlaceField string
 
 const (
@@ -248,10 +248,11 @@ func (e *PlaceError) Error() string { return fmt.Sprintf("%s %q: %v", e.Field, e
 
 func (e *PlaceError) Unwrap() error { return e.Err }
 
-// ReadPlace は書かれた host と repo を、この種類の読み方で読んで置き場にする。host・repo の順に確かめ、誤りは
-// *PlaceError。tracker.host を書けない種類に host を渡せば、host の誤りにする。
+// ReadPlace は書かれた host と repo を、この種類の読み方で読んで置き場にする。host が "" なら書かなかったものとして既定を
+// 使い (既定を持たない種類は ""、必須なら誤り)、host・repo の順に確かめる。誤りは *PlaceError。tracker.host を書けない種類に
+// host を渡せば、host の誤りにする。
 func (p Provider) ReadPlace(host, repo string) (Place, error) {
-	parsedHost, err := p.Host.Parse(host)
+	parsedHost, err := p.readHost(host)
 	if err != nil {
 		return Place{}, &PlaceError{Field: HostField, Value: host, Err: err}
 	}
@@ -260,6 +261,18 @@ func (p Provider) ReadPlace(host, repo string) (Place, error) {
 		return Place{}, &PlaceError{Field: RepoField, Value: repo, Err: err}
 	}
 	return p.NewPlace(parsedHost, parsedRepo), nil
+}
+
+// readHost は書かれた host を読む。"" なら書かなかったものとして既定を使う。
+func (p Provider) readHost(host string) (string, error) {
+	if host != "" {
+		return p.Host.Parse(host)
+	}
+	if p.Host.Required() {
+		return "", fmt.Errorf("必須 (%s)", p.Host.RequiredHint())
+	}
+	defaultHost, _ := p.Host.Default()
+	return defaultHost, nil
 }
 
 // Place は provider が tracker.repo と tracker.host から読んだ置き場。表示名を返し、その provider の組み立てに渡す。
@@ -339,11 +352,24 @@ func (s Setup) Flags() string { return s.flags }
 // OwnsOrigin は cwd の clone の origin の host を、この種類の置き場と認めるか。
 func (s Setup) OwnsOrigin(host string) bool { return s.ownsOrigin != nil && s.ownsOrigin(host) }
 
-// CurrentPlace は cwd の clone の置き場を CLI で引く。
-func (s Setup) CurrentPlace(rt Runtime) (Place, error) { return s.currentPlace(rt) }
+// CurrentPlace は cwd の clone の置き場を CLI で引く。origin を認めない種類 (ForOrigin が返さない種類) に撃てば呼び出し側の
+// 誤りなので panic する。
+func (s Setup) CurrentPlace(rt Runtime) (Place, error) {
+	if s.currentPlace == nil {
+		panic("この種類の provider は cwd の clone から置き場を引けない")
+	}
+	return s.currentPlace(rt)
+}
 
-// Template は issue 置き場 issues を埋めた雛形。cl は cwd の clone の origin の CL 置き場。
-func (s Setup) Template(issues Place, cl scaffold.CLHost) string { return s.template(issues, cl) }
+// Template は issue 置き場 issues を埋めた雛形。cl は cwd の clone の origin の CL 置き場で、CL 置き場の役割を持たない種類
+// だけが cl: に書く (持つ種類の CL 置き場は issue 置き場と同じ場所)。雛形を持たない種類に撃てば呼び出し側の誤りなので
+// panic する。
+func (s Setup) Template(issues Place, cl scaffold.CLHost) string {
+	if s.template == nil {
+		panic("この種類の provider は雛形を持たない")
+	}
+	return s.template(issues, cl)
+}
 
 // ForOrigin は origin の host を認める provider。認める provider が無ければ originFallback の provider。
 func ForOrigin(host string) Provider {

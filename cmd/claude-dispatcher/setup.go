@@ -128,15 +128,23 @@ func (o setupOptions) place() (flaggedPlace, error) {
 		return flaggedPlace{}, fmt.Errorf("--kind %s には %s が要る", p.Kind, p.Setup.Flags())
 	}
 	place, err := p.ReadPlace(o.host, o.repo)
-	var placeErr *provider.PlaceError
-	if errors.As(err, &placeErr) {
-		// 項目の名前は flag の名前と同じ綴り
-		return flaggedPlace{}, fmt.Errorf("--%s %q: %w", placeErr.Field, placeErr.Value, placeErr.Err)
-	}
 	if err != nil {
-		return flaggedPlace{}, err
+		return flaggedPlace{}, flagError(err)
 	}
 	return flaggedPlace{provider: p, place: place}, nil
+}
+
+// placeFlags は置き場の項目を受ける flag の名前。
+var placeFlags = map[provider.PlaceField]string{provider.HostField: "--host", provider.RepoField: "--repo"}
+
+// flagError は ReadPlace の誤りを、項目を受けた flag の名前で名指しする。ReadPlace の誤りは *provider.PlaceError だけで、
+// それ以外が届けば呼び出し側の誤りなので panic する。
+func flagError(err error) error {
+	var placeErr *provider.PlaceError
+	if !errors.As(err, &placeErr) {
+		panic(fmt.Sprintf("ReadPlace が *provider.PlaceError でない誤りを返した: %v", err))
+	}
+	return fmt.Errorf("%s %q: %w", placeFlags[placeErr.Field], placeErr.Value, placeErr.Err)
 }
 
 // placeOfOrigin は cwd の clone の origin の host を認める provider (host が github.com なら github、それ以外は gitlab) と、
