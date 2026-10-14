@@ -17,8 +17,8 @@ limits:
   # go test -race の数分は heartbeat しか書かず、heartbeat は活動として数えない
   stall_timeout: 30m
 claude:
-  # 再入の仕組み (ScheduleWakeup・Cron*) を塞ぐ。使うと -p が pending な wakeup の発火を待って終わらず、並列の枠を塞ぐ
-  # (internal/guide/guide.md の claude.args の行)。--disallowedTools は値を複数取るが、dispatcher が後ろに渡す -p で止まる
+  # 再入の仕組みを塞ぐ (理由は internal/guide/guide.md の claude.args の行)。
+  # --disallowedTools は値を複数取るが、dispatcher が後ろに渡す -p で止まる
   args: [--permission-mode, auto, --disallowedTools, "ScheduleWakeup,CronCreate,CronList,CronDelete"]
 triggers:
   # 既存の pull request の手直しを、新規の実装より先に起動する (宣言順が優先順)
