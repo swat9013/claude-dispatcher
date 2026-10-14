@@ -229,11 +229,16 @@ type streamWatch struct {
 	readError string
 	// workspace は worker の workspace の path (活動の tool の入力の path を相対にする)
 	workspace string
+	// readProgress と readActivity は progress と活動の読み出し (既定は scanProgress と summarizeLatest)。
+	// test が片方だけを落とすために差し替える
+	readProgress func(file string, from, to int64) (found bool, end int64, err error)
+	readActivity func(file string, size, after int64, workspace string) (summary string, changed bool, end int64, err error)
 }
 
 // newStreamWatch は、stream の file の offset より後 (今の attempt が書く行) を started から見始める streamWatch。
 func newStreamWatch(path string, offset int64, started time.Time, workspace string) *streamWatch {
-	return &streamWatch{path: path, size: offset, started: started, progressed: started, scanned: offset, summarized: offset, workspace: workspace}
+	return &streamWatch{path: path, size: offset, started: started, progressed: started, scanned: offset, summarized: offset, workspace: workspace,
+		readProgress: scanProgress, readActivity: summarizeLatest}
 }
 
 // check は now の時点で stream の file を確かめる。前の確認から書かれた行に progress があれば stall の時計を now に戻し、
@@ -253,11 +258,11 @@ func (w *streamWatch) check(now time.Time) (activity string, changed bool) {
 	if size < w.size {
 		scanned, summarized = 0, 0
 	}
-	found, scanned, err := scanProgress(w.path, scanned, size)
+	found, scanned, err := w.readProgress(w.path, scanned, size)
 	if err != nil {
 		return w.unreadable(err)
 	}
-	activity, changed, summarized, err = summarizeLatest(w.path, size, summarized, w.workspace)
+	activity, changed, summarized, err = w.readActivity(w.path, size, summarized, w.workspace)
 	if err != nil {
 		return w.unreadable(err)
 	}
