@@ -39,7 +39,8 @@ func section(text, heading string) (string, bool) {
 }
 
 // provider の対応表の始まりの目印。述語の節は述語の表の後に provider の対応表を、「項目」の節は key の表の後に
-// 置き場のサービスごとの違いの表を持つ。
+// 置き場のサービスごとの違いの表を持つ。目印は段落の先頭の綴りで、行の頭に出たものだけを目印とみなす
+// (散文の途中で同じ綴りに触れても、そこで探す範囲が切れないように)。
 const (
 	serviceDifferenceTableMarker = "**置き場のサービスごとの違い**"
 	jiraProviderTableMarker      = "`tracker.kind` が `jira` のときの述語の意味:"
@@ -117,7 +118,7 @@ func missingGuideKeys(text string) ([]string, error) {
 		if !ok {
 			return nil, fmt.Errorf("案内に節 ### %s が無い", root.section)
 		}
-		end := strings.Index(body, root.providerTable)
+		end := strings.Index(body, "\n"+root.providerTable)
 		if end < 0 {
 			return nil, fmt.Errorf("案内の節 ### %s に provider の対応表の目印 %q が無い", root.section, root.providerTable)
 		}
@@ -141,7 +142,7 @@ func withoutRow(t *testing.T, text, heading, marker, key string) string {
 	if start < 0 {
 		t.Fatalf("案内 (internal/guide/guide.md) に節 ### %s が無い", heading)
 	}
-	end := strings.Index(text[start:], marker)
+	end := strings.Index(text[start:], "\n"+marker)
 	if end < 0 {
 		t.Fatalf("案内 (internal/guide/guide.md) の節 ### %s に目印 %q が無い", heading, marker)
 	}
@@ -221,5 +222,19 @@ func TestASectionWithoutItsProviderTableMarkerIsAnError(t *testing.T) {
 				t.Fatalf("provider の対応表の目印が無いことを名指しして落ちない: %v", err)
 			}
 		})
+	}
+}
+
+func TestAMarkerMentionedMidLineDoesNotCutTheSection(t *testing.T) {
+	// key の表より前の散文で、目印と同じ綴りに行の途中で触れる
+	text := strings.Replace(guide.Text(), "\n### 項目\n", "\n### 項目\n\n違いは "+serviceDifferenceTableMarker+" の表を見る。\n", 1)
+
+	missing, err := missingGuideKeys(text)
+
+	if err != nil {
+		t.Fatalf("案内を読めない: %v", err)
+	}
+	if len(missing) > 0 {
+		t.Fatalf("行の途中の目印の綴りで探す範囲が切れた: %v", missing)
 	}
 }
