@@ -270,6 +270,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。claim の段階と打�
   - loop は、起動した shell の環境変数を引き継ぐ
   - loop の環境は worker と hooks にもそのまま渡る。`$VAR` で渡した秘密は worker からも読めるので、秘密を worker に見せない手段は持たない
   - `tracker.token` は、loop が撃つ置き場の CLI・worker・hooks のすべてに、その CLI が読む環境変数 (gh は `GH_TOKEN`、glab は `GITLAB_TOKEN`) として渡す
+    - glab は `GITLAB_TOKEN` を host を問わず使う。worker と hooks が `tracker.host` と別の GitLab の host へ glab を撃つと、token がその host にも送られる。host を絞る手段は glab の設定 file に token を書くことしかなく、dispatcher は秘密を持たない線 (ADR 0014) を保つので絞らない。この露出と回避は案内で告げる
 - **tick ごとに読み直す** (SPEC §6.2)
   - 直せば、loop を起動し直さずに効く
   - 読めない版・文法に合わない版では、新しい起動を止める。走っている worker の突き合わせは続ける
