@@ -304,14 +304,16 @@ func activityReadFails(string, int64, int64, string) (string, bool, int64, error
 
 // onlyProgressUnreadableUntilRestored は progress の読み出しだけを落とし (活動は読める)、元へ戻す関数を返す。
 func onlyProgressUnreadableUntilRestored(w *streamWatch) (restore func()) {
+	prev := w.readProgress
 	w.readProgress = progressReadFails
-	return func() { w.readProgress = scanProgress }
+	return func() { w.readProgress = prev }
 }
 
 // onlyActivityUnreadableUntilRestored は活動の読み出しだけを落とし (progress は読める)、元へ戻す関数を返す。
 func onlyActivityUnreadableUntilRestored(w *streamWatch) (restore func()) {
+	prev := w.readActivity
 	w.readActivity = activityReadFails
-	return func() { w.readActivity = summarizeLatest }
+	return func() { w.readActivity = prev }
 }
 
 func TestStallClockDoesNotResetWhileOnlyTheProgressCannotBeRead(t *testing.T) {
