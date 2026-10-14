@@ -40,8 +40,8 @@ const (
 // goVersionForm は期待値が取る版の形 (patch まで書いた版)
 var goVersionForm = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
 
-// adrNumberForm は ADR の file 名の先頭の番号。この形で始まらない file (README 等) は番号の検査から外す
-var adrNumberForm = regexp.MustCompile(`^([0-9]{4})-`)
+// adrNumberForm は ADR の file 名の先頭 4 桁の番号。この形でない file (README 等) は番号の検査から外す
+var adrNumberForm = regexp.MustCompile(`^([0-9]{4}).*\.md$`)
 
 func main() {
 	if len(os.Args) != 2 {
@@ -53,6 +53,9 @@ func main() {
 	case "files":
 		var files repoFiles
 		files, err = readRepoFiles()
+		if err == nil {
+			files.adrNames, err = readADRNames()
+		}
 		if err == nil {
 			problems, err = checkFiles(files)
 		}
@@ -79,7 +82,7 @@ func fatal(err error) {
 
 type repoFiles struct {
 	ci, checks, release, contributing, goMod string
-	// adrNames は docs/adr の file 名 (directory の中身の名前だけ)
+	// adrNames は docs/adr の file 名 (path を含まない名前だけ)。files の検査だけが読む
 	adrNames []string
 }
 
@@ -95,11 +98,22 @@ func readRepoFiles() (repoFiles, error) {
 	f.release, errs[2] = read(releasePath)
 	f.contributing, errs[3] = read(contributingPath)
 	f.goMod, errs[4] = read(goModPath)
+	return f, errors.Join(errs[:]...)
+}
+
+// readADRNames は docs/adr の file の名前を返す (directory は除く)。ruleset の検査は使わないので readRepoFiles と分ける
+func readADRNames() ([]string, error) {
 	entries, err := os.ReadDir(adrDir)
-	for _, e := range entries {
-		f.adrNames = append(f.adrNames, e.Name())
+	if err != nil {
+		return nil, err
 	}
-	return f, errors.Join(append(errs[:], err)...)
+	var names []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			names = append(names, e.Name())
+		}
+	}
+	return names, nil
 }
 
 func runRuleset() ([]string, error) {

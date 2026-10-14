@@ -214,7 +214,27 @@ func TestCheckFiles_ADRの先頭4桁が重なれば番号とfile名を出して�
 
 func TestCheckFiles_ADRの先頭4桁が重ならなければ通す(t *testing.T) {
 	files := validFiles()
-	files.adrNames = append(slices.Clone(adrNames), "0004-fourth.md", "README.md")
+	files.adrNames = append(slices.Clone(adrNames), "0004-fourth.md")
+
+	problems, err := checkFiles(files)
+
+	if err != nil || len(problems) != 0 {
+		t.Fatalf("got %q, %v", problems, err)
+	}
+}
+
+func TestCheckFiles_区切りが違ってもADRの先頭4桁が重なれば落とす(t *testing.T) {
+	files := validFiles()
+	files.adrNames = append(slices.Clone(adrNames), "0003_other.md")
+
+	problems, _ := checkFiles(files)
+
+	assertProblem(t, problems, "0003 が重なる: 0003-third.md / 0003_other.md")
+}
+
+func TestCheckFiles_先頭が番号でないmdとmdでないfileはADRの番号として数えない(t *testing.T) {
+	files := validFiles()
+	files.adrNames = append(slices.Clone(adrNames), "README.md", "0001-first.md.orig")
 
 	problems, err := checkFiles(files)
 
