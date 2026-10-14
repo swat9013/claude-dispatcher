@@ -431,10 +431,13 @@ func TestGitLabLoopLaunchesAWorkerAndCompletesWhenTheIssueLeavesTheTrigger(t *te
 
 func TestGitLabRejectsTheDeclarationsItCannotSupportWhereverTheyAreWritten(t *testing.T) {
 	s := newSandbox(t)
-	// triggers を tracker より前に書いても、kind に依る誤りを名指しする
+	// triggers と cl を tracker より前に書いても、kind に依る誤りを名指しする
 	s.writeWorkflowWithCommands(`---
 triggers:
   - {name: implement, on: issue, when: {blocked: false}, action: /implement}
+cl:
+  kind: github
+  repo: acme/widgets
 tracker:
   kind: gitlab
   repo: acme/sub/widgets
@@ -444,7 +447,7 @@ tracker:
 
 	r := s.dryRun()
 
-	s.assertRejected(r, "triggers[0].when.blocked")
+	s.assertRejected(r, "triggers[0].when.blocked", "cl (4 行目)")
 	s.assertNoGlab("workflow 定義が誤っているのに")
 }
 

@@ -141,7 +141,8 @@ type TrackerRole struct {
 	Prefix string
 	// IssueKey は key で指す種類の、番号の issue の key
 	IssueKey func(place Place, number int) string
-	// declared は tracker.token を除く宣言。tracker.token を支えるかは TokenVariable から導く (Declarations)
+	// declared は宣言。tracker.token を支えるかだけは Supports に書かず TokenVariable から導く (Declarations)。支えない種類
+	// の理由は Declines に書く
 	declared Declarations
 	// TokenVariable は tracker.token を渡す環境変数の名前 (役割を担う CLI が読むもの)。"" でない種類だけが tracker.token を
 	// 支える
