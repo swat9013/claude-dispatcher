@@ -31,6 +31,11 @@ claude-dispatcher-dev loop
 - **状態は Homebrew 版と共有する**: state dir ([docs/design/formats.md](docs/design/formats.md) §1) は Homebrew 版と同じものを読み書きする。同じ issue 置き場の loop は 1 本しか動かせない (`loop.lock`) ので、Homebrew 版の loop を止めてから dev の loop を撃つ。分けたいときは `XDG_STATE_HOME` を上書きして撃つ
 - **tracker と CL host は本物**: 試運転でない loop は、実際の issue 置き場を読んで worker を起動する。試すなら使い捨ての issue に trigger の label を付けるか、`loop --dry-run` で止める
 
+## 文書の読み手
+
+- README.md は claude-dispatcher の利用者 (導入して loop を回す人) に向けて書く。開発者と agent に向けた手順 (開発中の版の動かし方など) はこの file に、設計の資料は `docs/` と `CONTEXT.md` に置き、README からは開発に加わる人への入口として、この file を 1 回だけ指す。利用者が読まない資料が混ざると、利用者に要る手順が埋もれる
+- README は、利用者が撃つ手順の名前とコマンド例を持ち、条件や例外は「`claude-dispatcher guide` の「回す・見る・止める」」のように案内の節名で指す。案内は binary と同じ版の中身を出し、利用者のセッションにも届くので、細部はそちらに置く。案内が何の正本かは [docs/design/README.md](docs/design/README.md) の「設計を先に直す」の表に従う
+
 ## branch・worktree 運用
 
 - 作業は issue 単位で行い、main から `worktree-issue-<n>` (`<n>` は issue 番号) の branch を切る
@@ -57,7 +62,7 @@ claude-dispatcher-dev loop
   - gofmt (`go fmt ./...`): 整形し直した file があれば落ちる。file は書き換わった後なので、見直して stage し直す
   - go mod tidy (`go mod tidy -diff`): go.mod / go.sum に差分が出れば落ちる
   - actionlint: workflow の静的検査。`run:` の script は、hook 環境に版を固定して入れた shellcheck で検査する
-  - repocheck (`go run ./scripts/repocheck files`): 同じ値を 2 箇所以上に書いている設定の一致を検査する。GoReleaser の版 (checks.yml と release.yml) と、下の「PR に付く check 名」の列挙 (checks.yml の job 名と matrix から組み立てた名前) と、go.mod の `go` 行 (下の「版の更新」の「手で見るもの」に書いた期待値) がずれていれば落ちる。network は使わない
+  - repocheck (`go run ./scripts/repocheck files`): 同じ値を 2 箇所以上に書いている設定の一致を検査する。GoReleaser の版 (checks.yml と release.yml) と、下の「PR に付く check 名」の列挙 (checks.yml の job 名と matrix から組み立てた名前) と、go.mod の `go` 行 (下の「版の更新」の「手で見るもの」に書いた期待値) がずれていれば落ちる。加えて、[docs/adr/](docs/adr/) の file 名の先頭 4 桁 (ADR の番号) が重なれば、重なった番号と file 名を出して落ちる。network は使わない
 - push 前: `go vet ./...`・`golangci-lint run ./...` (設定は [.golangci.yml](.golangci.yml)。binary の入れ方は上の「セットアップ」) ・`go test -race ./...` (データ競合の検出付き) が通ること。加えて gitleaks が、push する commit のうち remote に無いもの (merge commit を除く) を 1 つずつ検査する。CI の `pre-commit` job は同じ hook を PR の commit 範囲に撃つ。`pre-commit install` 済みなら push 時に hook が走り、落ちると push を止める
   - golangci-lint の既定セットも govet を含むが、`go vet ./...` も撃つ (理由は .pre-commit-config.yaml の go-vet の hook のコメント)
   - `test/blackbox` は binary を build して外から撃つ black-box テスト (外から観測できる契約の検査。正本は [docs/design/formats.md](docs/design/formats.md))。外部 CLI は stub に差し替えるので、network も認証も要らず、マシンに在る実物にも届かない。例外: Homebrew の prefix 等に gh / claude の実物があるマシン (macOS の runner の gh 等) では、「解決できない」を確かめるテストが skip される

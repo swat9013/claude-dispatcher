@@ -121,7 +121,7 @@ func flagKinds() string { return provider.Join(provider.SetupFlagKinds()) }
 // place は --kind の flag から、その種類の provider の読み方で置き場を読む。flag で受けるのは provider が宣言した種類だけ。
 func (o setupOptions) place() (flaggedPlace, error) {
 	p, ok := provider.Of(provider.Kind(o.kind))
-	if !ok || p.Setup.Flags == "" {
+	if !ok || !p.Setup.TakesFlags() {
 		return flaggedPlace{}, fmt.Errorf("--kind は %s だけを受ける (%q)", flagKinds(), o.kind)
 	}
 	if o.host == "" || o.repo == "" {

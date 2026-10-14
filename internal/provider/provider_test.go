@@ -29,13 +29,13 @@ func TestEveryKindHasAProviderThatDeclaresEveryField(t *testing.T) {
 			if p.Tracker.KeyedIssues != (p.Tracker.IssueKey != nil) || (!p.Tracker.KeyedIssues && p.Tracker.Prefix == "") {
 				t.Fatalf("provider %s の issue の呼び方が key の有無と合わない", kind)
 			}
-			if p.Host.Parse != nil && p.Host.Default == "" && p.Host.RequiredHint == "" {
+			if p.Host.Required() && p.Host.RequiredHint == "" {
 				t.Fatalf("provider %s の tracker.host は必須なのに、欠落の誤りに添える案内が無い", kind)
 			}
 			if p.Setup.OwnsOrigin != nil && (p.Setup.CurrentPlace == nil || p.Setup.Template == nil) {
 				t.Fatalf("provider %s は origin を認めるのに、clone から雛形を書けない", kind)
 			}
-			if p.Setup.Flags != "" && (p.Setup.Template == nil || p.Host.Parse == nil) {
+			if p.Setup.TakesFlags() && (p.Setup.Template == nil || !p.Host.Writable()) {
 				t.Fatalf("provider %s は flag で受けるのに、--host を読めないか雛形を書けない", kind)
 			}
 		})

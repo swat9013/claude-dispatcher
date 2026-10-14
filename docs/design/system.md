@@ -96,6 +96,7 @@ dispatcher は、状態の意味を定めない。issue の label が何を表�
   - 同じマシンの中では、scope key の lock で 2 本目の loop を拒む (§9)
   - マシンを跨いだ排他は持たない。1 つの issue 置き場は 1 台から回す
   - マシンを跨いだ分担は、調停 remote を指した project に限り ADR 0011 の形で持つことを決めた。未実装 (#167)
+    - 調停 remote への `refs/dispatcher/*` の push (着手宣言・生存報告) は、すべて `git push --no-verify` で撃ち、実装 repo の pre-push hook (husky・lefthook・pre-commit など) を通さない。push するのは利用者のコードを含まない空の tree の commit なので、利用者のコードの変更を検査する hook を飛ばしても守るものを失わない (ADR 0017)
 
 ## 5. 機械と LLM の線
 
@@ -210,6 +211,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。claim の段階と打�
    - `--append-system-prompt-file` は `--resume` のときも毎回渡す
 4. 終了後に `after_run` を撃つ
 5. 作業対象を読み直し、起動した trigger から外れたかを確かめる
+   - 確かめに使うのは claim が起動したときに持った trigger の述語で、workflow 定義から引き直さない (その trigger が workflow 定義から消えていても同じ)
    - 読み直しに失敗したら、完了とも失敗とも数えない。error として log に残し、claim を持ったまま次の tick で確かめ直す
    - 外れていれば **完了**。claim を解く
    - 当たったままなら、worker が正常終了していても **失敗と同じに扱う** (ADR 0009「当たったままの正常終了は失敗と数える」)
@@ -224,11 +226,13 @@ SPEC §7・§8・§16 の状態機械を土台にする。claim の段階と打�
   - CL が tick の一覧で曖昧な CL (§6) に見えても claim を解かず、attempt を進めずに次の tick で試み直す。曖昧さは一覧でしか決まらず、古い一覧が close 直後の兄弟 CL を open のまま返すと曖昧に見える。そこで claim を解くと、次の tick で attempt 1 から数え直して起動しうる (attempt の上限をすり抜ける)
   - 曖昧な間も claim は再起動待ちとして残り、並列の枠を 1 つ使い続ける。曖昧な CL は `status` に出るので、人が片方を close すれば解ける
   - 再起動は同じ trigger で続ける。宣言順で先の trigger に当たるようになっていても、その評価は claim が解けた後の tick で行う
+  - 再起動を試みるときに、起動した trigger が workflow 定義から消えていれば、作業対象を読み直さずに claim を解く (続ける trigger が無いため)。trigger は名前で引き当てるので、名前を変えた trigger は消えたものと数える。試みるのは backoff が明けて空きがあるときなので、それまでは claim を持ったまま待つ
 - **attempt が上限に達したら打ち切る**
   - 打ち切りは memory に持ち、log と `status` に出す。tracker には書かない
   - 打ち切りは作業対象ごとに持つ。打ち切った作業対象は、どの trigger に当たっても起動しない
   - 打ち切ったときの trigger から作業対象が一度外れたのを tick で観測すると解ける。人が label を外して付け直せば、再び候補になる
   - 外してから付け直すまでが 1 周期に収まると、外れたのを観測できない。`status` の打ち切りの表示に、label を外して 1 周期待つよう書く
+  - 打ち切ったときの trigger が workflow 定義から消えたのを tick で観測しても解ける (外れたかを確かめる述語が無いため)。解けた作業対象は、残る trigger に当たれば再び候補になる
   - loop を起動し直すと消える
 
 **workspace**。

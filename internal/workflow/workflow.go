@@ -612,7 +612,7 @@ func (c *checker) place(owner, n *yaml.Node, path, key string, p *provider.Provi
 	if !in.hostWritten {
 		in.host, in.hostRead = p.Host.Default, true
 		// 既定を持たない host は必須。mapping の必須は種類に依らないので、ここで欠落を名指しする
-		if p.Host.Parse != nil && p.Host.Default == "" {
+		if p.Host.Required() {
 			in.hostRead = false
 			if n.Kind == yaml.MappingNode {
 				c.fail(owner, join(path, "host"), "必須の項目が無い (%s: %s では %s)", key, p.Kind, p.Host.RequiredHint)
@@ -680,7 +680,7 @@ func (c *checker) placeFields(p *provider.Provider, place *placeInput) map[strin
 			place.hostWritten = true
 			switch {
 			case p == nil:
-			case p.Host.Parse == nil:
+			case !p.Host.Writable():
 				c.fail(key, path, "未知の key")
 			default:
 				place.host, place.hostRead = parsed(c, n, path, p.Host.Parse)

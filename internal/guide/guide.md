@@ -33,6 +33,8 @@ claude-dispatcher は、tracker (GitHub・GitLab・Jira Cloud) の issue と CL 
    - workspace の置き場 (`workspace.root`) が clone の中なら、`.gitignore` に足す。既定の `.claude-dispatcher/workspaces` は clone の中に入る。`setup` は `.gitignore` を書かない
 3. **試運転**: `claude-dispatcher loop --dry-run` が workflow 定義を検査し、起動するはずの作業対象と trigger を 1 件 1 行で示す。何も起動せず、何も書かない
 4. **導入を確かめる**: `claude-dispatcher doctor` が workflow 定義・issue 置き場・依存 CLI・事前検査を確かめ、利用者の約束に頼る宣言を警告する。Claude Code の settings (`permissions.allow`) に要りそうな entry も示すので、自分で足す (CLI は settings を書かない)
+   - 依存 CLI は、gh・glab・acli のどれか・claude・git (git は CL 側の trigger があるとき)
+   - 警告する宣言は、承認済みの CL への action と、絞り込みの無い CL 側の trigger
 5. **回す**: `claude-dispatcher loop` を撃つ (下の「回す・見る・止める」)
 
 workflow 定義に誤りがあれば、試運転・`loop` の起動・`doctor` が項目の位置を名指しして失敗する。直して 3 へ戻る。
@@ -51,9 +53,11 @@ workflow 定義に誤りがあれば、試運転・`loop` の起動・`doctor` �
 ### 見る
 
 - loop を撃った端末には、`status` と同じ内容と直近のログを描き直し続ける。stdout が端末でなければ、ログの行と worker の活動を 1 行ずつ追記する
+  - 直近のログは、tick・起動・終了・再起動・停止・error の行の直近 10 行。worker の最新の活動は `workers` の表の列で見る
+  - 色は stdout が端末のときだけ付く。環境変数 `NO_COLOR` を設定すれば付かない (`status` も同じ)
 - 別の端末からは `claude-dispatcher status` で見る。loop が書き出す状態 file を描くだけで、何も書かず、tracker の CLI も撃たない
   - 見出しの 1 行目は loop が生きているか (`loop 稼働中` / `loop 停止待ち` / `loop なし`)、2 行目は次の tick と直近の tick の結果
-  - `workers` に走っている worker と再起動待ちを、`要対処` に打ち切り・曖昧な CL・事前検査に落ちた trigger を解き方とともに並べる
+  - `workers` に走っている worker と再起動待ちを (段階・経過・最新の活動を含む)、`要対処` に打ち切り・曖昧な CL・事前検査に落ちた trigger を解き方とともに並べる
 - 置き場は `claude-dispatcher paths --json` で引く。何も書かず、tracker の CLI も撃たない
 
 | key | 中身 |
@@ -185,7 +189,7 @@ triggers:                    # 必須。1 つ以上
 | `limits.stall_timeout` | 文字列 | worker の stream (stdout の stream-json) に progress (heartbeat (`tool_progress`)・rate limit の通知・読めない行を除いた行) が書かれなくなってから、止めて失敗とするまでの時間。既定 15m。`0s` で無効。claude が行を書かない区間 (長い build や test などの tool の実行・API の retry の backoff・compaction) より長くする |
 | `limits.run_timeout` | 文字列 | worker 1 回分の上限時間。起動からの経過が超えたら止めて失敗とする。既定 1h。`0s` で無効 |
 | `claude.command` | 文字列 | worker として起動する command。PATH から探す。既定 `claude` |
-| `claude.args` | 文字列の列 | command に、dispatcher が渡す引数 (上の「action が守る約束」の起動のコマンド) より前に渡す引数。既定は空。permission の扱い (`--permission-mode` など) はここで決める |
+| `claude.args` | 文字列の列 | command に、dispatcher が渡す引数 (上の「action が守る約束」の起動のコマンド) より前に渡す引数。既定は空。permission の扱い (`--permission-mode` など) はここで決める。worker が再入の仕組み (`ScheduleWakeup`・`CronCreate`・`CronList`・`CronDelete`) を使うと、`-p` は仕事を終えた後も pending な wakeup の発火を待って終わらず、並列の枠を塞ぐ。`--disallowedTools` で塞ぐことを勧める (background の subagent の完了は、`-p` が自分で新しい turn を始めて拾うので、待つための wakeup は要らない) |
 | `triggers` | 列 | trigger の宣言。1 つ以上。宣言順が起動の優先順 (先頭の trigger ほど先に起動する) |
 | `triggers[].name` | 文字列 | trigger の名前。`[A-Za-z0-9._-]+`。trigger の間で重複しない |
 | `triggers[].on` | 文字列 | 作業対象の種類。`issue` か `cl` (`gitlab` では merge request)。`cl` は CL 置き場の CL に当たる (`jira` では `cl:` の CL 置き場) |
