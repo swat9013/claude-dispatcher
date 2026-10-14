@@ -21,6 +21,15 @@ The skills speak in terms of five canonical triage roles. This file maps those r
 - triage で、選択肢を 2〜4 個に絞れない論点を抱えた issue に付ける。triage は済んでいるので `needs-triage` は外す
 - 深掘りの対話は、user が任意のセッションで grill 系の skill を呼んで行う。論点が固まったら、決定を issue に記録し、`need-grilling` を外して着手可 label を付ける (付ける前に `ready-for-agent-review` を通す)
 
+## 計画的な分解の親 (この repo で足した role)
+
+| Role   | Label in our tracker | Meaning                                                                    |
+| ------ | -------------------- | -------------------------------------------------------------------------- |
+| 計画的な分解の親 | `tracking` | 子 issue の追跡用で、直接は実装しない issue |
+
+- 子 issue がすべて close されたら close する。着手可にも triage 待ちにもしない
+- `docs/agents/issue-tracker.md` の「follow-up issue の深さ」は、この label を持つ親から子への辺を深さに数えない
+
 When a skill mentions a role (e.g. "apply the AFK-ready triage label"), use the corresponding label string from this table.
 
 Edit the right-hand column to match whatever vocabulary you actually use.
