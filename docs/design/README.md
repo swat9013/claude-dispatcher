@@ -62,8 +62,9 @@ entity に付けた印は、その entity の正本がどこにあるかを表�
 
 [![claim の状態機械図](statechart.svg)](statechart.svg)
 
-正本は [`statechart.puml`](statechart.puml)。作業対象 1 件について、loop の記憶 (claim と打ち切り) が出来事ごとにどう移るかを描く。状態は claim なし・claim の段階 4 つ・打ち切り、出来事は `system.md` §7 と §9 が挙げるもの。完了と claim を解くは、claim なしへ戻る遷移の効果で表す。
+正本は [`statechart.puml`](statechart.puml)。作業対象 1 件について、loop の記憶 (claim と打ち切り) が出来事ごとにどう移るかを描く。状態は claim なし・claim の段階 4 つ・打ち切り、出来事は `system.md` §7 と §9 が挙げるもの (`workflow定義を採れない` は、§7 の読めない・文法に合わない版と、§9 の scope key が変わった版をまとめる)。
 
-- **網羅の正本は図、規則の正本は §7**: どの「段階 × 出来事」にどの遷移があるかは図が持ち、遷移の条件と効果を決める規則 (backoff の式・再起動の前の読み直し・曖昧な CL の扱い 等) は §7 が散文で持つ。同じ遷移を図と §7 の両方に列挙しない
-- **当てない組み合わせには理由を書く**: 遷移の無い組み合わせは、図の中に `' uncovered: <状態> x <出来事> — <理由>` で理由を書く。理由の無い組み合わせは定義漏れとして検査が落とす
-- **直したら 3 つを通し直す**: 先に `plantuml --check-syntax docs/design/statechart.puml` の exit code で構文を確かめ (`-tsvg` は構文の誤りでも exit 0 を返しうる)、`plantuml -tsvg docs/design/statechart.puml` で描き直して対で commit する。網羅は Claude Code plugin `swat-skills` の sud-design skill に同梱の `scripts/check-statechart.py` に `docs/design/statechart.puml` を渡し、exit 0 で確かめる (全組み合わせが遷移か理由付きの宣言で埋まり、どの状態にも初期状態から届くこと)
+- **網羅の正本は図、規則の正本は §7**: どの「段階 × 出来事」にどの遷移があるかは図が持ち、遷移の条件と効果を決める規則 (backoff の式・再起動の前の読み直し・曖昧な CL の扱い 等) は §7 が散文で持つ。同じ遷移を図と §7 の両方に列挙しない。図の遷移のラベルは `出来事 [条件] / 出口` の形で、条件は同じ出来事で行き先が分かれるときだけ、出口は claim を出入りするとき (claim を立てる・完了・失敗・claim を解く・打ち切りを解く) だけ書く
+- **§7・§9 が反応を定める組み合わせは自己遷移で描く**: 待ち直す・確かめ直すなど、段階を変えずに反応する組み合わせ
+- **当てない組み合わせには理由を書く**: 遷移の無い組み合わせは、図の中に `' uncovered: <状態> x <出来事> — <理由>` の行で理由を書く。出来事の名前は空白を含めない (宣言が空白で切る)。状態は図の中の ASCII の alias で書く
+- **直したら手で 3 つを通し直す** (どれも gate には入っていない): 描き直しと構文の確かめ方は上のドメインモデル図と同じ (`plantuml --check-syntax docs/design/statechart.puml` の exit code を見てから `plantuml -tsvg docs/design/statechart.puml`)。網羅は Claude Code plugin `swat-skills` の sud-design skill に同梱の `scripts/check-statechart.py` に `docs/design/statechart.puml` を渡して撃ち、exit 0 を確かめる。理由の無い組み合わせ・遷移のある組み合わせへの宣言の残骸・初期状態から届かない状態があると落ちる
