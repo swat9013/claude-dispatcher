@@ -185,7 +185,7 @@ triggers:                    # 必須。1 つ以上
 | `limits.stall_timeout` | 文字列 | worker の stream (stdout の stream-json) に progress (heartbeat (`tool_progress`)・rate limit の通知・読めない行を除いた行) が書かれなくなってから、止めて失敗とするまでの時間。既定 15m。`0s` で無効。claude が行を書かない区間 (長い build や test などの tool の実行・API の retry の backoff・compaction) より長くする |
 | `limits.run_timeout` | 文字列 | worker 1 回分の上限時間。起動からの経過が超えたら止めて失敗とする。既定 1h。`0s` で無効 |
 | `claude.command` | 文字列 | worker として起動する command。PATH から探す。既定 `claude` |
-| `claude.args` | 文字列の列 | command に、dispatcher が渡す引数 (上の「action が守る約束」の起動のコマンド) より前に渡す引数。既定は空。permission の扱い (`--permission-mode` など) はここで決める |
+| `claude.args` | 文字列の列 | command に、dispatcher が渡す引数 (上の「action が守る約束」の起動のコマンド) より前に渡す引数。既定は空。permission の扱い (`--permission-mode` など) はここで決める。worker が再入の仕組み (`ScheduleWakeup`・`CronCreate`・`CronList`・`CronDelete`) を使うと、`-p` は仕事を終えた後も pending な wakeup の発火を待って終わらず、並列の枠を塞ぐ。`--disallowedTools` で塞ぐことを勧める (background の subagent の完了は、`-p` が自分で新しい turn を始めて拾うので、待つための wakeup は要らない) |
 | `triggers` | 列 | trigger の宣言。1 つ以上。宣言順が起動の優先順 (先頭の trigger ほど先に起動する) |
 | `triggers[].name` | 文字列 | trigger の名前。`[A-Za-z0-9._-]+`。trigger の間で重複しない |
 | `triggers[].on` | 文字列 | 作業対象の種類。`issue` か `cl` (`gitlab` では merge request)。`cl` は CL 置き場の CL に当たる (`jira` では `cl:` の CL 置き場) |
