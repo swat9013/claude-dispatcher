@@ -244,15 +244,18 @@ type PlaceError struct {
 	Err   error
 }
 
-func (e *PlaceError) Error() string { return fmt.Sprintf("%s %q: %v", e.Field, e.Value, e.Err) }
+func (e *PlaceError) Error() string { return e.Named(string(e.Field)).Error() }
+
+// Named は誤りを、項目を name の名前で名指しした誤り (`<name> "<値>": <理由>`) にする。
+func (e *PlaceError) Named(name string) error { return fmt.Errorf("%s %q: %w", name, e.Value, e.Err) }
 
 func (e *PlaceError) Unwrap() error { return e.Err }
 
-// ReadPlace は書かれた host と repo を、この種類の読み方で読んで置き場にする。host が "" なら書かなかったものとして既定を
-// 使い (既定を持たない種類は ""、必須なら誤り)、host・repo の順に確かめる。誤りは *PlaceError。tracker.host を書けない種類に
-// host を渡せば、host の誤りにする。
+// ReadPlace は書かれた host と repo を、この種類の読み方で読んで置き場にする。host・repo の順に確かめ、誤りは
+// *PlaceError。読むのは host を書いた置き場だけで、tracker.host を書けない種類では常に host の誤りになる (host を書かない
+// 置き場は、workflow 定義の検査が既定から作る)。
 func (p Provider) ReadPlace(host, repo string) (Place, error) {
-	parsedHost, err := p.readHost(host)
+	parsedHost, err := p.Host.Parse(host)
 	if err != nil {
 		return Place{}, &PlaceError{Field: HostField, Value: host, Err: err}
 	}
@@ -261,18 +264,6 @@ func (p Provider) ReadPlace(host, repo string) (Place, error) {
 		return Place{}, &PlaceError{Field: RepoField, Value: repo, Err: err}
 	}
 	return p.NewPlace(parsedHost, parsedRepo), nil
-}
-
-// readHost は書かれた host を読む。"" なら書かなかったものとして既定を使う。
-func (p Provider) readHost(host string) (string, error) {
-	if host != "" {
-		return p.Host.Parse(host)
-	}
-	if p.Host.Required() {
-		return "", fmt.Errorf("必須 (%s)", p.Host.RequiredHint())
-	}
-	defaultHost, _ := p.Host.Default()
-	return defaultHost, nil
 }
 
 // Place は provider が tracker.repo と tracker.host から読んだ置き場。表示名を返し、その provider の組み立てに渡す。
