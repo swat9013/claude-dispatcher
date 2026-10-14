@@ -1,0 +1,149 @@
+@startuml
+' claim の状態機械図。作業対象 1 件について、loop の記憶 (claim と打ち切り) がどう移るかを描く。
+' 「段階 × 出来事」のどの組み合わせにどの遷移があるか (と、意図した未定義の理由) はこの図が正本。
+' 遷移の条件と効果を決める規則 (backoff の式・再起動の前の読み直し・曖昧な CL の扱い 等) は system.md §7 が持つ。
+'
+' 記述規約:
+' 1. 状態は ASCII の alias で書き、表示名は CONTEXT.md の語 (段階・打ち切り・claim) に揃える
+' 2. 出来事は system.md §7 と §9 が挙げるものだけを拾う。名前に空白を入れない (uncovered 宣言が空白で切る)
+' 3. §7・§9 が反応 (待ち直す・確かめ直す) を定める組み合わせは自己遷移で描き、当てない組み合わせは
+'    `' uncovered: <状態> x <出来事> — <理由>` で理由を書く
+' 4. 遷移のラベルは `出来事 [条件] / 効果`。完了と claim を解くは、claim なしへ戻る遷移の効果で表す
+' 5. 検査は exit code で判定する: plantuml --check-syntax と、sud-design skill に同梱の check-statechart.py
+'    (全組み合わせが遷移か uncovered 宣言で埋まり、どの状態にも初期状態から届くこと)
+hide empty description
+
+state "claim なし" as NoClaim
+state "走っている" as Running
+state "止めている" as Stopping
+state "終わりを確かめ待ち" as AwaitingVerification
+state "再起動待ち" as WaitingRetry
+state "打ち切り" as Abandoned
+
+note "claim の段階は 走っている・止めている・\n終わりを確かめ待ち・再起動待ち の 4 つ。\nclaim と打ち切りは loop の記憶で、\nloop の終了と共に消える" as StagesNote
+
+' --- claim なし ---
+[*] --> NoClaim
+NoClaim --> Running : 候補になる [停止要求を受けていない ∧ 空きがある ∧ 起動の直前の読み直しを通る] /\nattempt 1 の claim を立てて起動する
+NoClaim --> [*] : loopの終了
+
+' --- 走っている ---
+Running --> AwaitingVerification : worker終了 /\nafter_run を撃ち、作業対象を読み直す
+Running --> AwaitingVerification : stall上限 /\nworker を止め、失敗として読み直す
+Running --> AwaitingVerification : 上限時間 /\nworker を止め、失敗として読み直す
+Running --> Stopping : 終端の観測 /\nworker を止める
+Running --> Running : 停止要求1回目 /\nworker の終了を待つ
+Running --> Stopping : 停止要求2回目 /\nworker の process group を止める
+Running --> [*] : loopの終了 /\nworker も止まる (loop が死んだとき)
+
+' --- 止めている ---
+Stopping --> [*] : loopの終了 /\nworker も止まる (loop が死んだとき)
+Stopping --> NoClaim : worker終了 /\nafter_run を撃ち、claim を解く (終端で止めたなら workspace を消す)
+
+' --- 終わりを確かめ待ち ---
+AwaitingVerification --> NoClaim : 終端の観測 /\n完了。workspace を消す
+AwaitingVerification --> NoClaim : trigger外れの観測 /\n完了
+AwaitingVerification --> WaitingRetry : 当たったままの観測 [attempt が上限未満] /\n失敗。backoff の後の再起動を予定する (停止要求の後は予定しない)
+AwaitingVerification --> Abandoned : 当たったままの観測 [attempt が上限] /\n失敗。claim を解いて打ち切る
+AwaitingVerification --> AwaitingVerification : 読み直しの失敗 /\nerror を残し、次の tick で確かめ直す
+AwaitingVerification --> AwaitingVerification : 当たるか未決 /\n次の tick で確かめ直す
+AwaitingVerification --> [*] : loopの終了 /\n終わり方を確かめないまま止まる (error を残す)
+
+' --- 再起動待ち ---
+WaitingRetry --> Running : backoffの明け [空きがある ∧ 読み直しで当たったまま ∧ 停止要求を受けていない] /\nattempt を進め、同じ trigger・session・workspace で起動する
+WaitingRetry --> WaitingRetry : 空きが無い /\nattempt を進めずに待ち直す
+WaitingRetry --> WaitingRetry : 読み直しの失敗 /\nattempt を進めずに次の tick で試み直す
+WaitingRetry --> WaitingRetry : 当たるか未決 /\nattempt を進めずに次の tick で試み直す
+WaitingRetry --> WaitingRetry : 曖昧なCL /\nclaim を解かず、attempt を進めずに次の tick で試み直す
+WaitingRetry --> WaitingRetry : 事前検査に落ちた /\n再起動せず、並列の枠にも数えない
+WaitingRetry --> WaitingRetry : workflow定義を採れない /\nその tick の中では再起動しない
+WaitingRetry --> WaitingRetry : 停止要求1回目 /\n再起動をやめ、loop の終了まで残る
+WaitingRetry --> NoClaim : 終端の観測 /\nclaim を解く。workspace を消す
+WaitingRetry --> NoClaim : trigger外れの観測 /\n完了として claim を解く
+WaitingRetry --> [*] : loopの終了 /\n再起動を待ったまま止まる (error を残す)
+
+' --- 打ち切り ---
+Abandoned --> NoClaim : 終端の観測 /\n打ち切りを解く
+Abandoned --> NoClaim : trigger外れの観測 /\n打ち切りを解く
+Abandoned --> [*] : loopの終了 /\n打ち切りが消える
+
+' --- 意図した未定義 (当てない組み合わせと、その理由) ---
+' claim なし
+' uncovered: NoClaim x worker終了 — claim が無いので終わる worker が無い
+' uncovered: NoClaim x stall上限 — 走っている worker が無い (stall は走っている worker にだけ当てる)
+' uncovered: NoClaim x 上限時間 — 走っている worker が無い (上限時間は走っている worker にだけ当てる)
+' uncovered: NoClaim x 終端の観測 — claim も打ち切りも無いので変わる記憶が無い。workspace の掃除は §7 の workspace の規則が扱う
+' uncovered: NoClaim x trigger外れの観測 — claim も打ち切りも無いので変わる記憶が無い。候補にならないだけ
+' uncovered: NoClaim x 当たったままの観測 — claim の無い作業対象が当たれば 候補になる で扱う
+' uncovered: NoClaim x 当たるか未決 — その tick では起動せず、次の tick で候補になれば試み直す (§7 の tick の手順 5)
+' uncovered: NoClaim x 読み直しの失敗 — 起動の直前の読み直しに失敗した候補はその tick では起動せず、次の tick で候補になれば試み直す (§7 の tick の手順 5)
+' uncovered: NoClaim x backoffの明け — backoff を待つのは再起動待ちだけ
+' uncovered: NoClaim x 空きが無い — claim を立てずに起動を見送るだけ。空きは次の tick の評価で回す (§7 の tick の手順 5)
+' uncovered: NoClaim x 曖昧なCL — 曖昧な CL は CL 側の trigger の対象から外すので、候補にならない (§6)
+' uncovered: NoClaim x 事前検査に落ちた — 落ちた trigger は評価から外すので、その trigger では候補にならない (§7 の tick の手順 2)
+' uncovered: NoClaim x workflow定義を採れない — その tick は何も起動しないので、claim は立たない (§7 の tick の手順 2)
+' uncovered: NoClaim x 停止要求1回目 — claim が無いので変わる記憶が無い。以後は起動しない (候補になる の条件)
+' uncovered: NoClaim x 停止要求2回目 — claim が無いので止める worker が無い
+' 走っている
+' uncovered: Running x 候補になる — claim されている作業対象は候補にならない (§4 の候補の定義)
+' uncovered: Running x trigger外れの観測 — 走っている worker は終端でだけ止める (ADR 0009)
+' uncovered: Running x 当たったままの観測 — 走っている間の読み直しは終端かどうかだけを見る (ADR 0009)
+' uncovered: Running x 当たるか未決 — 走っている間の読み直しは終端かどうかだけを見る (ADR 0009)
+' uncovered: Running x 読み直しの失敗 — 段階は変わらない。error を残し、次の tick の突き合わせで読み直す
+' uncovered: Running x backoffの明け — backoff を待つのは再起動待ちだけ
+' uncovered: Running x 空きが無い — 空きを待つのは起動と再起動だけ。走っている worker は既に枠を使っている
+' uncovered: Running x 曖昧なCL — 走っている worker は終端でだけ止める (ADR 0009)
+' uncovered: Running x 事前検査に落ちた — 事前検査は起動と再起動だけを止め、走っている worker は止めない
+' uncovered: Running x workflow定義を採れない — 突き合わせは続け、走っている worker は止めない (§7 の tick の手順 2)
+' 止めている
+' uncovered: Stopping x 候補になる — claim されている作業対象は候補にならない (§4 の候補の定義)
+' uncovered: Stopping x stall上限 — loop が止めたことを優先し、stall では数えない
+' uncovered: Stopping x 上限時間 — loop が止めたことを優先し、上限時間では数えない
+' uncovered: Stopping x 終端の観測 — 止めている worker の作業対象は読み直さず、worker が終わるのを待つ
+' uncovered: Stopping x trigger外れの観測 — 止めている worker の作業対象は読み直さず、worker が終わるのを待つ
+' uncovered: Stopping x 当たったままの観測 — 止めている worker の作業対象は読み直さず、worker が終わるのを待つ
+' uncovered: Stopping x 当たるか未決 — 止めている worker の作業対象は読み直さず、worker が終わるのを待つ
+' uncovered: Stopping x 読み直しの失敗 — 止めている worker の作業対象は読み直さず、worker が終わるのを待つ
+' uncovered: Stopping x backoffの明け — backoff を待つのは再起動待ちだけ
+' uncovered: Stopping x 空きが無い — 空きを待つのは起動と再起動だけ
+' uncovered: Stopping x 曖昧なCL — 止めている worker の作業対象は読み直さず、worker が終わるのを待つ
+' uncovered: Stopping x 事前検査に落ちた — 既に止めているので、起動を止める検査は関わらない
+' uncovered: Stopping x workflow定義を採れない — 既に止めているので、起動を止める検査は関わらない
+' uncovered: Stopping x 停止要求1回目 — 既に止めている
+' uncovered: Stopping x 停止要求2回目 — 既に止めている
+' 終わりを確かめ待ち
+' uncovered: AwaitingVerification x 候補になる — claim されている作業対象は候補にならない (§4 の候補の定義)
+' uncovered: AwaitingVerification x worker終了 — worker は既に終わっている
+' uncovered: AwaitingVerification x stall上限 — worker は既に終わっている
+' uncovered: AwaitingVerification x 上限時間 — worker は既に終わっている
+' uncovered: AwaitingVerification x backoffの明け — backoff を待つのは再起動待ちだけ
+' uncovered: AwaitingVerification x 空きが無い — 確かめは worker を起動しないので、空きを要さない
+' uncovered: AwaitingVerification x 曖昧なCL — 確かめは作業対象 1 件の読み直しで決め、open な一覧でしか決まらない曖昧さを見ない
+' uncovered: AwaitingVerification x 事前検査に落ちた — 確かめは読み直しの結果で決まり、起動を伴わない
+' uncovered: AwaitingVerification x workflow定義を採れない — 確かめ直しは workflow 定義の読み直しより先に撃つので、その結果に左右されない
+' uncovered: AwaitingVerification x 停止要求1回目 — 段階は変わらない。停止要求の後は tick を撃たないので確かめ直さず、loopの終了 で消える
+' uncovered: AwaitingVerification x 停止要求2回目 — 止める worker が無い。loopの終了 で消える
+' 再起動待ち
+' uncovered: WaitingRetry x 候補になる — claim されている作業対象は候補にならない (§4 の候補の定義)
+' uncovered: WaitingRetry x worker終了 — worker は走っていない
+' uncovered: WaitingRetry x stall上限 — worker は走っていない
+' uncovered: WaitingRetry x 上限時間 — worker は走っていない
+' uncovered: WaitingRetry x 当たったままの観測 — 当たったままであることは backoffの明け で再起動する条件として読む
+' uncovered: WaitingRetry x 停止要求2回目 — 止める worker が無い。loopの終了 で消える
+' 打ち切り
+' uncovered: Abandoned x 候補になる — 打ち切った作業対象は、どの trigger に当たっても起動しない (§7)
+' uncovered: Abandoned x worker終了 — worker は走っていない
+' uncovered: Abandoned x stall上限 — worker は走っていない
+' uncovered: Abandoned x 上限時間 — worker は走っていない
+' uncovered: Abandoned x 当たったままの観測 — 打ち切りを保つ。外れたのを観測するまで解かない (§7)
+' uncovered: Abandoned x 当たるか未決 — 外れたとは数えず、打ち切りを保つ
+' uncovered: Abandoned x 読み直しの失敗 — 打ち切りを保ち、次の tick で確かめ直す
+' uncovered: Abandoned x backoffの明け — 打ち切りは再起動を予定しない
+' uncovered: Abandoned x 空きが無い — 打ち切りは起動を待たない
+' uncovered: Abandoned x 曖昧なCL — 曖昧になったことでは打ち切りを解かない。古い一覧で曖昧に見えただけで解けるため
+' uncovered: Abandoned x 事前検査に落ちた — 打ち切りを解く判定は trigger の述語で行い、事前検査の結果を見ない
+' uncovered: Abandoned x workflow定義を採れない — その tick は打ち切りを解く判定を撃たず、打ち切りを保つ
+' uncovered: Abandoned x 停止要求1回目 — 打ち切りは loopの終了 まで残る
+' uncovered: Abandoned x 停止要求2回目 — 打ち切りは loopの終了 まで残る
+
+@enduml
