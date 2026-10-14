@@ -1,10 +1,7 @@
 package worker
 
 import (
-	"bytes"
 	"encoding/json"
-	"io"
-	"os"
 	"path/filepath"
 	"strings"
 	"unicode/utf8"
@@ -15,8 +12,8 @@ import (
 // summaryLimit は要約の文字数の上限
 const summaryLimit = 80
 
-// tailLimit は活動として数える最新の完結した行を探すために stream の file の末尾から読む大きさ。これより長い行は活動として
-// 数えない
+// tailLimit は活動として数える行を探す、stream の file の末尾の窓の大きさ。確認の時点で頭がこの窓の中にある行だけを数える
+// ので、これより長い行は数えない
 const tailLimit = 64 << 10
 
 // streamLine は stream-json の 1 行のうち、要約に使う項目。
@@ -126,34 +123,6 @@ func Summarize(line []byte, workspace string) (summary string, ok bool) {
 	return summary, true
 }
 
-// completeLines は file の size までのうち、after より後で終わる完結した行 (改行で終わる行) を古い順に返す。end は最後の行の
-// 終わりの offset (改行の次)。末尾から tailLimit を超えて遡らないので、頭が読んだ範囲より前にある行は返さない。
-func completeLines(file string, size, after int64) (lines [][]byte, end int64, err error) {
-	f, err := os.Open(file)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer f.Close()
-	// 行の頭の前の改行まで読めるよう、1 byte 余分に読む
-	start := max(size-tailLimit-1, 0)
-	buf := make([]byte, size-start)
-	if _, err := f.ReadAt(buf, start); err != nil && err != io.EOF {
-		return nil, 0, err
-	}
-	last := bytes.LastIndexByte(buf, '\n')
-	if last < 0 || start+int64(last)+1 <= after {
-		return nil, 0, nil
-	}
-	// 読んだ範囲の頭は、前の行の途中かもしれない (file の頭から読んだときだけ行の頭)
-	begin := 0
-	if start > 0 {
-		begin = bytes.IndexByte(buf, '\n') + 1
-	}
-	// after より前で終わった行は要約済みか、前の attempt の行
-	begin = max(begin, int(after-start))
-	end = start + int64(last) + 1
-	if begin > last {
-		return nil, end, nil
-	}
-	return bytes.Split(buf[begin:last], []byte{'\n'}), end, nil
-}
+// inTail は start で始まる行が、大きさ size の stream の file の末尾 tailLimit に収まるか。活動は末尾に収まる行からだけ
+// 取る (formats.md §6)。
+func inTail(start, size int64) bool { return start >= size-tailLimit }

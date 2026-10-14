@@ -66,8 +66,8 @@ func unreadableUntilRestored(t *testing.T, w *streamWatch) (restore func()) {
 		t.Fatal(err)
 	}
 	// dir の大きさは file system で違う。前に読めた大きさと同じだと、確かめても伸びていないとして読み出さない
-	if info, err := os.Stat(w.path); err != nil || info.Size() == w.size {
-		t.Fatalf("dir の大きさ %v が前に読めた大きさ %d と同じか、確かめられない (%v)。stream の中身の大きさを変える", info, w.size, err)
+	if info, err := os.Stat(w.path); err != nil || info.Size() == w.lines.size {
+		t.Fatalf("dir の大きさ %v が前に読めた大きさ %d と同じか、確かめられない (%v)。stream の中身の大きさを変える", info, w.lines.size, err)
 	}
 	return func() {
 		t.Helper()
@@ -296,85 +296,80 @@ func TestStreamThatCouldNotBeReadIsReadAgainEvenWithoutGrowing(t *testing.T) {
 // errReadFails は差し替えた読み出しが返す、読み出せない理由。
 var errReadFails = errors.New("読み出せない")
 
-func progressReadFails(string, int64, int64) (bool, int64, error) { return false, 0, errReadFails }
-
-func activityReadFails(string, int64, int64, string) (string, bool, int64, error) {
-	return "", false, 0, errReadFails
+// failsFrom は、offset from より前だけを読み出せ、from から先を読もうとすると落ちる file。
+type failsFrom struct {
+	readerAtCloser
+	from int64
 }
 
-// onlyProgressUnreadableUntilRestored は progress の読み出しだけを落とし (活動は読める)、元へ戻す関数を返す。
-func onlyProgressUnreadableUntilRestored(w *streamWatch) (restore func()) {
-	prev := w.readProgress
-	w.readProgress = progressReadFails
-	return func() { w.readProgress = prev }
+func (f *failsFrom) ReadAt(p []byte, off int64) (int, error) {
+	if off >= f.from {
+		return 0, errReadFails
+	}
+	if limit := f.from - off; int64(len(p)) > limit {
+		n, err := f.readerAtCloser.ReadAt(p[:limit], off)
+		if err != nil {
+			return n, err
+		}
+		return n, errReadFails
+	}
+	return f.readerAtCloser.ReadAt(p, off)
 }
 
-// onlyActivityUnreadableUntilRestored は活動の読み出しだけを落とし (progress は読める)、元へ戻す関数を返す。
-func onlyActivityUnreadableUntilRestored(w *streamWatch) (restore func()) {
-	prev := w.readActivity
-	w.readActivity = activityReadFails
-	return func() { w.readActivity = prev }
+// unreadableFromUntilRestored は stream の file を、offset from より前だけ読めて続きを読めなくし、元へ戻す関数を返す。from
+// より前の行は each へ渡った後に、読み出しが落ちる。
+func unreadableFromUntilRestored(w *streamWatch, from int64) (restore func()) {
+	prev := w.lines.open
+	w.lines.open = func(path string) (readerAtCloser, error) {
+		f, err := prev(path)
+		if err != nil {
+			return nil, err
+		}
+		return &failsFrom{readerAtCloser: f, from: from}, nil
+	}
+	return func() { w.lines.open = prev }
 }
 
-func TestStallClockDoesNotResetWhileOnlyTheProgressCannotBeRead(t *testing.T) {
+// writeProgressThenUnreadable は stream に progress の行と progress に数えない heartbeat の行を追記し、heartbeat の行から
+// 先を読めなくして、元へ戻す関数を返す。1 回の確認の中で、progress の行を読んだ後に読み出しが落ちる。
+func writeProgressThenUnreadable(t *testing.T, w *streamWatch) (restore func()) {
+	t.Helper()
+	info, err := os.Stat(w.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, w, taskProgress+heartbeat)
+	return unreadableFromUntilRestored(w, info.Size()+int64(len(taskProgress)))
+}
+
+func TestStallClockDoesNotResetWhenTheStreamBecomesUnreadablePartway(t *testing.T) {
 	started := time.Now()
 	w, _ := stallClock(t, started, time.Minute)
 	appendAt(t, w, text("前"), started.Add(10*time.Second))
-	write(t, w, text("後"))
-	onlyProgressUnreadableUntilRestored(w)
+	writeProgressThenUnreadable(t, w)
 
 	w.check(started.Add(30 * time.Second))
 
 	if got := w.sinceProgress(started.Add(30 * time.Second)); got != 20*time.Second {
-		t.Fatalf("progress が途絶えた時間 = %s, want progress を読めないあいだは、活動を読めても戻らず 20s", got)
+		t.Fatalf("progress が途絶えた時間 = %s, want 途中で読めなくなった確認では、読めた分の progress でも戻らず 20s", got)
 	}
 }
 
-func TestStallClockDoesNotResetWhileOnlyTheActivityCannotBeRead(t *testing.T) {
+func TestProgressReadBeforeTheStreamBecameUnreadablePartwayResetsTheStallClockOnceItCanBeRead(t *testing.T) {
 	started := time.Now()
 	w, _ := stallClock(t, started, time.Minute)
 	appendAt(t, w, text("前"), started.Add(10*time.Second))
-	write(t, w, text("後"))
-	onlyActivityUnreadableUntilRestored(w)
+	restore := writeProgressThenUnreadable(t, w)
+	if activity, _ := w.check(started.Add(20 * time.Second)); !strings.Contains(activity, "読めない") {
+		t.Fatalf("活動 = %q, want 途中で読めなくなったことを活動にする (読めなくする仕掛けが働いていない)", activity)
+	}
+	restore()
 
+	// 読めなかった確認から、file は伸びていない
 	w.check(started.Add(30 * time.Second))
 
-	if got := w.sinceProgress(started.Add(30 * time.Second)); got != 20*time.Second {
-		t.Fatalf("progress が途絶えた時間 = %s, want 活動を読めないあいだは、progress を読めても戻らず 20s", got)
-	}
-}
-
-func TestLinesWrittenWhileOnlyTheProgressCouldNotBeReadAreReadAgainOnceItCanBeRead(t *testing.T) {
-	started := time.Now()
-	w, _ := stallClock(t, started, time.Minute)
-	appendAt(t, w, text("前"), started.Add(10*time.Second))
-	write(t, w, text("後"))
-	restore := onlyProgressUnreadableUntilRestored(w)
-	w.check(started.Add(20 * time.Second))
-	restore()
-
-	// 読めなかった確認から、file は伸びていない
-	activity, changed := w.check(started.Add(30 * time.Second))
-
-	if got := w.sinceProgress(started.Add(30 * time.Second)); !changed || activity != "後" || got != 0 {
-		t.Fatalf("活動 = %q, %v; progress が途絶えた時間 = %s; want 読み終えた offset はどちらも進んでおらず、同じ行を読み直して 後, 0s", activity, changed, got)
-	}
-}
-
-func TestLinesWrittenWhileOnlyTheActivityCouldNotBeReadAreReadAgainOnceItCanBeRead(t *testing.T) {
-	started := time.Now()
-	w, _ := stallClock(t, started, time.Minute)
-	appendAt(t, w, text("前"), started.Add(10*time.Second))
-	write(t, w, text("後"))
-	restore := onlyActivityUnreadableUntilRestored(w)
-	w.check(started.Add(20 * time.Second))
-	restore()
-
-	// 読めなかった確認から、file は伸びていない
-	activity, changed := w.check(started.Add(30 * time.Second))
-
-	if got := w.sinceProgress(started.Add(30 * time.Second)); !changed || activity != "後" || got != 0 {
-		t.Fatalf("活動 = %q, %v; progress が途絶えた時間 = %s; want 読み終えた offset はどちらも進んでおらず、同じ行を読み直して 後, 0s", activity, changed, got)
+	if got := w.sinceProgress(started.Add(30 * time.Second)); got != 0 {
+		t.Fatalf("progress が途絶えた時間 = %s, want 読み終えた offset は進んでおらず、読めた分の progress を読み直して 0s", got)
 	}
 }
 

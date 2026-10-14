@@ -211,34 +211,26 @@ func sessionArgs(job Job) []string {
 }
 
 // streamWatch は stream の file を確かめ、活動と、progress を最後に見た時刻 (stall の検知に使う) を追う (formats.md §6)。
-// 活動と progress は別々に読む。活動の表示を変えても stall の判定は変わらない。
+// 1 回の読み出しから、活動と progress を別々の表で判定する。活動の表示を変えても stall の判定は変わらない。
 type streamWatch struct {
 	// path は stream の file の path。大きさも中身も path で確かめる (置き換えを縮みとして見る)
 	path string
-	size int64
+	// lines は stream の file を読み進める。前の attempt の行と、見終えた行を読み直さない
+	lines *lineReader
 	// started は attempt を見始めた時刻 (上限時間の起点)
 	started time.Time
 	// progressed は progress を最後に見た時刻。まだ見ていなければ started
 	progressed time.Time
-	// scanned は progress を見終えた行の終わりの offset。前の attempt の行と、見終えた行を見直さない
-	scanned int64
-	// summarized は要約した最新の行の終わりの offset。前の attempt の行と、要約済みの行を読み直さない
-	summarized int64
 	// readError は直近に stream の file を読めなかった理由。読めれば ""。同じ理由を活動として出し直さないためと、
 	// 読めないまま stall で止めたときの理由に添えるために使う
 	readError string
 	// workspace は worker の workspace の path (活動の tool の入力の path を相対にする)
 	workspace string
-	// readProgress と readActivity は progress と活動の読み出し (既定は scanProgress と summarizeLatest)。
-	// test が片方だけを落とすために差し替える
-	readProgress func(file string, from, to int64) (found bool, end int64, err error)
-	readActivity func(file string, size, after int64, workspace string) (summary string, changed bool, end int64, err error)
 }
 
 // newStreamWatch は、stream の file の offset より後 (今の attempt が書く行) を started から見始める streamWatch。
 func newStreamWatch(path string, offset int64, started time.Time, workspace string) *streamWatch {
-	return &streamWatch{path: path, size: offset, started: started, progressed: started, scanned: offset, summarized: offset, workspace: workspace,
-		readProgress: scanProgress, readActivity: summarizeLatest}
+	return &streamWatch{path: path, lines: newLineReader(path, offset), started: started, progressed: started, workspace: workspace}
 }
 
 // check は now の時点で stream の file を確かめる。前の確認から書かれた行に progress があれば stall の時計を now に戻し、
@@ -250,28 +242,30 @@ func (w *streamWatch) check(now time.Time) (activity string, changed bool) {
 		return w.unreadable(err)
 	}
 	size := info.Size()
-	if size == w.size && w.readError == "" {
+	if w.lines.unchanged(size) && w.readError == "" {
 		return "", false
 	}
-	scanned, summarized := w.scanned, w.summarized
-	// 縮んだら (truncate・置き換え)、縮んだ後の行を頭から見る
-	if size < w.size {
-		scanned, summarized = 0, 0
-	}
-	found, scanned, err := w.readProgress(w.path, scanned, size)
+	// 前の確認から完結した行を古い順に見る。活動は file の末尾に収まる行のうち、数える最後の行
+	var found, summarized bool
+	var summary string
+	err = w.lines.readTo(size, func(head []byte, start, length int64) {
+		found = found || countsAsProgress(head, length)
+		if !inTail(start, size) {
+			return
+		}
+		if s, ok := Summarize(head, w.workspace); ok {
+			summary, summarized = s, true
+		}
+	})
+	// 読めなければ、それまでに見た行の結果は捨てる (readTo は読み終えた offset を戻し、次の確認で読み直す)
 	if err != nil {
 		return w.unreadable(err)
 	}
-	activity, changed, summarized, err = w.readActivity(w.path, size, summarized, w.workspace)
-	if err != nil {
-		return w.unreadable(err)
-	}
-	// 両方を読めたときだけ進める。片方だけ進めると、読めないあいだに時計を戻すか、見ていない行を見たことにする
-	w.size, w.scanned, w.summarized, w.readError = size, scanned, summarized, ""
+	w.readError = ""
 	if found {
 		w.progressed = now
 	}
-	return activity, changed
+	return summary, summarized
 }
 
 // unreadable は stream の file を読めなかった理由を活動にする。直前と同じ理由なら changed が false。
@@ -282,22 +276,6 @@ func (w *streamWatch) unreadable(err error) (activity string, changed bool) {
 	}
 	w.readError = message
 	return message, true
-}
-
-// summarizeLatest は file の size までのうち after より後に完結した行を新しい側から見て、活動として数える最初の行を
-// 要約する。数える行が無ければ changed が false。end は要約を終えた offset (次の after)。
-func summarizeLatest(file string, size, after int64, workspace string) (summary string, changed bool, end int64, err error) {
-	lines, end, err := completeLines(file, size, after)
-	if err != nil {
-		return "", false, after, err
-	}
-	end = max(end, after)
-	for i := len(lines) - 1; i >= 0; i-- {
-		if summary, ok := Summarize(lines[i], workspace); ok {
-			return summary, true, end, nil
-		}
-	}
-	return "", false, end, nil
 }
 
 // sinceProgress は progress を最後に見てから now までの時間。
