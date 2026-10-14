@@ -39,7 +39,15 @@ jobs:
           version: v2.18.2
 `
 
-const contributing = "- PR に付く check 名: `checks / test (ubuntu-latest)`・`checks / test (macos-latest)`・`checks / lint`・`checks / goreleaser-check`。名前は `checks.yml` から決まる\n"
+const contributing = "- PR に付く check 名: `checks / test (ubuntu-latest)`・`checks / test (macos-latest)`・`checks / lint`・`checks / goreleaser-check`。名前は `checks.yml` から決まる\n" +
+	"- 手で見るもの: go.mod の `go` 行。期待値: `1.26.0`。`go` 行が期待値とずれると落ちる\n"
+
+const goMod = "module example.com/m\n\ngo 1.26.0\n\ntoolchain go1.27.2\n"
+
+// validFiles は、すべての検査が一致する file の組を返す。各テストは変える file だけを上書きする
+func validFiles() repoFiles {
+	return repoFiles{ci: ciYAML, checks: checksYAML, release: releaseYAML, contributing: contributing, goMod: goMod}
+}
 
 var wantNames = []string{"checks / test (ubuntu-latest)", "checks / test (macos-latest)", "checks / lint", "checks / goreleaser-check"}
 
@@ -76,15 +84,16 @@ func TestCheckNames_呼び出し元のjobのifはエラーにする(t *testing.T
 }
 
 func TestCheckFiles_versionを渡さないGoReleaserのstepはエラーにする(t *testing.T) {
-	release := releaseYAML + "      - uses: goreleaser/goreleaser-action@abc # v7\n"
+	files := validFiles()
+	files.release = releaseYAML + "      - uses: goreleaser/goreleaser-action@abc # v7\n"
 
-	if _, err := checkFiles(repoFiles{ci: ciYAML, checks: checksYAML, release: release, contributing: contributing}); err == nil {
+	if _, err := checkFiles(files); err == nil {
 		t.Fatal("エラーにならなかった")
 	}
 }
 
 func TestCheckFiles_一致していれば問題を返さない(t *testing.T) {
-	problems, err := checkFiles(repoFiles{ci: ciYAML, checks: checksYAML, release: releaseYAML, contributing: contributing})
+	problems, err := checkFiles(validFiles())
 
 	if err != nil || len(problems) != 0 {
 		t.Fatalf("got %q, %v", problems, err)
@@ -92,35 +101,104 @@ func TestCheckFiles_一致していれば問題を返さない(t *testing.T) {
 }
 
 func TestCheckFiles_GoReleaserの版が2箇所で違えば落とす(t *testing.T) {
-	release := strings.Replace(releaseYAML, "v2.18.2", "v2.19.0", 1)
+	files := validFiles()
+	files.release = strings.Replace(releaseYAML, "v2.18.2", "v2.19.0", 1)
 
-	problems, _ := checkFiles(repoFiles{ci: ciYAML, checks: checksYAML, release: release, contributing: contributing})
+	problems, _ := checkFiles(files)
 
 	assertProblem(t, problems, "v2.19.0")
 }
 
 func TestCheckFiles_同じfileの2つ目のGoReleaserのstepの版が違っても落とす(t *testing.T) {
-	release := releaseYAML + "      - uses: goreleaser/goreleaser-action@abc # v7\n        with:\n          version: v2.19.0\n"
+	files := validFiles()
+	files.release = releaseYAML + "      - uses: goreleaser/goreleaser-action@abc # v7\n        with:\n          version: v2.19.0\n"
 
-	problems, _ := checkFiles(repoFiles{ci: ciYAML, checks: checksYAML, release: release, contributing: contributing})
+	problems, _ := checkFiles(files)
 
 	assertProblem(t, problems, "v2.19.0")
 }
 
 func TestCheckFiles_CONTRIBUTINGの列挙にcheck名が欠けていれば落とす(t *testing.T) {
-	listed := strings.Replace(contributing, "・`checks / lint`", "", 1)
+	files := validFiles()
+	files.contributing = strings.Replace(contributing, "・`checks / lint`", "", 1)
 
-	problems, _ := checkFiles(repoFiles{ci: ciYAML, checks: checksYAML, release: releaseYAML, contributing: listed})
+	problems, _ := checkFiles(files)
 
 	assertProblem(t, problems, "checks / lint")
 }
 
 func TestCheckFiles_CONTRIBUTINGの列挙に無いcheck名があれば落とす(t *testing.T) {
-	listed := strings.Replace(contributing, "`checks / lint`", "`checks / lint`・`checks / gone`", 1)
+	files := validFiles()
+	files.contributing = strings.Replace(contributing, "`checks / lint`", "`checks / lint`・`checks / gone`", 1)
 
-	problems, _ := checkFiles(repoFiles{ci: ciYAML, checks: checksYAML, release: releaseYAML, contributing: listed})
+	problems, _ := checkFiles(files)
 
 	assertProblem(t, problems, "checks / gone")
+}
+
+func TestCheckFiles_go行が期待値とpatchだけ違っても落とす(t *testing.T) {
+	files := validFiles()
+	files.goMod = strings.Replace(goMod, "go 1.26.0", "go 1.26.5", 1)
+
+	problems, _ := checkFiles(files)
+
+	assertProblem(t, problems, "go.mod の `go` 行 (`1.26.5`) が CONTRIBUTING.md の期待値 (`1.26.0`) と違う")
+}
+
+func TestCheckFiles_go行がpatchの無い形に上がってもずれとして落とす(t *testing.T) {
+	files := validFiles()
+	files.goMod = strings.Replace(goMod, "go 1.26.0", "go 1.27", 1)
+
+	problems, _ := checkFiles(files)
+
+	assertProblem(t, problems, "go.mod の `go` 行 (`1.27`) が CONTRIBUTING.md の期待値 (`1.26.0`) と違う")
+}
+
+func TestCheckFiles_go行の後ろのコメントは版に含めない(t *testing.T) {
+	files := validFiles()
+	files.goMod = strings.Replace(goMod, "go 1.26.0", "go 1.26.0 // 最低の版", 1)
+
+	problems, err := checkFiles(files)
+
+	if err != nil || len(problems) != 0 {
+		t.Fatalf("got %q, %v", problems, err)
+	}
+}
+
+func TestCheckFiles_CONTRIBUTINGにgo行の期待値が無ければエラーにする(t *testing.T) {
+	files := validFiles()
+	files.contributing = strings.Replace(contributing, "期待値: `1.26.0`", "", 1)
+
+	if _, err := checkFiles(files); err == nil {
+		t.Fatal("エラーにならなかった")
+	}
+}
+
+func TestCheckFiles_CONTRIBUTINGにgo行の期待値の目印が2回あればエラーにする(t *testing.T) {
+	files := validFiles()
+	files.contributing = "- 別の項目。期待値: `9.9.9`\n" + contributing
+
+	if _, err := checkFiles(files); err == nil {
+		t.Fatal("エラーにならなかった")
+	}
+}
+
+func TestCheckFiles_go行の期待値が版の形でなければエラーにする(t *testing.T) {
+	files := validFiles()
+	files.contributing = strings.Replace(contributing, "期待値: `1.26.0`", "期待値: `1.26`", 1)
+
+	if _, err := checkFiles(files); err == nil {
+		t.Fatal("エラーにならなかった")
+	}
+}
+
+func TestCheckFiles_go_modにgo行が無ければエラーにする(t *testing.T) {
+	files := validFiles()
+	files.goMod = strings.Replace(goMod, "go 1.26.0\n", "", 1)
+
+	if _, err := checkFiles(files); err == nil {
+		t.Fatal("エラーにならなかった")
+	}
 }
 
 func TestCheckRuleset_required_checksが一致していれば問題を返さない(t *testing.T) {

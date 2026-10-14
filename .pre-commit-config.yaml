@@ -53,8 +53,8 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [pre-push]
-      # 同じ値を 2 箇所以上に書いている設定 (GoReleaser の版、check 名の列挙) の一致を検査する。network は使わず軽いので、
-      # 読む file を files: に重ねて書かずに毎回撃つ
+      # 同じ値を 2 箇所以上に書いている設定 (GoReleaser の版、check 名の列挙、go.mod の `go` 行と CONTRIBUTING.md の期待値) の
+      # 一致を検査する。network は使わず軽いので、読む file を files: に重ねて書かずに毎回撃つ
       - id: repocheck
         name: repocheck (設定の一致)
         entry: go run ./scripts/repocheck files

@@ -57,7 +57,7 @@ claude-dispatcher-dev loop
   - gofmt (`go fmt ./...`): 整形し直した file があれば落ちる。file は書き換わった後なので、見直して stage し直す
   - go mod tidy (`go mod tidy -diff`): go.mod / go.sum に差分が出れば落ちる
   - actionlint: workflow の静的検査。`run:` の script は、hook 環境に版を固定して入れた shellcheck で検査する
-  - repocheck (`go run ./scripts/repocheck files`): 同じ値を 2 箇所以上に書いている設定の一致を検査する。GoReleaser の版 (checks.yml と release.yml) と、下の「PR に付く check 名」の列挙 (checks.yml の job 名と matrix から組み立てた名前) がずれていれば落ちる。network は使わない
+  - repocheck (`go run ./scripts/repocheck files`): 同じ値を 2 箇所以上に書いている設定の一致を検査する。GoReleaser の版 (checks.yml と release.yml) と、下の「PR に付く check 名」の列挙 (checks.yml の job 名と matrix から組み立てた名前) と、go.mod の `go` 行 (下の「版の更新」の「手で見るもの」に書いた期待値) がずれていれば落ちる。network は使わない
 - push 前: `go vet ./...`・`golangci-lint run ./...` (設定は [.golangci.yml](.golangci.yml)。binary の入れ方は上の「セットアップ」) ・`go test -race ./...` (データ競合の検出付き) が通ること。加えて gitleaks が、push する commit のうち remote に無いもの (merge commit を除く) を 1 つずつ検査する。CI の `pre-commit` job は同じ hook を PR の commit 範囲に撃つ。`pre-commit install` 済みなら push 時に hook が走り、落ちると push を止める
   - golangci-lint の既定セットも govet を含むが、`go vet ./...` も撃つ (理由は .pre-commit-config.yaml の go-vet の hook のコメント)
   - `test/blackbox` は binary を build して外から撃つ black-box テスト (外から観測できる契約の検査。正本は [docs/design/formats.md](docs/design/formats.md))。外部 CLI は stub に差し替えるので、network も認証も要らず、マシンに在る実物にも届かない。例外: Homebrew の prefix 等に gh / claude の実物があるマシン (macOS の runner の gh 等) では、「解決できない」を確かめるテストが skip される
@@ -84,7 +84,7 @@ claude-dispatcher-dev loop
     - checks.yml の `lint` job で golangci-lint-action に渡す `version:` (上げたら手元の binary も同じ版にする。上の「セットアップ」)
     - .pre-commit-config.yaml の actionlint の `additional_dependencies` に固定した shellcheck (go-shellcheck) の版 (Dependabot が上げるのは hook の `rev`)
   - Renovate は GitHub App [Renovate](https://github.com/apps/renovate) を repo に入れて初めて動く。導入は repo の管理権限を持つ人の作業で、worker はできない。入っているかは repo の Settings の「GitHub Apps」で確かめ、動いているかは `renovate/` で始まる branch の PR が出るかで確かめる
-  - 手で見るもの: go.mod の `go` 行 (利用者に求める最低の版。サポート中の最も古い Go の版に合わせる)。依存の go.mod の `go` 行より下げられないので、Dependabot が上げた依存 (govulncheck の `golang.org/x/vuln` とその依存を含む) に引き上げられることがある。Dependabot の PR で `go` 行が動いたら、利用者に求める版が上がってよいかを見てから merge する
+  - 手で見るもの: go.mod の `go` 行 (利用者に求める最低の版。サポート中の最も古い Go の版に合わせる)。期待値: `1.26.0`。依存の go.mod の `go` 行より下げられないので、Dependabot が上げた依存 (govulncheck の `golang.org/x/vuln` とその依存を含む) や CL で足した依存に引き上げられることがある。`go` 行が期待値とずれると、commit 時の repocheck が落ちる。引き上げを受け入れるなら、利用者に求める版が上がってよいかを人が見てから、同じ PR でこの期待値を書き換える。期待値を書き換えるのは人だけで、worker は書き換えずに WORKFLOW.md の「人へ返す」に従って人へ返す
 - release: tag (`v*`) は main の commit に打つ。push すると [.github/workflows/release.yml](.github/workflows/release.yml) が、上の CI と同じ検査の本体 (checks.yml) を tag の commit で通し、tag の commit が main に在ることを確かめてから GoReleaser で GitHub Releases に binary を出し、tap `swat9013/homebrew-tap` の cask を更新する ([.goreleaser.yaml](.goreleaser.yaml))
   - prerelease の tag (`v1.2.0-rc.1` 等) は、Release を prerelease として出し、tap を更新しない
   - tap への push には Actions secret `HOMEBREW_TAP_GITHUB_TOKEN` を使う。Actions の `GITHUB_TOKEN` は別 repo に push できないので、`swat9013/homebrew-tap` の Contents だけに read/write を持つ fine-grained token を人が発行して登録する
