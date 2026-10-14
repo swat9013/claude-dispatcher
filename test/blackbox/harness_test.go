@@ -307,9 +307,15 @@ const loopStopGrace = 15 * time.Second
 // 待ち、2 回目で worker を止め、子が終わってから exit する。
 func (s *sandbox) startLoop(args ...string) *backgroundRun {
 	s.t.Helper()
+	return s.startLoopWithEnv(nil, args...)
+}
+
+// startLoopWithEnv は sandbox の env に extra を足して startLoop する。
+func (s *sandbox) startLoopWithEnv(extra map[string]string, args ...string) *backgroundRun {
+	s.t.Helper()
 	cmd := exec.Command(dispatcherBin, append([]string{"loop"}, args...)...)
 	cmd.Dir = s.clone
-	cmd.Env = s.environ(nil)
+	cmd.Env = s.environ(extra)
 	p := &backgroundRun{t: s.t, cmd: cmd, stdout: &syncBuffer{}, stderr: &syncBuffer{}, done: make(chan struct{})}
 	cmd.Stdout, cmd.Stderr = p.stdout, p.stderr
 	if err := cmd.Start(); err != nil {

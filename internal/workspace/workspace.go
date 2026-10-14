@@ -33,7 +33,7 @@ type Manager struct {
 	// Clone は workflow 定義の dir の絶対 path。hooks に渡す
 	Clone string
 	Hooks Hooks
-	// Env は hooks に渡す環境 (loop の環境)
+	// Env は hooks と worker に渡す環境
 	Env []string
 	// HookLock は after_create と before_remove を作業対象を跨いで直列に撃つ lock。loop が 1 つ作り、loop と worker が
 	// 使う Manager のすべてで同じものを指す (system.md §7 の workspace)

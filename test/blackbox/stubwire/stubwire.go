@@ -39,7 +39,7 @@ type Call struct {
 
 // RecordedEnv は Call に残す env。token の受け渡しと置き場の解決を assert するためのもの。
 var RecordedEnv = []string{
-	"GH_TOKEN", "GITHUB_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN",
+	"GH_TOKEN", "GITHUB_TOKEN", "GITLAB_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN",
 	"HOME", "PATH", "XDG_CONFIG_HOME", "XDG_STATE_HOME",
 }
 

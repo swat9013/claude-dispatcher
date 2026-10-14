@@ -78,8 +78,6 @@ type Runner struct {
 	Workspaces workspace.Manager
 	// Definition は起動の仕方 (claude.command / args) と、stall と上限時間の上限を持つ workflow 定義
 	Definition workflow.Definition
-	// Env は worker に渡す環境 (loop の環境)
-	Env []string
 	// StateDir は描画した共通 prompt と worker log を置く state dir
 	StateDir string
 }
@@ -161,7 +159,7 @@ func (r Runner) launch(job Job, run *Run, workspacePath string, started func(pid
 	}
 	claude := r.Definition.Claude
 	// command は attempt ごとに PATH から引き直す (loop を止めずに claude を入れ替えても、次の attempt から追従する)
-	command, err := deps.Lookup(claude.Command, r.Env)
+	command, err := deps.Lookup(claude.Command, r.Workspaces.Env)
 	if err != nil {
 		return Result{Failure: err.Error()}
 	}
@@ -184,7 +182,7 @@ func (r Runner) launch(job Job, run *Run, workspacePath string, started func(pid
 	args = append(args, sessionArgs(job)...)
 	args = append(args, "--append-system-prompt-file", promptFile, "--", action)
 	cmd := exec.Command(command, args...)
-	cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = workspacePath, r.Env, stream, stderr
+	cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = workspacePath, r.Workspaces.Env, stream, stderr
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	// 前の attempt が追記した行は、この attempt の活動でない
 	before, err := stream.Stat()
