@@ -5,9 +5,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
-// 活動として数える最新の完結した行の探し方。
+// 活動として数える最新の完結した行の探し方 (formats.md §6 の活動)。
 
 // streamFile は content を書いた stream の file を開く。
 func streamFile(t *testing.T, content string) *os.File {
@@ -24,14 +25,11 @@ func streamFile(t *testing.T, content string) *os.File {
 	return f
 }
 
-// summarizeAfter は content の stream から、after より後で終わる行の活動を読む。end は次に読み始める offset。
-func summarizeAfter(t *testing.T, content string, after int64) (summary string, ok bool, end int64) {
+// summarizeAfter は content を書いた stream を after から見始め、1 回確かめて活動を読む。
+func summarizeAfter(t *testing.T, content string, after int64) (summary string, ok bool) {
 	t.Helper()
-	summary, ok, end, err := summarizeLatest(streamFile(t, content).Name(), int64(len(content)), after, "/work")
-	if err != nil {
-		t.Fatal(err)
-	}
-	return summary, ok, end
+	started := time.Now()
+	return newStreamWatch(streamFile(t, content).Name(), after, started, "/work").check(started.Add(time.Second))
 }
 
 func text(s string) string {
@@ -41,7 +39,7 @@ func text(s string) string {
 const thinkingTokens = `{"type":"system","subtype":"thinking_tokens"}` + "\n"
 
 func TestActivitySkipsTheUnfinishedLine(t *testing.T) {
-	summary, _, _ := summarizeAfter(t, text("old")+text("new")+`{"type":"assist`, 0)
+	summary, _ := summarizeAfter(t, text("old")+text("new")+`{"type":"assist`, 0)
 
 	if summary != "new" {
 		t.Fatalf("活動 = %q, want new", summary)
@@ -52,7 +50,7 @@ func TestActivityLooksBackPastLinesThatAreNotCounted(t *testing.T) {
 	// 1s の間に tool_use の後へ thinking_tokens の行が続いても、tool_use を活動にする
 	edit := `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Edit","input":{"file_path":"/work/a.go"}}]}}` + "\n"
 
-	summary, ok, _ := summarizeAfter(t, text("old")+edit+thinkingTokens+thinkingTokens, 0)
+	summary, ok := summarizeAfter(t, text("old")+edit+thinkingTokens+thinkingTokens, 0)
 
 	if !ok || summary != "Edit a.go" {
 		t.Fatalf("活動 = %q, %v; want Edit a.go", summary, ok)
@@ -60,10 +58,12 @@ func TestActivityLooksBackPastLinesThatAreNotCounted(t *testing.T) {
 }
 
 func TestActivityDoesNotReturnALineAlreadySummarized(t *testing.T) {
-	content := text("old") + text("new")
-	_, _, end := summarizeAfter(t, content, 0)
+	started := time.Now()
+	w, _ := stallClock(t, started, time.Minute)
+	appendAt(t, w, text("old")+text("new"), started.Add(10*time.Second))
+	write(t, w, thinkingTokens)
 
-	if summary, ok, _ := summarizeAfter(t, content, end); ok {
+	if summary, changed := w.check(started.Add(20 * time.Second)); changed {
 		t.Fatalf("要約済みの行を返した: %q", summary)
 	}
 }
@@ -71,23 +71,32 @@ func TestActivityDoesNotReturnALineAlreadySummarized(t *testing.T) {
 func TestActivityStaysWhenOnlyUncountedLinesFollow(t *testing.T) {
 	old := text("old")
 
-	if summary, ok, _ := summarizeAfter(t, old+thinkingTokens, int64(len(old))); ok {
+	if summary, ok := summarizeAfter(t, old+thinkingTokens, int64(len(old))); ok {
 		t.Fatalf("数えない行だけなのに活動を返した: %q", summary)
 	}
 }
 
-func TestActivityFindsALineThatJustFitsTheTail(t *testing.T) {
-	long := text(strings.Repeat("x", tailLimit-len(text(""))))
+func TestActivityCountsALineOfExactly64KiB(t *testing.T) {
+	long := text(strings.Repeat("x", activityLineLimit-len(text(""))))
 
-	if summary, ok, _ := summarizeAfter(t, "head\n"+long, 0); !ok || !strings.HasPrefix(summary, "xxx") {
-		t.Fatalf("読んだ範囲に収まる行を数えない (長さ %d)", len(long))
+	if summary, ok := summarizeAfter(t, "head\n"+long, 0); !ok || !strings.HasPrefix(summary, "xxx") {
+		t.Fatalf("改行を含めてちょうど 64 KiB の行を数えない (長さ %d)", len(long))
 	}
 }
 
-func TestActivitySkipsALineLongerThanTheTail(t *testing.T) {
-	long := text(strings.Repeat("x", tailLimit))
+func TestActivitySkipsALineLongerThan64KiB(t *testing.T) {
+	head := text("head")
+	long := text(strings.Repeat("x", activityLineLimit))
 
-	if summary, ok, _ := summarizeAfter(t, text("head")+long, 0); ok {
-		t.Fatalf("読んだ範囲に収まらない行を数えた: %q", summary)
+	if summary, ok := summarizeAfter(t, head+long, int64(len(head))); ok {
+		t.Fatalf("64 KiB を超える行を数えた: %q", summary)
+	}
+}
+
+func TestActivityLooksBackPastALineLongerThan64KiB(t *testing.T) {
+	long := text(strings.Repeat("x", activityLineLimit))
+
+	if summary, ok := summarizeAfter(t, text("head")+long, 0); !ok || summary != "head" {
+		t.Fatalf("活動 = %q, %v; want 64 KiB を超える行を飛ばして head", summary, ok)
 	}
 }

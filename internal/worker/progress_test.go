@@ -3,6 +3,7 @@ package worker
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // progress の表 (formats.md §6 の progress)。行ごとに stall の時計を戻すかを決める。
@@ -54,44 +55,35 @@ func heartbeatPadded(t *testing.T, size int) string {
 	return line[:len(line)-3] + strings.Repeat("x", size-len(line)) + line[len(line)-3:]
 }
 
+// progressed は content を書いた stream を offset から見始め、1 回確かめて stall の時計が戻ったか。
+func progressed(t *testing.T, content string, offset int64) bool {
+	t.Helper()
+	started := time.Now()
+	w := newStreamWatch(streamFile(t, content).Name(), offset, started, "/work")
+	w.check(started.Add(10 * time.Second))
+	return w.sinceProgress(started.Add(10*time.Second)) == 0
+}
+
 func TestALineLongerThan64KiBCountsAsProgressWhateverItsType(t *testing.T) {
-	stream := streamFile(t, heartbeatPadded(t, progressLineLimit+1))
-
-	found, _, err := scanProgress(stream.Name(), 0, progressLineLimit+1)
-
-	if err != nil || !found {
-		t.Fatalf("scanProgress = %v, %v; want 64 KiB を超える行は type を見ずに数える", found, err)
+	if !progressed(t, heartbeatPadded(t, progressLineLimit+1), 0) {
+		t.Fatal("時計が戻らない; want 64 KiB を超える行は type を見ずに数える")
 	}
 }
 
 func TestALineOfExactly64KiBIsJudgedByItsType(t *testing.T) {
-	stream := streamFile(t, heartbeatPadded(t, progressLineLimit))
-
-	found, _, err := scanProgress(stream.Name(), 0, progressLineLimit)
-
-	if err != nil || found {
-		t.Fatalf("scanProgress = %v, %v; want 改行を含めてちょうど 64 KiB の heartbeat は数えない", found, err)
+	if progressed(t, heartbeatPadded(t, progressLineLimit), 0) {
+		t.Fatal("時計が戻った; want 改行を含めてちょうど 64 KiB の heartbeat は数えない")
 	}
 }
 
-func TestScanProgressStopsBeforeTheUnfinishedLine(t *testing.T) {
-	content := heartbeat + `{"type":"assistant"`
-	stream := streamFile(t, content)
-
-	found, end, err := scanProgress(stream.Name(), 0, int64(len(content)))
-
-	if err != nil || found || end != int64(len(heartbeat)) {
-		t.Fatalf("scanProgress = %v, %d, %v; want 完結していない行は見ずに heartbeat の終わり %d まで", found, end, err, len(heartbeat))
+func TestProgressSkipsTheUnfinishedLine(t *testing.T) {
+	if progressed(t, heartbeat+`{"type":"assistant"`, 0) {
+		t.Fatal("時計が戻った; want 完結していない行は見ない")
 	}
 }
 
-func TestScanProgressDoesNotLookBeforeTheOffset(t *testing.T) {
-	content := text("前の attempt") + heartbeat
-	stream := streamFile(t, content)
-
-	found, end, err := scanProgress(stream.Name(), int64(len(text("前の attempt"))), int64(len(content)))
-
-	if err != nil || found || end != int64(len(content)) {
-		t.Fatalf("scanProgress = %v, %d, %v; want offset より前の行は見ない", found, end, err)
+func TestProgressDoesNotLookBeforeTheOffset(t *testing.T) {
+	if progressed(t, text("前の attempt")+heartbeat, int64(len(text("前の attempt")))) {
+		t.Fatal("時計が戻った; want offset より前の行は見ない")
 	}
 }
