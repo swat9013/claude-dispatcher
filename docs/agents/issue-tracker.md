@@ -37,7 +37,7 @@ GitHub shares one number space across issues and PRs, so a bare `#42` may be eit
 
 - 測り方: github-sub-issue
 - 上限: 2
-- 計画的な分解の親の label: なし
+- 計画的な分解の親の label: tracking
 
 ## When a skill says "publish to the issue tracker"
 
@@ -62,4 +62,4 @@ Used by `/wayfinder`. The **map** is a single issue with **child** issues as tic
 
 - 測り方: github-sub-issue
 - 上限: 2
-- 計画的な分解の親の label: なし
+- 計画的な分解の親の label: tracking
