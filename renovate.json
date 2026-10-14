@@ -1,6 +1,6 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "description": "Dependabot が上げない版だけを regex で拾って上げる。Dependabot との分担は docs/adr/0011-renovate-regex-beside-dependabot.md",
+  "description": "Dependabot が上げない版だけを regex で拾って上げる。Dependabot との分担は docs/adr/0016-renovate-regex-beside-dependabot.md",
   "extends": [
     "schedule:weekly"
   ],

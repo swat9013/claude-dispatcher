@@ -1,4 +1,4 @@
-# ADR 0011: Dependabot の対象外の版を、custom.regex に限った Renovate で上げる
+# ADR 0016: Dependabot の対象外の版を、custom.regex に限った Renovate で上げる
 
 - Status: Accepted
 - Date: 2026-10-10
