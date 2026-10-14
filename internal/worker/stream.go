@@ -7,7 +7,8 @@ import (
 	"os"
 )
 
-// lineHeadLimit は完結した行を判定するために持つ行の頭の大きさ。progress と活動の、判定に中身を読む行の上限のうち大きい方
+// lineHeadLimit は完結した行を判定するために持つ行の頭の大きさ。progress は progressLineLimit 以下の行の、活動は末尾の窓
+// (tailLimit) に収まる行の中身を読むので、その大きい方
 const lineHeadLimit = max(progressLineLimit, tailLimit)
 
 // readChunk は stream の file から 1 回に読み出す大きさ

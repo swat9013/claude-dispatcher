@@ -80,7 +80,7 @@ func TestActivityFindsALineThatJustFitsTheTail(t *testing.T) {
 	long := text(strings.Repeat("x", tailLimit-len(text(""))))
 
 	if summary, ok := summarizeAfter(t, "head\n"+long, 0); !ok || !strings.HasPrefix(summary, "xxx") {
-		t.Fatalf("読んだ範囲に収まる行を数えない (長さ %d)", len(long))
+		t.Fatalf("末尾の窓 (tailLimit) に収まる行を数えない (長さ %d)", len(long))
 	}
 }
 
@@ -88,6 +88,6 @@ func TestActivitySkipsALineLongerThanTheTail(t *testing.T) {
 	long := text(strings.Repeat("x", tailLimit))
 
 	if summary, ok := summarizeAfter(t, text("head")+long, 0); ok {
-		t.Fatalf("読んだ範囲に収まらない行を数えた: %q", summary)
+		t.Fatalf("末尾の窓 (tailLimit) に収まらない行を数えた: %q", summary)
 	}
 }

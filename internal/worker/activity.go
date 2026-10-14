@@ -12,7 +12,8 @@ import (
 // summaryLimit は要約の文字数の上限
 const summaryLimit = 80
 
-// tailLimit は活動として数える最新の完結した行を探す、stream の file の末尾の大きさ。これより長い行は活動として数えない
+// tailLimit は活動として数える行を探す、stream の file の末尾の窓の大きさ。確認の時点で頭がこの窓の中にある行だけを数える
+// ので、これより長い行は数えない
 const tailLimit = 64 << 10
 
 // streamLine は stream-json の 1 行のうち、要約に使う項目。

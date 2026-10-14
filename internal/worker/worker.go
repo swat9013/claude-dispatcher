@@ -246,16 +246,18 @@ func (w *streamWatch) check(now time.Time) (activity string, changed bool) {
 		return "", false
 	}
 	// 前の確認から完結した行を古い順に見る。活動は file の末尾に収まる行のうち、数える最後の行
-	var found bool
+	var found, summarized bool
+	var summary string
 	err = w.lines.readTo(size, func(head []byte, start, length int64) {
 		found = found || countsAsProgress(head, length)
 		if !inTail(start, size) {
 			return
 		}
-		if summary, ok := Summarize(head, w.workspace); ok {
-			activity, changed = summary, true
+		if s, ok := Summarize(head, w.workspace); ok {
+			summary, summarized = s, true
 		}
 	})
+	// 読めなければ、それまでに見た行の結果は捨てる (readTo は読み終えた offset を戻し、次の確認で読み直す)
 	if err != nil {
 		return w.unreadable(err)
 	}
@@ -263,7 +265,7 @@ func (w *streamWatch) check(now time.Time) (activity string, changed bool) {
 	if found {
 		w.progressed = now
 	}
-	return activity, changed
+	return summary, summarized
 }
 
 // unreadable は stream の file を読めなかった理由を活動にする。直前と同じ理由なら changed が false。
