@@ -141,12 +141,21 @@ type TrackerRole struct {
 	Prefix string
 	// IssueKey は key で指す種類の、番号の issue の key
 	IssueKey func(place Place, number int) string
-	Declarations
-	// TokenVariable は tracker.token を渡す環境変数の名前 (役割を担う CLI が読むもの)。Supports に tracker.token を書く種類
-	// だけが持つ (テストが確かめる)
+	// declared は tracker.token を除く宣言。tracker.token を支えるかは TokenVariable から導く (Declarations)
+	declared Declarations
+	// TokenVariable は tracker.token を渡す環境変数の名前 (役割を担う CLI が読むもの)。"" でない種類だけが tracker.token を
+	// 支える
 	TokenVariable string
 	// Settings は worker が issue 置き場を操作するのに要りそうな Claude Code の settings の entry
 	Settings []string
+}
+
+// Declarations は issue 置き場の役割の宣言。tracker.token は、渡す環境変数を持つ種類なら支える宣言に足す。
+func (r TrackerRole) Declarations() Declarations {
+	if r.TokenVariable == "" {
+		return r.declared
+	}
+	return Declarations{Supports: append(slices.Clone(r.declared.Supports), Token), Declines: r.declared.Declines}
 }
 
 // CLHostRole は CL 置き場の役割の宣言。

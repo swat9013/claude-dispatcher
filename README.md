@@ -109,7 +109,7 @@ claude-dispatcher loop
   - tick の中で事前検査に落ちた trigger は起動しない
   - `tracker.repo` を変えたら、loop を撃ち直すまでどの tick も何も起動しない
 - 同じ issue 置き場の loop は、同じマシンで 1 本しか起動できない。マシンを跨いだ排他は持たないので、1 つの issue 置き場は 1 台から回す
-- loop を起動した環境から gh や glab の認証を取れない (ssh 越しの session など) なら、`tracker.token` に `$VAR` で token を渡して撃ち直す。token は loop の観測に加えて worker と hooks にも渡る (`claude-dispatcher guide` の「項目」)
+- loop を起動した環境から gh や glab の認証を取れない (ssh 越しの session など) なら、`tracker.token` に `$VAR` で token を渡して撃ち直す。token は loop の観測に加えて worker と hooks にも渡る (`claude-dispatcher guide` の「項目」)。`tracker.token` は issue 置き場が GitHub か GitLab のときにだけ書ける。Jira の `cl:` の CL 置き場の gh / glab には渡らないので、その CLI は `gh auth login` / `glab auth login` で認証しておく
 - loop は自分では起き直さない。端末を閉じたりマシンを再起動したりしたら、同じコマンドを撃ち直す。`brew upgrade` の後も撃ち直す (走っている loop は起動した時点の binary で回り続ける)
 
 ## 動いているかを見る

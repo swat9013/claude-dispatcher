@@ -23,9 +23,6 @@ func TestEveryKindHasAProviderThatDeclaresEveryField(t *testing.T) {
 			if len(p.Tracker.Settings) == 0 || (p.CLHost != nil && len(p.CLHost.Settings) == 0) {
 				t.Fatalf("provider %s が役割の settings の entry を宣言していない", kind)
 			}
-			if p.Tracker.Supported(provider.Token) != (p.Tracker.TokenVariable != "") {
-				t.Fatalf("provider %s が tracker.token を支えるかと、渡す環境変数の宣言が合わない", kind)
-			}
 			if p.CLHost != nil && (p.CLHost.Prefix == "" || p.CLHost.Scaffold == nil) {
 				t.Fatalf("provider %s が CL の呼び方か、雛形に CL 置き場を書く方法を宣言していない", kind)
 			}
@@ -55,7 +52,7 @@ type roleDeclarations struct {
 func TestEveryRoleEitherSupportsOrDeclinesEachOfItsDeclarationsWithAReason(t *testing.T) {
 	for _, kind := range provider.Kinds() {
 		p, _ := provider.Of(kind)
-		roles := []roleDeclarations{{"tracker", p.Tracker.Declarations, provider.TrackerFeatures}}
+		roles := []roleDeclarations{{"tracker", p.Tracker.Declarations(), provider.TrackerFeatures}}
 		if p.CLHost != nil {
 			roles = append(roles, roleDeclarations{"CL host", p.CLHost.Declarations, provider.CLHostFeatures})
 		}
@@ -101,7 +98,7 @@ func TestOnlyATrackerWithoutTheCLHostRoleAcceptsASeparateCLPlace(t *testing.T) {
 	for _, kind := range provider.Kinds() {
 		p, _ := provider.Of(kind)
 
-		if p.Tracker.Supported(provider.CLPlace) != (p.CLHost == nil) {
+		if p.Tracker.Declarations().Supported(provider.CLPlace) != (p.CLHost == nil) {
 			t.Fatalf("%s: cl: を書けるのは CL host の役割を持たない種類だけ (CL host の役割: %v)", kind, p.CLHost != nil)
 		}
 	}

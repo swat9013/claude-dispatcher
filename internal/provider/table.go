@@ -30,8 +30,8 @@ var providers = []Provider{
 			return Place{name: r.String(), value: r}
 		},
 		Tracker: TrackerRole{
-			Declarations: Declarations{
-				Supports: []Feature{Token, Author, Milestone, Blocked},
+			declared: Declarations{
+				Supports: []Feature{Author, Milestone, Blocked},
 				Declines: map[Feature]string{CLPlace: sameCLHost, Status: statusAndType, Type: statusAndType},
 			},
 			TokenVariable: "GH_TOKEN",
@@ -69,8 +69,8 @@ var providers = []Provider{
 			return Place{name: p.String(), value: p}
 		},
 		Tracker: TrackerRole{
-			Declarations: Declarations{
-				Supports: []Feature{Token, Author, Milestone},
+			declared: Declarations{
+				Supports: []Feature{Author, Milestone},
 				Declines: map[Feature]string{
 					CLPlace: sameCLHost,
 					Blocked: "GitLab の CE は issue の依存を API で返さないので、blocked: false が全件に当たる",
@@ -117,7 +117,7 @@ var providers = []Provider{
 			return Place{name: p.String(), value: p}
 		},
 		Tracker: TrackerRole{
-			Declarations: Declarations{
+			declared: Declarations{
 				Supports: []Feature{CLPlace, Blocked, Status, Type},
 				Declines: map[Feature]string{
 					Token:     "acli は acli jira auth login の認証を使う",
