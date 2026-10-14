@@ -96,6 +96,8 @@ dispatcher は、状態の意味を定めない。issue の label が何を表�
   - 同じマシンの中では、scope key の lock で 2 本目の loop を拒む (§9)
   - マシンを跨いだ排他は持たない。1 つの issue 置き場は 1 台から回す
   - マシンを跨いだ分担は、調停 remote を指した project に限り ADR 0011 の形で持つことを決めた。未実装 (#167)
+    - 調停 remote への `refs/dispatcher/*` の push (着手宣言・生存報告) は `git push --no-verify` で撃ち、実装 repo の pre-push hook (husky・lefthook・pre-commit など) を通さない。push するのは利用者のコードを含まない空の tree の commit で、HEAD とも無関係なので、利用者のコードの変更を検査する hook を飛ばしても守るものを失わない。逆に hook を通すと、hook が「HEAD と違う commit の push」として落とすことがあり、着手宣言が通らず、生存報告が通らない loop は死んだとみなされる
+    - hook の効かない別の場所 (bare clone など) から push する案は取らない。clone を持つ費用と同期の手間が増えるうえ、`core.hooksPath` を global に設定した環境では bare clone でも hook が効くので、`--no-verify` 無しでは hook を確実に避けられない
 
 ## 5. 機械と LLM の線
 
