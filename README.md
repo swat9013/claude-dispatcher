@@ -18,8 +18,6 @@ issue tracker の issue と CL (pull request) を周期ごとに読み、project
 - **完了は「worker が終わった後に、作業対象が trigger から外れていること」**。外れないまま終わった worker は失敗として数え、backoff して同じ session を続けさせる。上限の回数で打ち切る
 - **定期起動は cron ではなく、端末で撃つ `loop` が持つ**。止めるのも撃ち直すのも人が行う
 
-詳しくは [`docs/design/`](docs/design/)、用語は [`CONTEXT.md`](CONTEXT.md)、決定の理由は [`docs/adr/`](docs/adr/)。
-
 ## 前提
 
 - macOS か Linux
@@ -66,9 +64,9 @@ binary は署名していない。macOS でブラウザから取った archive �
 
 ## 導入
 
-実装 repo の clone を cwd にして撃つ。流れの正本は [`docs/design/usecases.md`](docs/design/usecases.md) の UC-5、各コマンドの形式は [`docs/design/formats.md`](docs/design/formats.md) §5・§7.4。
+実装 repo の clone を cwd にして、次の順に撃つ。各手順で何が起き、何を確かめるかは `claude-dispatcher guide` の「導入の流れ」。
 
-1. **雛形を置く**: `setup` が cwd に `WORKFLOW.md` の雛形を書く。origin の host が `github.com` なら GitHub の雛形で、`tracker.repo` は `gh repo view` が返す repo で埋まる。それ以外の host なら GitLab の雛形で、`tracker.host` と `tracker.repo` は cwd で撃った `glab repo view` が返す project の web の host と path で埋まる。Jira を issue 置き場にするなら、site と project key を flag で渡す (CL 置き場の `cl:` は origin から上と同じ手順で埋まる)。既にある file は上書きしない
+1. **雛形を置く**: `setup` が cwd に `WORKFLOW.md` の雛形を書く
 
    ```sh
    cd ~/src/widgets
@@ -76,78 +74,44 @@ binary は署名していない。macOS でブラウザから取った archive �
    claude-dispatcher setup --kind jira --host acme.atlassian.net --repo WIDGETS   # Jira の issue 置き場
    ```
 
-2. **自分の project に合わせて書く**: trigger の述語 (どの label・どの head branch に当てるか)・action (worker に何をさせるか)・hooks (workspace の作り方)・並列上限を直し、repo に commit する。書ける項目と action が守る約束は `claude-dispatcher guide` が出す案内 (書き方の正本。利用者のセッションに読ませてもよい)、この repo 自身の例は [`WORKFLOW.md`](WORKFLOW.md)
-   - worker が作業を終えたら作業対象を trigger から外すよう、action か本文 (共通 prompt) に書く (例: CL を開いたら `ready-for-agent` を外す)。外さないと、失敗として数えられて再起動される
-   - 承認済みの CL (`approved: true`) に action を当てるかは自分で決める。当てると merge を worker に任せうる
-   - workspace の置き場 (`workspace.root`) が clone の中なら、`.gitignore` に足す。既定の `.claude-dispatcher/workspaces` (`WORKFLOW.md` の dir からの相対) は clone の中に入る。`setup` は `.gitignore` を書かない
-3. **試運転**: 何も起動せず、何も書かずに、起動するはずの作業対象と trigger を 1 件 1 行で示す
+2. **自分の project に合わせて書く**: trigger・action・hooks・並列上限を直し、repo に commit する。書き方は `claude-dispatcher guide` の「workflow 定義の書き方」と「action が守る約束」(利用者のセッションに読ませてもよい)、この repo 自身の例は [`WORKFLOW.md`](WORKFLOW.md)
+3. **試運転**: 何も起動せず、起動するはずの作業対象と trigger を示す
 
    ```sh
    claude-dispatcher loop --dry-run
    ```
 
-4. **導入を確かめる**: `doctor` が workflow 定義・issue 置き場・依存 CLI (gh・glab・acli のどれか・claude・git)・事前検査を確かめ、利用者の約束に頼る宣言 (承認済みの CL への action・絞り込みの無い CL 側の trigger) を警告する。Claude Code の settings に要りそうな entry も示すので、自分で足す (CLI は settings を書かない)
+4. **導入を確かめる**: workflow 定義・issue 置き場・依存 CLI・事前検査を確かめ、settings に要りそうな entry を示す
 
    ```sh
    claude-dispatcher doctor
    ```
 
-`setup`・`loop`・`status`・`paths`・`doctor` は、workflow 定義の path を最後の引数で渡せる (省けば cwd の `WORKFLOW.md`)。
-
 ## 回す
 
-実装 repo の clone で `loop` を撃つ。起動直後に 1 回、以後は `polling.interval` ごとに tick を回す。
+実装 repo の clone で `loop` を撃つ。起動時の検査、`WORKFLOW.md` の変更の効き方、撃ち直しが要るときは `claude-dispatcher guide` の「回す・見る・止める」の「回す」。
 
 ```sh
 cd ~/src/widgets
 claude-dispatcher loop
 ```
 
-- 起動時に workflow 定義の検査と事前検査 (action の先頭の skill が呼べるか) を通す。落ちれば誤りを名指しして起動しない
-- tick ごとに workflow 定義を読み直すので、`WORKFLOW.md` の変更は loop を撃ち直さずに効く。ただし次の場合は効き方が違う
-  - 読み直した定義が検査に落ちたら、その tick は何も起動しない
-  - tick の中で事前検査に落ちた trigger は起動しない
-  - `tracker.repo` を変えたら、loop を撃ち直すまでどの tick も何も起動しない
-- 同じ issue 置き場の loop は、同じマシンで 1 本しか起動できない。マシンを跨いだ排他は持たないので、1 つの issue 置き場は 1 台から回す
-- loop を起動した環境から gh や glab の認証を取れない (ssh 越しの session など) なら、`tracker.token` に `$VAR` で token を渡して撃ち直す。token は loop の観測に加えて worker と hooks にも渡る (`claude-dispatcher guide` の「項目」)。`tracker.token` は issue 置き場が GitHub か GitLab のときにだけ書ける。Jira の `cl:` の CL 置き場の gh / glab には渡らないので、その CLI は `gh auth login` / `glab auth login` で認証しておく
-- loop は自分では起き直さない。端末を閉じたりマシンを再起動したりしたら、同じコマンドを撃ち直す。`brew upgrade` の後も撃ち直す (走っている loop は起動した時点の binary で回り続ける)
-
 ## 動いているかを見る
 
-loop を撃った端末の画面が一番早い。`status` と同じ見出しと `workers` の表 (段階・経過・stream の最新の活動を含む)・`要対処` の下に、直近 10 行のログ (tick・起動・終了・再起動・停止・error) を描き直し続ける。色は端末のときだけ付き、`NO_COLOR` を設定すれば付かない。stdout を pipe や file へ流しているときは、ログの行と worker の活動を 1 行ずつ追記する (形式は [`docs/design/formats.md`](docs/design/formats.md) §6)。
-
-別の端末からは `status` で見る。loop が書き出す状態 file (`status.json`) を描き、何も書かず tracker の CLI も撃たない。見出しに loop が生きているか (`loop 稼働中` / `loop 停止待ち` / `loop なし`) と直近の tick を出し、走っている worker・再起動待ち・打ち切り・曖昧な CL・事前検査に落ちた trigger を並べる (形式は [`docs/design/formats.md`](docs/design/formats.md) §7)。
+loop を撃った端末の画面か、別の端末の `status` で見る。log と worker の stream の置き場は `paths --json` で引く。画面と `status` の読み方、打ち切られた作業対象の解き方は `claude-dispatcher guide` の「回す・見る・止める」の「見る」。
 
 ```sh
 claude-dispatcher status
+claude-dispatcher paths --json
 ```
-
-過去の tick と worker の起動・終わり方は log.jsonl に 1 行ずつ残る。置き場は `claude-dispatcher paths --json` の `log` で引ける。worker の stream は `<state_dir>/workers/<作業対象>.log` (stderr は `.stderr.log`) に残る。
-
-打ち切られた作業対象は、どの trigger にも起動されない。打ち切りは loop の memory にだけ持つので、loop を撃ち直すと解ける。loop を止めずに解くなら、作業対象を打ち切ったときの trigger から外し (label で当てる trigger なら label を外す)、1 周期待ってから戻す。
 
 ## 止める
 
-1. loop の端末で Ctrl+C を押す (SIGTERM・SIGHUP も同じ)。新しい起動と再起動をやめ、走っている worker が終わるのを待って止まる。worker が走っていなければすぐ止まる
-2. 待てないときはもう一度 Ctrl+C を押す。走っている worker を止めて止まる。worker が途中まで書いた成果は workspace と remote branch に残る。作業対象が trigger に当たったままなら、次に起動した loop が同じ workspace で worker を起動し直す (session は新しく、attempt も 1 から数え直す。前の成果を拾わせるなら、共通 prompt にそう書く)
-3. 使うのをやめるなら、`paths --json` が返す `state_dir` と `workspace_root` を消す (workspace が worktree なら、消した後に clone で `git worktree prune` を撃つ)。tracker の label は残る
+loop の端末で Ctrl+C を押す。待てないときはもう一度押す。それぞれで worker と成果がどうなるか、使うのをやめるときに消すものは `claude-dispatcher guide` の「回す・見る・止める」の「止める」。
 
-## 開発中の版を動かす
+## 開発に加わる
 
-この repo の checkout を build して動かすなら、`scripts/claude-dispatcher-dev.sh` を使う。その checkout を build し直してから、渡した引数で実行する。Go は手元の版が [go.mod](go.mod) の `toolchain` 行より古くても、`go` コマンドがその版を取ってきて使う。
-
-```sh
-alias claude-dispatcher-dev=<claude-dispatcher の clone>/scripts/claude-dispatcher-dev.sh
-cd ~/src/widgets
-claude-dispatcher-dev --version        # 版に checkout の commit が出る (未 commit の変更があれば +dirty)
-claude-dispatcher-dev loop --dry-run
-```
-
-- build した binary は checkout の `dist/dev/claude-dispatcher` に置く。素の `claude-dispatcher` は PATH 上の版のまま
-- 状態 (state dir) は配布版と共有する。同じ issue 置き場の loop は 1 本しか動かせないので、配布版の loop を止めてから dev の loop を撃つ
-- `--dry-run` を付けない loop は、本物の tracker を読んで worker を起動する
-
-詳しい注意と、テスト・lint の撃ち方は [`CONTRIBUTING.md`](CONTRIBUTING.md) の「開発中の claude-dispatcher を試す」と「gate」。
+開発中の版の動かし方・gate・commit と PR の規約は [`CONTRIBUTING.md`](CONTRIBUTING.md)。
 
 ## License
 
