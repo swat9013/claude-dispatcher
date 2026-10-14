@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -37,6 +38,24 @@ func section(text, heading string) (string, bool) {
 	return body, true
 }
 
+// provider の対応表の始まりの目印。述語の節は、述語の表の後に provider の対応表を持つ。
+const (
+	jiraProviderTableMarker   = "`tracker.kind` が `jira` のときの述語の意味:"
+	gitlabProviderTableMarker = "上の表は `github` の field で書いた。"
+)
+
+// keyCells は本文の表の行ごとの最初のセル (key の列) を返す。案内は key を表の行で説明するので、key の列だけを探し、
+// 箇条書きや説明のセルに出る綴りで、説明の行が消えたのを見逃さない。
+func keyCells(body string) []string {
+	var cells []string
+	for _, line := range strings.Split(body, "\n") {
+		if cell, ok := strings.CutPrefix(line, "|"); ok {
+			cells = append(cells, strings.SplitN(cell, "|", 2)[0])
+		}
+	}
+	return cells
+}
+
 // leaves は表の key を、値が対応表でない key まで辿って、案内での path の綴りで返す。
 func (k keyTable) leaves(prefix string) []string {
 	var out []string
@@ -50,11 +69,15 @@ func (k keyTable) leaves(prefix string) []string {
 	return out
 }
 
-func TestEveryKeyTheLoaderAcceptsAppearsInTheGuide(t *testing.T) {
-	// 案内は key を、その key を説明する節の中に次の綴りで書く。設定の項目は「項目」の節に top level からの path
-	// (`tracker.kind`・`triggers[].when`)、述語は「issue 側の述語」「CL 側の述語」の節に when からの path (`labels.all`・`assignee`)。
-	// 節を限るのは、例や違いの表に出る綴りで、説明の行が消えたのを見逃さないため。値が対応表の key をここで辿り忘れると、その
-	// key の綴り (`tracker` など) を案内に探して落ちる
+// missingGuideKeys は読み込みが受ける key のうち、案内の文面 text でその key を説明する節に出てこないものを、
+// 「<節>: <key>」の綴りで返す。案内は key を、その key を説明する節の表の key の列に次の綴りで書く。設定の項目は「項目」の節に
+// top level からの path (`tracker.kind`・`triggers[].when`)、述語は「issue 側の述語」「CL 側の述語」の節に when
+// からの path (`labels.all`・`assignee`)。節を限るのは、例や違いの表に出る綴りで、説明の行が消えたのを見逃さないため。
+// 述語の節は、述語の表の後に provider の対応表を持ち、同じ key がどちらにも出る。対応表の目印から節の終わりまでを
+// 探す範囲から外し、述語の表の行が消えたのを見逃さない。
+// 値が対応表の key をここで辿り忘れると、その key の綴り (`tracker` など) を案内に探して落ちる。
+// 節か、述語の節の対応表の目印が無いときは error (目印の文面が変わって、黙って節の全体を探すのに戻らないように)
+func missingGuideKeys(text string) ([]string, error) {
 	c := &checker{}
 	def := &Definition{}
 	var issue trigger.IssuePredicate
@@ -67,9 +90,11 @@ func TestEveryKeyTheLoaderAcceptsAppearsInTheGuide(t *testing.T) {
 	}
 	roots := []struct {
 		section string
-		table   keyTable
+		// providerTable は provider の対応表の始まりの目印。空なら節の全体を探す
+		providerTable string
+		table         keyTable
 	}{
-		{"項目", keyTable{fields: c.topFields(def), nested: map[string]nestedTable{
+		{"項目", "", keyTable{fields: c.topFields(def), nested: map[string]nestedTable{
 			"tracker":   {"tracker", keyTable{fields: c.trackerFields(&def.Tracker, &placeInput{})}},
 			"cl":        {"cl", keyTable{fields: c.clFields(&placeInput{})}},
 			"polling":   {"polling", keyTable{fields: c.pollingFields(&def.Interval)}},
@@ -80,26 +105,119 @@ func TestEveryKeyTheLoaderAcceptsAppearsInTheGuide(t *testing.T) {
 			"triggers":  {"triggers[]", keyTable{fields: c.triggerFields(&trigger.Trigger{}, map[string]bool{}, &deferredItems{})}},
 		}}},
 		// when の中は on で表が変わるので、述語の表は when からの path で別に辿る
-		{"issue 側の述語", keyTable{fields: c.issuePredicateFields(&issue, &node, &node), nested: predicateNesting}},
-		{"CL 側の述語", keyTable{fields: c.clPredicateFields(&cl, &node), nested: predicateNesting}},
+		{"issue 側の述語", jiraProviderTableMarker, keyTable{fields: c.issuePredicateFields(&issue, &node, &node), nested: predicateNesting}},
+		{"CL 側の述語", gitlabProviderTableMarker, keyTable{fields: c.clPredicateFields(&cl, &node), nested: predicateNesting}},
 	}
-	text := guide.Text()
 
 	var missing []string
 	for _, root := range roots {
 		body, ok := section(text, root.section)
 		if !ok {
-			t.Fatalf("案内 (internal/guide/guide.md) に節 ### %s が無い", root.section)
+			return nil, fmt.Errorf("案内に節 ### %s が無い", root.section)
 		}
+		if root.providerTable != "" {
+			end := strings.Index(body, root.providerTable)
+			if end < 0 {
+				return nil, fmt.Errorf("案内の節 ### %s に provider の対応表の目印 %q が無い", root.section, root.providerTable)
+			}
+			body = body[:end]
+		}
+		cells := keyCells(body)
 		for _, key := range root.table.leaves("") {
-			if !strings.Contains(body, "`"+key+"`") {
+			if !slices.ContainsFunc(cells, func(cell string) bool { return strings.Contains(cell, "`"+key+"`") }) {
 				missing = append(missing, root.section+": "+key)
 			}
 		}
 	}
-
 	slices.Sort(missing)
-	if missing = slices.Compact(missing); len(missing) > 0 {
+	return slices.Compact(missing), nil
+}
+
+// withoutRow は text の節 ### heading のうち provider の対応表の目印 marker より前から、key の列が `key` の表の行を
+// 1 本消した文面を返す。範囲に行が無ければテストを落とす (差し替えが空振りするか別の表の行を消して、述語の表の行が残るのを防ぐ)。
+func withoutRow(t *testing.T, text, heading, marker, key string) string {
+	t.Helper()
+	start := strings.Index(text, "\n### "+heading+"\n")
+	if start < 0 {
+		t.Fatalf("案内 (internal/guide/guide.md) に節 ### %s が無い", heading)
+	}
+	end := strings.Index(text[start:], marker)
+	if end < 0 {
+		t.Fatalf("案内 (internal/guide/guide.md) の節 ### %s に目印 %q が無い", heading, marker)
+	}
+	row := strings.Index(text[start:start+end], "\n| `"+key+"` |")
+	if row < 0 {
+		t.Fatalf("案内 (internal/guide/guide.md) の節 ### %s の述語の表に key の列が `%s` の行が無い", heading, key)
+	}
+	from := start + row + 1
+	to := from + strings.Index(text[from:], "\n") + 1
+	return text[:from] + text[to:]
+}
+
+// without は text から s を 1 箇所消した文面を返す。s が無ければテストを落とす。
+func without(t *testing.T, text, s string) string {
+	t.Helper()
+	if !strings.Contains(text, s) {
+		t.Fatalf("案内 (internal/guide/guide.md) に %q が無い", s)
+	}
+	return strings.Replace(text, s, "", 1)
+}
+
+func TestEveryKeyTheLoaderAcceptsAppearsInTheGuide(t *testing.T) {
+	missing, err := missingGuideKeys(guide.Text())
+
+	if err != nil {
+		t.Fatalf("案内 (internal/guide/guide.md) を読めない: %v", err)
+	}
+	if len(missing) > 0 {
 		t.Fatalf("読み込みが受ける key が案内 (internal/guide/guide.md) に出てこない: %s", strings.Join(missing, ", "))
+	}
+}
+
+func TestAKeyWhosePredicateRowIsGoneIsMissingEvenIfTheProviderTableNamesIt(t *testing.T) {
+	cases := []struct {
+		heading string
+		marker  string
+		key     string
+		want    string
+	}{
+		// `draft` は gitlab の対応表にも、`assignee` は jira の対応表にも出る
+		{"CL 側の述語", gitlabProviderTableMarker, "draft", "CL 側の述語: draft"},
+		{"issue 側の述語", jiraProviderTableMarker, "assignee", "issue 側の述語: assignee"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.heading, func(t *testing.T) {
+			text := withoutRow(t, guide.Text(), tc.heading, tc.marker, tc.key)
+
+			missing, err := missingGuideKeys(text)
+
+			if err != nil {
+				t.Fatalf("案内を読めない: %v", err)
+			}
+			if !slices.Contains(missing, tc.want) {
+				t.Fatalf("行を消した key が欠けたと報告されない: want %q, got %v", tc.want, missing)
+			}
+		})
+	}
+}
+
+func TestAPredicateSectionWithoutTheProviderTableMarkerIsAnError(t *testing.T) {
+	cases := []struct {
+		name   string
+		marker string
+	}{
+		{"CL 側", gitlabProviderTableMarker},
+		{"issue 側", jiraProviderTableMarker},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			text := without(t, guide.Text(), tc.marker)
+
+			_, err := missingGuideKeys(text)
+
+			if err == nil || !strings.Contains(err.Error(), tc.marker) {
+				t.Fatalf("provider の対応表の目印が無いことを名指しして落ちない: %v", err)
+			}
+		})
 	}
 }
