@@ -213,6 +213,7 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
   - `permission_denial_count`: その `result` の `permission_denials` (配列) の要素の数
   - `result` の行が無ければ (claude を起動できなかった・stall や上限時間や signal で `result` を書く前に止めた 等) 3 つとも載せない。`result` の行にその項目が無ければ、その key だけ載せない。項目の型が違えば (`num_turns` が数でない 等)、その key を載せず `error` の行を残す。worker log を最後まで読めなければ (どれが最後の `result` か決まらない)、3 つとも載せず `error` の行を残す
   - 止めた attempt (stall・上限時間・停止要求) でも、止める前に `result` の行を書いていれば要約を載せる
+  - 要約は attempt 開始時の offset から読む。終了時の大きさがその offset より小さければ 0 から読む
 - `session_id` は CLI が発行して最初の attempt に `--session-id` で渡した値。同じ claim の attempt を通して 1 つ。Claude Code の transcript へ辿る鍵
 - claim を解くのは `completed` と `stopped` の `end`・`release`・`abandon` の行
 
@@ -447,7 +448,8 @@ issue#42  implement  1        running  5m10s  Edit internal/status/status.go
 - 64 KiB を超える行は tool の結果や発話の行で、heartbeat や通知の行は小さいので、`type` を見ずに数える。1 行は頭の 64 KiB までだけを持って判定する
 - 確認のたびに、前の確認で読み終えた offset から今の file の大きさまでの完結した行を、末尾の窓に限らずすべて見る。1 回に読む量に上限は置かない。今の attempt が書いた行だけを見る
 - 見た行に progress が 1 行でもあれば、stall の時計をその確認の時刻に戻す
-- stream の file が前の確認より縮んだら (truncate・置き換え)、progress と活動の読み終えた offset を 0 に戻し、縮んだ後の行を頭から見る。縮んだこと自体では時計を戻さない
+- 監視は stream を、loop が claude に渡した worker log の fd (またはその dup) で読む。path を開き直さない。path の rename・削除・置き換えは監視に影響しない
+- 縮みは、fd で Stat した大きさが前の確認で読み終えた offset より小さいことで判定し、progress と活動の読み終えた offset を 0 に戻し、縮んだ後の行を頭から見る。縮んだこと自体では時計を戻さない。1 回の確認のあいだの truncate と再成長は検出しない (loop の外の書き手が無い前提)
 - stream の file を読めなければ (大きさを確かめられない・中身を読み出せない のどちらも)、時計を戻さず、`stream を読めない: <理由>` を活動にする。その状態が `limits.stall_timeout` 続けば stall で止め、失敗の理由に読めない理由を添える。読めなかった後は、伸びていなくても読み直す
 - 行の書かれない区間 (長い tool の実行・API の retry の backoff・compaction・`-p` の終わりに background の作業を待つ区間) が `limits.stall_timeout` より長いと、進んでいても stall で止まる。区間を見分ける行は確かめられていないので、`limits.stall_timeout` を区間より長くして吸収する
 - `result` は turn ごとに書かれ (background の作業が始めた turn も 1 回ずつ書く)、worker の終わりを表さない。worker の終わりは process の終了だけで決め、`result` の後に行が途絶えた区間も、他の行の書かれない区間と同じく `limits.stall_timeout` で止める。最後の `result` の後の沈黙と background の作業を待つ区間は、stream の行からは見分けられないため
