@@ -27,11 +27,22 @@ type lineReader struct {
 	line []byte
 	// chunk は読み出しに使う buffer。確認をまたいで使い回す
 	chunk []byte
+	// open は path の file を読むために開く (既定は os.Open)。test が読み出しの途中で落とすために差し替える
+	open func(path string) (readerAtCloser, error)
 }
+
+// readerAtCloser は lineReader が開いた stream の file に求める操作。
+type readerAtCloser interface {
+	io.ReaderAt
+	io.Closer
+}
+
+func openFile(path string) (readerAtCloser, error) { return os.Open(path) }
 
 // newLineReader は path の stream の file の offset より後を読む lineReader。
 func newLineReader(path string, offset int64) *lineReader {
-	return &lineReader{path: path, size: offset, read: offset, lineStart: offset, line: make([]byte, 0, lineHeadLimit), chunk: make([]byte, readChunk)}
+	return &lineReader{path: path, size: offset, read: offset, lineStart: offset, line: make([]byte, 0, lineHeadLimit), chunk: make([]byte, readChunk),
+		open: openFile}
 }
 
 // unchanged は file の大きさ size が、前に読み終えたときから変わっていないか。
@@ -55,7 +66,7 @@ func (r *lineReader) readTo(size int64, each func(head []byte, start, length int
 }
 
 func (r *lineReader) readLines(size int64, each func(head []byte, start, length int64)) error {
-	f, err := os.Open(r.path)
+	f, err := r.open(r.path)
 	if err != nil {
 		return err
 	}

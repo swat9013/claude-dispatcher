@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -289,6 +290,76 @@ func TestStreamThatCouldNotBeReadIsReadAgainEvenWithoutGrowing(t *testing.T) {
 
 	if reason := r.overdue(time.Hour, w.sinceProgress(started.Add(80*time.Second)), w.readError); strings.Contains(reason, "読めない") {
 		t.Fatalf("理由 = %q, want 伸びていなくても読み直して読めたので、stall の理由に読めない理由を添えない", reason)
+	}
+}
+
+// errReadFails は差し替えた読み出しが返す、読み出せない理由。
+var errReadFails = errors.New("読み出せない")
+
+// failsAfterFirstRead は、開くたびに最初の 1 回だけ読み出せ、2 回目から落ちる file。
+type failsAfterFirstRead struct {
+	readerAtCloser
+	reads int
+}
+
+func (f *failsAfterFirstRead) ReadAt(p []byte, off int64) (int, error) {
+	f.reads++
+	if f.reads > 1 {
+		return 0, errReadFails
+	}
+	return f.readerAtCloser.ReadAt(p, off)
+}
+
+// unreadablePartwayUntilRestored は stream の file を、1 回の確認で最初の chunk だけ読めて続きを読めなくし、元へ戻す関数を
+// 返す。最初の chunk の行は each へ渡った後に、読み出しが落ちる。
+func unreadablePartwayUntilRestored(w *streamWatch) (restore func()) {
+	prev := w.lines.open
+	w.lines.open = func(path string) (readerAtCloser, error) {
+		f, err := prev(path)
+		if err != nil {
+			return nil, err
+		}
+		return &failsAfterFirstRead{readerAtCloser: f}, nil
+	}
+	return func() { w.lines.open = prev }
+}
+
+// progressThenMoreThanAChunk は progress の行の後に、合わせて 1 回の読み出し (readChunk) に収まらない 2 行を続けた stream の
+// 中身。続く行は、どれも progress に数えない heartbeat の行 (progressLineLimit 以下) にする。progress は最初の chunk にしか無い
+func progressThenMoreThanAChunk(t *testing.T) string {
+	t.Helper()
+	filler := heartbeatPadded(t, readChunk/2)
+	return taskProgress + filler + filler
+}
+
+func TestStallClockDoesNotResetWhenTheStreamBecomesUnreadablePartway(t *testing.T) {
+	started := time.Now()
+	w, _ := stallClock(t, started, time.Minute)
+	appendAt(t, w, text("前"), started.Add(10*time.Second))
+	write(t, w, progressThenMoreThanAChunk(t))
+	unreadablePartwayUntilRestored(w)
+
+	w.check(started.Add(30 * time.Second))
+
+	if got := w.sinceProgress(started.Add(30 * time.Second)); got != 20*time.Second {
+		t.Fatalf("progress が途絶えた時間 = %s, want 途中で読めなくなった確認では、読めた分の progress でも戻らず 20s", got)
+	}
+}
+
+func TestProgressReadBeforeTheStreamBecameUnreadablePartwayResetsTheStallClockOnceItCanBeRead(t *testing.T) {
+	started := time.Now()
+	w, _ := stallClock(t, started, time.Minute)
+	appendAt(t, w, text("前"), started.Add(10*time.Second))
+	write(t, w, progressThenMoreThanAChunk(t))
+	restore := unreadablePartwayUntilRestored(w)
+	w.check(started.Add(20 * time.Second))
+	restore()
+
+	// 読めなかった確認から、file は伸びていない
+	w.check(started.Add(30 * time.Second))
+
+	if got := w.sinceProgress(started.Add(30 * time.Second)); got != 0 {
+		t.Fatalf("progress が途絶えた時間 = %s, want 読み終えた offset は進んでおらず、最初の chunk の progress を読み直して 0s", got)
 	}
 }
 
