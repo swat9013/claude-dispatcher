@@ -139,7 +139,9 @@ limits:
   run_timeout: 1h            # 任意。worker 1 回分の上限時間。既定 1h。0 で無効
 claude:
   command: claude            # 任意。既定 claude
-  args: [--permission-mode, auto]   # 任意。既定は空
+  # 任意。既定は空。再入の仕組みを塞ぐ (理由は下の項目の表の claude.args の行)。
+  # --disallowedTools は値を複数取るが、dispatcher が後ろに渡す -p で止まる
+  args: [--permission-mode, auto, --disallowedTools, "ScheduleWakeup,CronCreate,CronList,CronDelete"]
 triggers:                    # 必須。1 つ以上
   - name: implement          # 必須
     on: issue                # 必須
@@ -189,7 +191,7 @@ triggers:                    # 必須。1 つ以上
 | `limits.stall_timeout` | 文字列 | worker の stream (stdout の stream-json) に progress (heartbeat (`tool_progress`)・rate limit の通知・読めない行を除いた行) が書かれなくなってから、止めて失敗とするまでの時間。既定 15m。`0s` で無効。claude が行を書かない区間 (長い build や test などの tool の実行・API の retry の backoff・compaction) より長くする |
 | `limits.run_timeout` | 文字列 | worker 1 回分の上限時間。起動からの経過が超えたら止めて失敗とする。既定 1h。`0s` で無効 |
 | `claude.command` | 文字列 | worker として起動する command。PATH から探す。既定 `claude` |
-| `claude.args` | 文字列の列 | command に、dispatcher が渡す引数 (上の「action が守る約束」の起動のコマンド) より前に渡す引数。既定は空。permission の扱い (`--permission-mode` など) はここで決める。worker が再入の仕組み (`ScheduleWakeup`・`CronCreate`・`CronList`・`CronDelete`) を使うと、`-p` は仕事を終えた後も pending な wakeup の発火を待って終わらず、並列の枠を塞ぐ。`--disallowedTools` で塞ぐことを勧める (background の subagent の完了は、`-p` が自分で新しい turn を始めて拾うので、待つための wakeup は要らない) |
+| `claude.args` | 文字列の列 | command に、dispatcher が渡す引数 (上の「action が守る約束」の起動のコマンド) より前に渡す引数。既定は空。permission の扱い (`--permission-mode` など) はここで決める。worker が再入の仕組み (`ScheduleWakeup`・`CronCreate`・`CronList`・`CronDelete`) を使うと、`-p` は仕事を終えた後も pending な wakeup の発火を待って終わらず、並列の枠を塞ぐ。`--disallowedTools` で塞ぐことを勧める (background の subagent の完了は、`-p` が自分で新しい turn を始めて拾うので、待つための wakeup は要らない)。塞ぐのは名前の固定の列で、`--disallowedTools` は知らない名前を検査しないので、Claude Code が再入の tool を足す・改名すると、黙って素通りする。そのときは、仕事を終えたはずの worker が `status` に走ったまま残り、並列の枠を塞ぎ続ける (`limits.stall_timeout` か `limits.run_timeout` で止められ、失敗として数える)。気付いたら、新しい名前を列に足す |
 | `triggers` | 列 | trigger の宣言。1 つ以上。宣言順が起動の優先順 (先頭の trigger ほど先に起動する) |
 | `triggers[].name` | 文字列 | trigger の名前。`[A-Za-z0-9._-]+`。trigger の間で重複しない |
 | `triggers[].on` | 文字列 | 作業対象の種類。`issue` か `cl` (`gitlab` では merge request)。`cl` は CL 置き場の CL に当たる (`jira` では `cl:` の CL 置き場) |

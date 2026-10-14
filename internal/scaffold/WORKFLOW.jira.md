@@ -15,7 +15,9 @@ hooks:
 limits:
   max_concurrent: 1
 claude:
-  args: [--permission-mode, auto]
+  # 再入の仕組みを塞ぐ (理由は `claude-dispatcher guide` の項目の表の claude.args の行)。
+  # --disallowedTools は値を複数取るが、dispatcher が後ろに渡す -p で止まる
+  args: [--permission-mode, auto, --disallowedTools, "ScheduleWakeup,CronCreate,CronList,CronDelete"]
 triggers:
   # status 名は project ごとに違う。project の status 名に合わせて書き換える (site に無い名前は loop の起動時に名指しされる)
   - name: implement
