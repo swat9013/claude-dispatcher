@@ -133,6 +133,12 @@ type Host struct {
 	RequiredHint string
 }
 
+// Writable は tracker.host を書けるか。
+func (h Host) Writable() bool { return h.Parse != nil }
+
+// Required は tracker.host が必須か (書けて、書かなかったときの既定を持たない)。
+func (h Host) Required() bool { return h.Writable() && h.Default == "" }
+
 // TrackerRole は issue 置き場の役割の宣言。
 type TrackerRole struct {
 	// KeyedIssues は issue を key (`WIDGETS-123`) で指すか。真なら `.issue.key` が使える
@@ -275,6 +281,9 @@ type Setup struct {
 	Template func(issues Place, cl scaffold.CLHost) string
 }
 
+// TakesFlags は `setup --kind <種類>` の flag で置き場を受けるか。
+func (s Setup) TakesFlags() bool { return s.Flags != "" }
+
 // ForOrigin は origin の host を認める provider。認める provider が無ければ originFallback の provider。
 func ForOrigin(host string) Provider {
 	for _, p := range providers {
@@ -290,7 +299,7 @@ func ForOrigin(host string) Provider {
 func SetupFlagKinds() []Kind {
 	var kinds []Kind
 	for _, p := range providers {
-		if p.Setup.Flags != "" {
+		if p.Setup.TakesFlags() {
 			kinds = append(kinds, p.Kind)
 		}
 	}
