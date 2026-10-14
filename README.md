@@ -89,7 +89,7 @@ binary は署名していない。macOS でブラウザから取った archive �
 
 ## 回す
 
-実装 repo の clone で `loop` を撃つ。起動時の検査、`WORKFLOW.md` の変更の効き方、撃ち直しが要るときは `claude-dispatcher guide` の「回す・見る・止める」の「回す」。
+実装 repo の clone で `loop` を撃つ。起動時の検査、`WORKFLOW.md` の変更の効き方、撃ち直しが要るときは `claude-dispatcher guide` の「回す・見る・止める」の「回す」。issue 置き場か CL 置き場を変えたときは同じ案内の「workflow 定義の書き方」、loop を起動した環境から gh や glab の認証を取れない (ssh 越しの session など) ときは「項目」の `tracker.token`。
 
 ```sh
 cd ~/src/widgets
