@@ -35,8 +35,7 @@ const (
 	goVersionMarker = "期待値: `"
 )
 
-// goVersionForm は期待値が取る版の形 (patch まで書いた版)。go.mod の `go` 行には当てず、
-// `go 1.27` のような patch の無い引き上げも、ずれとして期待値と比べる
+// goVersionForm は期待値が取る版の形 (patch まで書いた版)
 var goVersionForm = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
 
 func main() {
@@ -339,8 +338,8 @@ func listedCheckNames(src string) ([]string, error) {
 	return names, nil
 }
 
-// goDirective は go.mod の `go` 行の版を、形を問わずそのまま返す。`go` 行は block に入らない 1 行の directive で、
-// 後ろに // のコメントが付きうる
+// goDirective は go.mod の `go` 行の版を、形を問わずそのまま返す。`go 1.27` のような patch の無い引き上げも、
+// ずれとして期待値と比べるため。`go` 行は block に入らない 1 行の directive で、後ろに // のコメントが付きうる
 func goDirective(src string) (string, error) {
 	for line := range strings.Lines(src) {
 		line, _, _ = strings.Cut(line, "//")
@@ -359,11 +358,14 @@ func goDirective(src string) (string, error) {
 // expectedGoVersion は CONTRIBUTING.md の go.mod の `go` 行の期待値を返す。期待値は「期待値: 」の直後の、
 // バッククォートで囲んだ版。目印が無いか 2 回以上現れるか、版の形でなければエラーにする
 func expectedGoVersion(src string) (string, error) {
-	if n := strings.Count(src, goVersionMarker); n != 1 {
-		return "", fmt.Errorf("%q は 1 回だけ書く (%d 回ある)", goVersionMarker, n)
+	parts := strings.Split(src, goVersionMarker)
+	switch {
+	case len(parts) == 1:
+		return "", fmt.Errorf("%q の行が無い", goVersionMarker)
+	case len(parts) > 2:
+		return "", fmt.Errorf("%q が %d 回ある (go.mod の `go` 行の期待値だけに 1 回書く)", goVersionMarker, len(parts)-1)
 	}
-	_, after, _ := strings.Cut(src, goVersionMarker)
-	version, _, ok := strings.Cut(after, "`")
+	version, _, ok := strings.Cut(parts[1], "`")
 	if !ok || !goVersionForm.MatchString(version) {
 		return "", fmt.Errorf("%q の後の版を読めない", goVersionMarker)
 	}
