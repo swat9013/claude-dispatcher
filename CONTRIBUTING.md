@@ -31,6 +31,11 @@ claude-dispatcher-dev loop
 - **状態は Homebrew 版と共有する**: state dir ([docs/design/formats.md](docs/design/formats.md) §1) は Homebrew 版と同じものを読み書きする。同じ issue 置き場の loop は 1 本しか動かせない (`loop.lock`) ので、Homebrew 版の loop を止めてから dev の loop を撃つ。分けたいときは `XDG_STATE_HOME` を上書きして撃つ
 - **tracker と CL host は本物**: 試運転でない loop は、実際の issue 置き場を読んで worker を起動する。試すなら使い捨ての issue に trigger の label を付けるか、`loop --dry-run` で止める
 
+## 文書の読み手
+
+- README.md は claude-dispatcher の利用者 (導入して loop を回す人) に向けて書く。開発者と agent に向けた手順 (開発中の版の動かし方など) はこの file に、設計の資料は `docs/` と `CONTEXT.md` に置き、README からは開発に加わる人への入口として、この file を 1 回だけ指す。利用者が読まない資料が混ざると、利用者に要る手順が埋もれる
+- README は、利用者が撃つ手順の名前とコマンド例を持ち、条件や例外は「`claude-dispatcher guide` の「回す・見る・止める」」のように案内の節名で指す。案内は binary と同じ版の中身を出し、利用者のセッションにも届くので、細部はそちらに置く。案内が何の正本かは [docs/design/README.md](docs/design/README.md) の「設計を先に直す」の表に従う
+
 ## branch・worktree 運用
 
 - 作業は issue 単位で行い、main から `worktree-issue-<n>` (`<n>` は issue 番号) の branch を切る
