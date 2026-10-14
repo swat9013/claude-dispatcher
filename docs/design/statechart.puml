@@ -90,7 +90,7 @@ Abandoned --> [*] : loopの終了
 ' uncovered: Running x 事前検査に落ちた — 事前検査は起動と再起動だけを止め、走っている worker は止めない
 ' uncovered: Running x workflow定義を採れない — 突き合わせは続け、走っている worker は止めない (§7 の tick の手順 2)
 ' uncovered: Running x 先のtriggerに当たる — 走っている worker は終端でだけ止める (ADR 0009)
-' uncovered: Running x triggerの削除 — 走っている worker は終端でだけ止める (ADR 0009)。claim は起動したときの trigger を持ったまま走らせる (§7)
+' uncovered: Running x triggerの削除 — 走っている worker は終端でだけ止め、trigger を見ない (ADR 0009)
 ' 止めている
 ' uncovered: Stopping x 候補になる — claim されている作業対象は候補にならない (§4 の候補の定義)
 ' uncovered: Stopping x stall上限 — loop が止めたことを優先し、stall では数えない
@@ -122,7 +122,7 @@ Abandoned --> [*] : loopの終了
 ' uncovered: AwaitingVerification x 停止要求1回目 — 段階は変わらない。停止要求の後は tick を撃たないので確かめ直さず、loopの終了 で消える
 ' uncovered: AwaitingVerification x 停止要求2回目 — 止める worker が無い。loopの終了 で消える
 ' uncovered: AwaitingVerification x 先のtriggerに当たる — 確かめは起動した trigger から外れたかだけを見る
-' uncovered: AwaitingVerification x triggerの削除 — 確かめは claim が持つ起動したときの trigger の述語で決め、workflow 定義から引き直さない (§7)。失敗と数えた後の再起動待ちか打ち切りで、消えたことが効く
+' uncovered: AwaitingVerification x triggerの削除 — 確かめは claim が起動したときに持った trigger の述語で決め、workflow 定義から引き直さない (§7 の worker の 1 回分)。失敗と数えた後の再起動待ちか打ち切りで、消えたことが効く
 ' 再起動待ち
 ' uncovered: WaitingRetry x 候補になる — claim されている作業対象は候補にならない (§4 の候補の定義)
 ' uncovered: WaitingRetry x worker終了 — worker は走っていない
