@@ -205,6 +205,21 @@ func TestGitLabDryRunListsTheIssuesThatMatchATrigger(t *testing.T) {
 	s.assertNoGh("gitlab の issue 置き場なのに")
 }
 
+func TestGitLabTokenFromTheWorkflowDefinitionReachesGlabAsGitLabToken(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflowWithCommands(strings.Replace(gitlabWorkflow, "  repo: "+gitlabRepo+"\n", "  repo: "+gitlabRepo+"\n  token: $GL_TOKEN\n", 1))
+	s.setGitLabIssues(readyGitLabIssue(42))
+
+	r := s.runWithEnv(map[string]string{"GL_TOKEN": "secret-1", "GITLAB_TOKEN": "loop-own"}, "loop", "--dry-run")
+
+	assertCandidates(t, r, candidate("implement", 42))
+	for _, call := range s.calls("glab") {
+		if got := call.Env["GITLAB_TOKEN"]; got != "secret-1" {
+			t.Fatalf("glab %v の GITLAB_TOKEN = %q, want secret-1", call.Argv, got)
+		}
+	}
+}
+
 func TestGitLabLabelsAndAssigneesAreComparedIgnoringCase(t *testing.T) {
 	s := newSandbox(t)
 	s.writeWorkflowWithCommands(gitlabWorkflowWithTriggers(`
@@ -416,21 +431,23 @@ func TestGitLabLoopLaunchesAWorkerAndCompletesWhenTheIssueLeavesTheTrigger(t *te
 
 func TestGitLabRejectsTheDeclarationsItCannotSupportWhereverTheyAreWritten(t *testing.T) {
 	s := newSandbox(t)
-	// triggers を tracker より前に書いても、kind に依る誤りを名指しする
+	// triggers と cl を tracker より前に書いても、kind に依る誤りを名指しする
 	s.writeWorkflowWithCommands(`---
 triggers:
   - {name: implement, on: issue, when: {blocked: false}, action: /implement}
+cl:
+  kind: github
+  repo: acme/widgets
 tracker:
   kind: gitlab
   repo: acme/sub/widgets
-  token: $GL_TOKEN
 ---
 共通 prompt
 `)
 
-	r := s.runWithEnv(map[string]string{"GL_TOKEN": "secret"}, "loop", "--dry-run")
+	r := s.dryRun()
 
-	s.assertRejected(r, "triggers[0].when.blocked", "tracker.token")
+	s.assertRejected(r, "triggers[0].when.blocked", "cl (4 行目)")
 	s.assertNoGlab("workflow 定義が誤っているのに")
 }
 

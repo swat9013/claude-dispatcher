@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/swat9013/claude-dispatcher/internal/deps"
 	"github.com/swat9013/claude-dispatcher/internal/scaffold"
 	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/trigger"
@@ -140,9 +141,22 @@ type TrackerRole struct {
 	Prefix string
 	// IssueKey は key で指す種類の、番号の issue の key
 	IssueKey func(place Place, number int) string
-	Declarations
+	// declared は宣言。tracker.token を支えるかだけは Supports に書かず TokenVariable から導く (Declarations)。支えない種類
+	// の理由は Declines に書く
+	declared Declarations
+	// TokenVariable は tracker.token を渡す環境変数の名前 (役割を担う CLI が読むもの)。"" でない種類だけが tracker.token を
+	// 支える
+	TokenVariable string
 	// Settings は worker が issue 置き場を操作するのに要りそうな Claude Code の settings の entry
 	Settings []string
+}
+
+// Declarations は issue 置き場の役割の宣言。tracker.token は、渡す環境変数を持つ種類なら支える宣言に足す。
+func (r TrackerRole) Declarations() Declarations {
+	if r.TokenVariable == "" {
+		return r.declared
+	}
+	return Declarations{Supports: append(slices.Clone(r.declared.Supports), Token), Declines: r.declared.Declines}
 }
 
 // CLHostRole は CL 置き場の役割の宣言。
@@ -158,6 +172,19 @@ type CLHostRole struct {
 
 // CommonSettings は役割に依らず worker が使いそうな settings の entry。
 var CommonSettings = []string{"Bash(git push:*)"}
+
+// WithToken は env に tracker.token の値 token を、CLI が読む環境変数として置いた env を返す (system.md §8)。env に同じ
+// 変数が既にあっても token で上書きする。token が "" なら env のまま。tracker.token を支えない種類 (TokenVariable が "")
+// の token は、workflow 定義の検査が弾くので届かない。届けば呼び出し側の誤りなので panic する。
+func (p Provider) WithToken(env []string, token string) []string {
+	if token == "" {
+		return env
+	}
+	if p.Tracker.TokenVariable == "" {
+		panic(fmt.Sprintf("tracker.kind: %s の provider は tracker.token を渡す環境変数を持たない", p.Kind))
+	}
+	return deps.WithEnv(env, map[string]string{p.Tracker.TokenVariable: token})
+}
 
 // Settings は worker が外部 store を操作するのに要りそうな settings の entry (issue 置き場の役割・CL 置き場の役割・共通の
 // 順)。clHost は CL 置き場の役割を担う provider の役割。
@@ -200,9 +227,7 @@ type Runtime struct {
 
 // Setting は workflow 定義のうち、部品の組み立てに要るもの。
 type Setting struct {
-	Place Place
-	// Token は tracker.token の値。書かれていなければ ""
-	Token    string
+	Place    Place
 	Triggers []trigger.Trigger
 }
 

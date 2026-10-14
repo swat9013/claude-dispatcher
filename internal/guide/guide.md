@@ -117,7 +117,7 @@ file は YAML の front matter と本文からなる。
 tracker:
   kind: github               # 必須。github・gitlab・jira のどれか
   repo: acme/widgets         # 必須。issue 置き場 (github は owner/name、gitlab は group/…/name、jira は project key)。$VAR で書ける
-  token: $WIDGETS_GH_TOKEN   # 任意。gh に GH_TOKEN として渡す。$VAR でだけ書ける
+  token: $WIDGETS_GH_TOKEN   # 任意。gh・worker・hooks に GH_TOKEN として渡す。$VAR でだけ書ける
 polling:
   interval: 5m               # 任意。周期。既定 5m
 workspace:
@@ -167,7 +167,7 @@ triggers:                    # 必須。1 つ以上
 | `tracker.kind` | 文字列 | tracker の種類。`github` (gh で読む)・`gitlab` (glab で読む)・`jira` (acli で読む。Jira Cloud) のどれか |
 | `tracker.host` | 文字列 | `gitlab` と `jira` でだけ書ける。`$VAR` で書ける。`github` で書くと未知の key<br>- `gitlab`: GitLab の host 名 (`gitlab.example.com`)。既定 `gitlab.com`<br>- `jira`: Jira Cloud の site (`acme.atlassian.net`)。既定を持たず必須。綴りは `[A-Za-z0-9.-]+` |
 | `tracker.repo` | 文字列 | issue 置き場。`github` は `<owner>/<name>`、`gitlab` は `<group>/<name>` の段数を問わない path (`acme/sub/widgets`。どの段も `[A-Za-z0-9._-]+`)、`jira` は Jira の project key (`WIDGETS`。`[A-Za-z][A-Za-z0-9_]*`。大文字に揃えて読む)。`$VAR` で書ける |
-| `tracker.token` | 文字列 | `github` でだけ書ける。gh に環境変数 `GH_TOKEN` として渡す token。`$VAR` でだけ書ける (値そのものを書かない)。省くと、loop を起動した環境の認証を gh がそのまま使う。ssh 越しの shell などで gh の認証を取れないときに使う |
+| `tracker.token` | 文字列 | `github` と `gitlab` でだけ書ける。tracker の CLI が読む環境変数 (`github` は `GH_TOKEN`、`gitlab` は `GITLAB_TOKEN`) として渡す token。loop が撃つ tracker の CLI・worker・hooks のすべてに渡し、loop を起動した環境に同じ変数があっても上書きする。`$VAR` でだけ書ける (値そのものを書かない)。省くと、loop を起動した環境の認証を CLI がそのまま使う。ssh 越しの shell などで CLI の認証を取れないときに使う |
 | `cl` | 対応表 | issue 置き場と別の CL 置き場 (worker が CL を出す repo)。`tracker.kind: jira` でだけ書け、そのときは必須 (`github`・`gitlab` は issue 置き場と同じ場所が CL 置き場)。`on: cl` の trigger が無くても、`loop` の起動時・試運転・`doctor` で CL 置き場の open な一覧を 1 回読んで確かめる。token は持たず、gh / glab 自身の認証 (`gh auth login` / `glab auth login`) を使う |
 | `cl.kind` | 文字列 | 必須。CL 置き場の種類。`github` (gh で読む) か `gitlab` (glab で読む) |
 | `cl.host` | 文字列 | `cl.kind: gitlab` でだけ書ける。GitLab の host 名。既定 `gitlab.com`。`$VAR` で書ける。`github` で書くと未知の key |
@@ -198,10 +198,10 @@ triggers:                    # 必須。1 つ以上
 
 | 宣言 | 属する置き場 | GitHub | GitLab | Jira |
 |---|---|---|---|---|
-| 読む CLI と認証 | - | gh (`gh auth login`。issue 置き場なら `tracker.token` も) | glab (`glab auth login`) | acli (`acli jira auth login`) |
+| 読む CLI と認証 | - | gh (`gh auth login`。issue 置き場なら `tracker.token` も) | glab (`glab auth login`。issue 置き場なら `tracker.token` も) | acli (`acli jira auth login`) |
 | `tracker.host` | issue | 書けない | 任意 (既定 `gitlab.com`) | 必須 (Jira Cloud の site) |
 | `tracker.repo` | issue | `<owner>/<name>` | `<group>/…/<name>` | project key |
-| `tracker.token` | issue | 書ける | 書けない | 書けない |
+| `tracker.token` | issue | 書ける (`GH_TOKEN`) | 書ける (`GITLAB_TOKEN`) | 書けない |
 | `cl:` | issue | 書けない | 書けない | 必須 |
 | issue 側の `author` | issue | 書ける | 書ける | 書けない |
 | issue 側の `milestone` | issue | 書ける | 書ける | 書けない |
@@ -245,7 +245,7 @@ triggers:                    # 必須。1 つ以上
 - `assignee` と `unassigned` は一緒に書けない
 - label と login の綴りは、tracker によらず大文字と小文字を区別せずに比べる (GitLab の label は大文字と小文字を区別するが、dispatcher は揃えて比べる。誤って当たるのは、大文字と小文字だけが違う label を 2 つ持つ project に限られる)
 - `gitlab` の作業対象は、種類が issue のもの (`issue_type` が `issue`) だけ。同じ一覧に出る task・incident・test case は読まない
-- `gitlab` の `author` は、作者の access level を project の member の API で読む。この API は認証が要るので、glab が未認証なら public な project でも認証の失敗になる
+- `gitlab` の `author` は、作者の access level を project の member の API で読む。この API は認証が要るので、glab が未認証 (`glab auth login` も `tracker.token` も無い) なら public な project でも認証の失敗になる
 
 `tracker.kind` が `jira` のときの述語の意味:
 

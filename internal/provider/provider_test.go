@@ -4,6 +4,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/swat9013/claude-dispatcher/internal/deps"
 	"github.com/swat9013/claude-dispatcher/internal/provider"
 	"github.com/swat9013/claude-dispatcher/internal/target"
 )
@@ -51,7 +52,7 @@ type roleDeclarations struct {
 func TestEveryRoleEitherSupportsOrDeclinesEachOfItsDeclarationsWithAReason(t *testing.T) {
 	for _, kind := range provider.Kinds() {
 		p, _ := provider.Of(kind)
-		roles := []roleDeclarations{{"tracker", p.Tracker.Declarations, provider.TrackerFeatures}}
+		roles := []roleDeclarations{{"tracker", p.Tracker.Declarations(), provider.TrackerFeatures}}
 		if p.CLHost != nil {
 			roles = append(roles, roleDeclarations{"CL host", p.CLHost.Declarations, provider.CLHostFeatures})
 		}
@@ -73,11 +74,31 @@ func TestEveryRoleEitherSupportsOrDeclinesEachOfItsDeclarationsWithAReason(t *te
 	}
 }
 
+func TestTheTokenIsSetOverTheVariableAlreadyInTheEnvironment(t *testing.T) {
+	p, _ := provider.Of(provider.GitLab)
+
+	env := p.WithToken([]string{"GITLAB_TOKEN=loop-own", "HOME=/home/u"}, "secret-1")
+
+	if deps.Getenv(env, "GITLAB_TOKEN") != "secret-1" || deps.Getenv(env, "HOME") != "/home/u" || len(env) != 2 {
+		t.Fatalf("env = %v, want GITLAB_TOKEN を secret-1 に置き換え、HOME は残す", env)
+	}
+}
+
+func TestNoTokenLeavesTheEnvironmentAsItIs(t *testing.T) {
+	p, _ := provider.Of(provider.GitHub)
+
+	env := p.WithToken([]string{"GH_TOKEN=loop-own"}, "")
+
+	if !slices.Equal(env, []string{"GH_TOKEN=loop-own"}) {
+		t.Fatalf("env = %v", env)
+	}
+}
+
 func TestOnlyATrackerWithoutTheCLHostRoleAcceptsASeparateCLPlace(t *testing.T) {
 	for _, kind := range provider.Kinds() {
 		p, _ := provider.Of(kind)
 
-		if p.Tracker.Supported(provider.CLPlace) != (p.CLHost == nil) {
+		if p.Tracker.Declarations().Supported(provider.CLPlace) != (p.CLHost == nil) {
 			t.Fatalf("%s: cl: を書けるのは CL host の役割を持たない種類だけ (CL host の役割: %v)", kind, p.CLHost != nil)
 		}
 	}

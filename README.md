@@ -24,7 +24,7 @@ issue tracker の issue と CL (pull request) を周期ごとに読み、project
 
 - macOS か Linux
 - [Claude Code](https://docs.claude.com/en/docs/claude-code) と、その認証
-- tracker の CLI と、その認証。tracker が GitHub なら [gh](https://cli.github.com/) (`gh auth login`)、GitLab なら [glab](https://gitlab.com/gitlab-org/cli) (`glab auth login`)、Jira Cloud なら [acli](https://developer.atlassian.com/cloud/acli/) (`acli jira auth login`)。GitLab は issue 置き場と merge request の置き場が同じ project の構成を扱う。対象の GitLab は、GitLab が security 修正を出している版 ([maintenance policy](https://docs.gitlab.com/policy/maintenance/) の、最新の minor から 3 つ)
+- tracker の CLI と、その認証。tracker が GitHub なら [gh](https://cli.github.com/) (`gh auth login` か `tracker.token`)、GitLab なら [glab](https://gitlab.com/gitlab-org/cli) (`glab auth login` か `tracker.token`)、Jira Cloud なら [acli](https://developer.atlassian.com/cloud/acli/) (`acli jira auth login`)。GitLab は issue 置き場と merge request の置き場が同じ project の構成を扱う。対象の GitLab は、GitLab が security 修正を出している版 ([maintenance policy](https://docs.gitlab.com/policy/maintenance/) の、最新の minor から 3 つ)
 - Jira は Jira Cloud の 1 つの project を issue 置き場にする (Data Center / Server は扱わない)。CL 置き場は workflow 定義の `cl:` で GitHub か GitLab を宣言し、その CLI (gh か glab) とその認証も用意する。loop は `cl:` の CL 置き場の CL に CL 側の trigger を当て、worker もその CLI で CL を開く
   - 1 つの Jira project は 1 本の loop と 1 つの実装 repo で回す。component や JQL で 1 つの project を複数の repo に分けて回すことはできない (同じ project の 2 本目の loop は起動時に止まる)
   - acli の active な account の site を、workflow 定義の `tracker.host` にしておく。acli は呼び出しごとに site を選べないので、loop は起動時に site が違えば止まる (`acli jira auth switch --site <site>` で切り替える)
@@ -109,7 +109,7 @@ claude-dispatcher loop
   - tick の中で事前検査に落ちた trigger は起動しない
   - `tracker.repo` を変えたら、loop を撃ち直すまでどの tick も何も起動しない
 - 同じ issue 置き場の loop は、同じマシンで 1 本しか起動できない。マシンを跨いだ排他は持たないので、1 つの issue 置き場は 1 台から回す
-- loop を起動した環境から gh の認証を取れない (ssh 越しの session など) なら、`tracker.token` に `$VAR` で token を渡して撃ち直す (`claude-dispatcher guide` の「項目」)
+- loop を起動した環境から gh や glab の認証を取れない (ssh 越しの session など) なら、`tracker.token` に `$VAR` で token を渡して撃ち直す。token は loop の観測に加えて worker と hooks にも渡る (`claude-dispatcher guide` の「項目」)。`tracker.token` は issue 置き場が GitHub か GitLab のときにだけ書ける。Jira の `cl:` の CL 置き場の gh / glab には渡らないので、その CLI は `gh auth login` / `glab auth login` で認証しておく
 - loop は自分では起き直さない。端末を閉じたりマシンを再起動したりしたら、同じコマンドを撃ち直す。`brew upgrade` の後も撃ち直す (走っている loop は起動した時点の binary で回り続ける)
 
 ## 動いているかを見る
