@@ -14,7 +14,9 @@ hooks:
 limits:
   max_concurrent: 1
 claude:
-  args: [--permission-mode, auto]
+  # 再入の仕組みを塞ぐ (理由は `claude-dispatcher guide` の項目の表の claude.args の行)。
+  # --disallowedTools は値を複数取るが、dispatcher が後ろに渡す -p で止まる
+  args: [--permission-mode, auto, --disallowedTools, "ScheduleWakeup,CronCreate,CronList,CronDelete"]
 triggers:
   # GitLab の CE は issue の依存を API で返さないので、blocked の述語は書けない
   - name: implement
