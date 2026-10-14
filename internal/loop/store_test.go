@@ -54,26 +54,6 @@ func TestStoreRereadsEachKindFromThePlaceThatHoldsIt(t *testing.T) {
 	}
 }
 
-func TestStoreWithoutACLPlaceRefusesToListCLs(t *testing.T) {
-	store := loop.Store{Issues: issuesOnly{}}
-
-	_, err := store.Open(target.KindCL)
-
-	if err == nil {
-		t.Fatal("CL 置き場の無い置き場で CL の一覧を読めた")
-	}
-}
-
-func TestStoreWithoutACLPlaceRefusesToRereadACL(t *testing.T) {
-	store := loop.Store{Issues: issuesOnly{}}
-
-	_, err := store.Read(target.Ref{Kind: target.KindCL, Number: 1})
-
-	if err == nil {
-		t.Fatal("CL 置き場の無い置き場で CL を読み直せた")
-	}
-}
-
 // clsWithNonFatal は、一覧とともに処理を続けられる失敗を返す CL 置き場の部品。
 type clsWithNonFatal struct{}
 

@@ -81,6 +81,8 @@ func (endedWorker) Activity() status.Activity { return status.Activity{} }
 // harness は plans を順に 1 tick ずつ回し、読み切ったところで stop の停止要求を送る。
 type harness struct {
 	plans []tickPlan
+	// start は起動時の workflow 定義の版。nil なら definition
+	start func(maxConcurrent int) (workflow.Definition, error)
 	stop  os.Signal
 	// maxConcurrent は並列上限。0 なら worker を起動しない
 	maxConcurrent int
@@ -163,13 +165,17 @@ func (h *harness) run(t *testing.T) []string {
 	h.clock = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	h.settled = sync.NewCond(&h.mu)
 	tick := 0
+	start := definition(time.Minute, h.maxConcurrent)
+	if h.start != nil {
+		start, _ = h.start(h.maxConcurrent)
+	}
 	exit := loop.Run(loop.Options{
 		Load: func() (workflow.Definition, error) {
 			tick++
 			def, err := h.plans[tick-1].load(h.maxConcurrent)
 			return h.withAttempts(def), err
 		},
-		Definition: h.withAttempts(definition(time.Minute, h.maxConcurrent)),
+		Definition: h.withAttempts(start),
 		Precheck: func(workflow.Definition) []precheck.Problem {
 			var problems []precheck.Problem
 			for _, name := range h.plans[tick-1].blocked {
@@ -312,6 +318,46 @@ func TestTickWhoseScopeKeyDiffersFromTheStartDoesNotObserve(t *testing.T) {
 
 	if h.reads != 0 {
 		t.Fatalf("scope key が違うのに置き場を読んだ (%d 回)", h.reads)
+	}
+}
+
+// jiraWithCL は cl: に GitLab の path の CL 置き場を宣言した jira の定義の版。
+func jiraWithCL(path string) func(int) (workflow.Definition, error) {
+	return func(maxConcurrent int) (workflow.Definition, error) {
+		def := definition(time.Minute, maxConcurrent)
+		jira, _ := provider.Of(provider.Jira)
+		gitlab, _ := provider.Of(provider.GitLab)
+		def.Tracker = workflow.Tracker{Kind: provider.Jira, Place: jira.NewPlace("acme.atlassian.net", "WIDGETS")}
+		def.CL = &workflow.CL{Kind: provider.GitLab, Place: gitlab.NewPlace("gitlab.com", path)}
+		return def, nil
+	}
+}
+
+func TestTickWhoseCLPlaceDiffersFromTheStartDoesNotObserve(t *testing.T) {
+	// scope key は plan が決めるので、どの版も起動時と同じ scope key を返す
+	for name, start := range map[string]func(int) (workflow.Definition, error){
+		"CL 置き場の種類が変わる (github の issue 置き場と同じ場所 → jira の cl: の gitlab)": good(time.Minute),
+		"cl: を別の置き場にする": jiraWithCL("acme/other"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := &harness{start: start, plans: []tickPlan{{load: jiraWithCL("acme/widgets")}}}
+
+			lines := h.run(t)
+
+			if !strings.Contains(lines[0], "tick error · workflow 定義の CL 置き場") || h.reads != 0 {
+				t.Fatalf("CL 置き場が違う版を採った (読んだ回数 %d):\n%s", h.reads, h.stdout.String())
+			}
+		})
+	}
+}
+
+func TestTickWhoseCLDeclarationIsUnchangedObserves(t *testing.T) {
+	h := &harness{start: jiraWithCL("acme/widgets"), plans: []tickPlan{{load: jiraWithCL("acme/widgets")}}}
+
+	h.run(t)
+
+	if h.reads == 0 {
+		t.Fatalf("CL 置き場が同じ版を採らなかった:\n%s", h.stdout.String())
 	}
 }
 
@@ -554,7 +600,7 @@ func TestTickLineNamesAMergeRequestWithItsGitLabReference(t *testing.T) {
 		provider.GitHub: "候補 2: implement issue #42, fix-ci cl #7",
 		provider.GitLab: "候補 2: implement issue #42, fix-ci cl !7",
 	} {
-		if got := loop.Summary(candidates, workflow.Tracker{Kind: kind}); got != want {
+		if got := loop.Summary(candidates, workflow.Definition{Tracker: workflow.Tracker{Kind: kind}}); got != want {
 			t.Errorf("%s: Summary = %q, want %q", kind, got, want)
 		}
 	}

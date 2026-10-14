@@ -26,7 +26,7 @@ import (
 // テストは in-memory。失敗は *target.Failure。一覧は *target.NonFatal を一覧とともに返しうる (OpenItems)。
 type Store struct {
 	Issues provider.IssueStore
-	// CLs は CL 置き場の部品。CL 置き場の役割を持たない種類は nil
+	// CLs は CL 置き場の部品。検査に通った workflow 定義は CL 置き場をちょうど 1 つ持つ (ADR 0015) ので、いつも組まれる
 	CLs provider.CLStore
 }
 
@@ -39,9 +39,6 @@ func (s Store) Open(kind target.Kind) ([]target.Item, error) {
 	case target.KindIssue:
 		return s.Issues.OpenIssues()
 	case target.KindCL:
-		if s.CLs == nil {
-			return nil, errNoCLStore
-		}
 		return s.CLs.OpenCLs()
 	}
 	return nil, fmt.Errorf("未知の作業対象の種類 %q", kind)
@@ -53,17 +50,10 @@ func (s Store) Read(ref target.Ref) (target.Item, error) {
 	case target.KindIssue:
 		return s.Issues.ReadIssue(ref.Number)
 	case target.KindCL:
-		if s.CLs == nil {
-			return nil, errNoCLStore
-		}
 		return s.CLs.ReadCL(ref.Number)
 	}
 	return nil, fmt.Errorf("未知の作業対象の種類 %q", ref.Kind)
 }
-
-// errNoCLStore は CL 置き場の役割を持たない種類で CL を読もうとした誤り。workflow 定義の検査が on: cl を弾くので、起きれば
-// loop の誤り
-var errNoCLStore = errors.New("tracker.kind の provider は CL 置き場の役割を持たない")
 
 // Workspaces は workspace の掃除の口。
 type Workspaces interface {
@@ -313,6 +303,11 @@ func (l *loop) tick() {
 		l.tickFailed(fmt.Sprintf("workflow 定義の scope key %s が起動時の %s と違う (loop を起動し直す)", key, l.o.ScopeKey))
 		return
 	}
+	if place, start := def.CLPlace(), l.o.Definition.CLPlace(); place != start {
+		// claim している CL を、起動時と別の CL 置き場で読み直さない
+		l.tickFailed(fmt.Sprintf("workflow 定義の CL 置き場 %q が起動時の %q と違う (loop を起動し直す)", place, start))
+		return
+	}
 	l.def, l.blocked = def, l.o.Precheck(def)
 	open, err := OpenItems(store, def)
 	var nonFatal *target.NonFatal
@@ -366,7 +361,7 @@ func (l *loop) tick() {
 	l.board.ambiguous = ambiguous
 	l.rec.event("tick", map[string]any{"result": status.TickOK, "candidates": len(candidates), "launched": nonNil(launched), "ambiguous": ambiguousFields(ambiguous), "blocked": blockedFields(l.blocked),
 		"running": running, "waiting_retry": waitingRetry, "max_concurrent": def.MaxConcurrent},
-		LineTickOK, "tick ok", " · %s%s%s", Summary(candidates, def.Tracker), ambiguousSummary(ambiguous), blockedSummary(l.blocked))
+		LineTickOK, "tick ok", " · %s%s%s", Summary(candidates, def), ambiguousSummary(ambiguous), blockedSummary(l.blocked))
 }
 
 // view は tick が読んだ open な一覧と、そこから導いた CL の除外 (曖昧な CL と、claim している作業対象の branch)。
@@ -801,14 +796,14 @@ func nonNil(s []string) []string {
 	return s
 }
 
-// Summary は tick の行の候補の欄。番号は tracker の綴りの参照で出す。
-func Summary(candidates []trigger.Candidate, tracker workflow.Tracker) string {
+// Summary は tick の行の候補の欄。番号は作業対象の置き場の綴りの参照で出す。
+func Summary(candidates []trigger.Candidate, def workflow.Definition) string {
 	if len(candidates) == 0 {
 		return "候補 0"
 	}
 	names := make([]string, len(candidates))
 	for i, c := range candidates {
-		names[i] = fmt.Sprintf("%s %s %s", c.Trigger.Name, c.Trigger.On, tracker.Reference(c.Item.Ref()))
+		names[i] = fmt.Sprintf("%s %s %s", c.Trigger.Name, c.Trigger.On, def.Reference(c.Item.Ref()))
 	}
 	return fmt.Sprintf("候補 %d: %s", len(candidates), strings.Join(names, ", "))
 }

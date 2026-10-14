@@ -22,8 +22,8 @@ func TestEveryKindHasAProviderThatDeclaresEveryField(t *testing.T) {
 			if len(p.Tracker.Settings) == 0 || (p.CLHost != nil && len(p.CLHost.Settings) == 0) {
 				t.Fatalf("provider %s が役割の settings の entry を宣言していない", kind)
 			}
-			if p.CLHost != nil && p.CLHost.Prefix == "" {
-				t.Fatalf("provider %s が CL の呼び方を宣言していない", kind)
+			if p.CLHost != nil && (p.CLHost.Prefix == "" || p.CLHost.Scaffold == nil) {
+				t.Fatalf("provider %s が CL の呼び方か、雛形に CL 置き場を書く方法を宣言していない", kind)
 			}
 			if p.Tracker.KeyedIssues != (p.Tracker.IssueKey != nil) || (!p.Tracker.KeyedIssues && p.Tracker.Prefix == "") {
 				t.Fatalf("provider %s の issue の呼び方が key の有無と合わない", kind)
@@ -41,39 +41,60 @@ func TestEveryKindHasAProviderThatDeclaresEveryField(t *testing.T) {
 	}
 }
 
-func TestEveryProviderEitherSupportsOrDeclinesEachDeclarationWithAReason(t *testing.T) {
+// roleDeclarations は provider の役割 1 つの宣言と、その役割が支えるかを宣言する宣言の全件。
+type roleDeclarations struct {
+	name     string
+	declared provider.Declarations
+	features []provider.Feature
+}
+
+func TestEveryRoleEitherSupportsOrDeclinesEachOfItsDeclarationsWithAReason(t *testing.T) {
 	for _, kind := range provider.Kinds() {
 		p, _ := provider.Of(kind)
-		for _, f := range provider.TrackerFeatures {
-			t.Run(string(kind)+"/"+string(f), func(t *testing.T) {
-				supported := slices.Contains(p.Tracker.Supports, f)
-				reason, declined := p.Tracker.Declines[f]
+		roles := []roleDeclarations{{"tracker", p.Tracker.Declarations, provider.TrackerFeatures}}
+		if p.CLHost != nil {
+			roles = append(roles, roleDeclarations{"CL host", p.CLHost.Declarations, provider.CLHostFeatures})
+		}
+		for _, role := range roles {
+			for _, f := range role.features {
+				t.Run(string(kind)+"/"+role.name+"/"+string(f), func(t *testing.T) {
+					supported := slices.Contains(role.declared.Supports, f)
+					reason, declined := role.declared.Declines[f]
 
-				if supported == declined {
-					t.Fatalf("支える (%v) と支えない (%v) のどちらか一方だけを宣言する", supported, declined)
-				}
-				if declined && reason == "" {
-					t.Fatalf("支えない理由の文言が空")
-				}
-			})
+					if supported == declined {
+						t.Fatalf("支える (%v) と支えない (%v) のどちらか一方だけを宣言する", supported, declined)
+					}
+					if declined && reason == "" {
+						t.Fatalf("支えない理由の文言が空")
+					}
+				})
+			}
 		}
 	}
 }
 
-func TestAProviderWithoutTheCLHostRoleSaysWhyCLTriggersCannotBeWritten(t *testing.T) {
+func TestOnlyATrackerWithoutTheCLHostRoleAcceptsASeparateCLPlace(t *testing.T) {
 	for _, kind := range provider.Kinds() {
 		p, _ := provider.Of(kind)
 
-		if p.CLHost == nil && (p.Supported(provider.CL) || p.NoCLHost == "") {
-			t.Fatalf("%s: CL host の役割を持たないのに、on: cl を支えるか、支えない理由が無い", kind)
+		if p.Tracker.Supported(provider.CLPlace) != (p.CLHost == nil) {
+			t.Fatalf("%s: cl: を書けるのは CL host の役割を持たない種類だけ (CL host の役割: %v)", kind, p.CLHost != nil)
 		}
+	}
+}
+
+func TestCLHostKindsAreTheKindsWithTheCLHostRole(t *testing.T) {
+	got := provider.CLHostKinds()
+
+	if !slices.Equal(got, []provider.Kind{provider.GitHub, provider.GitLab}) {
+		t.Fatalf("CL 置き場になる種類 = %v, want [github gitlab]", got)
 	}
 }
 
 func TestAnUndeclaredDeclarationIsNotSupported(t *testing.T) {
-	p := provider.Provider{Kind: "x"}
+	d := provider.Declarations{}
 
-	supported, reason := p.Supported(provider.Token), p.DeclineReason(provider.Token)
+	supported, reason := d.Supported(provider.Token), d.DeclineReason(provider.Token)
 
 	if supported || reason == "" {
 		t.Fatalf("宣言の無いものは支えないものとして名指しする: supported = %v, reason = %q", supported, reason)

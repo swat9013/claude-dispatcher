@@ -9,7 +9,7 @@ trigger に当たった作業対象へ無人で worker を起動する機構の�
 _Avoid_: agent runner, orchestrator
 
 **project**:
-dispatcher を回す単位。1 つの issue 置き場と、多くとも 1 つの CL 置き場、1 つの workflow 定義、1 つの実装 repo の clone に対応する。CL 置き場は、github・gitlab では issue 置き場と同じ場所、jira では workflow 定義が宣言したときだけある。
+dispatcher を回す単位。1 つの issue 置き場と、1 つの CL 置き場、1 つの workflow 定義、1 つの実装 repo の clone に対応する。CL 置き場は、github・gitlab では issue 置き場と同じ場所、jira では workflow 定義の `cl:` が宣言した場所 (ADR 0015)。
 _Avoid_: workspace, repo (実装 repo と置き場を指す語と紛れる)
 
 **workflow 定義**:

@@ -71,6 +71,7 @@ func TestEveryKeyTheLoaderAcceptsAppearsInTheGuide(t *testing.T) {
 	}{
 		{"項目", keyTable{fields: c.topFields(def), nested: map[string]nestedTable{
 			"tracker":   {"tracker", keyTable{fields: c.trackerFields(&def.Tracker, &placeInput{})}},
+			"cl":        {"cl", keyTable{fields: c.clFields(&placeInput{})}},
 			"polling":   {"polling", keyTable{fields: c.pollingFields(&def.Interval)}},
 			"workspace": {"workspace", keyTable{fields: c.workspaceFields(def)}},
 			"hooks":     {"hooks", keyTable{fields: c.hooksFields(&def.Hooks)}},

@@ -27,7 +27,7 @@ claude-dispatcher は、tracker (GitHub・GitLab・Jira Cloud) の issue と CL 
 1. **雛形を置く**: `claude-dispatcher setup` が cwd に `WORKFLOW.md` の雛形を書く。既にある file は上書きしない
    - origin の host が `github.com` なら GitHub の雛形で、`tracker.repo` は `gh repo view` が返す repo で埋まる
    - それ以外の host なら GitLab の雛形で、`tracker.host` と `tracker.repo` は `glab repo view` が返す project の web の host と path で埋まる
-   - Jira を issue 置き場にするなら `claude-dispatcher setup --kind jira --host <site> --repo <project key>`
+   - Jira を issue 置き場にするなら `claude-dispatcher setup --kind jira --host <site> --repo <project key>`。CL 置き場 (`cl:`) は、origin の host で GitHub か GitLab を決め、上と同じ手順で埋まる
 2. **自分の project に合わせて書く**: trigger の述語・action・hooks・並列上限を直し、repo に commit する。書ける項目は下の「workflow 定義の書き方」
    - worker が作業を終えたら作業対象を trigger から外すよう、action か本文 (共通 prompt) に書く (下の「action が守る約束」)
    - workspace の置き場 (`workspace.root`) が clone の中なら、`.gitignore` に足す。既定の `.claude-dispatcher/workspaces` は clone の中に入る。`setup` は `.gitignore` を書かない
@@ -104,7 +104,7 @@ worker に渡るもの:
 
 ## workflow 定義の書き方
 
-実装 repo の中に置く。tick ごとに読み直すので、直せば loop を起動し直さずに効く。ただし issue 置き場 (`tracker.kind`・`tracker.host`・`tracker.repo`) を変えたら、loop を起動し直すまで、どの tick も何も起動しない。
+実装 repo の中に置く。tick ごとに読み直すので、直せば loop を起動し直さずに効く。ただし issue 置き場 (`tracker.kind`・`tracker.host`・`tracker.repo`) か CL 置き場 (`cl`) を変えたら、loop を起動し直すまで、どの tick も何も起動しない。
 
 file は YAML の front matter と本文からなる。
 
@@ -168,6 +168,10 @@ triggers:                    # 必須。1 つ以上
 | `tracker.host` | 文字列 | `gitlab` と `jira` でだけ書ける。`$VAR` で書ける。`github` で書くと未知の key<br>- `gitlab`: GitLab の host 名 (`gitlab.example.com`)。既定 `gitlab.com`<br>- `jira`: Jira Cloud の site (`acme.atlassian.net`)。既定を持たず必須。綴りは `[A-Za-z0-9.-]+` |
 | `tracker.repo` | 文字列 | issue 置き場。`github` は `<owner>/<name>`、`gitlab` は `<group>/<name>` の段数を問わない path (`acme/sub/widgets`。どの段も `[A-Za-z0-9._-]+`)、`jira` は Jira の project key (`WIDGETS`。`[A-Za-z][A-Za-z0-9_]*`。大文字に揃えて読む)。`$VAR` で書ける |
 | `tracker.token` | 文字列 | `github` でだけ書ける。gh に環境変数 `GH_TOKEN` として渡す token。`$VAR` でだけ書ける (値そのものを書かない)。省くと、loop を起動した環境の認証を gh がそのまま使う。ssh 越しの shell などで gh の認証を取れないときに使う |
+| `cl` | 対応表 | issue 置き場と別の CL 置き場 (worker が CL を出す repo)。`tracker.kind: jira` でだけ書け、そのときは必須 (`github`・`gitlab` は issue 置き場と同じ場所が CL 置き場)。`on: cl` の trigger が無くても、`loop` の起動時・試運転・`doctor` で CL 置き場の open な一覧を 1 回読んで確かめる。token は持たず、gh / glab 自身の認証 (`gh auth login` / `glab auth login`) を使う |
+| `cl.kind` | 文字列 | 必須。CL 置き場の種類。`github` (gh で読む) か `gitlab` (glab で読む) |
+| `cl.host` | 文字列 | `cl.kind: gitlab` でだけ書ける。GitLab の host 名。既定 `gitlab.com`。`$VAR` で書ける。`github` で書くと未知の key |
+| `cl.repo` | 文字列 | 必須。CL 置き場。綴りは `tracker.repo` の `github` (`<owner>/<name>`)・`gitlab` (`<group>/…/<name>`) と同じ。`$VAR` で書ける |
 | `polling.interval` | 文字列 | 周期。Go の duration の綴り (`90s` / `5m` / `1h30m`) で、1s 以上 24h 以下。短い周期は tracker の rate limit を食う |
 | `workspace.root` | 文字列 | workspace (作業対象ごとに worker が作業する dir) を置く dir。相対 path は workflow 定義の dir から、`~/` は HOME から (HOME が絶対 path でなければ失敗)。`$VAR` で書ける。workspace は `<workspace.root>/<作業対象>` (`issue-<番号>` か `cl-<番号>`) に作り、作業対象が終端になるまで残す |
 | `hooks.after_create` | 文字列 | workspace を作った直後に撃つ shell script。失敗したら workspace を消し、その attempt は失敗。`before_remove` と合わせて、作業対象を跨いで直列に撃つ (同時に 1 本まで)。遅い `after_create` は他の workspace の用意と削除を待たせ、削除を待つ間は loop も停止要求・tick に応えない |
@@ -184,31 +188,34 @@ triggers:                    # 必須。1 つ以上
 | `claude.args` | 文字列の列 | command に、dispatcher が渡す引数 (上の「action が守る約束」の起動のコマンド) より前に渡す引数。既定は空。permission の扱い (`--permission-mode` など) はここで決める |
 | `triggers` | 列 | trigger の宣言。1 つ以上。宣言順が起動の優先順 (先頭の trigger ほど先に起動する) |
 | `triggers[].name` | 文字列 | trigger の名前。`[A-Za-z0-9._-]+`。trigger の間で重複しない |
-| `triggers[].on` | 文字列 | 作業対象の種類。`issue` か `cl` (`gitlab` では merge request)。`jira` では `issue` だけを書ける |
+| `triggers[].on` | 文字列 | 作業対象の種類。`issue` か `cl` (`gitlab` では merge request)。`cl` は CL 置き場の CL に当たる (`jira` では `cl:` の CL 置き場) |
 | `triggers[].when` | 対応表 | 述語。書いた条件はすべて AND で評価する。書ける key は `on` で変わる (下の「issue 側の述語」「CL 側の述語」)。省くと、その種類の open な作業対象のすべてに当たる |
 | `triggers[].action` | 文字列 | worker に渡す prompt の template (下の「template」)。空にできない |
 
 **YAML の読み方**: 値を書いていない key (`when:` だけの行) は、空の対応表として読む。anchor と alias は辿る。merge key (`<<: *base`) は持たない (`<<` は未知の key として失敗する)。
 
-**tracker の種類ごとの違い**:
+**置き場のサービスごとの違い**: 宣言を書けるかは、その宣言が属する置き場のサービスで決まる。issue 側の述語・`tracker.*`・`cl:` は issue 置き場 (`tracker.kind`) の、`on: cl` と CL 側の述語は CL 置き場 (`github`・`gitlab` では issue 置き場と同じ場所、`jira` では `cl.kind`) のサービスで決まる。
 
-| 宣言 | `github` | `gitlab` | `jira` |
-|---|---|---|---|
-| 読む CLI と認証 | gh (`gh auth login` か `tracker.token`) | glab (`glab auth login`) | acli (`acli jira auth login`) |
-| `tracker.host` | 書けない | 任意 (既定 `gitlab.com`) | 必須 (Jira Cloud の site) |
-| `tracker.repo` | `<owner>/<name>` | `<group>/…/<name>` | project key |
-| `tracker.token` | 書ける | 書けない | 書けない |
-| `on: cl` の trigger | 書ける (pull request) | 書ける (merge request) | 書けない |
-| issue 側の `author` | 書ける | 書ける | 書けない |
-| issue 側の `milestone` | 書ける | 書ける | 書けない |
-| issue 側の `blocked` | 書ける | 書けない | 書ける |
-| issue 側の `status`・`type` | 書けない | 書けない | 書ける |
-| `.issue.key` (template) | 使えない | 使えない | 使える |
+| 宣言 | 属する置き場 | GitHub | GitLab | Jira |
+|---|---|---|---|---|
+| 読む CLI と認証 | - | gh (`gh auth login`。issue 置き場なら `tracker.token` も) | glab (`glab auth login`) | acli (`acli jira auth login`) |
+| `tracker.host` | issue | 書けない | 任意 (既定 `gitlab.com`) | 必須 (Jira Cloud の site) |
+| `tracker.repo` | issue | `<owner>/<name>` | `<group>/…/<name>` | project key |
+| `tracker.token` | issue | 書ける | 書けない | 書けない |
+| `cl:` | issue | 書けない | 書けない | 必須 |
+| issue 側の `author` | issue | 書ける | 書ける | 書けない |
+| issue 側の `milestone` | issue | 書ける | 書ける | 書けない |
+| issue 側の `blocked` | issue | 書ける | 書けない | 書ける |
+| issue 側の `status`・`type` | issue | 書けない | 書けない | 書ける |
+| `.issue.key` (template) | issue | 使えない | 使えない | 使える |
+| `on: cl` の trigger | CL | 書ける (pull request) | 書ける (merge request) | CL 置き場にならない |
+| CL 側の `author` | CL | 書ける | 書ける | CL 置き場にならない |
 
 書けない宣言は、項目を名指しして失敗する。
 
+- `github`・`gitlab` の `cl:`: issue 置き場と同じ場所が CL 置き場なので、別の CL 置き場を宣言しない
 - `gitlab` の `blocked`: GitLab の issue の依存は有償の tier の機能で、CE の API は依存を返さない。読むと常に 0 件になり、`blocked: false` が黙って全件に当たるため
-- `jira` の `on: cl`: Jira に CL は無い。CL は worker が action の中で GitHub か GitLab に開く
+- Jira を CL 置き場にすること: Jira に CL は無い。`tracker.kind: jira` では、`cl:` で GitHub か GitLab の CL 置き場をかならず宣言する
 - `jira` の `author`: worker を誰の書き込みで起動してよいかの線を、Jira の権限 (repo の push 権限と別の線) に引けないため
 - `jira` の `milestone`: sprint は無いことがあり、fixVersions は acli の一覧で読めないため
 
@@ -223,17 +230,17 @@ triggers:                    # 必須。1 つ以上
 | `labels.none` | 文字列の列 | 列の label をどれも持たない |
 | `assignee` | 文字列 | その login (GitLab は username、Jira は accountId) の人が assignee に居る |
 | `unassigned` | 真偽 | `true` なら assignee が居ない、`false` なら 1 人以上居る |
-| `author` | 文字列 | `collaborator` なら作者が collaborator、`non_collaborator` ならそれ以外。collaborator の線は tracker ごとに下の表 |
+| `author` | 文字列 | `collaborator` なら作者が collaborator、`non_collaborator` ならそれ以外。collaborator の線は issue 置き場のサービスごとに下の表 |
 | `milestone` | 文字列 | その題名の milestone に入っている |
 | `blocked` | 真偽 | `true` なら未解決 (open) の依存先 (blocked by) が 1 つ以上ある、`false` なら無い |
 | `status.any` / `status.none` | 文字列の列 | `jira` でだけ書ける。status 名が列のどれかである / どれでもない。`any` の空の列は書けない |
 | `type.any` / `type.none` | 文字列の列 | `jira` でだけ書ける。issue type 名 (subtask・epic を含む) が列のどれかである / どれでもない。`any` の空の列は書けない |
 
-| `tracker.kind` | collaborator と数える作者 |
+| 置き場のサービス | collaborator と数える作者 |
 |---|---|
-| `github` | repo の owner・organization の member・collaborator (GitHub の `authorAssociation` が `OWNER` / `MEMBER` / `COLLABORATOR`) |
-| `gitlab` | project での access level (group から継承したものを含む) が Developer (30) 以上の member。worker は push 権限を持つので、誰の書き込みで起動してよいかの線を push できる人に引く |
-| `jira` | `author` は書けない |
+| GitHub | repo の owner・organization の member・collaborator (GitHub の `authorAssociation` が `OWNER` / `MEMBER` / `COLLABORATOR`) |
+| GitLab | project での access level (group から継承したものを含む) が Developer (30) 以上の member。worker は push 権限を持つので、誰の書き込みで起動してよいかの線を push できる人に引く |
+| Jira | `author` は書けない |
 
 - `assignee` と `unassigned` は一緒に書けない
 - label と login の綴りは、tracker によらず大文字と小文字を区別せずに比べる (GitLab の label は大文字と小文字を区別するが、dispatcher は揃えて比べる。誤って当たるのは、大文字と小文字だけが違う label を 2 つ持つ project に限られる)
@@ -260,6 +267,7 @@ triggers:                    # 必須。1 つ以上
 - `blocked` を書いた trigger があると、tick ごとに open な一覧に加えて、依存を持つ open な issue を検索し (`issueLinkType = "is blocked by"`)、当たった issue を 1 件ずつ読み直して依存先の status の区分を見る
 - 1 つの Jira project は 1 本の loop と 1 つの実装 repo で回す (同じ project の 2 本目の loop は起動時に止まる)。project key を改名したら、workflow 定義を書き換えて loop を起動し直す
 - acli は呼び出しごとに site を選べず、active な account の site を読む。`loop` の起動時・試運転・`doctor` で、acli の認証の site が `tracker.host` と違えば止まる (`acli jira auth switch --site <site>` で切り替える)
+- `jira` の issue と `cl:` の CL を、dispatcher は結び付けない。CL を merge しても、closing reference は置き場を跨げないので Jira の issue は終端にならない。status を動かすのは人か worker (action に書く)
 
 ### CL 側の述語
 
@@ -279,7 +287,7 @@ triggers:                    # 必須。1 つ以上
 | `labels.all` / `labels.any` / `labels.none` | 文字列の列 | issue 側と同じ |
 | `head` | 文字列 | head branch の名前が pattern に当たり、かつ head が同じ repo の branch である。pattern は Go の `path.Match` の綴り (`*` は `/` 以外の文字の列、`?` は `/` 以外の 1 文字、`[...]` は文字の組) |
 | `same_repo` | 真偽 | `true` なら head が同じ repo の branch (fork でない)、`false` なら fork の branch |
-| `author` | 文字列 | issue 側と同じ |
+| `author` | 文字列 | issue 側と同じ。collaborator の線は CL 置き場のサービスで決まる (`jira` では `cl.kind` のサービス) |
 | `draft` | 真偽 | `true` なら draft、`false` なら draft でない |
 
 - `head` を書いたら、fork の CL には当たらない。fork からは誰でも同じ綴りの head branch を作れるため。`head` と `same_repo: false` は一緒に書けない
@@ -373,7 +381,8 @@ workflow 定義の次のものが誤りで、項目の位置 (`triggers[0].when.
 - 空の文字列 (空の `assignee` や label を「条件なし」と取り違えないため)
 - 上の表の各項目の制約 (`polling.interval` の範囲・trigger の名前の綴りと重複・`assignee` と `unassigned` の併記・空の `labels.any` / `status.any` / `type.any`・`head` の pattern の綴り・`head` と `same_repo: false` の併記・空の `action`)
 - `$VAR` の未設定と、`tracker.token` に値そのものを書いたこと
-- `tracker.kind` が支えない宣言 (上の「tracker の種類ごとの違い」)。key を書く順 (`triggers` を `tracker` より前に書くなど) によらず名指しする
+- 置き場のサービスが支えない宣言 (上の「置き場のサービスごとの違い」)。key を書く順 (`triggers` を `tracker` や `cl` より前に書くなど) によらず名指しする
+- `tracker.kind: jira` で `cl` を書かないこと・`cl.kind` に CL 置き場にならない種類 (`jira`) を書いたこと
 - action と本文の template を描画できないこと (綴りの誤り・未知の変数・未知の関数)
 - `jira` の次の誤りは、workflow 定義だけでは確かめられないので、`loop` の起動時・試運転・`doctor` で issue 置き場を確かめるときに名指しする。tick の中では確かめない
   - acli の認証の site が `tracker.host` と違う

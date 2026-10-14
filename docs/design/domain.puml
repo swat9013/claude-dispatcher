@@ -16,7 +16,7 @@ class "project" as Project {
 package "集約: workflow 定義 (project の宣言。tick ごとに読み直す)" as WorkflowAgg {
   class "workflow 定義" as Definition {
     {field} tracker.kind : github | gitlab | jira
-    {field} cl.kind : github | gitlab (tracker.kind が jira のときだけ書ける)
+    {field} cl.kind : github | gitlab (tracker.kind が jira のときだけ書き、そのときは必須)
     {field} 並列上限・attempt の上限
   }
   class "trigger" as Trigger {
@@ -72,7 +72,7 @@ package "集約: workspace" as WorkspaceAgg {
 Project "1" -- "1" Definition
 Definition "1" *-- "1..*" Trigger : 宣言順
 Project "1" ..> "1" IssuePlace : ID参照 tracker.repo
-Project "1" ..> "0..1" CLPlace : ID参照 tracker.repo か cl.repo
+Project "1" ..> "1" CLPlace : ID参照 tracker.repo か cl.repo
 Project "1" -- "0..1" Loop : 同じマシンの中
 
 Tracker "1" -- "*" IssuePlace
@@ -92,7 +92,7 @@ Abandoned "*" ..> "1" Trigger : ID参照 名前 (打ち切ったときの trigge
 
 note right of Project
   CL 置き場は、github・gitlab では issue 置き場と同じ場所。
-  jira では cl: で宣言したときだけある
+  jira では cl: で宣言した場所 (必須。ADR 0015)
 end note
 
 note bottom of External

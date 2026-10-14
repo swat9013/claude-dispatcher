@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/swat9013/claude-dispatcher/internal/scaffold"
 	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/trigger"
 )
@@ -51,15 +52,26 @@ func Of(kind Kind) (Provider, bool) {
 	return Provider{}, false
 }
 
+// CLHostKinds は CL 置き場の役割を持つ種類を、表 (providers) の順に返す。cl.kind に書けるのはこれだけ。
+func CLHostKinds() []Kind {
+	var kinds []Kind
+	for _, p := range providers {
+		if p.CLHost != nil {
+			kinds = append(kinds, p.Kind)
+		}
+	}
+	return kinds
+}
+
 // Feature は、種類によって書けたり書けなかったりする workflow 定義の宣言。
 type Feature string
 
 const (
-	// CL は on: cl の trigger。CL 置き場の役割を持つ種類だけが支える
-	CL Feature = "on: cl"
 	// Token は tracker.token
 	Token Feature = "tracker.token"
-	// Author・Milestone・Blocked・Status・Type は issue 側の述語
+	// CLPlace は issue 置き場と別の CL 置き場の宣言 (cl:)
+	CLPlace Feature = "cl"
+	// Author・Milestone・Blocked・Status・Type は述語 (Author は issue 側と CL 側の両方にある)
 	Author    Feature = "author"
 	Milestone Feature = "milestone"
 	Blocked   Feature = "blocked"
@@ -67,9 +79,29 @@ const (
 	Type      Feature = "type"
 )
 
-// TrackerFeatures は issue 置き場の役割が支えるかを宣言する宣言の全件。どの provider もすべてを支えるか支えないかの
-// どちらかで宣言する (テストが確かめる)。
-var TrackerFeatures = []Feature{Token, Author, Milestone, Blocked, Status, Type}
+// TrackerFeatures は issue 置き場の役割が支えるかを宣言する宣言の全件、CLHostFeatures は CL 置き場の役割のもの。どの
+// provider も、持つ役割ごとに、すべてを支えるか支えないかのどちらかで宣言する (テストが確かめる)。
+var (
+	TrackerFeatures = []Feature{Token, CLPlace, Author, Milestone, Blocked, Status, Type}
+	CLHostFeatures  = []Feature{Author}
+)
+
+// Declarations は役割が支える宣言 (Supports) と、支えない宣言とその理由の文言 (Declines。誤りの名指しに添える)。
+type Declarations struct {
+	Supports []Feature
+	Declines map[Feature]string
+}
+
+// Supported は宣言 f を支えるか。支える宣言の無いものは支えない (fail closed)。
+func (d Declarations) Supported(f Feature) bool { return slices.Contains(d.Supports, f) }
+
+// DeclineReason は支えない宣言 f の理由の文言。理由を宣言していなければ、支える宣言が無いことを理由にする。
+func (d Declarations) DeclineReason(f Feature) string {
+	if reason := d.Declines[f]; reason != "" {
+		return reason
+	}
+	return "provider に支える宣言が無い"
+}
 
 // Provider はサービス 1 つの知識。データは field に持ち、置き場の読み方と部品の組み立てだけを関数の field に持つ。
 type Provider struct {
@@ -83,11 +115,8 @@ type Provider struct {
 	NewPlace func(host, repo string) Place
 	// Tracker は issue 置き場の役割。どの種類も持つ
 	Tracker TrackerRole
-	// CLHost は CL 置き場の役割。持たない種類は nil で、NoCLHost にその理由の文言を持つ
-	CLHost   *CLHostRole
-	NoCLHost string
-	// SettingsNote は doctor が settings の entry の列の後に出す注記。無ければ ""
-	SettingsNote string
+	// CLHost は CL 置き場の役割。持たない種類は nil (CL 置き場は cl: で別の種類を宣言する)
+	CLHost *CLHostRole
 	// Build は置き場の部品を組み立てる
 	Build func(Runtime, Setting) Parts
 	Setup Setup
@@ -111,9 +140,7 @@ type TrackerRole struct {
 	Prefix string
 	// IssueKey は key で指す種類の、番号の issue の key
 	IssueKey func(place Place, number int) string
-	// Supports は支える宣言。Declines は支えない宣言と、その理由の文言 (誤りの名指しに添える)
-	Supports []Feature
-	Declines map[Feature]string
+	Declarations
 	// Settings は worker が issue 置き場を操作するのに要りそうな Claude Code の settings の entry
 	Settings []string
 }
@@ -122,36 +149,25 @@ type TrackerRole struct {
 type CLHostRole struct {
 	// Prefix は CL を人が読む行に出すときに番号の前に置く綴り
 	Prefix string
+	Declarations
 	// Settings は worker が CL 置き場を操作するのに要りそうな Claude Code の settings の entry
 	Settings []string
+	// Scaffold は置き場を雛形の cl: と CL 側の trigger の書き方にする
+	Scaffold func(Place) scaffold.CLHost
 }
 
 // CommonSettings は役割に依らず worker が使いそうな settings の entry。
 var CommonSettings = []string{"Bash(git push:*)"}
 
-// Supported は宣言 f を支えるか。on: cl は CL 置き場の役割を持つかで決まり、他は issue 置き場の役割の宣言に従う。支える
-// 宣言の無いものは支えない (fail closed)。
-func (p Provider) Supported(f Feature) bool {
-	if f == CL {
-		return p.CLHost != nil
-	}
-	return slices.Contains(p.Tracker.Supports, f)
+// Settings は worker が外部 store を操作するのに要りそうな settings の entry (issue 置き場の役割・CL 置き場の役割・共通の
+// 順)。clHost は CL 置き場の役割を担う provider の役割。
+func Settings(tracker TrackerRole, clHost CLHostRole) []string {
+	entries := append(append([]string{}, tracker.Settings...), clHost.Settings...)
+	return append(entries, CommonSettings...)
 }
 
-// DeclineReason は支えない宣言 f の理由の文言。理由を宣言していなければ、支える宣言が無いことを理由にする。
-func (p Provider) DeclineReason(f Feature) string {
-	reason := p.Tracker.Declines[f]
-	if f == CL {
-		reason = p.NoCLHost
-	}
-	if reason != "" {
-		return reason
-	}
-	return "tracker.kind: " + string(p.Kind) + " の provider に支える宣言が無い"
-}
-
-// Reference は作業対象を人が読む行に出す参照 (formats.md §5)。呼び方は作業対象の種類の役割が宣言する。CL 置き場の役割を
-// 持たない種類の CL は、workflow 定義の検査が on: cl を弾くので届かない。届けば呼び出し側の誤りなので panic する。
+// Reference は作業対象を人が読む行に出す参照 (formats.md §5)。呼び方は作業対象の種類の役割が宣言する。CL は CL 置き場の
+// 役割を担う provider で引く。役割を持たない provider に渡せば呼び出し側の誤りなので panic する。
 func (p Provider) Reference(place Place, ref target.Ref) string {
 	switch {
 	case ref.Kind == target.KindIssue && p.Tracker.KeyedIssues:
@@ -162,15 +178,6 @@ func (p Provider) Reference(place Place, ref target.Ref) string {
 		return p.CLHost.Prefix + strconv.Itoa(ref.Number)
 	}
 	panic(fmt.Sprintf("tracker.kind: %s の provider は %s を指す役割を持たない", p.Kind, ref))
-}
-
-// Settings は provider が担う役割の settings の entry (issue 置き場・CL 置き場・共通の順)。
-func (p Provider) Settings() []string {
-	entries := append([]string{}, p.Tracker.Settings...)
-	if p.CLHost != nil {
-		entries = append(entries, p.CLHost.Settings...)
-	}
-	return append(entries, CommonSettings...)
 }
 
 // Place は provider が tracker.repo と tracker.host から読んだ置き場。表示名を返し、その provider の組み立てに渡す。
@@ -238,8 +245,9 @@ type Setup struct {
 	OwnsOrigin func(host string) bool
 	// CurrentPlace は cwd の clone の置き場を CLI で引く
 	CurrentPlace func(Runtime) (Place, error)
-	// Template は置き場を埋めた雛形
-	Template func(Place) string
+	// Template は issue 置き場を埋めた雛形。cl は cwd の clone の origin の CL 置き場で、CL 置き場の役割を持たない種類だけが
+	// cl: に書く (持つ種類の CL 置き場は issue 置き場と同じ場所)
+	Template func(issues Place, cl scaffold.CLHost) string
 }
 
 // ForOrigin は origin の host を認める provider。認める provider が無ければ originFallback の provider。
