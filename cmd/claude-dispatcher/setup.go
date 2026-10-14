@@ -125,17 +125,18 @@ func (o setupOptions) place() (flaggedPlace, error) {
 		return flaggedPlace{}, fmt.Errorf("--kind は %s だけを受ける (%q)", flagKinds(), o.kind)
 	}
 	if o.host == "" || o.repo == "" {
-		return flaggedPlace{}, fmt.Errorf("--kind %s には %s が要る", p.Kind, p.Setup.Flags)
+		return flaggedPlace{}, fmt.Errorf("--kind %s には %s が要る", p.Kind, p.Setup.Flags())
 	}
-	host, err := p.Host.Parse(o.host)
+	place, err := p.ReadPlace(o.host, o.repo)
+	var placeErr *provider.PlaceError
+	if errors.As(err, &placeErr) {
+		// 項目の名前は flag の名前と同じ綴り
+		return flaggedPlace{}, fmt.Errorf("--%s %q: %w", placeErr.Field, placeErr.Value, placeErr.Err)
+	}
 	if err != nil {
-		return flaggedPlace{}, fmt.Errorf("--host %q: %w", o.host, err)
+		return flaggedPlace{}, err
 	}
-	repo, err := p.ParseRepo(o.repo)
-	if err != nil {
-		return flaggedPlace{}, fmt.Errorf("--repo %q: %w", o.repo, err)
-	}
-	return flaggedPlace{provider: p, place: p.NewPlace(host, repo)}, nil
+	return flaggedPlace{provider: p, place: place}, nil
 }
 
 // placeOfOrigin は cwd の clone の origin の host を認める provider (host が github.com なら github、それ以外は gitlab) と、

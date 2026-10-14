@@ -1,6 +1,7 @@
 package provider_test
 
 import (
+	"errors"
 	"slices"
 	"testing"
 
@@ -28,15 +29,6 @@ func TestEveryKindHasAProviderThatDeclaresEveryField(t *testing.T) {
 			}
 			if p.Tracker.KeyedIssues != (p.Tracker.IssueKey != nil) || (!p.Tracker.KeyedIssues && p.Tracker.Prefix == "") {
 				t.Fatalf("provider %s の issue の呼び方が key の有無と合わない", kind)
-			}
-			if p.Host.Required() && p.Host.RequiredHint == "" {
-				t.Fatalf("provider %s の tracker.host は必須なのに、欠落の誤りに添える案内が無い", kind)
-			}
-			if p.Setup.OwnsOrigin != nil && (p.Setup.CurrentPlace == nil || p.Setup.Template == nil) {
-				t.Fatalf("provider %s は origin を認めるのに、clone から雛形を書けない", kind)
-			}
-			if p.Setup.TakesFlags() && (p.Setup.Template == nil || !p.Host.Writable()) {
-				t.Fatalf("provider %s は flag で受けるのに、--host を読めないか雛形を書けない", kind)
 			}
 		})
 	}
@@ -152,8 +144,8 @@ func TestOriginOnGitHubIsGitHubAndAnyOtherHostIsGitLab(t *testing.T) {
 	for host, want := range map[string]provider.Kind{"github.com": provider.GitHub, "gitlab.com": provider.GitLab, "git.example.com": provider.GitLab} {
 		p := provider.ForOrigin(host)
 
-		if p.Kind != want || p.Setup.CurrentPlace == nil || p.Setup.Template == nil {
-			t.Fatalf("origin の host %s の種類 = %s, want clone から雛形を書ける %s", host, p.Kind, want)
+		if p.Kind != want {
+			t.Fatalf("origin の host %s の種類 = %s, want %s", host, p.Kind, want)
 		}
 	}
 }
@@ -171,6 +163,49 @@ func TestOnlyJiraIsWrittenFromSetupFlags(t *testing.T) {
 
 	if !slices.Equal(got, []provider.Kind{provider.Jira}) {
 		t.Fatalf("flag で受ける種類 = %v, want [jira]", got)
+	}
+}
+
+func TestReadingAPlaceWithAHostForAKindThatCannotWriteTheHostIsAnErrorOnTheHost(t *testing.T) {
+	p, _ := provider.Of(provider.GitHub)
+
+	_, err := p.ReadPlace("github.com", "acme/widgets")
+
+	var placeErr *provider.PlaceError
+	if !errors.As(err, &placeErr) || placeErr.Field != provider.HostField {
+		t.Fatalf("err = %v, want host の誤り", err)
+	}
+}
+
+func TestReadingAPlaceNamesTheHostBeforeTheRepo(t *testing.T) {
+	p, _ := provider.Of(provider.Jira)
+
+	_, err := p.ReadPlace("https://acme.atlassian.net", "acme/widgets")
+
+	var placeErr *provider.PlaceError
+	if !errors.As(err, &placeErr) || placeErr.Field != provider.HostField || placeErr.Value != "https://acme.atlassian.net" {
+		t.Fatalf("err = %v, want host の誤り", err)
+	}
+}
+
+func TestReadingAPlaceNamesAMalformedRepo(t *testing.T) {
+	p, _ := provider.Of(provider.Jira)
+
+	_, err := p.ReadPlace("acme.atlassian.net", "acme/widgets")
+
+	var placeErr *provider.PlaceError
+	if !errors.As(err, &placeErr) || placeErr.Field != provider.RepoField || placeErr.Value != "acme/widgets" {
+		t.Fatalf("err = %v, want repo の誤り", err)
+	}
+}
+
+func TestReadingAPlaceFromAWrittenHostAndRepoMakesThePlace(t *testing.T) {
+	p, _ := provider.Of(provider.Jira)
+
+	place, err := p.ReadPlace("acme.atlassian.net", "WIDGETS")
+
+	if err != nil || place.String() != placeOf(t, p).String() {
+		t.Fatalf("置き場 = %q, err = %v, want %q", place, err, placeOf(t, p))
 	}
 }
 
