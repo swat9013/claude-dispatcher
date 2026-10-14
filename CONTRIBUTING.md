@@ -50,10 +50,13 @@ claude-dispatcher-dev loop
 
 ## gate (品質チェック)
 
-検査の置き場は次の 2 点で決めている。
+検査の置き場は次の点で決めている。
 
 - **CI に置く検査は、同じものを手元 (pre-commit) でも撃てるようにする**。dispatcher は CL の CI が落ちると `fix-ci` の trigger で worker を起動し、worker は手元で再現できない失敗を推測で直さず人へ返す ([WORKFLOW.md](WORKFLOW.md) の共通 prompt)。CI にしか無い検査が落ちると、worker は毎回人へ返すことになる
 - **CL の変更と無関係に赤くなりうる検査は、PR の gate にしない**。network 上の脆弱性 DB を引く govulncheck がこれに当たる。gate にすると、新しい脆弱性が公開されたときに、開いている worker の CL に一斉に `fix-ci` の trigger が当たる
+- **gate で撃つ検査の script とその test は repo の中に置く**。repo の外 (plugin 等) の script は vendor してから gate に入れ、版の固定は vendor した commit で表す
+- **shell script の test は Go の test から bash を撃つ形で置き** (`go test ./...` に載せる)、別の test 基盤を足さない
+- **gate の前提 tool (plantuml 等) を足すときは**、「セットアップ」と CI の両方に入れ方を書く
 
 検査と撃たれる場所:
 
