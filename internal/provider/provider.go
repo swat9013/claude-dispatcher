@@ -127,7 +127,7 @@ type Provider struct {
 type Host struct {
 	// Parse は tracker.host の綴りを確かめる。nil なら tracker.host を書けない
 	Parse func(string) (string, error)
-	// Default は書かなかったときの host。"" なら必須
+	// Default は書かなかったときの host。"" なら既定を持たない (必須かは Required)
 	Default string
 	// RequiredHint は必須の項目の欠落に添える案内
 	RequiredHint string
@@ -136,7 +136,7 @@ type Host struct {
 // Writable は tracker.host を書けるか。
 func (h Host) Writable() bool { return h.Parse != nil }
 
-// Required は tracker.host が必須か (書けて、書かなかったときの既定を持たない)。
+// Required は tracker.host が必須か。書けない種類は既定を持たなくても必須にしない (書けば「未知の key」になる)。
 func (h Host) Required() bool { return h.Writable() && h.Default == "" }
 
 // TrackerRole は issue 置き場の役割の宣言。
