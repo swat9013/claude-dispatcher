@@ -51,18 +51,18 @@ var providers = []Provider{
 			return Parts{Issues: store, CLs: store}
 		},
 		Setup: Setup{
-			OwnsOrigin: func(host string) bool { return host == "github.com" },
-			CurrentPlace: func(rt Runtime) (Place, error) {
+			ownsOrigin: func(host string) bool { return host == "github.com" },
+			currentPlace: func(rt Runtime) (Place, error) {
 				repo, err := github.CurrentRepo(github.Exec{Env: rt.Env, Timeout: rt.Timeout})
 				return Place{name: repo.String(), value: repo}, err
 			},
-			Template: func(p Place, _ scaffold.CLHost) string { return scaffold.GitHub(p.value.(github.Repo).String()) },
+			template: func(p Place, _ scaffold.CLHost) string { return scaffold.GitHub(p.value.(github.Repo).String()) },
 		},
 	},
 	{
 		Kind:      GitLab,
 		Command:   "glab",
-		Host:      Host{Parse: gitlab.ParseHost, Default: gitlab.DefaultHost},
+		Host:      Host{parse: gitlab.ParseHost, defaultHost: gitlab.DefaultHost, hasDefault: true},
 		ParseRepo: gitlab.ParsePath,
 		NewPlace: func(host, repo string) Place {
 			p := gitlab.Project{Host: host, Path: repo}
@@ -97,11 +97,11 @@ var providers = []Provider{
 			return Parts{Issues: store, CLs: store}
 		},
 		Setup: Setup{
-			CurrentPlace: func(rt Runtime) (Place, error) {
+			currentPlace: func(rt Runtime) (Place, error) {
 				p, err := gitlab.CurrentProject(gitlab.Exec{Env: rt.Env, Timeout: rt.Timeout})
 				return Place{name: p.String(), value: p}, err
 			},
-			Template: func(p Place, _ scaffold.CLHost) string {
+			template: func(p Place, _ scaffold.CLHost) string {
 				project := p.value.(gitlab.Project)
 				return scaffold.GitLab(project.Host, project.Path)
 			},
@@ -110,7 +110,7 @@ var providers = []Provider{
 	{
 		Kind:      Jira,
 		Command:   "acli",
-		Host:      Host{Parse: jira.ParseSite, RequiredHint: "Jira Cloud の site を書く"},
+		Host:      Host{parse: jira.ParseSite, requiredHint: "Jira Cloud の site を書く"},
 		ParseRepo: jira.ParseKey,
 		NewPlace: func(host, repo string) Place {
 			p := jira.Project{Site: host, Key: repo}
@@ -134,8 +134,8 @@ var providers = []Provider{
 			return Parts{Issues: store, Confirm: func() error { return store.Confirm(jira.NamesOf(s.Triggers)) }}
 		},
 		Setup: Setup{
-			Flags: "--host <site> と --repo <project key>",
-			Template: func(p Place, cl scaffold.CLHost) string {
+			flags: "--host <site> と --repo <project key>",
+			template: func(p Place, cl scaffold.CLHost) string {
 				project := p.value.(jira.Project)
 				return scaffold.Jira(project.Site, project.Key, cl)
 			},

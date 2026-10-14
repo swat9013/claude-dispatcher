@@ -4,6 +4,7 @@
 package provider
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -123,21 +124,36 @@ type Provider struct {
 	Setup Setup
 }
 
-// Host は tracker.host の読み方。
+// Host は tracker.host の読み方。宣言は表 (providers) だけが書き、外からは method で読む。
 type Host struct {
-	// Parse は tracker.host の綴りを確かめる。nil なら tracker.host を書けない
-	Parse func(string) (string, error)
-	// Default は書かなかったときの host。"" なら既定を持たない (必須かは Required)
-	Default string
-	// RequiredHint は必須の項目の欠落に添える案内
-	RequiredHint string
+	// parse は tracker.host の綴りを確かめる。nil なら tracker.host を書けない
+	parse func(string) (string, error)
+	// defaultHost は書かなかったときの host。hasDefault が偽なら既定を持たない (defaultHost は "")
+	defaultHost string
+	hasDefault  bool
+	// requiredHint は必須の項目の欠落に添える案内
+	requiredHint string
 }
 
 // Writable は tracker.host を書けるか。
-func (h Host) Writable() bool { return h.Parse != nil }
+func (h Host) Writable() bool { return h.parse != nil }
 
 // Required は tracker.host が必須か。書けない種類は既定を持たなくても必須にしない (書けば「未知の key」になる)。
-func (h Host) Required() bool { return h.Writable() && h.Default == "" }
+func (h Host) Required() bool { return h.Writable() && !h.hasDefault }
+
+// Default は書かなかったときの host と、既定を持つか。既定を持たなければ ("", false)。
+func (h Host) Default() (string, bool) { return h.defaultHost, h.hasDefault }
+
+// RequiredHint は必須の tracker.host の欠落に添える案内。
+func (h Host) RequiredHint() string { return h.requiredHint }
+
+// Parse は tracker.host の綴りを確かめて揃えた値を返す。tracker.host を書けない種類なら誤り。
+func (h Host) Parse(s string) (string, error) {
+	if !h.Writable() {
+		return "", errors.New("この種類は host を書けない")
+	}
+	return h.parse(s)
+}
 
 // TrackerRole は issue 置き場の役割の宣言。
 type TrackerRole struct {
@@ -213,6 +229,43 @@ func (p Provider) Reference(place Place, ref target.Ref) string {
 	panic(fmt.Sprintf("tracker.kind: %s の provider は %s を指す役割を持たない", p.Kind, ref))
 }
 
+// PlaceField は置き場を指す項目 (host か repo)。
+type PlaceField string
+
+const (
+	HostField PlaceField = "host"
+	RepoField PlaceField = "repo"
+)
+
+// PlaceError は書かれた置き場の値の誤り。どの項目の、どの値の誤りかを持つ。
+type PlaceError struct {
+	Field PlaceField
+	Value string
+	Err   error
+}
+
+func (e *PlaceError) Error() string { return e.Named(string(e.Field)).Error() }
+
+// Named は誤りを、項目を name の名前で名指しした誤り (`<name> "<値>": <理由>`) にする。
+func (e *PlaceError) Named(name string) error { return fmt.Errorf("%s %q: %w", name, e.Value, e.Err) }
+
+func (e *PlaceError) Unwrap() error { return e.Err }
+
+// ReadPlace は書かれた host と repo を、この種類の読み方で読んで置き場にする。host・repo の順に確かめ、誤りは
+// *PlaceError。読むのは host を書いた置き場だけで、tracker.host を書けない種類では常に host の誤りになる (host を書かない
+// 置き場は、workflow 定義の検査が既定から作る)。
+func (p Provider) ReadPlace(host, repo string) (Place, error) {
+	parsedHost, err := p.Host.Parse(host)
+	if err != nil {
+		return Place{}, &PlaceError{Field: HostField, Value: host, Err: err}
+	}
+	parsedRepo, err := p.ParseRepo(repo)
+	if err != nil {
+		return Place{}, &PlaceError{Field: RepoField, Value: repo, Err: err}
+	}
+	return p.NewPlace(parsedHost, parsedRepo), nil
+}
+
 // Place は provider が tracker.repo と tracker.host から読んだ置き場。表示名を返し、その provider の組み立てに渡す。
 type Place struct {
 	name string
@@ -267,27 +320,52 @@ type Parts struct {
 	Confirm func() error
 }
 
-// Setup は setup が雛形を書くための宣言。
+// Setup は setup が雛形を書くための宣言。宣言は表 (providers) だけが書き、外からは method で読む。
 type Setup struct {
-	// Flags は `setup --kind <種類>` で置き場を受けるときの flag の綴りの案内。"" なら flag で受けない
-	Flags string
-	// OwnsOrigin は cwd の clone の origin の host を、この種類の置き場と認めるか。nil なら認めない (どの provider も認めない
+	// flags は `setup --kind <種類>` で置き場を受けるときの flag の綴りの案内。"" なら flag で受けない
+	flags string
+	// ownsOrigin は cwd の clone の origin の host を、この種類の置き場と認めるか。nil なら認めない (どの provider も認めない
 	// host は originFallback の種類と読む)
-	OwnsOrigin func(host string) bool
-	// CurrentPlace は cwd の clone の置き場を CLI で引く
-	CurrentPlace func(Runtime) (Place, error)
-	// Template は issue 置き場を埋めた雛形。cl は cwd の clone の origin の CL 置き場で、CL 置き場の役割を持たない種類だけが
+	ownsOrigin func(host string) bool
+	// currentPlace は cwd の clone の置き場を CLI で引く
+	currentPlace func(Runtime) (Place, error)
+	// template は issue 置き場を埋めた雛形。cl は cwd の clone の origin の CL 置き場で、CL 置き場の役割を持たない種類だけが
 	// cl: に書く (持つ種類の CL 置き場は issue 置き場と同じ場所)
-	Template func(issues Place, cl scaffold.CLHost) string
+	template func(issues Place, cl scaffold.CLHost) string
 }
 
 // TakesFlags は `setup --kind <種類>` の flag で置き場を受けるか。
-func (s Setup) TakesFlags() bool { return s.Flags != "" }
+func (s Setup) TakesFlags() bool { return s.flags != "" }
+
+// Flags は `setup --kind <種類>` で置き場を受けるときの flag の綴りの案内。
+func (s Setup) Flags() string { return s.flags }
+
+// OwnsOrigin は cwd の clone の origin の host を、この種類の置き場と認めるか。
+func (s Setup) OwnsOrigin(host string) bool { return s.ownsOrigin != nil && s.ownsOrigin(host) }
+
+// CurrentPlace は cwd の clone の置き場を CLI で引く。origin を認めない種類 (ForOrigin が返さない種類) に撃てば呼び出し側の
+// 誤りなので panic する。
+func (s Setup) CurrentPlace(rt Runtime) (Place, error) {
+	if s.currentPlace == nil {
+		panic("この種類の provider は cwd の clone から置き場を引けない")
+	}
+	return s.currentPlace(rt)
+}
+
+// Template は issue 置き場 issues を埋めた雛形。cl は cwd の clone の origin の CL 置き場で、CL 置き場の役割を持たない種類
+// だけが cl: に書く (持つ種類の CL 置き場は issue 置き場と同じ場所)。雛形を持たない種類に撃てば呼び出し側の誤りなので
+// panic する。
+func (s Setup) Template(issues Place, cl scaffold.CLHost) string {
+	if s.template == nil {
+		panic("この種類の provider は雛形を持たない")
+	}
+	return s.template(issues, cl)
+}
 
 // ForOrigin は origin の host を認める provider。認める provider が無ければ originFallback の provider。
 func ForOrigin(host string) Provider {
 	for _, p := range providers {
-		if p.Setup.OwnsOrigin != nil && p.Setup.OwnsOrigin(host) {
+		if p.Setup.OwnsOrigin(host) {
 			return p
 		}
 	}

@@ -610,12 +610,14 @@ func (c *checker) cl(owner, n *yaml.Node, path string) *CL {
 // 持たない host の欠落を名指しする (key は種類を書いた key)。repo と host がどちらも読めたときだけ true。
 func (c *checker) place(owner, n *yaml.Node, path, key string, p *provider.Provider, in *placeInput) (provider.Place, bool) {
 	if !in.hostWritten {
-		in.host, in.hostRead = p.Host.Default, true
+		// 既定を持たない種類は ""。host を書けない種類は "" で置き場を作る
+		in.host, _ = p.Host.Default()
+		in.hostRead = true
 		// 既定を持たない host は必須。mapping の必須は種類に依らないので、ここで欠落を名指しする
 		if p.Host.Required() {
 			in.hostRead = false
 			if n.Kind == yaml.MappingNode {
-				c.fail(owner, join(path, "host"), "必須の項目が無い (%s: %s では %s)", key, p.Kind, p.Host.RequiredHint)
+				c.fail(owner, join(path, "host"), "必須の項目が無い (%s: %s では %s)", key, p.Kind, p.Host.RequiredHint())
 			}
 		}
 	}

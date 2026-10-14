@@ -125,17 +125,30 @@ func (o setupOptions) place() (flaggedPlace, error) {
 		return flaggedPlace{}, fmt.Errorf("--kind は %s だけを受ける (%q)", flagKinds(), o.kind)
 	}
 	if o.host == "" || o.repo == "" {
-		return flaggedPlace{}, fmt.Errorf("--kind %s には %s が要る", p.Kind, p.Setup.Flags)
+		return flaggedPlace{}, fmt.Errorf("--kind %s には %s が要る", p.Kind, p.Setup.Flags())
 	}
-	host, err := p.Host.Parse(o.host)
+	place, err := p.ReadPlace(o.host, o.repo)
 	if err != nil {
-		return flaggedPlace{}, fmt.Errorf("--host %q: %w", o.host, err)
+		return flaggedPlace{}, flagError(err)
 	}
-	repo, err := p.ParseRepo(o.repo)
-	if err != nil {
-		return flaggedPlace{}, fmt.Errorf("--repo %q: %w", o.repo, err)
+	return flaggedPlace{provider: p, place: place}, nil
+}
+
+// placeFlags は置き場の項目を受ける flag の名前。
+var placeFlags = map[provider.PlaceField]string{provider.HostField: "--host", provider.RepoField: "--repo"}
+
+// flagError は ReadPlace の誤りを、項目を受けた flag の名前で名指しする。ReadPlace の誤りは *provider.PlaceError だけで、
+// それ以外の誤りか、flag の無い項目が届けば呼び出し側の誤りなので panic する。
+func flagError(err error) error {
+	var placeErr *provider.PlaceError
+	if !errors.As(err, &placeErr) {
+		panic(fmt.Sprintf("ReadPlace が *provider.PlaceError でない誤りを返した: %v", err))
 	}
-	return flaggedPlace{provider: p, place: p.NewPlace(host, repo)}, nil
+	flag, ok := placeFlags[placeErr.Field]
+	if !ok {
+		panic(fmt.Sprintf("置き場の項目 %s を受ける flag が無い", placeErr.Field))
+	}
+	return placeErr.Named(flag)
 }
 
 // placeOfOrigin は cwd の clone の origin の host を認める provider (host が github.com なら github、それ以外は gitlab) と、
