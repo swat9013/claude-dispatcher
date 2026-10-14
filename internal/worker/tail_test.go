@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
 // 活動として数える最新の完結した行の探し方。
@@ -25,12 +24,14 @@ func streamFile(t *testing.T, content string) *os.File {
 	return f
 }
 
-// summarizeAfter は content の stream から、after より後で終わる行の活動を読む。
-func summarizeAfter(t *testing.T, content string, after int64) (summary string, ok bool, w *streamWatch) {
+// summarizeAfter は content の stream から、after より後で終わる行の活動を読む。end は次に読み始める offset。
+func summarizeAfter(t *testing.T, content string, after int64) (summary string, ok bool, end int64) {
 	t.Helper()
-	w = &streamWatch{file: streamFile(t, content), size: int64(len(content)), summarized: after, workspace: "/work"}
-	summary, ok = w.activity(time.Time{})
-	return summary, ok, w
+	summary, ok, end, err := summarizeLatest(streamFile(t, content).Name(), int64(len(content)), after, "/work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return summary, ok, end
 }
 
 func text(s string) string {
@@ -60,9 +61,9 @@ func TestActivityLooksBackPastLinesThatAreNotCounted(t *testing.T) {
 
 func TestActivityDoesNotReturnALineAlreadySummarized(t *testing.T) {
 	content := text("old") + text("new")
-	_, _, w := summarizeAfter(t, content, 0)
+	_, _, end := summarizeAfter(t, content, 0)
 
-	if summary, ok := w.activity(time.Time{}); ok {
+	if summary, ok, _ := summarizeAfter(t, content, end); ok {
 		t.Fatalf("要約済みの行を返した: %q", summary)
 	}
 }

@@ -15,7 +15,7 @@ import (
 
 // runSetup は `setup [--kind jira --host <site> --repo <project key>] [<workflow の path>]` を撃つ (formats.md §7.4):
 // flag があれば jira の雛形を、無ければ cwd の clone の origin から tracker.kind と issue 置き場を決めて、その種類の雛形を書く。
-// 既にある file は上書きしない。
+// CL 置き場は、どちらも cwd の clone の origin から決める (jira は cl: に書く)。既にある file は上書きしない。
 func runSetup(args []string, stdout, stderr io.Writer) int {
 	flags, rest, err := setupFlags(args)
 	if err != nil {
@@ -38,13 +38,21 @@ func runSetup(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "%s は既にあるので書かない\n", path)
 		return 0
 	}
-	var template, place string
-	if flagged != nil {
-		template, place = flagged.provider.Setup.Template(flagged.place), flagged.place.String()
-	} else if template, place, err = scaffoldFromOrigin(); err != nil {
-		fmt.Fprintf(stderr, "issue 置き場を決められない: %v\n", err)
+	origin, originPlace, err := placeOfOrigin()
+	if err != nil {
+		what := "issue 置き場"
+		if flagged != nil {
+			what = "CL 置き場"
+		}
+		fmt.Fprintf(stderr, "%s を決められない: %v\n", what, err)
 		return exitFailed
 	}
+	tracker, place, placeNote := origin, originPlace, "issue 置き場: "+originPlace.String()
+	if flagged != nil {
+		tracker, place = flagged.provider, flagged.place
+		placeNote = "issue 置き場: " + place.String() + " · CL 置き場: " + originPlace.String()
+	}
+	template := tracker.Setup.Template(place, origin.CLHost.Scaffold(originPlace))
 	// 確かめてから書くまでの間に他が書いても、上書きしない
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 	if errors.Is(err, os.ErrExist) {
@@ -59,7 +67,7 @@ func runSetup(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "workflow 定義の雛形を書けない (%s): %v\n", path, err)
 		return exitFailed
 	}
-	fmt.Fprintf(stdout, "%s に workflow 定義の雛形を書いた (issue 置き場: %s)。project に合わせて直し、`claude-dispatcher loop --dry-run` で試運転する\n", path, place)
+	fmt.Fprintf(stdout, "%s に workflow 定義の雛形を書いた (%s)。project に合わせて直し、`claude-dispatcher loop --dry-run` で試運転する\n", path, placeNote)
 	return 0
 }
 
@@ -130,25 +138,21 @@ func (o setupOptions) place() (flaggedPlace, error) {
 	return flaggedPlace{provider: p, place: p.NewPlace(host, repo)}, nil
 }
 
-// scaffoldFromOrigin は cwd の clone の origin の host を認める provider で tracker.kind を決め、issue 置き場を埋めたその種類の
-// 雛形と、issue 置き場の表示名を返す (host が github.com なら github、それ以外は gitlab)。
-// PATH は撃つ CLI ごとに解決する (git の後、host で決まった tracker の CLI だけ)。
-func scaffoldFromOrigin() (template, place string, err error) {
+// placeOfOrigin は cwd の clone の origin の host を認める provider (host が github.com なら github、それ以外は gitlab) と、
+// その provider の CLI で引いた clone の置き場を返す。PATH は撃つ CLI ごとに解決する (git の後、host で決まった CLI だけ)。
+func placeOfOrigin() (provider.Provider, provider.Place, error) {
 	origin, err := commandEnvironment("git").origin()
 	if err != nil {
-		return "", "", err
+		return provider.Provider{}, provider.Place{}, err
 	}
 	host, err := remoteHost(origin)
 	if err != nil {
 		// URL は認証情報を含みうるので名指しに載せない
-		return "", "", fmt.Errorf("origin の URL: %w", err)
+		return provider.Provider{}, provider.Place{}, fmt.Errorf("origin の URL: %w", err)
 	}
 	p := provider.ForOrigin(host)
 	current, err := p.Setup.CurrentPlace(commandEnvironment(p.Command).runtime())
-	if err != nil {
-		return "", "", err
-	}
-	return p.Setup.Template(current), current.String(), nil
+	return p, current, err
 }
 
 // origin は cwd の clone の origin の URL。

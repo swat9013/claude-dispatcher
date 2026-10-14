@@ -130,10 +130,10 @@ func commandEnvironment(commands ...string) environment {
 	return environment{env: deps.WithEnv(os.Environ(), map[string]string{"PATH": path})}
 }
 
-// definitionEnvironment は、workflow 定義で loop・試運転・doctor が撃つ依存 CLI (tracker の CLI・claude.command・git) を
+// definitionEnvironment は、workflow 定義で loop・試運転・doctor が撃つ依存 CLI (置き場の CLI・claude.command・git) を
 // PATH で解決できるようにした環境。git は CL 側の trigger と、loop の PATH を継ぐ worker と hooks が撃つ。
 func definitionEnvironment(def workflow.Definition) environment {
-	return commandEnvironment(trackerCommand(def), def.Claude.Command, "git")
+	return commandEnvironment(append(placeCommands(def), def.Claude.Command, "git")...)
 }
 
 func (e environment) getenv(key string) string { return deps.Getenv(e.env, key) }
@@ -152,34 +152,78 @@ func (e environment) withToken(def workflow.Definition) environment {
 	return environment{env: def.Tracker.Provider().WithToken(e.env, def.Tracker.Token)}
 }
 
-// parts は workflow 定義の tracker.kind の provider で置き場の部品を組み立てる。
-func (e environment) parts(def workflow.Definition) provider.Parts {
+// trackerParts は workflow 定義の tracker.kind の provider で置き場の部品を組み立てる。
+func (e environment) trackerParts(def workflow.Definition) provider.Parts {
 	return def.Tracker.Provider().Build(e.withToken(def).runtime(), provider.Setting{Place: def.Tracker.Place, Triggers: def.Triggers})
 }
 
-// store は loop が読む置き場。
-func (e environment) store(def workflow.Definition) loop.Store {
-	parts := e.parts(def)
-	return loop.Store{Issues: parts.Issues, CLs: parts.CLs}
+// separateCLs は cl: の CL 置き場の部品を、cl.kind の provider で組み立てる。cl: は token を持たず、CL 置き場の CLI 自身の
+// 認証を使う。
+// cl: が無ければ false。
+func (e environment) separateCLs(def workflow.Definition) (provider.CLStore, bool) {
+	p, place, ok := def.SeparateCLHost()
+	if !ok {
+		return nil, false
+	}
+	return p.Build(e.runtime(), provider.Setting{Place: place, Triggers: def.Triggers}).CLs, true
 }
 
-// confirmPlace は起動時の issue 置き場の確認 (formats.md §6)。確認の手順を持たない種類は何もしない。
+// store は loop が読む置き場。issue 置き場の部品は tracker.kind の provider から、CL 置き場の部品は cl: があれば cl.kind の
+// provider から組む (system.md §13)。
+func (e environment) store(def workflow.Definition) loop.Store {
+	parts := e.trackerParts(def)
+	cls := parts.CLs
+	if separate, ok := e.separateCLs(def); ok {
+		cls = separate
+	}
+	return loop.Store{Issues: parts.Issues, CLs: cls}
+}
+
+// confirmPlace は起動時の置き場の確認 (formats.md §6): issue 置き場の確認と、cl: の CL 置き場の確認。
 func (e environment) confirmPlace(def workflow.Definition) error {
-	if confirm := e.parts(def).Confirm; confirm != nil {
+	if err := e.confirmIssuePlace(def); err != nil {
+		return err
+	}
+	err := e.readSeparateCLs(def)
+	var nonFatal *target.NonFatal
+	if errors.As(err, &nonFatal) {
+		// 一覧は読めた。補助の要求だけの失敗は確認を落とさない
+		return nil
+	}
+	return err
+}
+
+// confirmIssuePlace は起動時の issue 置き場の確認 (formats.md §6)。確認の手順を持たない種類は何もしない。
+func (e environment) confirmIssuePlace(def workflow.Definition) error {
+	if confirm := e.trackerParts(def).Confirm; confirm != nil {
 		return confirm()
 	}
 	return nil
 }
 
-// trackerCommand は workflow 定義の tracker.kind の CLI。
-func trackerCommand(def workflow.Definition) string {
-	return def.Tracker.Provider().Command
+// readSeparateCLs は cl: の CL 置き場の open な一覧を 1 回読む (formats.md §6 の CL 置き場の確認)。cl: が無ければ何もしない。
+func (e environment) readSeparateCLs(def workflow.Definition) error {
+	cls, ok := e.separateCLs(def)
+	if !ok {
+		return nil
+	}
+	_, err := cls.OpenCLs()
+	return err
 }
 
-// requiredCommands は loop が撃つ依存 CLI: tracker の CLI と claude.command。CL 側の trigger があれば、claim の workspace の
+// placeCommands は置き場の CLI: tracker の CLI と、cl: があれば CL 置き場の CLI。
+func placeCommands(def workflow.Definition) []string {
+	commands := []string{def.Tracker.Provider().Command}
+	if p, _, ok := def.SeparateCLHost(); ok {
+		commands = append(commands, p.Command)
+	}
+	return commands
+}
+
+// requiredCommands は loop が撃つ依存 CLI: 置き場の CLI と claude.command。CL 側の trigger があれば、claim の workspace の
 // branch を読むのに git も撃つ。
 func requiredCommands(def workflow.Definition) []string {
-	commands := []string{trackerCommand(def), def.Claude.Command}
+	commands := append(placeCommands(def), def.Claude.Command)
 	if slices.Contains(def.Kinds(), target.KindCL) {
 		commands = append(commands, "git")
 	}
@@ -360,13 +404,13 @@ func dryRunOnce(e environment, def workflow.Definition, stdout, stderr io.Writer
 	for _, c := range candidates {
 		item, skip, err := loop.RecheckCandidate(store, def.Triggers, c)
 		if err != nil {
-			fmt.Fprintf(stderr, "候補 %s を読み直せない: %v\n", def.Tracker.Reference(c.Item.Ref()), err)
+			fmt.Fprintf(stderr, "候補 %s を読み直せない: %v\n", def.Reference(c.Item.Ref()), err)
 			return failureExit(err)
 		}
 		if skip != "" {
 			continue
 		}
-		fmt.Fprintf(&lines, "%s\t%s\t%s\t%s\n", c.Trigger.Name, c.Trigger.On, def.Tracker.Reference(item.Ref()), printable.Line(item.Heading()))
+		fmt.Fprintf(&lines, "%s\t%s\t%s\t%s\n", c.Trigger.Name, c.Trigger.On, def.Reference(item.Ref()), printable.Line(item.Heading()))
 	}
 	fmt.Fprint(stdout, lines.String())
 	return 0
