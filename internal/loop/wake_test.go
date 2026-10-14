@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/swat9013/claude-dispatcher/internal/loop"
+	"github.com/swat9013/claude-dispatcher/internal/precheck"
 	"github.com/swat9013/claude-dispatcher/internal/status"
 	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/trigger"
@@ -32,6 +33,8 @@ type wakeLoop struct {
 	read func(loaded int, ref target.Ref) target.Item
 	// stoppable は Stop されるまで走り続ける worker の作業対象。ほかの worker は起動するとすぐに終わる
 	stoppable target.Ref
+	// precheck は事前検査。nil なら、どの trigger も通す
+	precheck func(workflow.Definition) []precheck.Problem
 	// deliverWakes は wake を届けるか (届けなければ、再起動は tick と worker の終わりでだけ試みる)
 	deliverWakes bool
 	// period は n 回目 (1 始まり) の周期の明けを返す。nil を返せば、その周期で停止要求を送る
@@ -67,6 +70,10 @@ func (s wakeLoop) run(t *testing.T) *wakeRun {
 		signals    = make(chan os.Signal, 1)
 		neverFires = make(chan time.Time)
 	)
+	check := s.precheck
+	if check == nil {
+		check = noProblems
+	}
 	exit := loop.Run(loop.Options{
 		Load: func() (workflow.Definition, error) {
 			w.tick++
@@ -75,7 +82,7 @@ func (s wakeLoop) run(t *testing.T) *wakeRun {
 			return s.def(w.tick), nil
 		},
 		Definition: s.def(1),
-		Precheck:   noProblems,
+		Precheck:   check,
 		Store: func(workflow.Definition) loop.Store {
 			return memoryStore{
 				scopeKey: func() string { return startScope },
@@ -184,6 +191,39 @@ func TestWaitingRetryOfACLThatCannotRestartOutsideATickWakesTheLoopOnlyOnceBefor
 
 	if wakesBeforeSecondTick != 1 {
 		t.Fatalf("2 回目の tick までに置いた wake = %d, want 1 (backoff の明けに 1 回だけ。起動できなかった後は tick を待つ)", wakesBeforeSecondTick)
+	}
+}
+
+func TestWakeRestartsWithThePrecheckOfTheLastTick(t *testing.T) {
+	// tick 1 の事前検査は通り、その後に先頭の skill が消える (事前検査を撃ち直せば落ちる)。tick の外の wake は事前検査を
+	// 撃ち直さず、tick 1 の結果で再起動する
+	checks := 0
+	s := wakeLoop{
+		def: func(int) workflow.Definition {
+			return workflow.Definition{Tracker: githubTracker, Interval: wakeInterval, MaxConcurrent: 1, MaxAttempts: 2, MaxRetryBackoff: 5 * time.Minute, Triggers: []trigger.Trigger{readyTrigger}}
+		},
+		open: []target.Item{readyIssue(1)},
+		read: func(_ int, ref target.Ref) target.Item { return readyIssue(ref.Number) },
+		precheck: func(workflow.Definition) []precheck.Problem {
+			checks++
+			if checks == 1 {
+				return nil
+			}
+			return []precheck.Problem{{Trigger: readyTrigger.Name, Error: "action の先頭の /implement が見つからない"}}
+		},
+		deliverWakes: true,
+		period: func(n int, w *wakeRun) <-chan time.Time {
+			if n == 1 {
+				return firesAfter(w.woke)
+			}
+			return nil
+		},
+	}
+
+	w := s.run(t)
+
+	if got := w.launchesAtTick[2]; got != 2 {
+		t.Fatalf("tick 2 の前に起動した worker = %d, want 2 (backoff の明けた wake で attempt 2 を起動する)", got)
 	}
 }
 

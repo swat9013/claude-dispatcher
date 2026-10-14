@@ -77,8 +77,8 @@ func TestTriggerThatLosesItsLeadingSkillIsLeftOutOfTheEvaluation(t *testing.T) {
 }
 
 // 「skill を失った trigger の retry」のテストは、skill を attempt 1 が走っている間に消し、tick が事前検査に落ちたのを
-// 出してから attempt 1 を終わらせる。事前検査は tick の中でだけ撃ち、backoff の明けた再起動は直近の tick の結果で決める
-// (formats.md §6 の tick の手順 3 と再起動) ので、消すのが backoff の明けより後の tick になると attempt 2 が起動する。
+// 出してから attempt 1 を終わらせる。事前検査は tick の中でだけ撃ち、tick の外の再起動は直近の tick の結果で決める
+// (formats.md §6 の再起動) ので、skill を消したのを tick が見る前に backoff が明けると attempt 2 が起動する。
 
 func TestRetryOfATriggerThatLostItsSkillDoesNotHoldTheSlot(t *testing.T) {
 	// 並列上限 1。urgent で失敗して再起動を待つ issue#43 の skill が消えていれば、implement の issue#42 は起動する
