@@ -33,6 +33,8 @@ claude-dispatcher は、tracker (GitHub・GitLab・Jira Cloud) の issue と CL 
    - workspace の置き場 (`workspace.root`) が clone の中なら、`.gitignore` に足す。既定の `.claude-dispatcher/workspaces` は clone の中に入る。`setup` は `.gitignore` を書かない
 3. **試運転**: `claude-dispatcher loop --dry-run` が workflow 定義を検査し、起動するはずの作業対象と trigger を 1 件 1 行で示す。何も起動せず、何も書かない
 4. **導入を確かめる**: `claude-dispatcher doctor` が workflow 定義・issue 置き場・依存 CLI・事前検査を確かめ、利用者の約束に頼る宣言を警告する。Claude Code の settings (`permissions.allow`) に要りそうな entry も示すので、自分で足す (CLI は settings を書かない)
+   - 依存 CLI は、gh・glab・acli のどれか・claude・git (git は CL 側の trigger があるとき)
+   - 警告する宣言は、承認済みの CL への action と、絞り込みの無い CL 側の trigger
 5. **回す**: `claude-dispatcher loop` を撃つ (下の「回す・見る・止める」)
 
 workflow 定義に誤りがあれば、試運転・`loop` の起動・`doctor` が項目の位置を名指しして失敗する。直して 3 へ戻る。
@@ -51,9 +53,11 @@ workflow 定義に誤りがあれば、試運転・`loop` の起動・`doctor` �
 ### 見る
 
 - loop を撃った端末には、`status` と同じ内容と直近のログを描き直し続ける。stdout が端末でなければ、ログの行と worker の活動を 1 行ずつ追記する
+  - 直近のログは、tick・起動・終了・再起動・停止・error の行の直近 10 行。worker の最新の活動は `workers` の表の列で見る
+  - 色は stdout が端末のときだけ付く。環境変数 `NO_COLOR` を設定すれば付かない (`status` も同じ)
 - 別の端末からは `claude-dispatcher status` で見る。loop が書き出す状態 file を描くだけで、何も書かず、tracker の CLI も撃たない
   - 見出しの 1 行目は loop が生きているか (`loop 稼働中` / `loop 停止待ち` / `loop なし`)、2 行目は次の tick と直近の tick の結果
-  - `workers` に走っている worker と再起動待ちを、`要対処` に打ち切り・曖昧な CL・事前検査に落ちた trigger を解き方とともに並べる
+  - `workers` に走っている worker と再起動待ちを (段階・経過・最新の活動を含む)、`要対処` に打ち切り・曖昧な CL・事前検査に落ちた trigger を解き方とともに並べる
 - 置き場は `claude-dispatcher paths --json` で引く。何も書かず、tracker の CLI も撃たない
 
 | key | 中身 |
