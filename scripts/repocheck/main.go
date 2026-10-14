@@ -1,4 +1,4 @@
-// repocheck は、同じ値を 2 箇所以上に書いている設定の一致を検査する (方針は CONTRIBUTING.md の「gate」)。
+// repocheck は、同じ値を 2 箇所以上に書いている設定の一致と、ADR の番号の一意を検査する (方針は CONTRIBUTING.md の「gate」)。
 // network は使わない。ruleset は呼び出し側が gh で取った JSON を標準入力で渡す。
 //
 //	go run ./scripts/repocheck files     # repo の root で撃つ。pre-commit の hook が撃つ
@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"regexp"
 	"slices"
@@ -26,6 +27,7 @@ const (
 	releasePath      = ".github/workflows/release.yml"
 	contributingPath = "CONTRIBUTING.md"
 	goModPath        = "go.mod"
+	adrDir           = "docs/adr"
 
 	goreleaserAction = "goreleaser/goreleaser-action@"
 	// CONTRIBUTING.md の check 名の列挙がある行の目印。列挙はこの後から最初の「。」までの `...` で囲んだ名前
@@ -37,6 +39,9 @@ const (
 
 // goVersionForm は期待値が取る版の形 (patch まで書いた版)
 var goVersionForm = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
+
+// adrNumberForm は ADR の file 名の先頭の番号。この形で始まらない file (README 等) は番号の検査から外す
+var adrNumberForm = regexp.MustCompile(`^([0-9]{4})-`)
 
 func main() {
 	if len(os.Args) != 2 {
@@ -74,6 +79,8 @@ func fatal(err error) {
 
 type repoFiles struct {
 	ci, checks, release, contributing, goMod string
+	// adrNames は docs/adr の file 名 (directory の中身の名前だけ)
+	adrNames []string
 }
 
 func readRepoFiles() (repoFiles, error) {
@@ -88,7 +95,11 @@ func readRepoFiles() (repoFiles, error) {
 	f.release, errs[2] = read(releasePath)
 	f.contributing, errs[3] = read(contributingPath)
 	f.goMod, errs[4] = read(goModPath)
-	return f, errors.Join(errs[:]...)
+	entries, err := os.ReadDir(adrDir)
+	for _, e := range entries {
+		f.adrNames = append(f.adrNames, e.Name())
+	}
+	return f, errors.Join(append(errs[:], err)...)
 }
 
 func runRuleset() ([]string, error) {
@@ -148,7 +159,28 @@ func checkFiles(f repoFiles) ([]string, error) {
 			"利用者に求める版が上がってよいかを人が判断し、受け入れるなら CONTRIBUTING.md の「版の更新」の期待値を書き換える (worker は書き換えずに人へ返す)",
 			goVersion, expected))
 	}
+
+	problems = append(problems, duplicateADRNumbers(f.adrNames)...)
 	return problems, nil
+}
+
+// duplicateADRNumbers は、先頭の番号が重なる ADR の file 名を、番号ごとに 1 件 1 行で返す。
+// ADR を足す branch がそれぞれ次の空き番号を手で取るので、並行すると merge の後に番号が重なる
+func duplicateADRNumbers(names []string) []string {
+	byNumber := map[string][]string{}
+	for _, name := range names {
+		if m := adrNumberForm.FindStringSubmatch(name); m != nil {
+			byNumber[m[1]] = append(byNumber[m[1]], name)
+		}
+	}
+	var problems []string
+	for _, number := range slices.Sorted(maps.Keys(byNumber)) {
+		if dup := byNumber[number]; len(dup) > 1 {
+			problems = append(problems, fmt.Sprintf("%s の ADR の番号 %s が重なる: %s。後から足した方を次の空き番号へ振り直す",
+				adrDir, number, strings.Join(dup, " / ")))
+		}
+	}
+	return problems
 }
 
 // checkRuleset は ruleset の required status checks が check 名と一致するかを検査する。

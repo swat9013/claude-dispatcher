@@ -44,9 +44,11 @@ const contributing = "- PR に付く check 名: `checks / test (ubuntu-latest)`�
 
 const goMod = "module example.com/m\n\ngo 1.26.0\n\ntoolchain go1.27.2\n"
 
+var adrNames = []string{"0001-first.md", "0002-second.md", "0003-third.md"}
+
 // validFiles は、すべての検査が一致する file の組を返す。各テストは変える file だけを上書きする
 func validFiles() repoFiles {
-	return repoFiles{ci: ciYAML, checks: checksYAML, release: releaseYAML, contributing: contributing, goMod: goMod}
+	return repoFiles{ci: ciYAML, checks: checksYAML, release: releaseYAML, contributing: contributing, goMod: goMod, adrNames: adrNames}
 }
 
 var wantNames = []string{"checks / test (ubuntu-latest)", "checks / test (macos-latest)", "checks / lint", "checks / goreleaser-check"}
@@ -198,6 +200,26 @@ func TestCheckFiles_go_modにgo行が無ければエラーにする(t *testing.T
 
 	if _, err := checkFiles(files); err == nil {
 		t.Fatal("エラーにならなかった")
+	}
+}
+
+func TestCheckFiles_ADRの先頭4桁が重なれば番号とfile名を出して落とす(t *testing.T) {
+	files := validFiles()
+	files.adrNames = append(slices.Clone(adrNames), "0002-another.md")
+
+	problems, _ := checkFiles(files)
+
+	assertProblem(t, problems, "0002 が重なる: 0002-second.md / 0002-another.md")
+}
+
+func TestCheckFiles_ADRの先頭4桁が重ならなければ通す(t *testing.T) {
+	files := validFiles()
+	files.adrNames = append(slices.Clone(adrNames), "0004-fourth.md", "README.md")
+
+	problems, err := checkFiles(files)
+
+	if err != nil || len(problems) != 0 {
+		t.Fatalf("got %q, %v", problems, err)
 	}
 }
 
