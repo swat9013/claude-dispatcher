@@ -5,7 +5,7 @@ import (
 )
 
 // progressLineLimit は、改行を含めてこれを超える行を type を見ずに progress と数える大きさ。1 行は頭のこの大きさまでだけを
-// 持って判定する (formats.md §6 の progress)。活動の行の上限 (activityLineLimit) とは別に決める
+// 持って判定する (formats.md §6 の progress)。活動の末尾の窓 (tailLimit) とは別に決める
 const progressLineLimit = 64 << 10
 
 // isProgress は stream-json の 1 行 (progressLineLimit 以下) が progress か (formats.md §6 の progress の表)。止まっていても

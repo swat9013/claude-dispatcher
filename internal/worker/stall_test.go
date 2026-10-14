@@ -133,16 +133,16 @@ func TestProgressDoesNotChangeTheActivity(t *testing.T) {
 	}
 }
 
-func TestProgressFollowedByMoreThan64KiBOfHeartbeatsInOneCheckResetsTheStallClock(t *testing.T) {
+func TestProgressPushedOutOfTheActivityTailStillResetsTheStallClock(t *testing.T) {
 	started := time.Now()
 	w, _ := stallClock(t, started, time.Minute)
 	read := `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/work/big.go"}}]}}` + "\n"
 
 	// 1 回の確認のあいだに、progress の後へ 64 KiB を超える heartbeat が続く
-	appendAt(t, w, read+strings.Repeat(heartbeat, progressLineLimit/len(heartbeat)+1), started.Add(50*time.Second))
+	appendAt(t, w, read+strings.Repeat(heartbeat, tailLimit/len(heartbeat)+1), started.Add(50*time.Second))
 
 	if got := w.sinceProgress(started.Add(70 * time.Second)); got != 20*time.Second {
-		t.Fatalf("progress が途絶えた時間 = %s, want heartbeat の前の tool_use で時計が戻って 20s", got)
+		t.Fatalf("progress が途絶えた時間 = %s, want 末尾の窓から押し出された tool_use で時計が戻って 20s", got)
 	}
 }
 

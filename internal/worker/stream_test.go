@@ -64,6 +64,37 @@ func TestALongLineWrittenAcrossChecksCountsAsProgressWhateverItsType(t *testing.
 	}
 }
 
+func TestALineHalfWrittenWhenTheStreamCouldNotBeReadIsJudgedWholeOnceItCanBeRead(t *testing.T) {
+	started := time.Now()
+	w, _ := stallClock(t, started, time.Minute)
+	line := text("分けて書く")
+	appendAt(t, w, line[:10], started.Add(10*time.Second))
+	restore := unreadableUntilRestored(t, w)
+	w.check(started.Add(20 * time.Second))
+	restore()
+	write(t, w, line[10:])
+
+	activity, changed := w.check(started.Add(30 * time.Second))
+
+	if !changed || activity != "分けて書く" {
+		t.Fatalf("活動 = %q, %v; want 読めなかった前後に分けて書かれた行を 1 行として 分けて書く", activity, changed)
+	}
+}
+
+func TestAHalfWrittenLineIsDroppedWhenTheStreamIsReplaced(t *testing.T) {
+	started := time.Now()
+	w, _ := stallClock(t, started, time.Minute)
+	// 書きかけの頭は置き換え後の file より大きいので、縮んだとみなせる
+	appendAt(t, w, text(strings.Repeat("前", 100))[:200], started.Add(10*time.Second))
+	replaceWith(t, w, text("後"))
+
+	activity, changed := w.check(started.Add(20 * time.Second))
+
+	if !changed || activity != "後" {
+		t.Fatalf("活動 = %q, %v; want 置き換え前の書きかけの頭を捨てて 後", activity, changed)
+	}
+}
+
 // longLineSize は計測で小分けに書く 1 行の大きさ、piece は 1 回に書く大きさ
 const (
 	longLineSize = 4 << 20

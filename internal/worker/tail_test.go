@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// 活動として数える最新の完結した行の探し方 (formats.md §6 の活動)。
+// 活動として数える最新の完結した行の探し方。
 
 // streamFile は content を書いた stream の file を開く。
 func streamFile(t *testing.T, content string) *os.File {
@@ -76,27 +76,18 @@ func TestActivityStaysWhenOnlyUncountedLinesFollow(t *testing.T) {
 	}
 }
 
-func TestActivityCountsALineOfExactly64KiB(t *testing.T) {
-	long := text(strings.Repeat("x", activityLineLimit-len(text(""))))
+func TestActivityFindsALineThatJustFitsTheTail(t *testing.T) {
+	long := text(strings.Repeat("x", tailLimit-len(text(""))))
 
 	if summary, ok := summarizeAfter(t, "head\n"+long, 0); !ok || !strings.HasPrefix(summary, "xxx") {
-		t.Fatalf("改行を含めてちょうど 64 KiB の行を数えない (長さ %d)", len(long))
+		t.Fatalf("読んだ範囲に収まる行を数えない (長さ %d)", len(long))
 	}
 }
 
-func TestActivitySkipsALineLongerThan64KiB(t *testing.T) {
-	head := text("head")
-	long := text(strings.Repeat("x", activityLineLimit))
+func TestActivitySkipsALineLongerThanTheTail(t *testing.T) {
+	long := text(strings.Repeat("x", tailLimit))
 
-	if summary, ok := summarizeAfter(t, head+long, int64(len(head))); ok {
-		t.Fatalf("64 KiB を超える行を数えた: %q", summary)
-	}
-}
-
-func TestActivityLooksBackPastALineLongerThan64KiB(t *testing.T) {
-	long := text(strings.Repeat("x", activityLineLimit))
-
-	if summary, ok := summarizeAfter(t, text("head")+long, 0); !ok || summary != "head" {
-		t.Fatalf("活動 = %q, %v; want 64 KiB を超える行を飛ばして head", summary, ok)
+	if summary, ok := summarizeAfter(t, text("head")+long, 0); ok {
+		t.Fatalf("読んだ範囲に収まらない行を数えた: %q", summary)
 	}
 }

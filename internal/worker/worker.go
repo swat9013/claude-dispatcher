@@ -211,7 +211,7 @@ func sessionArgs(job Job) []string {
 }
 
 // streamWatch は stream の file を確かめ、活動と、progress を最後に見た時刻 (stall の検知に使う) を追う (formats.md §6)。
-// 活動と progress は別々に読む。活動の表示を変えても stall の判定は変わらない。
+// 1 回の読み出しから、活動と progress を別々の表で判定する。活動の表示を変えても stall の判定は変わらない。
 type streamWatch struct {
 	// path は stream の file の path。大きさも中身も path で確かめる (置き換えを縮みとして見る)
 	path string
@@ -230,7 +230,7 @@ type streamWatch struct {
 
 // newStreamWatch は、stream の file の offset より後 (今の attempt が書く行) を started から見始める streamWatch。
 func newStreamWatch(path string, offset int64, started time.Time, workspace string) *streamWatch {
-	return &streamWatch{path: path, lines: newLineReader(offset), started: started, progressed: started, workspace: workspace}
+	return &streamWatch{path: path, lines: newLineReader(path, offset), started: started, progressed: started, workspace: workspace}
 }
 
 // check は now の時点で stream の file を確かめる。前の確認から書かれた行に progress があれば stall の時計を now に戻し、
@@ -242,14 +242,17 @@ func (w *streamWatch) check(now time.Time) (activity string, changed bool) {
 		return w.unreadable(err)
 	}
 	size := info.Size()
-	if size == w.lines.size && w.readError == "" {
+	if w.lines.unchanged(size) && w.readError == "" {
 		return "", false
 	}
-	// 前の確認から完結した行を古い順に見る。活動は数える最後の行
+	// 前の確認から完結した行を古い順に見る。活動は file の末尾に収まる行のうち、数える最後の行
 	var found bool
-	err = w.lines.readTo(w.path, size, func(head []byte, length int64) {
+	err = w.lines.readTo(size, func(head []byte, start, length int64) {
 		found = found || countsAsProgress(head, length)
-		if summary, ok := activityOf(head, length, w.workspace); ok {
+		if !inTail(start, size) {
+			return
+		}
+		if summary, ok := Summarize(head, w.workspace); ok {
 			activity, changed = summary, true
 		}
 	})

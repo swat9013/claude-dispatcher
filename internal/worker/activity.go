@@ -12,8 +12,8 @@ import (
 // summaryLimit は要約の文字数の上限
 const summaryLimit = 80
 
-// activityLineLimit は活動として数える行の大きさの上限 (改行を含む)。これより長い行は活動として数えない (formats.md §6)
-const activityLineLimit = 64 << 10
+// tailLimit は活動として数える最新の完結した行を探す、stream の file の末尾の大きさ。これより長い行は活動として数えない
+const tailLimit = 64 << 10
 
 // streamLine は stream-json の 1 行のうち、要約に使う項目。
 type streamLine struct {
@@ -122,11 +122,6 @@ func Summarize(line []byte, workspace string) (summary string, ok bool) {
 	return summary, true
 }
 
-// activityOf は完結した 1 行を活動として要約する。head は行の頭 (改行を含めて activityLineLimit 以上を持つ)、length は改行を
-// 含めた行の長さ。activityLineLimit より長い行と、Summarize が数えない行は ok が false。
-func activityOf(head []byte, length int64, workspace string) (summary string, ok bool) {
-	if length > activityLineLimit {
-		return "", false
-	}
-	return Summarize(head, workspace)
-}
+// inTail は start で始まる行が、大きさ size の stream の file の末尾 tailLimit に収まるか。活動は末尾に収まる行からだけ
+// 取る (formats.md §6)。
+func inTail(start, size int64) bool { return start >= size-tailLimit }
