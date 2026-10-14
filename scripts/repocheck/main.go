@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -24,11 +25,17 @@ const (
 	checksPath       = ".github/workflows/checks.yml"
 	releasePath      = ".github/workflows/release.yml"
 	contributingPath = "CONTRIBUTING.md"
+	goModPath        = "go.mod"
 
 	goreleaserAction = "goreleaser/goreleaser-action@"
 	// CONTRIBUTING.md の check 名の列挙がある行の目印。列挙はこの後から最初の「。」までの `...` で囲んだ名前
 	checkNamesMarker = "PR に付く check 名:"
+	// CONTRIBUTING.md の go.mod の `go` 行の期待値の目印。期待値はこの直後の `...` で囲んだ版
+	goVersionMarker = "期待値: `"
 )
+
+// goVersionForm は go.mod の `go` 行と期待値が取る版の形 (patch まで書いた版)
+var goVersionForm = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
 
 func main() {
 	if len(os.Args) != 2 {
@@ -65,7 +72,7 @@ func fatal(err error) {
 }
 
 type repoFiles struct {
-	ci, checks, release, contributing string
+	ci, checks, release, contributing, goMod string
 }
 
 func readRepoFiles() (repoFiles, error) {
@@ -74,11 +81,12 @@ func readRepoFiles() (repoFiles, error) {
 		return string(b), err
 	}
 	var f repoFiles
-	var errs [4]error
+	var errs [5]error
 	f.ci, errs[0] = read(ciPath)
 	f.checks, errs[1] = read(checksPath)
 	f.release, errs[2] = read(releasePath)
 	f.contributing, errs[3] = read(contributingPath)
+	f.goMod, errs[4] = read(goModPath)
 	return f, errors.Join(errs[:]...)
 }
 
@@ -125,6 +133,20 @@ func checkFiles(f repoFiles) ([]string, error) {
 		return nil, fmt.Errorf("%s: %w", contributingPath, err)
 	}
 	problems = append(problems, setDiff(names, listed, fmt.Sprintf("%s の check 名の列挙", contributingPath))...)
+
+	goVersion, err := goDirective(f.goMod)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", goModPath, err)
+	}
+	expected, err := expectedGoVersion(f.contributing)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", contributingPath, err)
+	}
+	if goVersion != expected {
+		problems = append(problems, fmt.Sprintf("go.mod の `go` 行 (`%s`) が CONTRIBUTING.md の期待値 (`%s`) と違う。"+
+			"利用者に求める版が上がってよいかを人が判断し、受け入れるなら CONTRIBUTING.md の「版の更新」の期待値を書き換える (worker は書き換えずに人へ返す)",
+			goVersion, expected))
+	}
 	return problems, nil
 }
 
@@ -313,4 +335,34 @@ func listedCheckNames(src string) ([]string, error) {
 		}
 	}
 	return names, nil
+}
+
+// goDirective は go.mod の `go` 行の版を返す。`go` 行は block に入らない 1 行の directive で、後ろに // のコメントが付きうる
+func goDirective(src string) (string, error) {
+	for line := range strings.Lines(src) {
+		line, _, _ = strings.Cut(line, "//")
+		fields := strings.Fields(line)
+		if len(fields) == 0 || fields[0] != "go" {
+			continue
+		}
+		if len(fields) != 2 || !goVersionForm.MatchString(fields[1]) {
+			return "", fmt.Errorf("`go` 行の版を読めない: %q", strings.TrimSpace(line))
+		}
+		return fields[1], nil
+	}
+	return "", errors.New("`go` 行が無い")
+}
+
+// expectedGoVersion は CONTRIBUTING.md の go.mod の `go` 行の期待値を返す。期待値は「期待値: 」の直後の、
+// バッククォートで囲んだ版。目印が無いか、版の形でなければエラーにする
+func expectedGoVersion(src string) (string, error) {
+	_, after, ok := strings.Cut(src, goVersionMarker)
+	if !ok {
+		return "", fmt.Errorf("%q の行が無い", goVersionMarker)
+	}
+	version, _, ok := strings.Cut(after, "`")
+	if !ok || !goVersionForm.MatchString(version) {
+		return "", fmt.Errorf("%q の後の版を読めない", goVersionMarker)
+	}
+	return version, nil
 }
