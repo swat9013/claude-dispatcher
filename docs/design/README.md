@@ -11,7 +11,7 @@
 | [`domain.puml`](domain.puml) | ドメインモデル図。entity・集約・多重度・不変条件と、各 entity の正本の持ち主 (外部 store / loop の記憶 / CLI の disk)。描画結果は `domain.svg` |
 | [`statechart.puml`](statechart.puml) | claim の状態機械図。claim の段階と打ち切りが、どの出来事でどう遷移するかと、意図した未定義の組み合わせの理由。描画結果は `statechart.svg` |
 | [`formats.md`](formats.md) | 外から観測できる形式。black-box テストの参照先 |
-| [`internal/guide/guide.md`](../../internal/guide/guide.md) | 利用者のセッションへ出す案内。workflow 定義の書き方の正本で、action が守る約束 (`system.md` §7) と導入の流れ (`usecases.md` の UC-5) を利用者の語で添える。binary に埋め込み、`claude-dispatcher guide` が出す (ADR 0012)。本ディレクトリの外に置くのは embed のため |
+| [`internal/guide/guide.md`](../../internal/guide/guide.md) | 利用者のセッションへ出す案内。workflow 定義の書き方と、利用者向けの導入・運用の手順 (導入の流れ・回す・見る・止める・action が守る約束) の正本。後者は `system.md` §7 と `usecases.md` の UC-5・UC-6 を利用者の語で書く。binary に埋め込み、`claude-dispatcher guide` が出す (ADR 0012)。本ディレクトリの外に置くのは embed のため |
 
 用語は [`CONTEXT.md`](../../CONTEXT.md)。
 
@@ -27,6 +27,9 @@
 | claim の段階と遷移 (どの段階でどの出来事にどの遷移があるか) | `statechart.puml` (直したら `statechart.svg` を描き直し、下の網羅検査を通し直す)。遷移の条件と効果を決める規則は `system.md` §7 |
 | 外から観測できる形式 | `formats.md` |
 | workflow 定義の書き方 (項目・述語・template・何が誤りになるか・事前検査がどこを探すか) | `internal/guide/guide.md` (検査で CLI が何を出すかは `formats.md` §2.8・§2.9) |
+| 利用者向けの導入の流れ・loop の回し方と見方と止め方・action が守る約束 | `internal/guide/guide.md` (仕組みの規則は `system.md` §7、ユースケースは `usecases.md` の UC-5・UC-6 が正本で、案内はそれを利用者の語で書く) |
+
+`system.md` §7・`usecases.md` の UC-5・UC-6 を直して、案内の「導入の流れ」「回す・見る・止める」「action が守る約束」に書いた振る舞いが変わるなら、同じ CL で案内も直す。
 
 振る舞いの変わらないリファクタリング・bug fix・実装内部だけの変更は先に直さなくてよい。迷ったら先に直す。決定を覆すときは ADR を新しく起こす (既存 ADR の本文は書き換えない)。
 
