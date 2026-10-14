@@ -314,7 +314,6 @@ func TestRetryWaitingForAFreeSlotDoesNotAdvanceTheAttempt(t *testing.T) {
 		{ArgsContain: []string{"issue #43"}, Stdout: `{"type":"result"}` + "\n", ReleaseFile: s.releaseFile()},
 		{Stdout: `{"type":"result"}` + "\n", ReleaseFile: s.mark("never")}, // #42 は never を書くまで走り、書いたら当たったまま終わる
 	})
-	s.t.Cleanup(func() { _ = os.WriteFile(s.releaseFile(), nil, 0o644); _ = os.WriteFile(s.mark("never"), nil, 0o644) })
 	s.startLoop()
 	s.waitEvents("start", 2)
 	s.writeWorkflowWithCommands(s.workerWorkflow(fastRetry + "  max_concurrent: 1\n"))

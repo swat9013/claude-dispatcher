@@ -294,9 +294,15 @@ func (s *sandbox) respond(name string, r stubwire.Rule) {
 	s.respondAll(name, []stubwire.Rule{r})
 }
 
-// respondAll は name の stub の応答 rule を rules にする。先頭から見て最初に当たった rule で応答する。
+// respondAll は name の stub の応答 rule を rules にする。先頭から見て最初に当たった rule で応答する。release を待つ
+// rule は、テストの後片付けで release して、テストが先に終わっても stub を居残らせない。
 func (s *sandbox) respondAll(name string, rules []stubwire.Rule) {
 	s.t.Helper()
+	for _, r := range rules {
+		if r.ReleaseFile != "" {
+			s.t.Cleanup(func() { _ = os.WriteFile(r.ReleaseFile, nil, 0o644) })
+		}
+	}
 	s.rules[name] = rules
 	raw, err := json.Marshal(s.rules[name])
 	if err != nil {

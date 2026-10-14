@@ -2,6 +2,7 @@ package blackbox_test
 
 import (
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -75,8 +76,12 @@ func TestTriggerThatLosesItsLeadingSkillIsLeftOutOfTheEvaluation(t *testing.T) {
 	s.waitStatus("起動しない trigger urgent: action の先頭の /urgent が見つからない")
 }
 
+// 「skill を失った trigger の retry」のテストは、skill を attempt 1 が走っている間に消し、tick が事前検査に落ちたのを
+// 出してから attempt 1 を終わらせる。事前検査は tick の中でだけ撃ち、tick の外の再起動は直近の tick の結果で決める
+// (formats.md §6 の再起動) ので、skill を消したのを tick が見る前に backoff が明けると attempt 2 が起動する。
+
 func TestRetryOfATriggerThatLostItsSkillDoesNotHoldTheSlot(t *testing.T) {
-	// 並列上限 1。urgent で失敗して再起動を待つ issue#43 の skill が消えても、implement の issue#42 は起動する
+	// 並列上限 1。urgent で失敗して再起動を待つ issue#43 の skill が消えていれば、implement の issue#42 は起動する
 	s := newSandbox(t)
 	s.writeWorkflowWithCommands(strings.Replace(s.workerWorkflow(fastRetry), "triggers:\n", `triggers:
   - name: urgent
@@ -87,17 +92,21 @@ func TestRetryOfATriggerThatLostItsSkillDoesNotHoldTheSlot(t *testing.T) {
 	urgent := readyIssue(43)
 	urgent.labels = append(urgent.labels, "urgent")
 	s.setIssues(urgent)
+	// implement の worker は s.releaseFile() で待たせるので、urgent の worker は別の file で終わらせる
+	urgentRelease := filepath.Join(s.root, "release-urgent")
 	s.respondAll("claude", []stubwire.Rule{
-		{ArgsContain: []string{"/urgent"}, Stdout: `{"type":"result"}` + "\n", Exit: 1},
+		{ArgsContain: []string{"/urgent"}, Stdout: `{"type":"result"}` + "\n", Exit: 1, ReleaseFile: urgentRelease},
 		{Stdout: `{"type":"result"}` + "\n", ReleaseFile: s.releaseFile()},
 	})
 	loop := s.startLoop()
-	s.waitEvents("retry", 1)
-
+	s.waitEvents("start", 1)
 	if err := os.Remove(s.command("urgent")); err != nil {
 		t.Fatal(err)
 	}
 	s.setIssues(readyIssue(42), urgent)
+	loop.waitForOutput(regexp.MustCompile(`起動しない trigger: urgent`))
+
+	mustWrite(t, urgentRelease, "")
 
 	loop.waitForOutput(regexp.MustCompile(`起動 issue#42 \(implement`))
 	s.waitStatusRow("issue#43", "urgent", "1", "waiting_retry")
@@ -107,13 +116,15 @@ func TestRetryOfATriggerThatLostItsSkillIsReleasedWhenTheIssueCloses(t *testing.
 	s := newSandbox(t)
 	s.writeWorkflowWithCommands(s.workerWorkflow(fastRetry))
 	s.setIssues(readyIssue(42))
-	s.onClaude(stubwire.Rule{})
+	s.onClaude(stubwire.Rule{ReleaseFile: s.releaseFile()})
 	loop := s.startLoop()
-	s.waitEvents("retry", 1)
+	s.waitEvents("start", 1)
 	if err := os.Remove(s.command("implement")); err != nil {
 		t.Fatal(err)
 	}
 	loop.waitForOutput(regexp.MustCompile(`起動しない trigger: implement`))
+	s.release()
+	s.waitEvents("retry", 1)
 	closed := readyIssue(42)
 	closed.closed = true
 
