@@ -94,7 +94,6 @@ func TestRetryOfATriggerThatLostItsSkillDoesNotHoldTheSlot(t *testing.T) {
 	s.setIssues(urgent)
 	// implement の worker は s.releaseFile() で待たせるので、urgent の worker は別の file で終わらせる
 	urgentRelease := filepath.Join(s.root, "release-urgent")
-	t.Cleanup(func() { _ = os.WriteFile(urgentRelease, nil, 0o644) })
 	s.respondAll("claude", []stubwire.Rule{
 		{ArgsContain: []string{"/urgent"}, Stdout: `{"type":"result"}` + "\n", Exit: 1, ReleaseFile: urgentRelease},
 		{Stdout: `{"type":"result"}` + "\n", ReleaseFile: s.releaseFile()},

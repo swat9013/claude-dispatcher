@@ -52,13 +52,9 @@ func (s *sandbox) workspace(number int) string {
 	return filepath.Join(s.clone, ".claude-dispatcher", "workspaces", "issue-"+strconv.Itoa(number))
 }
 
-// onClaude は claude の stub の応答を r にする。stdout は stream-json の 1 行を既定で出す。release を待つ stub は、
-// テストの後片付けで release して、テストが先に終わっても居残らせない。
+// onClaude は claude の stub の応答を r にする。stdout は stream-json の 1 行を既定で出す。
 func (s *sandbox) onClaude(r stubwire.Rule) {
 	s.t.Helper()
-	if r.ReleaseFile != "" {
-		s.t.Cleanup(func() { _ = os.WriteFile(r.ReleaseFile, nil, 0o644) })
-	}
 	if r.Stdout == "" {
 		r.Stdout = `{"type":"result","subtype":"success"}` + "\n"
 	}
