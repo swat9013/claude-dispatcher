@@ -115,6 +115,8 @@ type Provider struct {
 	ParseRepo func(string) (string, error)
 	// NewPlace は Host と ParseRepo を通った host と repo から置き場を作る (host を書けない種類は "")
 	NewPlace func(host, repo string) Place
+	// scopeKey は issue 置き場の scope key を置き場から決める (ScopeKey)
+	scopeKey func(Place) string
 	// Tracker は issue 置き場の役割。どの種類も持つ
 	Tracker TrackerRole
 	// CLHost は CL 置き場の役割。持たない種類は nil (CL 置き場は cl: で別の種類を宣言する)
@@ -276,12 +278,31 @@ type Place struct {
 // String は置き場の表示名 (github は `owner/name`、gitlab は `<host>/<path>`、jira は `<site>/<project key>`)。
 func (p Place) String() string { return p.name }
 
+// ScopeKey は、この provider が issue 置き場の役割を担う置き場 place の scope key (system.md §13)。部品を組まずに得られる。
+// tracker ごとの粒度は provider の外に出さない。
+func (p Provider) ScopeKey(place Place) string { return p.scopeKey(place) }
+
+// Runner は CLI を 1 回撃ち、stdout を返す (github・gitlab・jira の Runner と同じ形)。失敗は *proc.Error。
+type Runner interface {
+	Run(args ...string) ([]byte, error)
+}
+
 // Runtime は部品が撃つ CLI の実行環境。
 type Runtime struct {
 	// Env は CLI に渡す環境変数 (PATH を解決した後のもの)
 	Env []string
 	// Timeout は CLI の 1 回の呼び出しの上限
 	Timeout time.Duration
+	// Runner は撃つ CLI の名前と Env から Runner を作る。nil なら実物の CLI を撃つ。テストが stub を差し込む口
+	Runner func(command string, env []string) Runner
+}
+
+// runner は command を撃つ Runner。Runtime.Runner が無ければ実物 real。
+func (rt Runtime) runner(command string, real Runner) Runner {
+	if rt.Runner == nil {
+		return real
+	}
+	return rt.Runner(command, rt.Env)
 }
 
 // Setting は workflow 定義のうち、部品の組み立てに要るもの。

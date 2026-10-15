@@ -29,6 +29,7 @@ var providers = []Provider{
 			r := mustParse(github.ParseRepo, repo)
 			return Place{name: r.String(), value: r}
 		},
+		scopeKey: func(p Place) string { return github.ScopeKey(p.value.(github.Repo)) },
 		Tracker: TrackerRole{
 			declared: Declarations{
 				Supports: []Feature{Author, Milestone, Blocked},
@@ -47,7 +48,7 @@ var providers = []Provider{
 			},
 		},
 		Build: func(rt Runtime, s Setting) Parts {
-			store := github.NewStore(github.Exec{Env: rt.Env, Timeout: rt.Timeout}, s.Place.value.(github.Repo))
+			store := github.NewStore(rt.runner("gh", github.Exec{Env: rt.Env, Timeout: rt.Timeout}), s.Place.value.(github.Repo))
 			return Parts{Issues: store, CLs: store}
 		},
 		Setup: Setup{
@@ -68,6 +69,7 @@ var providers = []Provider{
 			p := gitlab.Project{Host: host, Path: repo}
 			return Place{name: p.String(), value: p}
 		},
+		scopeKey: func(p Place) string { return gitlab.ScopeKey(p.value.(gitlab.Project)) },
 		Tracker: TrackerRole{
 			declared: Declarations{
 				Supports: []Feature{Author, Milestone},
@@ -93,7 +95,7 @@ var providers = []Provider{
 			},
 		},
 		Build: func(rt Runtime, s Setting) Parts {
-			store := gitlab.NewStore(gitlab.Exec{Env: rt.Env, Timeout: rt.Timeout}, s.Place.value.(gitlab.Project))
+			store := gitlab.NewStore(rt.runner("glab", gitlab.Exec{Env: rt.Env, Timeout: rt.Timeout}), s.Place.value.(gitlab.Project))
 			return Parts{Issues: store, CLs: store}
 		},
 		Setup: Setup{
@@ -116,6 +118,7 @@ var providers = []Provider{
 			p := jira.Project{Site: host, Key: repo}
 			return Place{name: p.String(), value: p}
 		},
+		scopeKey: func(p Place) string { return jira.ScopeKey(p.value.(jira.Project)) },
 		Tracker: TrackerRole{
 			declared: Declarations{
 				Supports: []Feature{CLPlace, Blocked, Status, Type},
@@ -130,7 +133,7 @@ var providers = []Provider{
 			Settings:    []string{"Bash(acli jira workitem:*)"},
 		},
 		Build: func(rt Runtime, s Setting) Parts {
-			store := jira.NewStore(jira.Exec{Env: rt.Env, Timeout: rt.Timeout}, s.Place.value.(jira.Project), s.Triggers)
+			store := jira.NewStore(rt.runner("acli", jira.Exec{Env: rt.Env, Timeout: rt.Timeout}), s.Place.value.(jira.Project), s.Triggers)
 			return Parts{Issues: store, Confirm: func() error { return store.Confirm(jira.NamesOf(s.Triggers)) }}
 		},
 		Setup: Setup{

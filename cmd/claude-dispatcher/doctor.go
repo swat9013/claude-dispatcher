@@ -9,6 +9,7 @@ import (
 
 	"github.com/swat9013/claude-dispatcher/internal/deps"
 	"github.com/swat9013/claude-dispatcher/internal/loop"
+	"github.com/swat9013/claude-dispatcher/internal/places"
 	"github.com/swat9013/claude-dispatcher/internal/printable"
 	"github.com/swat9013/claude-dispatcher/internal/provider"
 	"github.com/swat9013/claude-dispatcher/internal/target"
@@ -62,7 +63,7 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 // checkStore は issue 置き場を読めるかを確かめる。確認の手順を持つ種類は loop の起動時と同じ確認 (formats.md §6) を通し、
 // workflow 定義が書いた名前のうち実在しないものを 1 つ 1 行で名指しする。cl: の CL 置き場は checkCLPlace が確かめる。
 func checkStore(e environment, def workflow.Definition, stdout io.Writer) bool {
-	if err := e.confirmIssuePlace(def); err != nil {
+	if err := e.places(def).ConfirmIssues(); err != nil {
 		var unknown *target.UnknownNames
 		if errors.As(err, &unknown) {
 			for _, p := range unknown.Problems {
@@ -73,7 +74,7 @@ func checkStore(e environment, def workflow.Definition, stdout io.Writer) bool {
 		fmt.Fprintf(stdout, "NG   issue 置き場 %s: %s\n", def.Tracker.Place, printable.Line(err.Error()))
 		return false
 	}
-	store := e.store(def)
+	store := e.places(def).Store()
 	var err error
 	if _, _, separate := def.SeparateCLHost(); separate {
 		// CL は別の置き場にあり、checkCLPlace の行で確かめる
@@ -90,7 +91,7 @@ func checkCLPlace(e environment, def workflow.Definition, stdout io.Writer) bool
 	if !ok {
 		return true
 	}
-	return placeLine(stdout, "CL 置き場", place, e.readSeparateCLs(def))
+	return placeLine(stdout, "CL 置き場", place, e.places(def).ConfirmCLs())
 }
 
 // placeLine は置き場を読んだ結果 err を、name の置き場の 1 行に出す。処理を続けられる失敗 (*target.NonFatal) は、置き場を
@@ -112,7 +113,7 @@ func placeLine(stdout io.Writer, name string, place provider.Place, err error) b
 // checkCommands は、loop の起動時と同じく依存 CLI を解決できるかを確かめる (formats.md §6)。
 func checkCommands(e environment, def workflow.Definition, stdout io.Writer) bool {
 	ok := true
-	for _, name := range requiredCommands(def) {
+	for _, name := range places.RequiredCommands(def) {
 		if path, err := deps.Lookup(name, e.env); err != nil {
 			fmt.Fprintf(stdout, "NG   %s\n", printable.Line(err.Error()))
 			ok = false

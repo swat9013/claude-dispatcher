@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,6 +19,7 @@ import (
 	"github.com/swat9013/claude-dispatcher/internal/deps"
 	"github.com/swat9013/claude-dispatcher/internal/guide"
 	"github.com/swat9013/claude-dispatcher/internal/loop"
+	"github.com/swat9013/claude-dispatcher/internal/places"
 	"github.com/swat9013/claude-dispatcher/internal/precheck"
 	"github.com/swat9013/claude-dispatcher/internal/printable"
 	"github.com/swat9013/claude-dispatcher/internal/provider"
@@ -131,10 +131,10 @@ func commandEnvironment(commands ...string) environment {
 	return environment{env: deps.WithEnv(os.Environ(), map[string]string{"PATH": path})}
 }
 
-// definitionEnvironment は、workflow 定義で loop・試運転・doctor が撃つ依存 CLI (置き場の CLI・claude.command・git) を
-// PATH で解決できるようにした環境。git は CL 側の trigger と、loop の PATH を継ぐ worker と hooks が撃つ。
+// definitionEnvironment は、workflow 定義で loop・試運転・doctor が撃ちうる依存 CLI (places.Commands) を PATH で解決
+// できるようにした環境。
 func definitionEnvironment(def workflow.Definition) environment {
-	return commandEnvironment(append(placeCommands(def), def.Claude.Command, "git")...)
+	return commandEnvironment(places.Commands(def)...)
 }
 
 func (e environment) getenv(key string) string { return deps.Getenv(e.env, key) }
@@ -147,88 +147,9 @@ func (e environment) runtime() provider.Runtime {
 	return provider.Runtime{Env: e.env, Timeout: commandTimeout}
 }
 
-// withToken は workflow 定義の tracker.token を、tracker の CLI が読む環境変数に置いた環境 (system.md §8)。
-// tracker.token が書かれていなければ e のまま。
-func (e environment) withToken(def workflow.Definition) environment {
-	return environment{env: def.Tracker.Provider().WithToken(e.env, def.Tracker.Token)}
-}
-
-// trackerParts は workflow 定義の tracker.kind の provider で置き場の部品を組み立てる。
-func (e environment) trackerParts(def workflow.Definition) provider.Parts {
-	return def.Tracker.Provider().Build(e.withToken(def).runtime(), provider.Setting{Place: def.Tracker.Place, Triggers: def.Triggers})
-}
-
-// separateCLs は cl: の CL 置き場の部品を、cl.kind の provider で組み立てる。cl: は token を持たず、CL 置き場の CLI 自身の
-// 認証を使う。
-// cl: が無ければ false。
-func (e environment) separateCLs(def workflow.Definition) (provider.CLStore, bool) {
-	p, place, ok := def.SeparateCLHost()
-	if !ok {
-		return nil, false
-	}
-	return p.Build(e.runtime(), provider.Setting{Place: place, Triggers: def.Triggers}).CLs, true
-}
-
-// store は loop が読む置き場。issue 置き場の部品は tracker.kind の provider から、CL 置き場の部品は cl: があれば cl.kind の
-// provider から組む (system.md §13)。
-func (e environment) store(def workflow.Definition) loop.Store {
-	parts := e.trackerParts(def)
-	cls := parts.CLs
-	if separate, ok := e.separateCLs(def); ok {
-		cls = separate
-	}
-	return loop.Store{Issues: parts.Issues, CLs: cls}
-}
-
-// confirmPlace は起動時の置き場の確認 (formats.md §6): issue 置き場の確認と、cl: の CL 置き場の確認。
-func (e environment) confirmPlace(def workflow.Definition) error {
-	if err := e.confirmIssuePlace(def); err != nil {
-		return err
-	}
-	err := e.readSeparateCLs(def)
-	var nonFatal *target.NonFatal
-	if errors.As(err, &nonFatal) {
-		// 一覧は読めた。補助の要求だけの失敗は確認を落とさない
-		return nil
-	}
-	return err
-}
-
-// confirmIssuePlace は起動時の issue 置き場の確認 (formats.md §6)。確認の手順を持たない種類は何もしない。
-func (e environment) confirmIssuePlace(def workflow.Definition) error {
-	if confirm := e.trackerParts(def).Confirm; confirm != nil {
-		return confirm()
-	}
-	return nil
-}
-
-// readSeparateCLs は cl: の CL 置き場の open な一覧を 1 回読む (formats.md §6 の CL 置き場の確認)。cl: が無ければ何もしない。
-func (e environment) readSeparateCLs(def workflow.Definition) error {
-	cls, ok := e.separateCLs(def)
-	if !ok {
-		return nil
-	}
-	_, err := cls.OpenCLs()
-	return err
-}
-
-// placeCommands は置き場の CLI: tracker の CLI と、cl: があれば CL 置き場の CLI。
-func placeCommands(def workflow.Definition) []string {
-	commands := []string{def.Tracker.Provider().Command}
-	if p, _, ok := def.SeparateCLHost(); ok {
-		commands = append(commands, p.Command)
-	}
-	return commands
-}
-
-// requiredCommands は loop が撃つ依存 CLI: 置き場の CLI と claude.command。CL 側の trigger があれば、claim の workspace の
-// branch を読むのに git も撃つ。
-func requiredCommands(def workflow.Definition) []string {
-	commands := append(placeCommands(def), def.Claude.Command)
-	if slices.Contains(def.Kinds(), target.KindCL) {
-		commands = append(commands, "git")
-	}
-	return commands
+// places は workflow 定義の置き場の組 (system.md §13)。tracker.token の渡し先は組が決める。
+func (e environment) places(def workflow.Definition) places.Places {
+	return places.New(def, e.runtime())
 }
 
 // precheck は workflow 定義の事前検査 (formats.md §2.9)。~/.claude は loop の環境の HOME から引く。
@@ -238,7 +159,7 @@ func (e environment) precheck(def workflow.Definition) []precheck.Problem {
 
 // stateDir は workflow 定義の scope key と、その state dir。
 func (e environment) stateDir(def workflow.Definition) (scopeKey, dir string) {
-	scopeKey = e.store(def).ScopeKey()
+	scopeKey = places.ScopeKey(def)
 	return scopeKey, state.Dir(state.Root(e.getenv), scopeKey)
 }
 
@@ -321,7 +242,7 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 	if opts.dryRun {
-		if err := e.confirmPlace(def); err != nil {
+		if err := e.places(def).Confirm(); err != nil {
 			fmt.Fprintln(stderr, err)
 			return failureExit(err)
 		}
@@ -329,13 +250,13 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 	}
 
 	// 起動時は人が画面の前にいるので、tick で落ちる前に依存 CLI を解決できることを確かめる (system.md §8)
-	for _, name := range requiredCommands(def) {
+	for _, name := range places.RequiredCommands(def) {
 		if _, err := deps.Lookup(name, e.env); err != nil {
 			fmt.Fprintln(stderr, err)
 			return exitFailed
 		}
 	}
-	if err := e.confirmPlace(def); err != nil {
+	if err := e.places(def).Confirm(); err != nil {
 		fmt.Fprintln(stderr, err)
 		return failureExit(err)
 	}
@@ -374,7 +295,7 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 		Load:       load,
 		Definition: def,
 		Precheck:   e.precheck,
-		Store:      e.store,
+		Store:      func(def workflow.Definition) loop.Store { return e.places(def).Store() },
 		Workspaces: func(def workflow.Definition) loop.Workspaces { return e.workspaces(def, hookLock) },
 		Launch: func(def workflow.Definition, job worker.Job, events chan<- worker.Event) loop.Worker {
 			return worker.Runner{Workspaces: e.workspaces(def, hookLock), Definition: def, StateDir: dir}.Start(job, events)
@@ -398,7 +319,7 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 // hookLock は loop が 1 つ持つ、after_create と before_remove を直列に撃つ lock。
 func (e environment) workspaces(def workflow.Definition, hookLock *sync.Mutex) workspace.Manager {
 	h := def.Hooks
-	return workspace.Manager{Root: def.WorkspaceRoot, Clone: def.Dir, Env: e.withToken(def).env, HookLock: hookLock, Hooks: workspace.Hooks{
+	return workspace.Manager{Root: def.WorkspaceRoot, Clone: def.Dir, Env: e.places(def).TokenEnv(), HookLock: hookLock, Hooks: workspace.Hooks{
 		AfterCreate: h.AfterCreate, BeforeRun: h.BeforeRun, AfterRun: h.AfterRun, BeforeRemove: h.BeforeRemove, Timeout: h.Timeout,
 	}}
 }
@@ -406,7 +327,7 @@ func (e environment) workspaces(def workflow.Definition, hookLock *sync.Mutex) w
 // dryRunOnce は試運転 (formats.md §5): snapshot を作って trigger を評価し、候補を loop の起動の直前と同じく 1 件ずつ
 // 読み直して、loop が起動する候補だけを 1 件 1 行で出す。候補を 1 件でも読み直せなければ、何も出さずに失敗する。何も書かない。
 func dryRunOnce(e environment, def workflow.Definition, stdout, stderr io.Writer) int {
-	store := e.store(def)
+	store := e.places(def).Store()
 	open, err := loop.OpenItems(store, def)
 	var nonFatal *target.NonFatal
 	switch {
