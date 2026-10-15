@@ -341,12 +341,21 @@ func (s Setup) TakesFlags() bool { return s.flags != "" }
 func (s Setup) Flags() string { return s.flags }
 
 // OwnsOrigin は cwd の clone の origin の host を、この種類の置き場と認めるか。
-func (s Setup) OwnsOrigin(host string) bool { return s.ownsOrigin != nil && s.ownsOrigin(host) }
+func (s Setup) OwnsOrigin(host string) bool { return s.DeclaresOrigin() && s.ownsOrigin(host) }
+
+// DeclaresOrigin は origin の host を認める宣言を持つか。持たない種類はどの host も認めない。
+func (s Setup) DeclaresOrigin() bool { return s.ownsOrigin != nil }
+
+// ReadsClone は cwd の clone から置き場を引けるか。引けない種類に CurrentPlace を撃てば panic する。
+func (s Setup) ReadsClone() bool { return s.currentPlace != nil }
+
+// WritesTemplate は雛形を書けるか。書けない種類に Template を撃てば panic する。
+func (s Setup) WritesTemplate() bool { return s.template != nil }
 
 // CurrentPlace は cwd の clone の置き場を CLI で引く。origin を認めない種類 (ForOrigin が返さない種類) に撃てば呼び出し側の
 // 誤りなので panic する。
 func (s Setup) CurrentPlace(rt Runtime) (Place, error) {
-	if s.currentPlace == nil {
+	if !s.ReadsClone() {
 		panic("この種類の provider は cwd の clone から置き場を引けない")
 	}
 	return s.currentPlace(rt)
@@ -356,7 +365,7 @@ func (s Setup) CurrentPlace(rt Runtime) (Place, error) {
 // だけが cl: に書く (持つ種類の CL 置き場は issue 置き場と同じ場所)。雛形を持たない種類に撃てば呼び出し側の誤りなので
 // panic する。
 func (s Setup) Template(issues Place, cl scaffold.CLHost) string {
-	if s.template == nil {
+	if !s.WritesTemplate() {
 		panic("この種類の provider は雛形を持たない")
 	}
 	return s.template(issues, cl)
