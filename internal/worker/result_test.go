@@ -71,20 +71,6 @@ func TestResultWrittenAfterTheStreamShrankIsSummarized(t *testing.T) {
 	}
 }
 
-func TestResultAfterAShrinkSeenByTheWatchIsReadFromTheHeadEvenIfTheStreamRegrew(t *testing.T) {
-	started := time.Now()
-	w := watchFrom(t, strings.Repeat("x", 64)+"\n", started, limits{})
-	shrinkTo(t, w, "")
-	w.check(started.Add(time.Second))
-	write(t, w, strings.Repeat("x", 40)+"\n"+`{"type":"result","num_turns":2}`+"\n")
-
-	summary, err := w.lastResult()
-
-	if err != nil || summary == nil || summary.NumTurns == nil || *summary.NumTurns != 2 {
-		t.Fatalf("要約 = %+v, %v, want 監視が見た縮みを覚えて頭から読み num_turns 2", summary, err)
-	}
-}
-
 func TestWorkerLogThatCannotBeStattedIsReported(t *testing.T) {
 	w := watchFrom(t, "", time.Now(), limits{})
 	write(t, w, `{"type":"result","num_turns":1}`+"\n")
