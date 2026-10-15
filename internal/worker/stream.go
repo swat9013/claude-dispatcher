@@ -134,20 +134,21 @@ func (w *streamWatch) stopReason(now time.Time) string {
 }
 
 // lastResult は attempt の最後の result の行を要約する (formats.md §4)。attempt 開始時の offset から読み、終了時の大きさが
-// その offset より小さければ (attempt の途中で縮んだ) 0 から読む。行の切り方は監視と同じで、要約は行全体を読む。
+// その offset より小さければ (attempt の途中で縮んだ) 0 から読む。監視が途中で縮みを見ていれば、その後に開始時の offset を
+// 超えて伸びていても 0 から読む (開始時の offset は縮んだ後の中身の途中を指す)。行の切り方は監視と同じで、要約は行全体を読む。
 func (w *streamWatch) lastResult() (*ResultSummary, error) {
 	info, err := w.file.Stat()
 	if err != nil {
 		return nil, err
 	}
 	from := w.origin
-	if info.Size() < from {
+	if info.Size() < from || w.lines.shrank {
 		from = 0
 	}
-	var last []byte
+	var last *resultItems
 	if err := newLineReader(from, math.MaxInt).readTo(w.file, info.Size(), func(line []byte, _, _ int64) {
-		if isResult(line) {
-			last = append(last[:0], line...)
+		if items, ok := parseResult(line); ok {
+			last = items
 		}
 	}); err != nil {
 		return nil, err
@@ -155,7 +156,7 @@ func (w *streamWatch) lastResult() (*ResultSummary, error) {
 	if last == nil {
 		return nil, nil
 	}
-	return summarizeResult(last)
+	return last.summarize()
 }
 
 // lineReader は stream を、確認をまたいで前に読み終えた offset から読み進め、完結した行 (改行で終わる行) を 1 行ずつ渡す。
@@ -168,11 +169,15 @@ type lineReader struct {
 	headLimit int
 	// chunk は読み出しに使う buffer。確認をまたいで使い回す
 	chunk []byte
+	// done は最後に読み終えた確認の offset。読めなかった確認は read を書きかけの行の頭へ戻すが、縮みはこれとも比べる
+	done int64
+	// shrank は一度でも縮みを見たか
+	shrank bool
 }
 
 // newLineReader は offset より後を読み、行の頭を headLimit まで持つ lineReader。
 func newLineReader(offset int64, headLimit int) *lineReader {
-	return &lineReader{read: offset, lineStart: offset, headLimit: headLimit, line: make([]byte, 0, min(headLimit, readChunk)),
+	return &lineReader{read: offset, lineStart: offset, done: offset, headLimit: headLimit, line: make([]byte, 0, min(headLimit, readChunk)),
 		chunk: make([]byte, readChunk)}
 }
 
@@ -181,14 +186,15 @@ func newLineReader(offset int64, headLimit int) *lineReader {
 // みなし、頭から読む。読めなければ、この呼び出しで読んだ分を進めずに error を返す (呼び出し側は、それまでに呼んだ each の結果を
 // 捨てる)。縮んだことは読めなくても覚えておく。
 func (r *lineReader) readTo(file io.ReaderAt, size int64, each func(head []byte, start, length int64)) error {
-	if size < r.read {
-		r.read, r.lineStart, r.line = 0, 0, r.line[:0]
+	if size < max(r.read, r.done) {
+		r.read, r.lineStart, r.line, r.done, r.shrank = 0, 0, r.line[:0], 0, true
 	}
 	before := r.lineStart
 	if err := r.readLines(file, size, each); err != nil {
 		r.read, r.lineStart, r.line = before, before, r.line[:0]
 		return err
 	}
+	r.done = r.read
 	return nil
 }
 
