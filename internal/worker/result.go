@@ -24,23 +24,17 @@ type resultItems struct {
 	PermissionDenials json.RawMessage `json:"permission_denials"`
 }
 
-// isResult は完結した行が type: result の行か。worker log は数 MB になり、ほとんどの行は result でないので、"result" を
-// 含む行だけを decode する。
-func isResult(line []byte) bool {
+// parseResult は完結した行が type: result の行なら、その項目を返す。worker log は数 MB になり、ほとんどの行は result で
+// ないので、"result" を含む行だけを decode する。
+func parseResult(line []byte) (*resultItems, bool) {
 	if !bytes.Contains(line, []byte(`"result"`)) {
-		return false
+		return nil, false
 	}
 	var items resultItems
-	return json.Unmarshal(line, &items) == nil && items.Type == "result"
-}
-
-// summarizeResult は result の行を要約する。
-func summarizeResult(line []byte) (*ResultSummary, error) {
-	var items resultItems
-	if err := json.Unmarshal(line, &items); err != nil {
-		return nil, err
+	if json.Unmarshal(line, &items) != nil || items.Type != "result" {
+		return nil, false
 	}
-	return items.summarize()
+	return &items, true
 }
 
 // summarize は result の行の項目を要約する。型の違う項目は要約に載せず、その理由を返す。

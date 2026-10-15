@@ -80,7 +80,7 @@ func watchFrom(t *testing.T, content string, started time.Time, l limits) *watch
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	f, err := openAppend(path, os.O_RDWR)
+	f, err := openStream(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,23 +113,23 @@ func shrinkTo(t *testing.T, w *watched, content string) {
 	write(t, w, content)
 }
 
-// unreadableFrom は worker log の offset from から先を読み出せなくし、元へ戻す関数を返す。from より前の行は each へ渡った
+// failReadsFrom は worker log の offset from から先を読み出せなくし、元へ戻す関数を返す。from より前の行は each へ渡った
 // 後に、読み出しが落ちる。
-func unreadableFrom(w *watched, from int64) (restore func()) {
+func failReadsFrom(w *watched, from int64) (restore func()) {
 	w.handle.readFails, w.handle.readFrom = true, from
 	return func() { w.handle.readFails = false }
 }
 
-// unreadable は worker log の中身を読み出せなくし (大きさは確かめられる)、元へ戻す関数を返す。
-func unreadable(w *watched) (restore func()) { return unreadableFrom(w, 0) }
+// failReads は worker log の中身を読み出せなくし (大きさは確かめられる)、元へ戻す関数を返す。
+func failReads(w *watched) (restore func()) { return failReadsFrom(w, 0) }
 
-// unstattable は worker log の大きさを確かめられなくし、元へ戻す関数を返す。
-func unstattable(w *watched) (restore func()) {
+// failStat は worker log の大きさを確かめられなくし、元へ戻す関数を返す。
+func failStat(w *watched) (restore func()) {
 	w.handle.statFails = true
 	return func() { w.handle.statFails = false }
 }
 
-func size(t *testing.T, w *watched) int64 {
+func logSize(t *testing.T, w *watched) int64 {
 	t.Helper()
 	info, err := w.handle.file.Stat()
 	if err != nil {
@@ -262,13 +262,13 @@ func TestStreamThatShrankAndCouldNotBeReadIsReadFromItsHeadAfterGrowingPastItsOl
 	started := time.Now()
 	w := stallClock(t, started, time.Minute)
 	appendAt(t, w, text(strings.Repeat("前", 50)), started.Add(10*time.Second))
-	old := size(t, w)
+	old := logSize(t, w)
 	shrinkTo(t, w, text("後"))
-	restore := unreadable(w)
+	restore := failReads(w)
 	w.check(started.Add(20 * time.Second))
 	restore()
 	// 読めるようになるまでに、縮む前の大きさを超えて伸びる。後に続くのは progress と数えない行だけ
-	for size(t, w) <= old {
+	for logSize(t, w) <= old {
 		write(t, w, heartbeat)
 	}
 
@@ -279,24 +279,57 @@ func TestStreamThatShrankAndCouldNotBeReadIsReadFromItsHeadAfterGrowingPastItsOl
 	}
 }
 
-func TestRenamingOrRemovingThePathDoesNotStopWatchingTheStream(t *testing.T) {
+func TestStreamThatShrankAfterAFailedReadOfAHalfWrittenLineIsReadFromItsHead(t *testing.T) {
+	started := time.Now()
+	w := stallClock(t, started, time.Minute)
+	appendAt(t, w, text("前の長い行"), started.Add(10*time.Second))
+	// 書きかけの行を読み終えてから、伸びた分の読み出しに落ちる
+	appendAt(t, w, text(strings.Repeat("前", 100))[:200], started.Add(20*time.Second))
+	write(t, w, "xxxxxxxxxx")
+	restore := failReads(w)
+	w.check(started.Add(30 * time.Second))
+	restore()
+	// 書きかけの行の頭より大きく、前に読み終えた offset より小さく縮む
+	shrinkTo(t, w, text("後")+text("後"))
+
+	activity, changed := w.check(started.Add(40 * time.Second))
+
+	if !changed || activity != "後" || w.sinceProgress(started.Add(40*time.Second)) != 0 {
+		t.Fatalf("活動 = %q, %v; want 前に読み終えた offset より縮んだので頭から読んで 後・0s", activity, changed)
+	}
+}
+
+func TestRenamingThePathDoesNotStopWatchingTheStream(t *testing.T) {
 	started := time.Now()
 	w := stallClock(t, started, time.Minute)
 	appendAt(t, w, text("前"), started.Add(10*time.Second))
 	if err := os.Rename(w.path, w.path+".moved"); err != nil {
 		t.Fatal(err)
 	}
-	appendAt(t, w, text("動かした後"), started.Add(20*time.Second))
-	if err := os.Remove(w.path + ".moved"); err != nil {
+	write(t, w, text("動かした後"))
+
+	activity, changed := w.check(started.Add(20 * time.Second))
+
+	if !changed || activity != "動かした後" || w.sinceProgress(started.Add(20*time.Second)) != 0 {
+		t.Fatalf("活動 = %q, %v, progress が途絶えた時間 %s; want path を動かしても fd の行を読んで 動かした後・0s",
+			activity, changed, w.sinceProgress(started.Add(20*time.Second)))
+	}
+}
+
+func TestRemovingThePathDoesNotStopWatchingTheStream(t *testing.T) {
+	started := time.Now()
+	w := stallClock(t, started, time.Minute)
+	appendAt(t, w, text("前"), started.Add(10*time.Second))
+	if err := os.Remove(w.path); err != nil {
 		t.Fatal(err)
 	}
 	write(t, w, text("消した後"))
 
-	activity, changed := w.check(started.Add(30 * time.Second))
+	activity, changed := w.check(started.Add(20 * time.Second))
 
-	if !changed || activity != "消した後" || w.sinceProgress(started.Add(30*time.Second)) != 0 {
-		t.Fatalf("活動 = %q, %v, progress が途絶えた時間 %s; want path を動かしても消しても fd の行を読んで 消した後・0s",
-			activity, changed, w.sinceProgress(started.Add(30*time.Second)))
+	if !changed || activity != "消した後" || w.sinceProgress(started.Add(20*time.Second)) != 0 {
+		t.Fatalf("活動 = %q, %v, progress が途絶えた時間 %s; want path を消しても fd の行を読んで 消した後・0s",
+			activity, changed, w.sinceProgress(started.Add(20*time.Second)))
 	}
 }
 
@@ -325,7 +358,7 @@ func TestStallClockDoesNotResetWhileTheStreamCannotBeRead(t *testing.T) {
 	w := stallClock(t, started, time.Minute)
 	appendAt(t, w, text("前"), started.Add(10*time.Second))
 	write(t, w, text("後"))
-	unreadable(w)
+	failReads(w)
 
 	w.check(started.Add(30 * time.Second))
 
@@ -339,7 +372,7 @@ func TestStallClockDoesNotResetWhileTheStreamCannotBeStatted(t *testing.T) {
 	w := stallClock(t, started, time.Minute)
 	appendAt(t, w, text("前"), started.Add(10*time.Second))
 	write(t, w, text("後"))
-	unstattable(w)
+	failStat(w)
 
 	w.check(started.Add(30 * time.Second))
 
@@ -352,7 +385,7 @@ func TestActivityTellsWhyTheStreamCannotBeRead(t *testing.T) {
 	started := time.Now()
 	w := stallClock(t, started, time.Minute)
 	write(t, w, text("後"))
-	unreadable(w)
+	failReads(w)
 
 	activity, changed := w.check(started.Add(10 * time.Second))
 
@@ -365,7 +398,7 @@ func TestProgressWrittenWhileTheStreamCouldNotBeReadResetsTheStallClockOnceItCan
 	started := time.Now()
 	w := stallClock(t, started, time.Minute)
 	write(t, w, text("後"))
-	restore := unstattable(w)
+	restore := failStat(w)
 	w.check(started.Add(10 * time.Second))
 	restore()
 
@@ -381,7 +414,7 @@ func TestStreamThatCouldNotBeReadIsReadAgainEvenWithoutGrowing(t *testing.T) {
 	started := time.Now()
 	w := stallClock(t, started, time.Minute)
 	appendAt(t, w, text("前の行")+text("前の行"), started.Add(10*time.Second))
-	restore := unreadable(w)
+	restore := failReads(w)
 	w.check(started.Add(20 * time.Second))
 	restore()
 
@@ -396,9 +429,9 @@ func TestStreamThatCouldNotBeReadIsReadAgainEvenWithoutGrowing(t *testing.T) {
 // 行から先を読めなくして、元へ戻す関数を返す。1 回の確認の中で、progress の行を読んだ後に読み出しが落ちる。
 func writeProgressThenUnreadable(t *testing.T, w *watched) (restore func()) {
 	t.Helper()
-	from := size(t, w) + int64(len(taskProgress))
+	from := logSize(t, w) + int64(len(taskProgress))
 	write(t, w, taskProgress+heartbeat)
-	return unreadableFrom(w, from)
+	return failReadsFrom(w, from)
 }
 
 func TestStallClockDoesNotResetWhenTheStreamBecomesUnreadablePartway(t *testing.T) {
@@ -443,7 +476,7 @@ func watchAt(t *testing.T, w *watched, ticks ...time.Time) (result Result, ended
 	out := make(chan outcome, 1)
 	run := &Run{stop: make(chan struct{})}
 	go func() {
-		result, ended := Runner{}.watch(make(chan error), run, w.streamWatch, tick)
+		result, ended := watch(make(chan error), run, w.streamWatch, tick)
 		out <- outcome{result, ended}
 	}()
 	for _, now := range ticks {
@@ -479,7 +512,7 @@ func TestWatchStopsAWorkerThatWritesOnlyHeartbeats(t *testing.T) {
 func TestWatchWaitsForTheStallTimeoutWhenTheStreamCannotBeStatted(t *testing.T) {
 	started := time.Now()
 	w := stallClock(t, started, time.Minute)
-	unstattable(w)
+	failStat(w)
 
 	_, _, returned := watchAt(t, w, started.Add(250*time.Millisecond), started.Add(59*time.Second))
 
@@ -491,7 +524,7 @@ func TestWatchWaitsForTheStallTimeoutWhenTheStreamCannotBeStatted(t *testing.T) 
 func TestWatchStallsWithTheReasonWhenTheStreamCannotBeStattedPastTheTimeout(t *testing.T) {
 	started := time.Now()
 	w := stallClock(t, started, time.Minute)
-	unstattable(w)
+	failStat(w)
 
 	result, _, returned := watchAt(t, w, started.Add(250*time.Millisecond), started.Add(61*time.Second))
 
@@ -503,7 +536,7 @@ func TestWatchStallsWithTheReasonWhenTheStreamCannotBeStattedPastTheTimeout(t *t
 func TestWatchStopsAtTheRunTimeoutWithoutWhyTheStreamCannotBeRead(t *testing.T) {
 	started := time.Now()
 	w := watchFrom(t, "", started, limits{stall: time.Hour, run: time.Minute})
-	unstattable(w)
+	failStat(w)
 
 	result, _, returned := watchAt(t, w, started.Add(250*time.Millisecond), started.Add(2*time.Minute))
 

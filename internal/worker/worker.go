@@ -163,15 +163,14 @@ func (r Runner) launch(job Job, run *Run, workspacePath string, started func(pid
 		return Result{Failure: err.Error()}
 	}
 	// stdout (stream-json) と stderr を別の file に追記する。stall は stdout に progress が書かれなくなったことで見る。
-	// claude に file をそのまま渡すので、loop が死んでも claude の出力は途切れない。stream は監視と要約が同じ fd で読むので、
-	// 読み書きで開く (formats.md §6)
+	// claude に file をそのまま渡すので、loop が死んでも claude の出力は途切れない
 	name := filepath.Join(r.StateDir, "workers", job.Item.Ref().FileName())
-	stream, err := openAppend(name+".log", os.O_RDWR)
+	stream, err := openStream(name + ".log")
 	if err != nil {
 		return Result{Failure: fmt.Sprintf("worker log を開けない: %v", err)}
 	}
 	defer stream.Close()
-	stderr, err := openAppend(name+".stderr.log", os.O_WRONLY)
+	stderr, err := openAppend(name + ".stderr.log")
 	if err != nil {
 		return Result{Failure: fmt.Sprintf("worker log を開けない: %v", err)}
 	}
@@ -235,7 +234,7 @@ func (r Runner) wait(cmd *exec.Cmd, run *Run, w *streamWatch) Result {
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	ticker := time.NewTicker(watchInterval)
-	result, ended := r.watch(done, run, w, ticker.C)
+	result, ended := watch(done, run, w, ticker.C)
 	ticker.Stop()
 	if ended {
 		return r.exited(cmd, Result{})
@@ -259,7 +258,7 @@ func (r Runner) wait(cmd *exec.Cmd, run *Run, w *streamWatch) Result {
 
 // watch は claude が終わるまで待つ (ended が true)。先に止める理由ができたら、その理由を持った result を返す。
 // ticks が届くたびに、その時刻で stream を確かめ、活動を更新し、確認が返した理由で止める。
-func (r Runner) watch(done <-chan error, run *Run, w *streamWatch, ticks <-chan time.Time) (result Result, ended bool) {
+func watch(done <-chan error, run *Run, w *streamWatch, ticks <-chan time.Time) (result Result, ended bool) {
 	for {
 		select {
 		case <-done:
@@ -327,8 +326,14 @@ func writeFile(file, content string) error {
 	return os.WriteFile(file, []byte(content), 0o644)
 }
 
-// openAppend は file を追記で開く。access は os.O_WRONLY か os.O_RDWR。
-func openAppend(file string, access int) (*os.File, error) {
+// openStream は stream の worker log を追記で開く。claude が書き、監視と要約が同じ fd で読むので、読み書きで開く
+// (formats.md §6)。
+func openStream(file string) (*os.File, error) { return openFile(file, os.O_RDWR) }
+
+// openAppend は file を書き込みだけの追記で開く。
+func openAppend(file string) (*os.File, error) { return openFile(file, os.O_WRONLY) }
+
+func openFile(file string, access int) (*os.File, error) {
 	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
 		return nil, err
 	}

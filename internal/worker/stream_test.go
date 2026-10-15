@@ -69,7 +69,7 @@ func TestALineHalfWrittenWhenTheStreamCouldNotBeReadIsJudgedWholeOnceItCanBeRead
 	w := stallClock(t, started, time.Minute)
 	line := text("分けて書く")
 	appendAt(t, w, line[:10], started.Add(10*time.Second))
-	restore := unreadable(w)
+	restore := failReads(w)
 	w.check(started.Add(20 * time.Second))
 	restore()
 	write(t, w, line[10:])
@@ -113,7 +113,7 @@ func BenchmarkCheckWhileALongLineIsWrittenInPieces(b *testing.B) {
 		if err := os.WriteFile(file, nil, 0o644); err != nil {
 			b.Fatal(err)
 		}
-		f, err := openAppend(file, os.O_RDWR)
+		f, err := openStream(file)
 		if err != nil {
 			b.Fatal(err)
 		}

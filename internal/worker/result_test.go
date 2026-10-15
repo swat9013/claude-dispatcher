@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -49,7 +50,7 @@ func TestResultLinesBeforeTheOffsetAreNotRead(t *testing.T) {
 }
 
 func TestResultLongerThanTheLineHeadIsReadWhole(t *testing.T) {
-	long := `{"type":"result","num_turns":4,"result":"` + pad(lineHeadLimit) + `"}` + "\n"
+	long := `{"type":"result","num_turns":4,"result":"` + strings.Repeat("x", lineHeadLimit) + `"}` + "\n"
 
 	summary, err := summarizeStream(t, "", long)
 
@@ -59,7 +60,7 @@ func TestResultLongerThanTheLineHeadIsReadWhole(t *testing.T) {
 }
 
 func TestResultWrittenAfterTheStreamShrankIsSummarized(t *testing.T) {
-	w := watchFrom(t, pad(1024)+"\n", time.Now(), limits{})
+	w := watchFrom(t, strings.Repeat("x", 1024)+"\n", time.Now(), limits{})
 	write(t, w, `{"type":"result","num_turns":1}`+"\n")
 	shrinkTo(t, w, `{"type":"result","num_turns":2}`+"\n")
 
@@ -70,10 +71,24 @@ func TestResultWrittenAfterTheStreamShrankIsSummarized(t *testing.T) {
 	}
 }
 
+func TestResultAfterAShrinkSeenByTheWatchIsReadFromTheHeadEvenIfTheStreamRegrew(t *testing.T) {
+	started := time.Now()
+	w := watchFrom(t, strings.Repeat("x", 64)+"\n", started, limits{})
+	shrinkTo(t, w, "")
+	w.check(started.Add(time.Second))
+	write(t, w, strings.Repeat("x", 40)+"\n"+`{"type":"result","num_turns":2}`+"\n")
+
+	summary, err := w.lastResult()
+
+	if err != nil || summary == nil || summary.NumTurns == nil || *summary.NumTurns != 2 {
+		t.Fatalf("要約 = %+v, %v, want 監視が見た縮みを覚えて頭から読み num_turns 2", summary, err)
+	}
+}
+
 func TestWorkerLogThatCannotBeStattedIsReported(t *testing.T) {
 	w := watchFrom(t, "", time.Now(), limits{})
 	write(t, w, `{"type":"result","num_turns":1}`+"\n")
-	unstattable(w)
+	failStat(w)
 
 	summary, err := w.lastResult()
 
@@ -85,19 +100,11 @@ func TestWorkerLogThatCannotBeStattedIsReported(t *testing.T) {
 func TestWorkerLogThatCannotBeReadIsReported(t *testing.T) {
 	w := watchFrom(t, "", time.Now(), limits{})
 	write(t, w, `{"type":"result","num_turns":1}`+"\n")
-	unreadable(w)
+	failReads(w)
 
 	summary, err := w.lastResult()
 
 	if err == nil || summary != nil {
 		t.Fatalf("要約 = %+v, %v, want 読み出せないことを返す", summary, err)
 	}
-}
-
-func pad(n int) string {
-	b := make([]byte, n)
-	for i := range b {
-		b[i] = 'x'
-	}
-	return string(b)
 }
