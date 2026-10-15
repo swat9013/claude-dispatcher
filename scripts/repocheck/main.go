@@ -2,6 +2,7 @@
 // network は使わない。ruleset は呼び出し側が gh で取った JSON を標準入力で渡す。
 //
 //	go run ./scripts/repocheck files     # repo の root で撃つ。pre-commit の hook が撃つ
+//	go run ./scripts/repocheck adr       # ADR の番号の一意。commit 時の hook と adr-numbers.yml が撃つ (PR の gate では撃たない)
 //	gh api repos/<owner>/<repo>/rules/branches/main | go run ./scripts/repocheck ruleset
 //
 // 不一致は 1 件 1 行で標準エラーに出し、exit 1 で終わる。検査そのものの失敗 (file が読めない等) は exit 2
@@ -45,7 +46,7 @@ var adrNumberForm = regexp.MustCompile(`^([0-9]{4}).*\.md$`)
 
 func main() {
 	if len(os.Args) != 2 {
-		fatal(errors.New("使い方: repocheck files | repocheck ruleset < rules.json"))
+		fatal(errors.New("使い方: repocheck files | repocheck adr | repocheck ruleset < rules.json"))
 	}
 	var problems []string
 	var err error
@@ -54,10 +55,13 @@ func main() {
 		var files repoFiles
 		files, err = readRepoFiles()
 		if err == nil {
-			files.adrNames, err = readADRNames()
-		}
-		if err == nil {
 			problems, err = checkFiles(files)
+		}
+	case "adr":
+		var names []string
+		names, err = readADRNames()
+		if err == nil {
+			problems = duplicateADRNumbers(names)
 		}
 	case "ruleset":
 		problems, err = runRuleset()
@@ -82,8 +86,6 @@ func fatal(err error) {
 
 type repoFiles struct {
 	ci, checks, release, contributing, goMod string
-	// adrNames は docs/adr の file 名 (path を含まない名前だけ)。files の検査だけが読む
-	adrNames []string
 }
 
 func readRepoFiles() (repoFiles, error) {
@@ -101,7 +103,7 @@ func readRepoFiles() (repoFiles, error) {
 	return f, errors.Join(errs[:]...)
 }
 
-// readADRNames は docs/adr の file の名前を返す (directory は除く)。ruleset の検査は使わないので readRepoFiles と分ける
+// readADRNames は docs/adr の file の名前を返す (directory は除く)。adr の検査だけが読む
 func readADRNames() ([]string, error) {
 	entries, err := os.ReadDir(adrDir)
 	if err != nil {
@@ -173,13 +175,12 @@ func checkFiles(f repoFiles) ([]string, error) {
 			"利用者に求める版が上がってよいかを人が判断し、受け入れるなら CONTRIBUTING.md の「版の更新」の期待値を書き換える (worker は書き換えずに人へ返す)",
 			goVersion, expected))
 	}
-
-	problems = append(problems, duplicateADRNumbers(f.adrNames)...)
 	return problems, nil
 }
 
 // duplicateADRNumbers は、先頭の番号が重なる ADR の file 名を、番号ごとに 1 件 1 行で返す。
-// ADR を足す branch がそれぞれ次の空き番号を手で取るので、並行すると merge の後に番号が重なる
+// ADR を足す branch がそれぞれ次の空き番号を手で取るので、並行すると merge の後に番号が重なる。
+// merge の後の重なりは CL の変更と無関係に PR の merge ref を赤くするので、files と分けて PR の gate から外す
 func duplicateADRNumbers(names []string) []string {
 	byNumber := map[string][]string{}
 	for _, name := range names {

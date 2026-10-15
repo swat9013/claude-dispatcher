@@ -61,6 +61,15 @@ repos:
         language: unsupported
         pass_filenames: false
         always_run: true
+      # ADR の番号の一意。手元の branch の中の重なりは CL の作者が直せるので commit 時に撃つ。
+      # CI の pre-commit job は SKIP で外す (merge の後の main 側の重なりで、無関係な PR の merge ref まで赤くするため)。
+      # main 側の重なりは .github/workflows/adr-numbers.yml が拾って issue にする
+      - id: repocheck-adr
+        name: repocheck (ADR の番号の一意)
+        entry: go run ./scripts/repocheck adr
+        language: unsupported
+        pass_filenames: false
+        always_run: true
       # binary は CI と同じ版を人が公式の手段で入れる (CONTRIBUTING.md の「セットアップ」)。公式の hook は
       # language: golang で source から build し (公式が保証しない導入経路)、--fix も付くので使わない。
       # script は手元の版が checks.yml の lint job の version: と違えば lint を撃たずに落とす

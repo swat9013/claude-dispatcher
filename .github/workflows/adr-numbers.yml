@@ -1,0 +1,56 @@
+# main の docs/adr の ADR の番号の重なりを検査し、重なっていたら triage 待ちの issue を 1 件起こす。
+# 並行する PR が同じ番号を取ると、各 PR の CI は単独で通って両方が merge される。重なりは CL の変更と無関係に
+# PR の merge ref を赤くするので、PR では撃たない。方針は CONTRIBUTING.md の「gate」
+name: adr-numbers
+
+on:
+  schedule:
+    - cron: "0 0 * * 1"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+# 同じ題名の issue を探してから起こすまでの間に別の run が割り込むと、issue が 2 件できる。run を 1 本ずつ流す
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  adr-numbers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      # exit 1 は重なりの検出、それ以外の非 0 は検査そのものの失敗
+      - name: 検査
+        id: check
+        run: |
+          code=0
+          go run ./scripts/repocheck adr > report.txt 2>&1 || code=$?
+          cat report.txt
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          if [ "$code" -ne 0 ] && [ "$code" -ne 1 ]; then
+            echo "::error::ADR の番号の検査に失敗した (exit $code)"
+            exit "$code"
+          fi
+      - name: 重なりを issue にする
+        if: steps.check.outputs.code == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: main の ADR の番号が重なっている
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          {
+            echo "main の docs/adr で ADR の番号が重なっている。後から足した方を次の空き番号へ振り直す (参照している文書の番号も直す)。run: $RUN_URL"
+            echo
+            echo "手元での再現: \`go run ./scripts/repocheck adr\`"
+          } > prelude.md
+          scripts/open-triage-issue.sh "$TITLE" prelude.md report.txt
+          echo "::error::main の ADR の番号が重なっている"
+          exit 1

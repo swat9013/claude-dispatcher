@@ -76,7 +76,11 @@ jobs:
           go-version-file: go.mod
       # 版は Renovate が上げる (CONTRIBUTING.md の「gate」の「版の更新」)
       - run: pipx install pre-commit==4.6.2
+      # ADR の番号の一意 (repocheck-adr) は外す。並行する PR が同じ番号を取って merge されると、CL の変更と無関係に
+      # 後の PR の merge ref が赤くなる。main 側の重なりは adr-numbers.yml が拾う (CONTRIBUTING.md の「gate」)
       - run: pre-commit run --all-files --show-diff-on-failure
+        env:
+          SKIP: repocheck-adr
       # merge commit を許しているので、PR の途中の commit で入れて後の commit で消した秘匿情報も main の履歴に残る。
       # tree だけを見る commit 時の hook では見逃すので、push 前の gitleaks の hook を PR の commit 範囲に撃つ (版も規則も手元と同じ)。
       # base..head は main (stack した CL なら前段の branch) から届く commit を除くので、--first-parent で絞らない
