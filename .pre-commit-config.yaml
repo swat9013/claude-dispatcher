@@ -1,5 +1,5 @@
 # `pre-commit install` 1 回で commit 時 (gitleaks / gofmt / go mod tidy / actionlint) と push 前 (gitleaks の commit 範囲 / go vet / golangci-lint / go test) の両方の hook が入る。
-# CI (.github/workflows/checks.yml) は commit 時の hook を `pre-commit run --all-files` で撃つので、手元と同じ検査が CI でも落ちる
+# CI (.github/workflows/checks.yml) は commit 時の hook を `pre-commit run --all-files` で撃つので、手元と同じ検査が CI でも落ちる (repocheck-adr を除く。理由は repocheck-adr の hook のコメント)
 default_install_hook_types: [pre-commit, pre-push]
 # stages を書かない hook は commit 時だけに撃つ (書かないと install した全 stage で撃たれ、push 前にも走る)
 default_stages: [pre-commit]

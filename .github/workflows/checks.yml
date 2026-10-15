@@ -64,7 +64,7 @@ jobs:
           args: check
 
   # commit 時の hook (.pre-commit-config.yaml) を全 file に撃ち、PR の commit 範囲を gitleaks で検査する。
-  # pre-commit install していない commit も、ここで同じ検査に掛かる
+  # pre-commit install していない commit も、ここで同じ検査に掛かる (repocheck-adr を除く。下の SKIP)
   pre-commit:
     runs-on: ubuntu-latest
     steps:
