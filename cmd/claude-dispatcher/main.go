@@ -282,7 +282,8 @@ func valueFlags(args []string, targets map[string]*string) ([]string, error) {
 			continue
 		}
 		if !inline {
-			if i+1 >= len(args) {
+			// 次が flag の綴りなら値は書かれていない。値として取ると、後段の読み方しだいで flag の綴りが値として通る
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
 				return nil, fmt.Errorf("%s に値が要る", name)
 			}
 			i++

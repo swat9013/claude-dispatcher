@@ -254,7 +254,7 @@ claude-dispatcher loop [--max-concurrent <N>] [<workflow の path>]
 
 実装 repo の clone を cwd にして撃つ。
 
-- `--max-concurrent <N>` は、workflow 定義の `limits.max_concurrent` を上書きする並列上限 (`system.md` §8)。`--max-concurrent 3` の形でも `--max-concurrent=3` の形でも書ける。値が無い・値が空・2 回書いた・1 以上の整数でないときは引数の誤り (exit 2)
+- `--max-concurrent <N>` は、workflow 定義の `limits.max_concurrent` を上書きする並列上限 (`system.md` §8)。`--max-concurrent 3` の形でも `--max-concurrent=3` の形でも書ける。値が無い (flag の直後が `-` で始まるときを含む)・値が空・2 回書いた・1 以上の整数でないときは引数の誤り (exit 2)
   - 渡した値は loop が止まるまで変わらない。tick ごとに workflow 定義を読み直しても、`limits.max_concurrent` は効かない
   - 本節と §4 の `limits.max_concurrent` は、`--max-concurrent` を渡した loop ではその値と読み替える
 
@@ -592,7 +592,7 @@ claude-dispatcher doctor [<workflow の path>]
 
 - `--kind jira` を渡したら、`jira` の雛形を書き、`tracker.host` を `--host`、`tracker.repo` を `--repo` で埋める。`cl:` は、下の flag が無いときと同じ手順 (origin の host で種類を決め、gh か glab で置き場を引く) で `cl.kind`・`cl.host`・`cl.repo` を埋める。`cl:` を受ける flag は無い。acli は撃たない
   - `--kind` の値は `jira` だけを受ける。`--kind jira` には `--host` と `--repo` の両方が要り、`--host` と `--repo` は `--kind jira` と一緒にだけ書ける。綴りは `tracker.host` と `tracker.repo` と同じ (§2.1)。外れたら引数の誤り (exit 2)
-  - flag は `--kind jira` の形でも `--kind=jira` の形でも書ける。値が無い・値が空・同じ flag を 2 回書いたときは引数の誤り (exit 2)
+  - flag は `--kind jira` の形でも `--kind=jira` の形でも書ける。値が無い (flag の直後が `-` で始まるときを含む)・値が空・同じ flag を 2 回書いたときは引数の誤り (exit 2)
 - flag が無ければ、`tracker.kind` を、cwd で `git remote get-url origin` が返す URL の host で決める。host が `github.com` なら `github`、それ以外は `gitlab`
   - URL は `https://<host>/…`・`ssh://<user>@<host>[:<port>]/…`・`<user>@<host>:…` (scp の綴り) を読む。host は port を除いて小文字にする
   - `github`: `tracker.repo` を、cwd で `gh repo view --json nameWithOwner` が返す repo で埋める
