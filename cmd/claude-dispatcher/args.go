@@ -10,7 +10,8 @@ import (
 )
 
 // 引数の宣言の表。subcommand ごとの flag と位置引数、command の代わりに書く flag をここに書き、parser (parse と run の
-// 振り分け) と usage の Usage 節の 2・3 行目と Options 節 (usageForms・options) が同じ表を読む。flag の一覧と規則の正本は
+// 振り分け) と usage の Usage 節の 2 行目からと Options 節 (usageForms・options) が同じ表を読む。command の代わりの flag
+// ごとの処理は run が helpFlag・versionFlag を名指しで持つ。flag の一覧と規則の正本は
 // formats.md §10 (と §6・§7) で、この表はそれに合わせる側。setup の --kind が受ける種類と案内の綴りは provider の表も持つ。
 
 // flagSpec は subcommand の flag 1 つの宣言。
@@ -36,35 +37,38 @@ type commandSpec struct {
 	// required は必ず付ける flag の名前
 	required []string
 	// check は値付き flag を読んだ後、他の引数を読む前の、値付き flag の組み合わせの検査。nil なら検査しない
-	check func(values map[string]string) error
+	// check の中では値を取らない flag はまだ読まれていないので has を使わない
+	check func(parsedArgs) error
 }
 
 // arguments は subcommand が flag 以外に受けるもの。
 type arguments int
 
 const (
+	// undeclaredArguments は宣言の書き忘れ。parse は panic する
+	undeclaredArguments arguments = iota
 	// workflowArgument は位置引数 WORKFLOW (workflow 定義の path) を 1 つまで受ける
-	workflowArgument arguments = iota
-	// noArguments は何も受けない。flag の綴りも余った引数として名指しする
+	workflowArgument
+	// noArguments は何も受けない。flag を宣言しない subcommand に限り、flag の綴りも余った引数として名指しする
 	noArguments
 )
 
 // commandSpecs は subcommand の宣言。並びは usage の Options 節の並び。
 var commandSpecs = []commandSpec{
-	{name: "loop", flags: []flagSpec{
+	{name: "loop", arguments: workflowArgument, flags: []flagSpec{
 		{name: "--dry-run", help: "起動するはずの作業対象と trigger を示す。何も起動せず、何も書かない"},
 		{name: "--max-concurrent", value: "<N>", help: "limits.max_concurrent を上書きする並列上限 (1 以上の整数)", check: positiveInt("--max-concurrent")},
 	}},
-	{name: "status"},
-	{name: "paths", required: []string{"--json"}, flags: []flagSpec{
+	{name: "status", arguments: workflowArgument},
+	{name: "paths", arguments: workflowArgument, required: []string{"--json"}, flags: []flagSpec{
 		{name: "--json", help: "JSON で出す (paths では必須)"},
 	}},
-	{name: "setup", check: checkSetupFlags, flags: []flagSpec{
+	{name: "setup", arguments: workflowArgument, check: checkSetupFlags, flags: []flagSpec{
 		{name: "--kind", value: "jira", help: "Jira を issue 置き場にする。--host と --repo と一緒に書く"},
 		{name: "--host", value: "<site>", help: "Jira の site", field: provider.HostField},
 		{name: "--repo", value: "<key>", help: "Jira の project key", field: provider.RepoField},
 	}},
-	{name: "doctor"},
+	{name: "doctor", arguments: workflowArgument},
 	{name: "guide", arguments: noArguments},
 }
 
@@ -77,10 +81,16 @@ type globalFlag struct {
 	help string
 }
 
-// accepts は arg がこの flag の綴りか。
-func (g globalFlag) accepts(arg string) bool {
-	return g.word != "" && arg == g.word || slices.Contains(g.spellings, arg)
+// allSpellings は受ける綴りすべて: flag の綴りと、あれば word。
+func (g globalFlag) allSpellings() []string {
+	if g.word == "" {
+		return g.spellings
+	}
+	return append(g.spellings[:len(g.spellings):len(g.spellings)], g.word)
 }
+
+// accepts は arg がこの flag の綴りか。
+func (g globalFlag) accepts(arg string) bool { return slices.Contains(g.allSpellings(), arg) }
 
 var (
 	helpFlag    = globalFlag{spellings: []string{"-h", "--help"}, word: "help", help: "この一覧を出す。help でも同じ"}
@@ -128,6 +138,9 @@ func (a parsedArgs) has(name string) bool {
 // 値付き flag は `--name value` と `--name=value` を読み、値が無い (直後が `-` で始まるときを含む)・空・2 回書いたら誤り。
 // 位置引数と flag は混ざってよい。
 func (c commandSpec) parse(argv []string) (parsedArgs, error) {
+	if c.arguments == undeclaredArguments || c.arguments == noArguments && len(c.flags) > 0 {
+		panic(fmt.Sprintf("subcommand %s の引数の受け方の宣言が誤り", c.name))
+	}
 	a := parsedArgs{spec: c, values: map[string]string{}, set: map[string]bool{}}
 	// 値付き flag を先に抜く。値として取った綴りが後段で flag として読まれないようにする
 	var rest []string
@@ -161,7 +174,7 @@ func (c commandSpec) parse(argv []string) (parsedArgs, error) {
 		}
 	}
 	if c.check != nil {
-		if err := c.check(a.values); err != nil {
+		if err := c.check(a); err != nil {
 			return a, err
 		}
 	}
@@ -214,11 +227,7 @@ func positiveInt(name string) func(string) error {
 func usageForms() string {
 	var b strings.Builder
 	for _, g := range globalFlags {
-		spellings := g.spellings
-		if g.word != "" {
-			spellings = append(spellings[:len(spellings):len(spellings)], g.word)
-		}
-		fmt.Fprintf(&b, "       claude-dispatcher %s\n", strings.Join(spellings, " | "))
+		fmt.Fprintf(&b, "       claude-dispatcher %s\n", strings.Join(g.allSpellings(), " | "))
 	}
 	return b.String()
 }

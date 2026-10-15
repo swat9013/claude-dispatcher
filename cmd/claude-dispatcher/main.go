@@ -280,7 +280,7 @@ func loopFlags(argv []string) (loopOptions, error) {
 	if v := a.value("--max-concurrent"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil {
-			return loopOptions{}, fmt.Errorf("--max-concurrent は 1 以上の整数 (%q)", v)
+			panic(fmt.Sprintf("--max-concurrent の値 %q が宣言の検査 (positiveInt) を通っていない", v))
 		}
 		o.maxConcurrent = n
 	}

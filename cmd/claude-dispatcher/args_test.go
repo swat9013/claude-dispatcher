@@ -43,19 +43,17 @@ func TestUsageListsEveryDeclaredFlagUnderOptions(t *testing.T) {
 }
 
 func TestEveryDeclaredGlobalFlagIsAcceptedInPlaceOfACommand(t *testing.T) {
+	wants := map[string]string{"--help": "Usage: claude-dispatcher ", "--version": "claude-dispatcher "}
 	for _, g := range globalFlags {
-		spellings := g.spellings
-		if g.word != "" {
-			spellings = append(spellings[:len(spellings):len(spellings)], g.word)
-		}
-		for _, spelling := range spellings {
+		want := wants[g.spellings[len(g.spellings)-1]]
+		for _, spelling := range g.allSpellings() {
 			t.Run(spelling, func(t *testing.T) {
 				var stdout, stderr bytes.Buffer
 
 				code := run([]string{spelling}, &stdout, &stderr)
 
-				if code != 0 || stdout.Len() == 0 {
-					t.Fatalf("run(%s) = %d, stdout %q, stderr %q", spelling, code, stdout.String(), stderr.String())
+				if code != 0 || want == "" || !strings.HasPrefix(stdout.String(), want) {
+					t.Fatalf("run(%s) = %d, stdout %q, want 先頭 %q", spelling, code, stdout.String(), want)
 				}
 			})
 		}
