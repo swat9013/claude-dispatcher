@@ -100,7 +100,7 @@ func TestUsageListsEveryAcceptedFlagUnderOptions(t *testing.T) {
 
 	options := usageSection(t, s.run("--help").stdout, "Options")
 
-	for _, flag := range []string{"--dry-run", "--json", "--kind", "--host", "--repo", "-h, --help", "--version"} {
+	for _, flag := range []string{"--dry-run", "--max-concurrent", "--json", "--kind", "--host", "--repo", "-h, --help", "--version"} {
 		if !strings.Contains("\n"+options, "\n  "+flag+" ") {
 			t.Errorf("Options に %s が無い", flag)
 		}

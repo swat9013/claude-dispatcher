@@ -55,13 +55,14 @@ Commands:
   guide     導入の流れ・回し方・WORKFLOW.md の書き方の案内を出す
 
 Options:
-  --dry-run          (loop) 起動するはずの作業対象と trigger を示す。何も起動せず、何も書かない
-  --json             (paths) JSON で出す (paths では必須)
-  --kind jira        (setup) Jira を issue 置き場にする。--host と --repo と一緒に書く
-  --host <site>      (setup) Jira の site
-  --repo <key>       (setup) Jira の project key
-  -h, --help         (command の代わり) この一覧を出す。help でも同じ
-  --version          (command の代わり) 版を出す
+  --dry-run              (loop) 起動するはずの作業対象と trigger を示す。何も起動せず、何も書かない
+  --max-concurrent <N>   (loop) limits.max_concurrent を上書きする並列上限 (1 以上の整数)
+  --json                 (paths) JSON で出す (paths では必須)
+  --kind jira            (setup) Jira を issue 置き場にする。--host と --repo と一緒に書く
+  --host <site>          (setup) Jira の site
+  --repo <key>           (setup) Jira の project key
+  -h, --help             (command の代わり) この一覧を出す。help でも同じ
+  --version              (command の代わり) 版を出す
 
 Arguments:
   WORKFLOW   workflow 定義の path。省くと cwd の WORKFLOW.md (guide では受けない)
