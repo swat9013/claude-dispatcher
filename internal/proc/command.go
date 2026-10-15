@@ -77,7 +77,7 @@ func (c Command) OutputWithInput(input string, args ...string) (string, error) {
 	if err := cmd.Start(); err != nil {
 		return "", &Error{Name: name, Args: args, Exit: -1, Stderr: err.Error()}
 	}
-	end, err := Wait(cmd, c.Timeout, nil)
+	end, err := Wait(cmd, c.Timeout)
 	if end == TimedOut {
 		return "", &Error{Name: name, Args: args, Exit: -1, Stderr: fmt.Sprintf("%s を超えても終わらない", c.Timeout)}
 	}

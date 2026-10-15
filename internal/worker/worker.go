@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/swat9013/claude-dispatcher/internal/deps"
+	"github.com/swat9013/claude-dispatcher/internal/proc"
 	"github.com/swat9013/claude-dispatcher/internal/render"
 	"github.com/swat9013/claude-dispatcher/internal/status"
 	"github.com/swat9013/claude-dispatcher/internal/target"
@@ -232,26 +233,22 @@ func (r Runner) render(job Job, workspacePath string) (action, promptFile string
 
 // wait は起動した claude が終わるか、止められるか、stall か上限時間で止めるまで待つ。
 func (r Runner) wait(cmd *exec.Cmd, run *Run, w *streamWatch) Result {
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
+	group := proc.Watch(cmd)
 	ticker := time.NewTicker(watchInterval)
-	result, ended := r.watch(done, run, w, ticker.C)
+	result, ended := r.watch(group.Done(), run, w, ticker.C)
 	ticker.Stop()
 	if ended {
 		return r.exited(cmd, Result{})
-	}
-	// 子の終了と同時に止める理由ができたら終了を優先する (select はどちらも選びうる)。自分で終わった worker を
-	// 止めたことにすると、終わり方を確かめないまま claim を解いてしまう
-	select {
-	case <-done:
-		return r.exited(cmd, Result{})
-	default:
 	}
 	if run.stopped() {
 		// stall や上限時間と停止要求が重なったら、loop が止めたことを優先する
 		result = Result{Stopped: true}
 	}
-	if err := stopGroup(cmd.Process.Pid, done); err != nil {
+	exited, err := group.Stop(stopGrace)
+	if exited {
+		return r.exited(cmd, Result{})
+	}
+	if err != nil {
 		result.StopError = err.Error()
 	}
 	return r.exited(cmd, result)
@@ -259,7 +256,7 @@ func (r Runner) wait(cmd *exec.Cmd, run *Run, w *streamWatch) Result {
 
 // watch は claude が終わるまで待つ (ended が true)。先に止める理由ができたら、その理由を持った result を返す。
 // ticks が届くたびに、その時刻で stream を確かめ、活動を更新し、確認が返した理由で止める。
-func (r Runner) watch(done <-chan error, run *Run, w *streamWatch, ticks <-chan time.Time) (result Result, ended bool) {
+func (r Runner) watch(done <-chan struct{}, run *Run, w *streamWatch, ticks <-chan time.Time) (result Result, ended bool) {
 	for {
 		select {
 		case <-done:
@@ -288,36 +285,6 @@ func (r Runner) exited(cmd *exec.Cmd, result Result) Result {
 		result.Failure = "異常終了 (" + cmd.ProcessState.String() + ")"
 	}
 	return result
-}
-
-// stopGroup は process group に SIGTERM を送り、stopGrace のうちに claude が終わらなければ SIGKILL を送って、終わるまで待つ。
-// claude が終わった後も、group に残った子 (claude が起こした tool の process) を SIGKILL で止める。workspace を消すか
-// 次の attempt が使う前に、そこを cwd にした process を残さないため。
-func stopGroup(pid int, done <-chan error) error {
-	var errs []error
-	if err := kill(pid, syscall.SIGTERM); err != nil {
-		errs = append(errs, err)
-	}
-	select {
-	case <-done:
-	case <-time.After(stopGrace):
-		if err := kill(pid, syscall.SIGKILL); err != nil {
-			errs = append(errs, err)
-		}
-		<-done
-	}
-	if err := kill(pid, syscall.SIGKILL); err != nil {
-		errs = append(errs, err)
-	}
-	return errors.Join(errs...)
-}
-
-// kill は process group に sig を送る。group がもう無い (ESRCH) のは失敗と数えない。
-func kill(pid int, sig syscall.Signal) error {
-	if err := syscall.Kill(-pid, sig); err != nil && !errors.Is(err, syscall.ESRCH) {
-		return fmt.Errorf("process group %d に %v を送れない: %w", pid, sig, err)
-	}
-	return nil
 }
 
 func writeFile(file, content string) error {
