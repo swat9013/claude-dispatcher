@@ -25,7 +25,7 @@ worker の `claude -p` は、stream-json の `result` の行を turn ごとに�
 
 ### 悪い影響 / 制約
 
-- 仕事を終えたのに終わらない worker は、`limits.stall_timeout` が過ぎるまで並列の枠を塞ぐ。枠を早く空けるには、worker が終わらなくなる原因 (再入の仕組みなど) を `claude.args` で塞ぐ (guide.md の項目の表の `claude.args` の行)
+- 仕事を終えたのに終わらない worker は、`limits.stall_timeout` か `limits.run_timeout` で止められるまで並列の枠を塞ぐ。枠を早く空けるには、worker が終わらなくなる原因 (再入の仕組みなど) を `claude.args` で塞ぐ (guide.md の項目の表の `claude.args` の行)
 
 ## Alternatives considered
 

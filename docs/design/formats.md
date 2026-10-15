@@ -452,7 +452,7 @@ issue#42  implement  1        running  5m10s  Edit internal/status/status.go
 - 縮みは、fd で Stat した大きさが前の確認で読み終えた offset より小さいことで判定し、progress と活動の読み終えた offset を 0 に戻し、縮んだ後の行を頭から見る。縮んだこと自体では時計を戻さない。1 回の確認のあいだの truncate と再成長は検出しない (loop の外の書き手が無い前提)
 - stream の file を読めなければ (大きさを確かめられない・中身を読み出せない のどちらも)、時計を戻さず、`stream を読めない: <理由>` を活動にする。その状態が `limits.stall_timeout` 続けば stall で止め、失敗の理由に読めない理由を添える。読めなかった後は、伸びていなくても読み直す
 - 行の書かれない区間 (長い tool の実行・API の retry の backoff・compaction・`-p` の終わりに background の作業を待つ区間・最後の `result` の後) が `limits.stall_timeout` より長いと、進んでいても stall で止まる。区間を見分ける行は確かめられていないので、`limits.stall_timeout` を区間より長くして吸収する
-- `result` は turn ごとに書かれ (background の作業が始めた turn も 1 回ずつ書く)、worker の終わりを表さない。worker の終わりは process の終了だけで決める (ADR 0018)
+- `result` は worker の終わりを表さない。worker の終わりは process の終了だけで決める (ADR 0018)
 
 **停止**: SIGINT / SIGTERM / SIGHUP を同じに扱う。
 
