@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/swat9013/claude-dispatcher/internal/guide"
+	"github.com/swat9013/claude-dispatcher/internal/provider"
 	"github.com/swat9013/claude-dispatcher/internal/trigger"
 	"gopkg.in/yaml.v3"
 )
@@ -87,7 +88,11 @@ func guideKeyCells(text, title string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	tables, err := s.KeyTables()
+	var services []string
+	for _, k := range provider.Kinds() {
+		services = append(services, string(k))
+	}
+	tables, err := s.KeyTables(services)
 	if err != nil {
 		return nil, err
 	}
@@ -124,7 +129,7 @@ func missingGuideKeys(text string) ([]string, error) {
 	return slices.Compact(missing), nil
 }
 
-// unknownGuideKeys は案内 text の key の表の 1 列目に “ で書いた綴りのうち、読み込みが受けないものを「<節>: <綴り>」で返す。
+// unknownGuideKeys は案内 text の key の表の 1 列目に バッククォート (`) で書いた綴りのうち、読み込みが受けないものを「<節>: <綴り>」で返す。
 func unknownGuideKeys(text string) ([]string, error) {
 	var unknown []string
 	for title, table := range loaderKeys() {
@@ -145,7 +150,7 @@ func unknownGuideKeys(text string) ([]string, error) {
 	return unknown, nil
 }
 
-// backquoted はセルの “ で囲んだ綴りの列。
+// backquoted はセルの バッククォート (`) で囲んだ綴りの列。
 func backquoted(cell string) []string {
 	parts := strings.Split(cell, "`")
 	var out []string
@@ -156,8 +161,13 @@ func backquoted(cell string) []string {
 }
 
 // withoutKeyRow は text の節 title の key の表から、1 列目が `key` の行を消した文面を返す。行が無ければテストを落とす。
+// 節の範囲は読み手から得て、その本文の中で行を消す。
 func withoutKeyRow(t *testing.T, text, title, key string) string {
 	t.Helper()
+	s, err := guide.FindSection(text, title)
+	if err != nil {
+		t.Fatal(err)
+	}
 	cells, err := guideKeyCells(text, title)
 	if err != nil {
 		t.Fatal(err)
@@ -165,11 +175,16 @@ func withoutKeyRow(t *testing.T, text, title, key string) string {
 	if !slices.Contains(cells, "`"+key+"`") {
 		t.Fatalf("案内の節 %s の key の表に `%s` の行が無い", title, key)
 	}
-	start := strings.Index(text, "### "+title+"\n")
-	row := strings.Index(text[start:], "\n| `"+key+"` |")
-	from := start + row + 1
-	to := from + strings.Index(text[from:], "\n") + 1
-	return text[:from] + text[to:]
+	var kept []string
+	removed := false
+	for _, line := range strings.Split(s.Body, "\n") {
+		if !removed && strings.HasPrefix(line, "| `"+key+"` |") {
+			removed = true
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.Replace(text, s.Body, strings.Join(kept, "\n"), 1)
 }
 
 func TestEveryKeyTheLoaderAcceptsAppearsInTheGuide(t *testing.T) {
@@ -234,11 +249,22 @@ func TestAKeyWhoseRowIsGoneIsMissingEvenIfTheProviderTableNamesIt(t *testing.T) 
 }
 
 func TestRewordingTheGuideProseDoesNotBreakTheSync(t *testing.T) {
-	// 以前は散文の一文を目印にしていた。散文を書き換えても key の表の読み方は変わらない
-	text := strings.Replace(guide.Text(), "上の表は `github` の field で書いた。", "別の言い回し。", 1)
-	text = strings.Replace(text, "**置き場のサービスごとの違い**", "違い", 1)
+	// 以前は散文の一文を目印にしていた。見出し・表・fenced block の外の散文の行をすべて別の文面に替えても、key の表の読み方は変わらない。
+	// 特定の一文を名指しせずに替えるので、案内の散文が直ってもこの test は空振りしない
+	var rewritten []string
+	inFence := false
+	for _, line := range strings.Split(guide.Text(), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "```") {
+			inFence = !inFence
+		}
+		if !inFence && trimmed != "" && !strings.HasPrefix(trimmed, "```") && !strings.HasPrefix(trimmed, "#") && !strings.HasPrefix(trimmed, "|") {
+			line = "書き換えた散文。"
+		}
+		rewritten = append(rewritten, line)
+	}
 
-	missing, err := missingGuideKeys(text)
+	missing, err := missingGuideKeys(strings.Join(rewritten, "\n"))
 
 	if err != nil || len(missing) > 0 {
 		t.Fatalf("散文の書き換えで落ちた: %v %v", err, missing)

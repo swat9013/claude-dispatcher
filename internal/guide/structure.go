@@ -12,7 +12,6 @@ import (
 // (深い見出しの節を含む)。fenced block の中の `#` の行は見出しとみなさない。
 type Section struct {
 	Heading string
-	Level   int
 	Body    string
 }
 
@@ -78,7 +77,7 @@ func FindSection(text, title string) (Section, error) {
 		for _, b := range ls[i+1 : end] {
 			body = append(body, b.text)
 		}
-		return Section{Heading: title, Level: level, Body: strings.Join(body, "\n")}, nil
+		return Section{Heading: title, Body: strings.Join(body, "\n")}, nil
 	}
 	return Section{}, fmt.Errorf("案内に節 %q が無い", title)
 }
@@ -127,47 +126,43 @@ func (s Section) Tables() []Table {
 func (s Section) FencedBlocks() []FencedBlock {
 	var blocks []FencedBlock
 	var current *FencedBlock
-	for _, text := range strings.Split(s.Body, "\n") {
-		trimmed := strings.TrimSpace(text)
-		if fence, ok := strings.CutPrefix(trimmed, "```"); ok {
-			if current == nil {
-				current = &FencedBlock{Info: strings.TrimSpace(fence)}
-				continue
-			}
+	for _, l := range lines(s.Body) {
+		switch {
+		case !l.fenced:
+		case current == nil:
+			// 開きの行。fenced の判定は lines に 1 つだけ置く
+			current = &FencedBlock{Info: strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(l.text), "```"))}
+		case strings.HasPrefix(strings.TrimSpace(l.text), "```"):
 			blocks = append(blocks, *current)
 			current = nil
-			continue
-		}
-		if current != nil {
-			current.Lines = append(current.Lines, text)
+		default:
+			current.Lines = append(current.Lines, l.text)
 		}
 	}
 	return blocks
 }
 
-// services は置き場のサービスの綴り。見出しのセルが名指ししているかを、大文字と小文字を区別せずに見る。
-var services = []string{"github", "gitlab", "jira"}
-
-// isKeyTable は、表が key の表であること。1 列目の見出しが `key` で、2 列目の見出しが置き場のサービスを名指ししない。
-// provider の対応表 (`jira` での意味・GitLab の field) は 2 列目の見出しでサービスを名指しするので外れる。
-func (t Table) isKeyTable() bool {
+// isKeyTable は、表が key の表であること。1 列目の見出しが `key` で、2 列目の見出しが services のどれも名指ししない
+// (大文字と小文字を区別しない)。provider の対応表 (`jira` での意味・GitLab の field) は 2 列目の見出しでサービスを名指しするので外れる。
+func (t Table) isKeyTable(services []string) bool {
 	if len(t.Header) < 2 || t.Header[0] != "key" {
 		return false
 	}
 	second := strings.ToLower(t.Header[1])
 	for _, s := range services {
-		if strings.Contains(second, s) {
+		if strings.Contains(second, strings.ToLower(s)) {
 			return false
 		}
 	}
 	return true
 }
 
-// KeyTables は節の key の表 (isKeyTable) を、出てくる順に返す。1 つも無ければ、節を名指しした error。
-func (s Section) KeyTables() ([]Table, error) {
+// KeyTables は節の key の表 (isKeyTable) を、出てくる順に返す。services は置き場のサービスの綴りで、種類の知識は provider が
+// 持つので呼び出し側が渡す。1 つも無ければ、節を名指しした error。
+func (s Section) KeyTables(services []string) ([]Table, error) {
 	var out []Table
 	for _, t := range s.Tables() {
-		if t.isKeyTable() {
+		if t.isKeyTable(services) {
 			out = append(out, t)
 		}
 	}

@@ -64,7 +64,8 @@ func argsLine(t *testing.T, lines []string) string {
 	return found[0]
 }
 
-// guideExample は案内の「workflow 定義の書き方」の節の書式例 (fenced block) の行。書式例がちょうど 1 つでなければ test を落とす。
+// guideExample は案内の「workflow 定義の書き方」の節の最初の fenced block (書式例) の行。節は下位の節を含むので、
+// 下位の節に例が増えても書式例を取り違えないよう、最初の block に限る。block が無ければ test を落とす。
 func guideExample(t *testing.T) []string {
 	t.Helper()
 	s, err := guide.FindSection(guide.Text(), "workflow 定義の書き方")
@@ -72,8 +73,8 @@ func guideExample(t *testing.T) []string {
 		t.Fatal(err)
 	}
 	blocks := s.FencedBlocks()
-	if len(blocks) != 1 {
-		t.Fatalf("案内の節 %q の書式例がちょうど 1 つでない: %d", s.Heading, len(blocks))
+	if len(blocks) == 0 {
+		t.Fatalf("案内の節 %q に書式例 (fenced block) が無い", s.Heading)
 	}
 	return blocks[0].Lines
 }
