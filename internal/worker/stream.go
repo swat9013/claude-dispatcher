@@ -134,15 +134,14 @@ func (w *streamWatch) stopReason(now time.Time) string {
 }
 
 // lastResult は attempt の最後の result の行を要約する (formats.md §4)。attempt 開始時の offset から読み、終了時の大きさが
-// その offset より小さければ (attempt の途中で縮んだ) 0 から読む。監視が途中で縮みを見ていれば、その後に開始時の offset を
-// 超えて伸びていても 0 から読む (開始時の offset は縮んだ後の中身の途中を指す)。行の切り方は監視と同じで、要約は行全体を読む。
+// その offset より小さければ 0 から読む。行の切り方は監視と同じで、要約は行全体を読む。
 func (w *streamWatch) lastResult() (*ResultSummary, error) {
 	info, err := w.file.Stat()
 	if err != nil {
 		return nil, err
 	}
 	from := w.origin
-	if info.Size() < from || w.lines.shrank {
+	if info.Size() < from {
 		from = 0
 	}
 	var last *resultItems
@@ -169,15 +168,13 @@ type lineReader struct {
 	headLimit int
 	// chunk は読み出しに使う buffer。確認をまたいで使い回す
 	chunk []byte
-	// done は最後に読み終えた確認の offset。読めなかった確認は read を書きかけの行の頭へ戻すが、縮みはこれとも比べる
-	done int64
-	// shrank は一度でも縮みを見たか
-	shrank bool
+	// completed は最後に読み終えた確認の offset。読めなかった確認は read を書きかけの行の頭へ戻すが、縮みはこれとも比べる
+	completed int64
 }
 
 // newLineReader は offset より後を読み、行の頭を headLimit まで持つ lineReader。
 func newLineReader(offset int64, headLimit int) *lineReader {
-	return &lineReader{read: offset, lineStart: offset, done: offset, headLimit: headLimit, line: make([]byte, 0, min(headLimit, readChunk)),
+	return &lineReader{read: offset, lineStart: offset, completed: offset, headLimit: headLimit, line: make([]byte, 0, min(headLimit, readChunk)),
 		chunk: make([]byte, readChunk)}
 }
 
@@ -186,15 +183,15 @@ func newLineReader(offset int64, headLimit int) *lineReader {
 // みなし、頭から読む。読めなければ、この呼び出しで読んだ分を進めずに error を返す (呼び出し側は、それまでに呼んだ each の結果を
 // 捨てる)。縮んだことは読めなくても覚えておく。
 func (r *lineReader) readTo(file io.ReaderAt, size int64, each func(head []byte, start, length int64)) error {
-	if size < max(r.read, r.done) {
-		r.read, r.lineStart, r.line, r.done, r.shrank = 0, 0, r.line[:0], 0, true
+	if size < max(r.read, r.completed) {
+		r.read, r.lineStart, r.line, r.completed = 0, 0, r.line[:0], 0
 	}
 	before := r.lineStart
 	if err := r.readLines(file, size, each); err != nil {
 		r.read, r.lineStart, r.line = before, before, r.line[:0]
 		return err
 	}
-	r.done = r.read
+	r.completed = r.read
 	return nil
 }
 
