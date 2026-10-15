@@ -1,0 +1,6 @@
+# worktree 作成時 (claude --worktree / EnterWorktree) に、gitignored なローカル設定を新しい worktree へ写す。
+# 個人の permission 設定。gitignored なので、写さないと新しい worktree に存在しない
+.claude/settings.local.json
+# 写さないもの:
+# - dist/: build し直せる生成物
+# - .claude-dispatcher/: dispatcher の workspace (worktree) を抱えるので、写すと worktree を再帰的に複製する

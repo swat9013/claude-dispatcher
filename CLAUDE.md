@@ -4,6 +4,11 @@
 
 CLI のコードを変える前に `docs/design/README.md` の「設計を先に直す」を読み、そこが挙げる変更なら実装より先に `docs/design/` の正本を直す。
 
+## Worktree 方式
+
+- git diff に差分が出る作業は git worktree 上で行う (読み取りだけの作業は除く)
+- 差分の出る作業を subagent に任せるときは、Agent tool に `isolation: "worktree"` を渡す
+
 ## Agent skills
 
 ### Issue tracker

@@ -33,6 +33,18 @@ When set to `yes`, PRs run through the same labels and states as issues, using t
 
 GitHub shares one number space across issues and PRs, so a bare `#42` may be either: resolve with `gh pr view 42` and fall back to `gh issue view 42`.
 
+## follow-up issue の起票
+
+作業の中で見つけた範囲外の欠陥・指摘を issue にするときは、次に従う。
+
+- この CL の変更が生んだ指摘と、変更した行の近くにあり同じ CL で直せる指摘は、起票せずに直す (依頼や issue 本文が範囲を狭めているときはそれに従う)。ただしレビューが修正量の上限で今回の CL から外した指摘 (`[上限超過]`) は、近くにあっても直さずに起票する — 上限は、修正の差分を再レビュー 1 巡で見切れる量に保つためにある
+- 起票するのは、担当範囲の外で見つけた欠陥・レビューの指摘のうち直さなかった Act on と Consider・`[上限超過]` を付けた Noted (区分の語はレビューの出力のもの)。それ以外の Noted (`[既存]` を含む) は起票しない — レビューの出力に記録が残る
+- 判定条件が同じで対象だけ違う指摘は 1 件に束ね、対象を本文の checklist に並べる
+- 起票の前に、同じ指摘の issue を、open なものと、`docs/agents/triage-labels.md` の表で `wontfix` の役を持つ label で close したものから、題名と変更対象の file path の 2 通りで探す。当たった issue は本文を読み、判定条件と対象が同じかで同じ指摘かを決める。同じ指摘の issue があれば起票せず、open なら発端の issue と CL の番号があればコメントで足す
+- 起票した issue は、発端の issue (作業が担当している issue) の子にする。親子は tracker の親子の機能で付け、本書に「follow-up issue の深さ」節があれば、その測り方が辿れる形にする (測り方が `github-sub-issue` なら sub-issue にし、本文の行で代えない)。issue を介さず人が始めた作業なら親を付けない — 人が起点の作業は agent の起票の連鎖ではない
+- 本文に `## 範囲` の節を置き、変更してよい file と「範囲外で見つけた欠陥・指摘は `docs/agents/issue-tracker.md`「follow-up issue の起票」に従って扱う」を書く
+- 付ける label は triage 待ち (`docs/agents/triage-labels.md` の表で `needs-triage` の役を持つ label) だけにする。着手可は triage が付ける。本書に「follow-up issue の深さ」節があれば、triage はそこで連鎖の深さを測ってから付ける
+
 ## follow-up issue の深さ
 
 - 測り方: github-sub-issue
@@ -57,9 +69,3 @@ Used by `/wayfinder`. The **map** is a single issue with **child** issues as tic
 - **Frontier query**: list the map's open children (`gh issue list --state open`, scoped to the map's sub-issues / task list), drop any with an open blocker (`issue_dependencies_summary.blocked_by > 0`, or an open issue in the `Blocked by` line) or an assignee; first in map order wins.
 - **Claim**: `gh issue edit <n> --add-assignee @me`, the session's first write.
 - **Resolve**: `gh issue comment <n> --body "<answer>"`, then `gh issue close <n>`, then append a context pointer (gist + link) to the map's Decisions-so-far.
-
-## follow-up issue の深さ
-
-- 測り方: github-sub-issue
-- 上限: 2
-- 計画的な分解の親の label: tracking
