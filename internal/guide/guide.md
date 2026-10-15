@@ -140,7 +140,7 @@ limits:
   run_timeout: 1h            # 任意。worker 1 回分の上限時間。既定 1h。0 で無効
 claude:
   command: claude            # 任意。既定 claude
-  # 任意。既定は空。再入の仕組みを塞ぐ (理由は下の項目の表の下の注記「再入の仕組みを塞ぐ」)。
+  # 任意。既定は空。再入の仕組みを塞ぐ (理由は項目の表の下の注記「再入の仕組みを塞ぐ」)。
   # --disallowedTools は値を複数取るが、dispatcher が後ろに渡す -p で止まる
   args: [--permission-mode, auto, --disallowedTools, "ScheduleWakeup,CronCreate,CronList,CronDelete,Monitor"]
 triggers:                    # 必須。1 つ以上
