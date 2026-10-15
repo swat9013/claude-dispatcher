@@ -183,7 +183,7 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
   - `running`・`waiting_retry`: その tick で候補の起動を始める前の、走っている worker と再起動待ちの claim の数 (手順 7 が `limits.max_concurrent` から引く数)
   - `max_concurrent`: `loop` に `--max-concurrent` (§6) を渡したならその値、渡さなければその tick で読み直した workflow 定義の `limits.max_concurrent`
   - 手順 7 は、`running`・`waiting_retry`・その tick で起動した数 (`launched` の数) の和が `max_concurrent` に達したところで候補の起動をやめる
-- `wait_slot` の行の `max_concurrent` は、空きの判定に使った値。`tick` の行の `max_concurrent` と同じく、`--max-concurrent` を渡したならその値、渡さなければその tick で読み直した workflow 定義の `limits.max_concurrent`
+- `wait_slot` の行の `max_concurrent` は、空きの判定に使った値。`--max-concurrent` を渡したならその値、渡さなければ loop が直近に読めた版の workflow 定義の `limits.max_concurrent` (`wait_slot` は tick の外でも書かれ、読み直しに落ちた tick は前の版を使い続ける)
 - `outcome`
 
 | 値 | 意味 |

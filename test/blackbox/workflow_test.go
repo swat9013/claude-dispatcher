@@ -111,7 +111,7 @@ func TestLoopRejectsAnUnknownFlag(t *testing.T) {
 	s.assertNoGh("flag が誤っているのに")
 }
 
-func TestOnlyLoopAcceptsTheConcurrencyLimitFlag(t *testing.T) {
+func TestSubcommandsOtherThanLoopRejectTheConcurrencyLimitFlag(t *testing.T) {
 	for _, args := range [][]string{
 		{"status", "--max-concurrent", "2"},
 		{"doctor", "--max-concurrent", "2"},
