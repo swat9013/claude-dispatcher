@@ -32,7 +32,7 @@ workspace は state dir の外、workflow 定義の `workspace.root` の下に�
 <workspace root>/<作業対象>/          作業対象の workspace。作業対象が終端になるまで残す
 ```
 
-- **scope key**: issue 置き場の部品が決める、issue 置き場の識別子 (system.md §13)
+- **scope key**: issue 置き場の役割を担う provider が、読んだ置き場から決める、issue 置き場の識別子 (system.md §13)
   - GitHub は `github.com/<owner>/<name>` を小文字にしたもの (GitHub の owner と repo の名前は大文字と小文字を区別しない)
   - GitLab は `<host>/<path>` を小文字にしたもの (例: `gitlab.example.com/acme/sub/widgets`。GitLab の path は大文字と小文字を区別しない)
   - Jira は `<site>/<project key>` を小文字にしたもの (例: `acme.atlassian.net/widgets`)。1 つの Jira project は 1 本の loop で回す (同じ project の 2 本目の loop は lock で止まる)。project key を改名したら scope key が変わるので、workflow 定義を書き換えて loop を起動し直す
