@@ -64,13 +64,27 @@ func argsLine(t *testing.T, lines []string) string {
 	return found[0]
 }
 
+// guideExample は案内の「workflow 定義の書き方」の節の書式例 (fenced block) の行。書式例がちょうど 1 つでなければ test を落とす。
+func guideExample(t *testing.T) []string {
+	t.Helper()
+	s, err := guide.FindSection(guide.Text(), "workflow 定義の書き方")
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocks := s.FencedBlocks()
+	if len(blocks) != 1 {
+		t.Fatalf("案内の節 %q の書式例がちょうど 1 つでない: %d", s.Heading, len(blocks))
+	}
+	return blocks[0].Lines
+}
+
 // endsWithDisallowedTools は列が `--disallowedTools` の値で終わること。--disallowedTools は値を複数取るので、
 // 後ろに別の引数を置くと値に呑まれる。dispatcher が後ろに渡す -p で止まる
 var endsWithDisallowedTools = regexp.MustCompile(`--disallowedTools, "[^"]+"\]$`)
 
 func TestEveryTemplateBlocksTheSameReentryToolsAsTheGuideExample(t *testing.T) {
 	// 再入の tool の名前の列を直すときに片方だけ直すと、setup が案内の勧めと食い違う雛形を書く
-	want := argsLine(t, strings.Split(guide.Text(), "\n"))
+	want := argsLine(t, guideExample(t))
 	if !endsWithDisallowedTools.MatchString(want) {
 		t.Fatalf("案内の書式例の args が --disallowedTools の値で終わらない: %s", want)
 	}
