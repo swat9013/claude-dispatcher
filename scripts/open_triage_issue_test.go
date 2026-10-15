@@ -2,18 +2,21 @@
 package scripts
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
-	"unicode/utf8"
 )
 
-const truncatedNote = "\n出力が長いので先頭の 60000 byte で切った。全文は run の log にある\n"
+// limit は script の limit (報告を切る byte 数)
+const limit = 60000
+
+var truncatedNote = fmt.Sprintf("\n出力が長いので先頭の %d byte で切った。全文は run の log にある\n", limit)
 
 // triageBody は open-triage-issue.sh を source して triage_body に前置きと報告を渡し、組んだ本文を返す。
-// source した script は gh を撃たない
+// source した script は gh を撃たない。guard が壊れても本物の gh を撃たないよう、PATH の先頭に失敗する gh を置く
 func triageBody(t *testing.T, prelude, report string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -25,11 +28,19 @@ func triageBody(t *testing.T, prelude, report string) string {
 	if err := os.WriteFile(reportFile, []byte(report), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	bin := filepath.Join(dir, "bin")
+	if err := os.Mkdir(bin, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte("#!/bin/sh\necho 'test から gh を撃った' >&2\nexit 99\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	script, err := filepath.Abs("open-triage-issue.sh")
 	if err != nil {
 		t.Fatal(err)
 	}
 	cmd := exec.Command("bash", "-c", `source "$1" && triage_body "$2" "$3"`, "bash", script, preludeFile, reportFile)
+	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	out, err := cmd.Output()
 	if err != nil {
 		var stderr string
@@ -59,7 +70,7 @@ func wantBody(prelude, fence, inside string, truncated bool) string {
 const prelude = "前置き\n"
 
 func TestTriageBody(t *testing.T) {
-	a := strings.Repeat
+	repeat := strings.Repeat
 	tests := []struct {
 		name      string
 		report    string
@@ -69,7 +80,8 @@ func TestTriageBody(t *testing.T) {
 	}{
 		{"上限内の報告は 3 個の backtick で囲んでそのまま載せる", "line1\nline2\n", "```", "line1\nline2\n", false},
 		{"末尾に改行の無い報告は閉じの囲いの前に改行を足す", "line1\nno newline", "```", "line1\nno newline", false},
-		{"上限を超える報告は先頭 60000 byte で切って注記を足す", a("a", 70000) + "\n", "```", a("a", 60000), true},
+		{"上限ちょうどの報告は切らない", repeat("a", limit-1) + "\n", "```", repeat("a", limit-1) + "\n", false},
+		{"上限を超える報告は先頭の上限 byte で切って注記を足す", repeat("a", 70000) + "\n", "```", repeat("a", limit), true},
 		{
 			"報告中の最長の backtick の連なりより 1 つ長い囲いにする",
 			"before\n```\ninside ````` run\n```go\nafter\n",
@@ -77,38 +89,42 @@ func TestTriageBody(t *testing.T) {
 			"before\n```\ninside ````` run\n```go\nafter\n",
 			false,
 		},
-		{"切れ目が 3 byte 文字の 1 byte 目の後ならその文字を落とす", a("a", 59999) + "あtail\n", "```", a("a", 59999), true},
-		{"切れ目が 3 byte 文字の 2 byte 目の後ならその文字を落とす", a("a", 59998) + "あtail\n", "```", a("a", 59998), true},
-		{"切れ目が 2 byte 文字の途中ならその文字を落とす", a("a", 59999) + "étail\n", "```", a("a", 59999), true},
-		{"切れ目が 4 byte 文字の 3 byte 目の後ならその文字を落とす", a("a", 59997) + "😀tail\n", "```", a("a", 59997), true},
-		{"切れ目で文字が完結していればその文字を残す", a("a", 59997) + "あtail\n", "```", a("a", 59997) + "あ", true},
-		{"元から不正な先頭 byte の後が ASCII ならその byte を残す", a("a", 59999) + "\xE3btail\n", "```", a("a", 59999) + "\xE3", true},
-		{"元から不正な並びが切れ目にまたがるならその byte を残す", a("a", 59999) + "\xE3\x80\n", "```", a("a", 59999) + "\xE3", true},
+		{"最長の連なりがちょうど 3 個なら 4 個の囲いにする", "x\n```\ny\n", "````", "x\n```\ny\n", false},
+		{"切れ目が 3 byte 文字の 1 byte 目の後ならその文字を落とす", repeat("a", limit-1) + "あtail\n", "```", repeat("a", limit-1), true},
+		{"切れ目が 3 byte 文字の 2 byte 目の後ならその文字を落とす", repeat("a", limit-2) + "あtail\n", "```", repeat("a", limit-2), true},
+		{"切れ目が 2 byte 文字の途中ならその文字を落とす", repeat("a", limit-1) + "étail\n", "```", repeat("a", limit-1), true},
+		{"切れ目が 4 byte 文字の 1 byte 目の後ならその文字を落とす", repeat("a", limit-1) + "😀tail\n", "```", repeat("a", limit-1), true},
+		{"切れ目が 4 byte 文字の 2 byte 目の後ならその文字を落とす", repeat("a", limit-2) + "😀tail\n", "```", repeat("a", limit-2), true},
+		{"切れ目が 4 byte 文字の 3 byte 目の後ならその文字を落とす", repeat("a", limit-3) + "😀tail\n", "```", repeat("a", limit-3), true},
+		{"切れ目で 3 byte 文字が完結していればその文字を残す", repeat("a", limit-3) + "あtail\n", "```", repeat("a", limit-3) + "あ", true},
+		{"切れ目で 4 byte 文字が完結していればその文字を残す", repeat("a", limit-4) + "😀tail\n", "```", repeat("a", limit-4) + "😀", true},
+		{"元から不正な先頭 byte の後が ASCII ならその byte を残す", repeat("a", limit-1) + "\xE3btail\n", "```", repeat("a", limit-1) + "\xE3", true},
+		{"元から不正な先頭 byte の後が別の文字の先頭ならその byte を残す", repeat("a", limit-1) + "\xE3あtail\n", "```", repeat("a", limit-1) + "\xE3", true},
+		{"元から不正な並びが切れ目にまたがるならその byte を残す", repeat("a", limit-1) + "\xE3\x80\n", "```", repeat("a", limit-1) + "\xE3", true},
+		{"元から不正な並びが切れ目の直後で報告ごと終わってもその byte を残す", repeat("a", limit-1) + "\xE3\x80", "```", repeat("a", limit-1) + "\xE3", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := triageBody(t, prelude, tt.report)
 
 			if want := wantBody(prelude, tt.fence, tt.inside, tt.truncated); got != want {
-				t.Errorf("本文が違う\n got 末尾: %q\nwant 末尾: %q", tail(got), tail(want))
+				i := firstDiff(got, want)
+				t.Errorf("本文が %d byte 目から違う\n got: %q\nwant: %q", i, around(got, i), around(want, i))
 			}
 		})
 	}
 }
 
-func TestTriageBodyKeepsValidUTF8WhenCuttingInsideCharacter(t *testing.T) {
-	report := strings.Repeat("a", 59999) + "あtail\n"
-
-	got := triageBody(t, prelude, report)
-
-	if !utf8.ValidString(got) {
-		t.Errorf("本文が UTF-8 として不正: 末尾 %q", tail(got))
+// firstDiff は a と b が最初に食い違う byte の位置を返す
+func firstDiff(a, b string) int {
+	i := 0
+	for i < len(a) && i < len(b) && a[i] == b[i] {
+		i++
 	}
+	return i
 }
 
-func tail(s string) string {
-	if len(s) > 120 {
-		return s[len(s)-120:]
-	}
-	return s
+// around は s の i byte 目の前後 60 byte を返す
+func around(s string, i int) string {
+	return s[max(0, i-60):min(len(s), i+60)]
 }
