@@ -315,7 +315,7 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return usageError(stderr, "%v", err)
 	}
-	path, dryRun, maxConcurrent := opts.path, opts.dryRun, opts.maxConcurrent
+	path := opts.path
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		fmt.Fprintf(stderr, "workflow 定義の path を解決できない (%s): %v\n", path, err)
@@ -325,8 +325,8 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 	// --max-concurrent は読み直すたびに limits.max_concurrent を上書きし、loop が止まるまで変わらない (system.md §8)
 	load := func() (workflow.Definition, error) {
 		def, err := workflow.Load(abs, unresolvedEnvironment().getenv)
-		if err == nil && maxConcurrent != 0 {
-			def.MaxConcurrent = maxConcurrent
+		if err == nil && opts.maxConcurrent != 0 {
+			def.MaxConcurrent = opts.maxConcurrent
 		}
 		return def, err
 	}
@@ -345,7 +345,7 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 		}
 		return exitUsage
 	}
-	if dryRun {
+	if opts.dryRun {
 		if err := e.confirmPlace(def); err != nil {
 			fmt.Fprintln(stderr, err)
 			return failureExit(err)
