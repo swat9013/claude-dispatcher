@@ -63,14 +63,70 @@ func TestUsageEndsWithAPointerToTheGuide(t *testing.T) {
 	}
 }
 
+// usageSection は usage の出力から、見出し name の節の中身 (次の空行まで) を切り出す。節の綴りは formats.md §10
+func usageSection(t *testing.T, out, name string) string {
+	t.Helper()
+	_, body, found := strings.Cut(out, "\n"+name+":\n")
+	if !found {
+		t.Fatalf("usage に節 %s が無い:\n%s", name, out)
+	}
+	body, _, _ = strings.Cut(body, "\n\n")
+	return body
+}
+
+func TestUsageListsSectionsInTheStandardOrder(t *testing.T) {
+	// 節の並びは formats.md §10
+	s := newSandbox(t)
+
+	r := s.run("--help")
+
+	assertExit(t, r, 0)
+	if !strings.HasPrefix(r.stdout, "Usage: claude-dispatcher ") {
+		t.Fatalf("usage が `Usage:` の行で始まらない:\n%s", r.stdout)
+	}
+	last := 0
+	for _, section := range []string{"\nCommands:\n", "\nOptions:\n", "\nArguments:\n"} {
+		i := strings.Index(r.stdout, section)
+		if i < last {
+			t.Fatalf("節 %q が無いか、並びが違う:\n%s", strings.TrimSpace(section), r.stdout)
+		}
+		last = i
+	}
+}
+
+func TestUsageListsEveryAcceptedFlagUnderOptions(t *testing.T) {
+	// 一覧は parser が受ける flag (main.go の run・runLoop・runPaths、setup.go の setupFlags)。flag を足したらここにも足す
+	s := newSandbox(t)
+
+	options := usageSection(t, s.run("--help").stdout, "Options")
+
+	for _, flag := range []string{"--dry-run", "--max-concurrent", "--json", "--kind", "--host", "--repo", "-h, --help", "--version"} {
+		if !strings.Contains("\n"+options, "\n  "+flag+" ") {
+			t.Errorf("Options に %s が無い", flag)
+		}
+	}
+}
+
+func TestUsageWithoutArgumentsGoesToStderrWithExit2(t *testing.T) {
+	s := newSandbox(t)
+
+	r := s.run()
+
+	assertExit(t, r, 2)
+	if r.stdout != "" || !strings.HasPrefix(r.stderr, "Usage: claude-dispatcher ") {
+		t.Fatalf("引数が無いのに usage だけを stderr に出していない: stdout = %q\nstderr:\n%s", r.stdout, r.stderr)
+	}
+}
+
 func TestGuideCoversEverySubcommandInTheUsage(t *testing.T) {
 	// 利用者の手元には README が無いので、usage に並ぶ subcommand の使い方は案内にしか無い
 	s := newSandbox(t)
 	usage := s.run("--help")
 	guide := s.run("guide")
-	subcommand := regexp.MustCompile(`(?m)^  claude-dispatcher ([a-z]+)`)
+	commands := usageSection(t, usage.stdout, "Commands")
+	subcommand := regexp.MustCompile(`(?m)^  ([a-z]+) `)
 
-	matches := subcommand.FindAllStringSubmatch(usage.stdout, -1)
+	matches := subcommand.FindAllStringSubmatch(commands, -1)
 
 	if len(matches) == 0 {
 		t.Fatalf("usage から subcommand を読めない:\n%s", usage.stdout)
