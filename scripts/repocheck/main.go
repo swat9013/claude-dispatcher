@@ -1,4 +1,4 @@
-// repocheck は、同じ値を 2 箇所以上に書いている設定の一致と、ADR の番号の一意を検査する (方針は CONTRIBUTING.md の「gate」)。
+// repocheck は、同じ値を 2 箇所以上に書いている設定の一致と、ADR の番号の一意と、docs/design の図の描き直し漏れを検査する (方針は CONTRIBUTING.md の「gate」)。
 // network は使わない。ruleset は呼び出し側が gh で取った JSON を標準入力で渡す。
 //
 //	go run ./scripts/repocheck files     # repo の root で撃つ。pre-commit の hook が撃つ

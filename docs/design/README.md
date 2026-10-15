@@ -24,7 +24,7 @@
 | 状態の表現と書き手、候補の定義式、機械と LLM の線、trigger の文法と評価の規則、起動・retry・打ち切り、workflow 定義の項目と検査の姿勢、駆動、worker に渡すもの、配布と外部依存、CLI の seam (部品の責務と seam の位置) | `system.md` |
 | ユースケース | `usecases.md` |
 | entity・集約・多重度・不変条件 | `domain.puml` (直したら `domain.svg` を描き直し、下の検証シナリオを通し直す) |
-| claim の段階と遷移 (どの段階でどの出来事にどの遷移があるか) | `statechart.puml` (直したら `statechart.svg` を描き直し、下の網羅検査を通し直す)。遷移の条件と効果を決める規則は `system.md` §7 |
+| claim の段階と遷移 (どの段階でどの出来事にどの遷移があるか) | `statechart.puml` (直したら `statechart.svg` を描き直して対で commit する。網羅は gate が検査する)。遷移の条件と効果を決める規則は `system.md` §7 |
 | 外から観測できる形式 | `formats.md` |
 | workflow 定義の書き方 (項目・述語・template・何が誤りになるか・事前検査がどこを探すか) | `internal/guide/guide.md` (検査で CLI が何を出すかは `formats.md` §2.8・§2.9) |
 | 利用者向けの導入の流れ・loop の回し方と見方と止め方・action が守る約束 | `internal/guide/guide.md` (仕組みの規則は `system.md` §7、ユースケースは `usecases.md` の UC-5・UC-6、loop の画面・`status`・`paths` の形式は `formats.md` §6・§7 が正本で、案内はそれを利用者の語で書く) |

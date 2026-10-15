@@ -27,6 +27,15 @@ func TestCheckDiagram_固定した版で描き直したsvgは通す(t *testing.T
 	}
 }
 
+// plantuml は @startuml の直後の空行を落として埋めるので、空行を足しただけの puml は描き直しても同じ source になる
+func TestCheckDiagram_startumlの直後の空行は比べない(t *testing.T) {
+	puml, svg := readSample(t)
+	puml = strings.Replace(puml, "@startuml sample\n", "@startuml sample\n\n", 1)
+	if got := checkDiagram("sample.puml", puml, svg, "1.2026.8"); len(got) != 0 {
+		t.Fatalf("問題を返した: %v", got)
+	}
+}
+
 func TestCheckDiagram_pumlを直してsvgを描き直していなければ落とす(t *testing.T) {
 	puml, svg := readSample(t)
 	puml = strings.Replace(puml, "終わる", "終える", 1)

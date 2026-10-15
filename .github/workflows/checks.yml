@@ -24,6 +24,7 @@ jobs:
         with:
           go-version-file: go.mod
       - run: go vet ./...
+      # go test は scripts/checkstatechart で python3 (3.11 以上。CONTRIBUTING.md の「セットアップ」) を撃つ。runner の image に入っているものを使う
       # -json の event を残し、log には -v と同じ出力を流す。shell: bash は pipefail で撃つので、go test が落ちれば step も落ちる
       - run: go test -race -count=1 -json ./... | tee test.json | jq -rj 'select(.Action == "output") | .Output'
         shell: bash
@@ -77,13 +78,15 @@ jobs:
       # 版は Renovate が上げる (CONTRIBUTING.md の「gate」の「版の更新」)
       - run: pipx install pre-commit==4.6.2
       # 図の構文の hook (plantuml-syntax) が撃つ plantuml を、固定した版 (scripts/plantuml.version) の native binary で入れる。
-      # Java も graphviz も要らない。check-statechart の hook が撃つ python3 は runner に入っている
+      # Java も graphviz も要らない。release の asset は tag を変えずに差し替えうるので、scripts/plantuml.sha256 で確かめてから展開する。
+      # check-statechart の hook が撃つ python3 は runner の image に入っているものを使う
       - name: plantuml を入れる
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           version=$(tr -d '[:space:]' < scripts/plantuml.version)
           gh release download "v$version" -R plantuml/plantuml -p "native-plantuml-linux-amd64-$version.zip" -D "$RUNNER_TEMP"
+          (cd "$RUNNER_TEMP" && sha256sum -c "$GITHUB_WORKSPACE/scripts/plantuml.sha256")
           unzip -q "$RUNNER_TEMP/native-plantuml-linux-amd64-$version.zip" -d "$RUNNER_TEMP/plantuml"
           echo "$RUNNER_TEMP/plantuml" >> "$GITHUB_PATH"
       # ADR の番号の一意 (repocheck-adr) は外す。並行する PR が同じ番号を取って merge されると、CL の変更と無関係に

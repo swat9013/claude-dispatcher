@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"compress/flate"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -24,8 +25,8 @@ var (
 	svgSourceForm  = regexp.MustCompile(`<\?plantuml-src ([0-9A-Za-z_-]+)\?>`)
 )
 
-// plantumlAlphabet は plantuml が source を deflate した後に使う 64 文字の符号
-const plantumlAlphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-_"
+// plantumlEncoding は plantuml が source を raw deflate した後に使う符号。bit の並びは base64 と同じで、文字の表だけが違う
+var plantumlEncoding = base64.NewEncoding("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-_").WithPadding(base64.NoPadding)
 
 // runDiagrams は docs/design の .puml と、隣の同名の .svg を読み、検査の結果を返す。svg が無ければ空文字で渡す
 func runDiagrams() ([]string, error) {
@@ -56,8 +57,8 @@ func runDiagrams() ([]string, error) {
 	return problems, nil
 }
 
-// checkDiagram は、svg が pin の版の plantuml で今の puml から描かれたかを検査する。
-// 描き直して比べると、同じ版でも font や OS で座標が変わり CL と無関係に赤くなるので、svg に埋まった版と source で比べる
+// checkDiagram は、svg が pin の版の plantuml で今の puml から描かれたかを、svg に埋まった版と source で検査する
+// (描き直して比べない理由は CONTRIBUTING.md の「gate」)
 func checkDiagram(pumlPath, puml, svg, pin string) []string {
 	svgPath := strings.TrimSuffix(pumlPath, ".puml") + ".svg"
 	redraw := fmt.Sprintf("plantuml %s で `plantuml -tsvg %s` を撃って描き直す", pin, pumlPath)
@@ -85,7 +86,8 @@ func checkDiagram(pumlPath, puml, svg, pin string) []string {
 	return nil
 }
 
-// pumlBody は plantuml が svg に埋める形 (@startuml と @enduml の行を除いた本文。末尾の改行を落とす) に揃える
+// pumlBody は plantuml が svg に埋める形 (@startuml と @enduml の行を除き、先頭の空行と末尾の改行を落とした本文) に揃える。
+// 1 file に図を 1 つだけ書く前提で、最初の @startuml から最後の @enduml までを本文とする
 func pumlBody(puml string) string {
 	lines := strings.Split(strings.ReplaceAll(puml, "\r\n", "\n"), "\n")
 	start, end := 0, len(lines)
@@ -101,27 +103,20 @@ func pumlBody(puml string) string {
 			break
 		}
 	}
+	for start < end && strings.TrimSpace(lines[start]) == "" {
+		start++
+	}
 	return strings.TrimRight(strings.Join(lines[start:end], "\n"), "\n")
 }
 
 func decodePlantumlSource(enc string) (string, error) {
-	var buf bytes.Buffer
-	var acc, n uint
-	for _, c := range enc {
-		i := strings.IndexRune(plantumlAlphabet, c)
-		if i < 0 {
-			return "", fmt.Errorf("符号に無い文字 %q", c)
-		}
-		acc = acc<<6 | uint(i)
-		n += 6
-		if n >= 8 {
-			n -= 8
-			buf.WriteByte(byte(acc >> n))
-			acc &= 1<<n - 1
-		}
+	// 末尾の 4 文字に満たない端数は、余りの bit を 0 で埋めて符号にしている
+	raw, err := plantumlEncoding.DecodeString(enc)
+	if err != nil {
+		return "", err
 	}
-	b, err := io.ReadAll(flate.NewReader(&buf))
-	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
+	b, err := io.ReadAll(flate.NewReader(bytes.NewReader(raw)))
+	if err != nil {
 		return "", err
 	}
 	return strings.TrimRight(string(b), "\n"), nil

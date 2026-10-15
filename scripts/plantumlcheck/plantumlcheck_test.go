@@ -43,7 +43,10 @@ func run(t *testing.T, stubVersion string, failSyntax bool) (int, string, string
 	if failSyntax {
 		cmd.Env = append(cmd.Env, "FAIL_SYNTAX=1")
 	}
-	out, _ := cmd.CombinedOutput()
+	out, err := cmd.CombinedOutput()
+	if cmd.ProcessState == nil {
+		t.Fatalf("bash で script を撃てない: %v", err)
+	}
 	called, _ := os.ReadFile(calls)
 	return cmd.ProcessState.ExitCode(), string(out), string(called)
 }
