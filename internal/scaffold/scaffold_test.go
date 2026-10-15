@@ -110,9 +110,12 @@ func TestEveryTemplateBlocksTheSameReentryToolsAsTheGuideExample(t *testing.T) {
 // reentryNote は案内の項目の表の下にある、再入の仕組みを塞ぐ理由と見分け方の注記の見出し
 const reentryNote = "再入の仕組みを塞ぐ"
 
+// reentrySection は注記を置く案内の節 (項目の表の節) の見出し
+const reentrySection = "項目"
+
 func TestEveryTemplateAndTheGuideExamplePointToTheReentryNote(t *testing.T) {
 	// 注記の見出しを変えて片方だけ直すと、雛形のコメントが案内に無い置き場を指す
-	items, err := guide.FindSection(guide.Text(), "項目")
+	items, err := guide.FindSection(guide.Text(), reentrySection)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +126,7 @@ func TestEveryTemplateAndTheGuideExamplePointToTheReentryNote(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pointer := "「" + reentryNote + "」"
+	pointer := reentrySection + "の表の下の注記「" + reentryNote + "」"
 	texts := map[string]string{
 		"guide example":    strings.Join(guideExample(t), "\n"),
 		"repo WORKFLOW.md": string(repoWorkflow),
