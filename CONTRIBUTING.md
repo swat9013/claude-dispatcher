@@ -103,5 +103,6 @@ claude-dispatcher-dev loop
 ## commit・PR 規約
 
 - commit message と PR 本文は日本語で書く。1 行目は変更の要約 (「〜する」の形)、本文に変更点を箇条書きする
+- 上の 1 行目と本文の規約は、自分で書く commit に掛ける。git と GitHub が作る merge commit (remote の branch の取り込み・main の取り込み・PR の merge) は既定の message のままにし、message を書き換えるために rebase・amend・force push をしない
 - PR 本文には、対応する issue への closing reference (`Closes #<n>`) を書く
 - PR 本文には、issue の確定事項に無く自律判断で決めたことと、残るリスクを節を分けて書く

@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -41,9 +42,9 @@ const (
 )
 
 const usage = `usage:
-  claude-dispatcher loop [<workflow の path>]
-      前面で tick を回し続け、止めるまで戻らない (Ctrl+C で止める)
-  claude-dispatcher loop --dry-run [<workflow の path>]
+  claude-dispatcher loop [--max-concurrent <N>] [<workflow の path>]
+      前面で tick を回し続け、止めるまで戻らない (Ctrl+C で止める)。--max-concurrent は limits.max_concurrent を上書きする
+  claude-dispatcher loop --dry-run [--max-concurrent <N>] [<workflow の path>]
       起動するはずの作業対象と trigger を示す。何も起動せず、何も書かない
   claude-dispatcher status [<workflow の path>]
       loop の今の状態を描く。何も書かず、tracker の CLI も撃たない
@@ -261,32 +262,98 @@ func failureExit(err error) int {
 
 // --- loop ---
 
-// runLoop は `loop [--dry-run] [<workflow の path>]` を撃つ。
-func runLoop(args []string, stdout, stderr io.Writer) int {
-	var path string
-	var dryRun bool
-	for _, arg := range args {
+// loopOptions は `loop` の引数を読んだもの。
+type loopOptions struct {
+	path   string
+	dryRun bool
+	// maxConcurrent は --max-concurrent の値。0 は渡されていない (1 以上しか受けない)
+	maxConcurrent int
+}
+
+// valueFlags は args から targets の値付き flag を抜き出し、残りの引数を返す。`--name value` と `--name=value` を読み、
+// 値が無い・空・2 回書いたら誤りにする (formats.md §6・§7.4)。
+func valueFlags(args []string, targets map[string]*string) ([]string, error) {
+	var rest []string
+	for i := 0; i < len(args); i++ {
+		name, value, inline := strings.Cut(args[i], "=")
+		target, known := targets[name]
+		if !known {
+			rest = append(rest, args[i])
+			continue
+		}
+		if !inline {
+			// 次が flag の綴りなら値は書かれていない。値として取ると、後段の読み方しだいで flag の綴りが値として通る
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				return nil, fmt.Errorf("%s に値が要る", name)
+			}
+			i++
+			value = args[i]
+		}
+		if *target != "" {
+			return nil, fmt.Errorf("%s を 2 回書いている", name)
+		}
+		if value == "" {
+			return nil, fmt.Errorf("%s の値が空", name)
+		}
+		*target = value
+	}
+	return rest, nil
+}
+
+// loopFlags は `loop [--dry-run] [--max-concurrent <N>] [<workflow の path>]` の引数を読む (formats.md §5・§6)。
+func loopFlags(args []string) (loopOptions, error) {
+	var o loopOptions
+	var maxConcurrent string
+	rest, err := valueFlags(args, map[string]*string{"--max-concurrent": &maxConcurrent})
+	if err != nil {
+		return o, err
+	}
+	if maxConcurrent != "" {
+		n, err := strconv.Atoi(maxConcurrent)
+		if err != nil || n < 1 {
+			return o, fmt.Errorf("--max-concurrent は 1 以上の整数 (%q)", maxConcurrent)
+		}
+		o.maxConcurrent = n
+	}
+	for _, arg := range rest {
 		switch {
 		case arg == "--dry-run":
-			dryRun = true
+			o.dryRun = true
 		case strings.HasPrefix(arg, "-"):
-			return usageError(stderr, "未知の flag: %s", arg)
-		case path == "":
-			path = arg
+			return o, fmt.Errorf("未知の flag: %s", arg)
+		case o.path == "":
+			o.path = arg
 		default:
-			return usageError(stderr, "引数が多い: %s", arg)
+			return o, fmt.Errorf("引数が多い: %s", arg)
 		}
 	}
-	if path == "" {
-		path = defaultWorkflowFile
+	if o.path == "" {
+		o.path = defaultWorkflowFile
 	}
+	return o, nil
+}
+
+// runLoop は `loop [--dry-run] [--max-concurrent <N>] [<workflow の path>]` を撃つ。
+func runLoop(args []string, stdout, stderr io.Writer) int {
+	opts, err := loopFlags(args)
+	if err != nil {
+		return usageError(stderr, "%v", err)
+	}
+	path := opts.path
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		fmt.Fprintf(stderr, "workflow 定義の path を解決できない (%s): %v\n", path, err)
 		return exitFailed
 	}
 	// workflow 定義は PATH を使わずに読めるので、撃つ依存 CLI が決まる前の環境で読む
-	load := func() (workflow.Definition, error) { return workflow.Load(abs, unresolvedEnvironment().getenv) }
+	// --max-concurrent は読み直すたびに limits.max_concurrent を上書きし、loop が止まるまで変わらない (system.md §8)
+	load := func() (workflow.Definition, error) {
+		def, err := workflow.Load(abs, unresolvedEnvironment().getenv)
+		if err == nil && opts.maxConcurrent != 0 {
+			def.MaxConcurrent = opts.maxConcurrent
+		}
+		return def, err
+	}
 	def, err := load()
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -302,7 +369,7 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 		}
 		return exitUsage
 	}
-	if dryRun {
+	if opts.dryRun {
 		if err := e.confirmPlace(def); err != nil {
 			fmt.Fprintln(stderr, err)
 			return failureExit(err)

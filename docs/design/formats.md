@@ -181,8 +181,9 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 - `target` は、issue なら `issue#<番号>`、CL なら `cl#<番号>`
 - `tick` の行の起動の判定に使った値は、§6 の tick の手順 7 (候補の起動) の判定のもの
   - `running`・`waiting_retry`: その tick で候補の起動を始める前の、走っている worker と再起動待ちの claim の数 (手順 7 が `limits.max_concurrent` から引く数)
-  - `max_concurrent`: その tick で読み直した workflow 定義の `limits.max_concurrent`
+  - `max_concurrent`: `loop` に `--max-concurrent` (§6) を渡したならその値、渡さなければその tick で読み直した workflow 定義の `limits.max_concurrent`
   - 手順 7 は、`running`・`waiting_retry`・その tick で起動した数 (`launched` の数) の和が `max_concurrent` に達したところで候補の起動をやめる
+- `wait_slot` の行の `max_concurrent` は、空きの判定に使った値。`--max-concurrent` を渡したならその値、渡さなければ loop が直近に読めた版の workflow 定義の `limits.max_concurrent` (`wait_slot` は tick の外でも書かれ、読み直しに落ちた tick は前の版を使い続ける)
 - `outcome`
 
 | 値 | 意味 |
@@ -220,8 +221,10 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 ## 5. 試運転 (`loop --dry-run`)
 
 ```
-claude-dispatcher loop --dry-run [<workflow の path>]
+claude-dispatcher loop --dry-run [--max-concurrent <N>] [<workflow の path>]
 ```
+
+`--max-concurrent` は `loop` (§6) と同じ綴りと検査で受ける。試運転は並列上限に依らずに候補を出すので、渡しても出力は変わらない。
 
 workflow 定義を読んで検査し、事前検査 (§2.9) を通し、snapshot を作って trigger を評価し、起動するはずの作業対象を示して終わる。**何も書かない** (state dir を作らず、lock も取らない)。
 
@@ -246,10 +249,14 @@ fix-ci	cl	#51	ログインの失敗を記録する
 ## 6. `loop`
 
 ```
-claude-dispatcher loop [<workflow の path>]
+claude-dispatcher loop [--max-concurrent <N>] [<workflow の path>]
 ```
 
 実装 repo の clone を cwd にして撃つ。
+
+- `--max-concurrent <N>` は、workflow 定義の `limits.max_concurrent` を上書きする並列上限 (`system.md` §8)。`--max-concurrent 3` の形でも `--max-concurrent=3` の形でも書ける。値が無い (flag の直後が `-` で始まるときを含む)・値が空・2 回書いた・1 以上の整数でないときは引数の誤り (exit 2)
+  - 渡した値は loop が止まるまで変わらない。tick ごとに workflow 定義を読み直しても、`limits.max_concurrent` は効かない
+  - 本節と §4 の `limits.max_concurrent` は、`--max-concurrent` を渡した loop ではその値と読み替える
 
 **起動時の検査** (落ちたら stderr に理由を出して終わる):
 
@@ -585,7 +592,7 @@ claude-dispatcher doctor [<workflow の path>]
 
 - `--kind jira` を渡したら、`jira` の雛形を書き、`tracker.host` を `--host`、`tracker.repo` を `--repo` で埋める。`cl:` は、下の flag が無いときと同じ手順 (origin の host で種類を決め、gh か glab で置き場を引く) で `cl.kind`・`cl.host`・`cl.repo` を埋める。`cl:` を受ける flag は無い。acli は撃たない
   - `--kind` の値は `jira` だけを受ける。`--kind jira` には `--host` と `--repo` の両方が要り、`--host` と `--repo` は `--kind jira` と一緒にだけ書ける。綴りは `tracker.host` と `tracker.repo` と同じ (§2.1)。外れたら引数の誤り (exit 2)
-  - flag は `--kind jira` の形でも `--kind=jira` の形でも書ける
+  - flag は `--kind jira` の形でも `--kind=jira` の形でも書ける。値が無い (flag の直後が `-` で始まるときを含む)・値が空・同じ flag を 2 回書いたときは引数の誤り (exit 2)
 - flag が無ければ、`tracker.kind` を、cwd で `git remote get-url origin` が返す URL の host で決める。host が `github.com` なら `github`、それ以外は `gitlab`
   - URL は `https://<host>/…`・`ssh://<user>@<host>[:<port>]/…`・`<user>@<host>:…` (scp の綴り) を読む。host は port を除いて小文字にする
   - `github`: `tracker.repo` を、cwd で `gh repo view --json nameWithOwner` が返す repo で埋める

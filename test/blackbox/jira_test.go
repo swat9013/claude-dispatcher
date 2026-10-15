@@ -601,6 +601,12 @@ func TestSetupRejectsMalformedJiraFlags(t *testing.T) {
 		{"--kind", "jira", "--host", "https://" + jiraSite, "--repo", jiraKey},
 		{"--kind", "jira", "--host", jiraSite, "--repo", "acme/widgets"},
 		{"--kind"},
+		{"--kind", "jira", "--host", "--kind", "--repo", jiraKey},
+		{"--kind", "jira", "--host", "--host", jiraSite, "--repo", jiraKey},
+		{"--kind=", "--host", jiraSite, "--repo", jiraKey},
+		{"--kind", "jira", "--host=", "--repo", jiraKey},
+		{"--kind", "jira", "--kind", "jira", "--host", jiraSite, "--repo", jiraKey},
+		{"--kind", "jira", "--host", jiraSite, "--host", jiraSite, "--repo", jiraKey},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			s := newSandbox(t)
