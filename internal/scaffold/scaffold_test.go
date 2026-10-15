@@ -1,6 +1,8 @@
 package scaffold
 
 import (
+	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -110,15 +112,24 @@ const reentryNote = "再入の仕組みを塞ぐ"
 
 func TestEveryTemplateAndTheGuideExamplePointToTheReentryNote(t *testing.T) {
 	// 注記の見出しを変えて片方だけ直すと、雛形のコメントが案内に無い置き場を指す
-	if !strings.Contains(guide.Text(), "**"+reentryNote+"**:") {
-		t.Fatalf("案内に注記 %q が無い", reentryNote)
+	items, err := guide.FindSection(guide.Text(), "項目")
+	if err != nil {
+		t.Fatal(err)
 	}
-	pointer := "注記「" + reentryNote + "」"
+	if !strings.Contains(items.Body, "**"+reentryNote+"**:") {
+		t.Fatalf("案内の節 %q に注記 %q が無い", items.Heading, reentryNote)
+	}
+	repoWorkflow, err := os.ReadFile(filepath.Join("..", "..", "WORKFLOW.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pointer := "「" + reentryNote + "」"
 	texts := map[string]string{
-		"guide example": strings.Join(guideExample(t), "\n"),
-		"github":        GitHub("acme/widgets"),
-		"gitlab":        GitLab("gitlab.example.com", "acme/widgets"),
-		"jira":          Jira("acme.atlassian.net", "WIDGETS", GitLabCL("gitlab.example.com", "acme/widgets")),
+		"guide example":    strings.Join(guideExample(t), "\n"),
+		"repo WORKFLOW.md": string(repoWorkflow),
+		"github":           GitHub("acme/widgets"),
+		"gitlab":           GitLab("gitlab.example.com", "acme/widgets"),
+		"jira":             Jira("acme.atlassian.net", "WIDGETS", GitLabCL("gitlab.example.com", "acme/widgets")),
 	}
 	for name, text := range texts {
 		t.Run(name, func(t *testing.T) {
