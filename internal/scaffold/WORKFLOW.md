@@ -15,7 +15,7 @@ limits:
 claude:
   # 再入の仕組みを塞ぐ (理由は `claude-dispatcher guide` の項目の表の下の注記「再入の仕組みを塞ぐ」)。
   # --disallowedTools は値を複数取るが、dispatcher が後ろに渡す -p で止まる
-  args: [--permission-mode, auto, --disallowedTools, "ScheduleWakeup,CronCreate,CronList,CronDelete"]
+  args: [--permission-mode, auto, --disallowedTools, "ScheduleWakeup,CronCreate,CronList,CronDelete,Monitor"]
 triggers:
   - name: implement
     on: issue

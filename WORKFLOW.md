@@ -19,7 +19,7 @@ limits:
 claude:
   # 再入の仕組みを塞ぐ (理由は internal/guide/guide.md の項目の表の下の注記「再入の仕組みを塞ぐ」)。
   # --disallowedTools は値を複数取るが、dispatcher が後ろに渡す -p で止まる
-  args: [--permission-mode, auto, --disallowedTools, "ScheduleWakeup,CronCreate,CronList,CronDelete"]
+  args: [--permission-mode, auto, --disallowedTools, "ScheduleWakeup,CronCreate,CronList,CronDelete,Monitor"]
 triggers:
   # 既存の pull request の手直しを、新規の実装より先に起動する (宣言順が優先順)
   - name: resolve-conflict
