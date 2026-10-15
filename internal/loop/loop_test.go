@@ -384,7 +384,7 @@ func TestTickWhoseCLPlaceDiffersOnlyInCaseObserves(t *testing.T) {
 
 			h.run(t)
 
-			if h.reads == 0 {
+			if h.reads == 0 || strings.Contains(h.stdout.String(), "tick error") {
 				t.Fatalf("大文字と小文字だけが違う CL 置き場の版を採らなかった:\n%s", h.stdout.String())
 			}
 		})
