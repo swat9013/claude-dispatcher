@@ -27,12 +27,14 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      # exit 1 は重なりの検出、それ以外の非 0 は検査そのものの失敗
+      # exit 1 は重なりの検出、それ以外の非 0 は検査そのものの失敗。go run は子の非 0 をすべて 1 に潰すので、
+      # build してから binary を撃つ (build の失敗は step の失敗にする)
+      - run: go build -o "$RUNNER_TEMP/repocheck" ./scripts/repocheck
       - name: 検査
         id: check
         run: |
           code=0
-          go run ./scripts/repocheck adr > report.txt 2>&1 || code=$?
+          "$RUNNER_TEMP/repocheck" adr > report.txt 2>&1 || code=$?
           cat report.txt
           echo "code=$code" >> "$GITHUB_OUTPUT"
           if [ "$code" -ne 0 ] && [ "$code" -ne 1 ]; then
