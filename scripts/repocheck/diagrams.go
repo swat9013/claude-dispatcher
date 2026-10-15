@@ -62,6 +62,9 @@ func runDiagrams() ([]string, error) {
 func checkDiagram(pumlPath, puml, svg, pin string) []string {
 	svgPath := strings.TrimSuffix(pumlPath, ".puml") + ".svg"
 	redraw := fmt.Sprintf("plantuml %s で `plantuml -tsvg %s` を撃って描き直す", pin, pumlPath)
+	if n := strings.Count(puml, "@startuml"); n != 1 {
+		return []string{fmt.Sprintf("%s: @startuml が %d 個ある。docs/design の .puml には図を 1 つだけ書く", pumlPath, n)}
+	}
 	if svg == "" {
 		return []string{fmt.Sprintf("%s: 描いた svg (%s) が無い。%s", pumlPath, svgPath, redraw)}
 	}
@@ -87,7 +90,7 @@ func checkDiagram(pumlPath, puml, svg, pin string) []string {
 }
 
 // pumlBody は plantuml が svg に埋める形 (@startuml と @enduml の行を除き、先頭の空行と末尾の改行を落とした本文) に揃える。
-// 1 file に図を 1 つだけ書く前提で、最初の @startuml から最後の @enduml までを本文とする
+// 図が 1 つだけであることは checkDiagram が先に確かめる
 func pumlBody(puml string) string {
 	lines := strings.Split(strings.ReplaceAll(puml, "\r\n", "\n"), "\n")
 	start, end := 0, len(lines)
@@ -103,7 +106,8 @@ func pumlBody(puml string) string {
 			break
 		}
 	}
-	for start < end && strings.TrimSpace(lines[start]) == "" {
+	// 落とすのは空の行だけ。空白だけの行は plantuml も残す
+	for start < end && lines[start] == "" {
 		start++
 	}
 	return strings.TrimRight(strings.Join(lines[start:end], "\n"), "\n")

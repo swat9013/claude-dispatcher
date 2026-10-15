@@ -18,9 +18,12 @@ if ! command -v plantuml >/dev/null; then
   exit 1
 fi
 # 1 行目は `PlantUML version <版> ...`
-if ! out=$(plantuml -version 2>&1); then
+# 版は stdout だけから取る (Java の wrapper は stderr に警告を出しうる)。stderr は失敗の案内にだけ使う
+errlog=$(mktemp)
+trap 'rm -f "$errlog"' EXIT
+if ! out=$(plantuml -version 2>"$errlog"); then
   echo "plantuml -version が失敗した。入れ直す (CONTRIBUTING.md の「セットアップ」):" >&2
-  echo "$out" >&2
+  cat "$errlog" >&2
   echo "  $install" >&2
   exit 1
 fi

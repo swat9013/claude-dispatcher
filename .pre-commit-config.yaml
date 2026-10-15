@@ -71,13 +71,14 @@ repos:
         pass_filenames: false
         always_run: true
       # docs/design の図。描画の版は scripts/plantuml.version に固定する。svg の一致の比べ方とその理由は CONTRIBUTING.md の「gate」。
-      # どちらも軽いので、読む file を files: に重ねて書かずに毎回撃つ
+      # plantuml と python3 を撃つ 2 つは、図と無関係な commit を前提 tool の有無で止めないよう、読む file と自身の script に絞る。
+      # repocheck-diagrams は network も外部 tool も使わないので、隣の repocheck と同じく毎回撃つ
       - id: plantuml-syntax
         name: plantuml (構文)
         entry: scripts/plantuml-check.sh
         language: unsupported
         pass_filenames: false
-        always_run: true
+        files: ^(docs/design/[^/]*\.puml|scripts/plantuml\.version|scripts/plantuml-check\.sh)$
       - id: repocheck-diagrams
         name: repocheck (図の描き直し漏れ)
         entry: go run ./scripts/repocheck diagrams
@@ -90,7 +91,7 @@ repos:
         entry: python3 -I scripts/check-statechart.py docs/design/statechart.puml
         language: unsupported
         pass_filenames: false
-        always_run: true
+        files: ^(docs/design/statechart\.puml|scripts/check-statechart\.py)$
       # binary は CI と同じ版を人が公式の手段で入れる (CONTRIBUTING.md の「セットアップ」)。公式の hook は
       # language: golang で source から build し (公式が保証しない導入経路)、--fix も付くので使わない。
       # script は手元の版が checks.yml の lint job の version: と違えば lint を撃たずに落とす

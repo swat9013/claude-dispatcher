@@ -78,16 +78,18 @@ jobs:
       # 版は Renovate が上げる (CONTRIBUTING.md の「gate」の「版の更新」)
       - run: pipx install pre-commit==4.6.2
       # 図の構文の hook (plantuml-syntax) が撃つ plantuml を、固定した版 (scripts/plantuml.version) の native binary で入れる。
-      # Java も graphviz も要らない。release の asset は tag を変えずに差し替えうるので、scripts/plantuml.sha256 で確かめてから展開する。
+      # Java も graphviz も要らない。release の asset は tag を変えずに差し替えうるので、scripts/plantuml.sha256 (hash だけを持つ。
+      # file 名は版から組み立てる) で確かめてから展開する。
       # check-statechart の hook が撃つ python3 は runner の image に入っているものを使う
       - name: plantuml を入れる
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           version=$(tr -d '[:space:]' < scripts/plantuml.version)
-          gh release download "v$version" -R plantuml/plantuml -p "native-plantuml-linux-amd64-$version.zip" -D "$RUNNER_TEMP"
-          (cd "$RUNNER_TEMP" && sha256sum -c "$GITHUB_WORKSPACE/scripts/plantuml.sha256")
-          unzip -q "$RUNNER_TEMP/native-plantuml-linux-amd64-$version.zip" -d "$RUNNER_TEMP/plantuml"
+          zip="$RUNNER_TEMP/native-plantuml-linux-amd64-$version.zip"
+          gh release download "v$version" -R plantuml/plantuml -p "$(basename "$zip")" -D "$RUNNER_TEMP"
+          echo "$(tr -d '[:space:]' < scripts/plantuml.sha256)  $zip" | sha256sum -c
+          unzip -q "$zip" -d "$RUNNER_TEMP/plantuml"
           echo "$RUNNER_TEMP/plantuml" >> "$GITHUB_PATH"
       # ADR の番号の一意 (repocheck-adr) は外す。並行する PR が同じ番号を取って merge されると、CL の変更と無関係に
       # 後の PR の merge ref が赤くなる。main 側の重なりは adr-numbers.yml が拾う (CONTRIBUTING.md の「gate」)

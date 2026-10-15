@@ -27,11 +27,18 @@ func TestCheckDiagram_固定した版で描き直したsvgは通す(t *testing.T
 	}
 }
 
-// plantuml は @startuml の直後の空行を落として埋めるので、空行を足しただけの puml は描き直しても同じ source になる
-func TestCheckDiagram_startumlの直後の空行は比べない(t *testing.T) {
-	puml, svg := readSample(t)
-	puml = strings.Replace(puml, "@startuml sample\n", "@startuml sample\n\n", 1)
-	if got := checkDiagram("sample.puml", puml, svg, "1.2026.8"); len(got) != 0 {
+// testdata/diagrams/blank.svg は、@startuml の直後に空の行 2 つと空白だけの行を置いた blank.puml を plantuml 1.2026.8 で描いたもの。
+// plantuml は空の行を落とし、空白だけの行は残して埋める
+func TestCheckDiagram_startumlの直後に空行を置いたpumlも描き直せば通す(t *testing.T) {
+	puml, err := os.ReadFile("testdata/diagrams/blank.puml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	svg, err := os.ReadFile("testdata/diagrams/blank.svg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := checkDiagram("blank.puml", string(puml), string(svg), "1.2026.8"); len(got) != 0 {
 		t.Fatalf("問題を返した: %v", got)
 	}
 }
@@ -58,6 +65,14 @@ func TestCheckDiagram_描いた元のsourceを持たないsvgは落とす(t *tes
 	got := checkDiagram("sample.puml", puml, `<svg><?plantuml 1.2026.8?></svg>`, "1.2026.8")
 	if len(got) != 1 {
 		t.Fatalf("source の無い svg を通した: %v", got)
+	}
+}
+
+func TestCheckDiagram_図を2つ書いたpumlは落とす(t *testing.T) {
+	puml, svg := readSample(t)
+	got := checkDiagram("sample.puml", puml+"@startuml other\n[*] --> X\n@enduml\n", svg, "1.2026.8")
+	if len(got) != 1 || !strings.Contains(got[0], "2 個") {
+		t.Fatalf("図が 2 つの puml を落とさなかった: %v", got)
 	}
 }
 

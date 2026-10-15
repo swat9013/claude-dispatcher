@@ -12,7 +12,11 @@ import (
 // stub の plantuml は -version に渡された版を名乗り、--check-syntax は FAIL_SYNTAX が立っていれば落ちる。撃たれた引数を calls に残す
 const stub = `#!/usr/bin/env bash
 echo "$*" >> "$STUB_CALLS"
-if [ "$1" = "-version" ]; then echo "PlantUML version $STUB_VERSION / abc"; exit 0; fi
+if [ "$1" = "-version" ]; then
+  [ "$STUB_VERSION" = broken ] && { echo "no java" >&2; exit 3; }
+  echo "Picked up JAVA_TOOL_OPTIONS: x" >&2
+  echo "PlantUML version $STUB_VERSION / abc"; exit 0
+fi
 [ -z "${FAIL_SYNTAX:-}" ]
 `
 
@@ -62,6 +66,13 @@ func TestPlantumlCheck_構文の誤りがあれば落とす(t *testing.T) {
 	code, out, _ := run(t, "1.2026.8", true)
 	if code != 1 || !strings.Contains(out, "docs/design/a.puml") {
 		t.Fatalf("exit %d, out %q", code, out)
+	}
+}
+
+func TestPlantumlCheck_版を取れなければ理由と入れ方を出して落とす(t *testing.T) {
+	code, out, called := run(t, "broken", false)
+	if code != 1 || strings.Contains(called, "--check-syntax") || !strings.Contains(out, "no java") || !strings.Contains(out, "入れ直す") {
+		t.Fatalf("exit %d, out %q, calls %q", code, out, called)
 	}
 }
 
