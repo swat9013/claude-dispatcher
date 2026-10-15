@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-const sample = "# 題\n\n## 書き方\n\n```markdown\n# fenced block の中は見出しでない\n| key | 中身 |\n|---|---|\n| `x` | 表でない |\n```\n\n### 項目\n\n散文。\n\n| key | 型 |\n|---|---|\n| `a` | 文字列 |\n| `b` | 真偽 |\n\n| key | `jira` での意味 |\n|---|---|\n| `a` | 対応 |\n\n| 宣言 | GitHub |\n|---|---|\n| `a` | 書ける |\n\n### 空\n\n| key | GitLab の field |\n|---|---|\n| `a` | `x` |\n\n## 次\n\n本文\n"
+const sample = "# 題\n\n## 書き方\n\n```markdown\n# fenced block の中は見出しでない\n| key | 中身 |\n|---|---|\n| `x` | 表でない |\n```\n\n### 項目\n\n散文。\n\n| key | 型 |\n|---|---|\n| `a` | 文字列 |\n| `b` | 真偽 |\n\n| 宣言 | 型 |\n|---|---|\n| `c` | 文字列 |\n\n| key | `jira` での意味 |\n|---|---|\n| `a` | 対応 |\n\n| 宣言 | GitHub |\n|---|---|\n| `a` | 書ける |\n\n### 空\n\n| key | GitLab の field |\n|---|---|\n| `a` | `x` |\n\n## 次\n\n本文\n"
 
 // services はテストの置き場のサービスの綴り
 var services = []string{"github", "gitlab", "jira"}
@@ -17,7 +17,8 @@ func TestASectionEndsAtTheNextHeadingOfTheSameOrShallowerLevel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(s.Body, "### 項目") || strings.Contains(s.Body, "## 次") {
+	items, _ := FindSection(sample, "項目")
+	if !strings.Contains(s.Body, "### 項目") || strings.Contains(s.Body, "## 次") || strings.Contains(items.Body, "### 空") {
 		t.Fatalf("節の範囲が違う:\n%s", s.Body)
 	}
 }

@@ -139,7 +139,12 @@ func unknownGuideKeys(text string) ([]string, error) {
 		}
 		keys := table.paths("")
 		for _, cell := range cells {
-			for _, name := range backquoted(cell) {
+			names := backquoted(cell)
+			if len(names) == 0 {
+				// key をバッククォートで囲まずに書いた行も、受けない綴りとして報告する (黙って見逃さない)
+				names = []string{cell}
+			}
+			for _, name := range names {
 				if !slices.Contains(keys, name) {
 					unknown = append(unknown, title+": "+name)
 				}
@@ -210,14 +215,14 @@ func TestEveryKeyInTheGuideIsAcceptedByTheLoader(t *testing.T) {
 }
 
 func TestAKeyNotAcceptedByTheLoaderIsReported(t *testing.T) {
-	text := strings.Replace(guide.Text(), "\n| `cl.kind` |", "\n| `cl.nope` | 文字列 | 無い key |\n| `cl.kind` |", 1)
+	text := strings.Replace(guide.Text(), "\n| `cl.kind` |", "\n| `cl.nope` | 文字列 | 無い key |\n| cl.bare | 文字列 | 囲まない key |\n| `cl.kind` |", 1)
 
 	unknown, err := unknownGuideKeys(text)
 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(unknown, "項目: cl.nope") {
+	if !slices.Contains(unknown, "項目: cl.nope") || !slices.Contains(unknown, "項目: cl.bare") {
 		t.Fatalf("読み込みが受けない key が報告されない: %v", unknown)
 	}
 }
