@@ -41,11 +41,9 @@ const (
 	exitAuth        = 4
 )
 
-// usage の形式は formats.md §10。Options 節は引数の宣言 (args.go) から生成し、Commands と Arguments は手で書く
-var usage = `Usage: claude-dispatcher <command> [options] [WORKFLOW]
-       claude-dispatcher -h | --help | help
-       claude-dispatcher --version
-
+// usage の形式は formats.md §10。Usage 節の command の代わりに flag を書く形と Options 節は引数の宣言 (args.go) から生成し、
+// Commands と Arguments は手で書く
+var usage = "Usage: claude-dispatcher <command> [options] [WORKFLOW]\n" + usageForms() + `
 Commands:
   loop      前面で tick を回し続け、止めるまで戻らない (Ctrl+C で止める)
   status    loop の今の状態を描く。何も書かず、tracker の CLI も撃たない
@@ -76,6 +74,15 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stderr, usage)
 		return exitUsage
 	}
+	switch {
+	case helpFlag.accepts(args[0]):
+		fmt.Fprint(stdout, usage)
+		return 0
+	case versionFlag.accepts(args[0]):
+		// workflow 定義も state dir も読まない。不具合の報告に版を貼れるよう、導入が壊れていても撃てる
+		fmt.Fprintf(stdout, "claude-dispatcher %s\n", version.Current())
+		return 0
+	}
 	switch args[0] {
 	case "loop":
 		return runLoop(args[1:], stdout, stderr)
@@ -89,13 +96,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runDoctor(args[1:], stdout, stderr)
 	case "guide":
 		return runGuide(args[1:], stdout, stderr)
-	case "-h", "--help", "help":
-		fmt.Fprint(stdout, usage)
-		return 0
-	case "--version":
-		// workflow 定義も state dir も読まない。不具合の報告に版を貼れるよう、導入が壊れていても撃てる
-		fmt.Fprintf(stdout, "claude-dispatcher %s\n", version.Current())
-		return 0
 	}
 	return usageError(stderr, "未知の subcommand: %s", args[0])
 }
@@ -199,8 +199,11 @@ func loopFlags(argv []string) (loopOptions, error) {
 	}
 	o := loopOptions{path: a.workflowPath, dryRun: a.has("--dry-run")}
 	if v := a.value("--max-concurrent"); v != "" {
-		// 値は宣言の検査 (positiveInt) を通っている
-		o.maxConcurrent, _ = strconv.Atoi(v)
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			panic(fmt.Sprintf("--max-concurrent の値 %q が宣言の検査 (positiveInt) を通っていない", v))
+		}
+		o.maxConcurrent = n
 	}
 	return o, nil
 }
