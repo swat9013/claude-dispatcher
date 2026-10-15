@@ -134,7 +134,7 @@ var providers = []Provider{
 			return Parts{Issues: store, Confirm: func() error { return store.Confirm(jira.NamesOf(s.Triggers)) }}
 		},
 		Setup: Setup{
-			flags: "--host <site> と --repo <project key>",
+			flags: "--host <site> と --repo <key>",
 			template: func(p Place, cl scaffold.CLHost) string {
 				project := p.value.(jira.Project)
 				return scaffold.Jira(project.Site, project.Key, cl)

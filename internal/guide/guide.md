@@ -27,7 +27,7 @@ claude-dispatcher は、tracker (GitHub・GitLab・Jira Cloud) の issue と CL 
 1. **雛形を置く**: `claude-dispatcher setup` が cwd に `WORKFLOW.md` の雛形を書く。既にある file は上書きしない
    - origin の host が `github.com` なら GitHub の雛形で、`tracker.repo` は `gh repo view` が返す repo で埋まる
    - それ以外の host なら GitLab の雛形で、`tracker.host` と `tracker.repo` は `glab repo view` が返す project の web の host と path で埋まる
-   - Jira を issue 置き場にするなら `claude-dispatcher setup --kind jira --host <site> --repo <project key>`。CL 置き場 (`cl:`) は、origin の host で GitHub か GitLab を決め、上と同じ手順で埋まる
+   - Jira を issue 置き場にするなら `claude-dispatcher setup --kind jira --host <site> --repo <key>` (`<key>` は Jira の project key)。CL 置き場 (`cl:`) は、origin の host で GitHub か GitLab を決め、上と同じ手順で埋まる
 2. **自分の project に合わせて書く**: trigger の述語・action・hooks・並列上限を直し、repo に commit する。書ける項目は下の「workflow 定義の書き方」
    - worker が作業を終えたら作業対象を trigger から外すよう、action か本文 (共通 prompt) に書く (下の「action が守る約束」)
    - workspace の置き場 (`workspace.root`) が clone の中なら、`.gitignore` に足す。既定の `.claude-dispatcher/workspaces` は clone の中に入る。`setup` は `.gitignore` を書かない
