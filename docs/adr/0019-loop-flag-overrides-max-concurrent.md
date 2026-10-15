@@ -7,7 +7,7 @@
 
 並列上限は workflow 定義の `limits.max_concurrent` だけで決まっていた。workflow 定義は実装 repo に commit され、tick ごとに読み直される (`docs/design/system.md` §8)。
 
-並列上限は、loop を回すマシンが同時に捌ける worker の数で決まる値で、project の宣言ではない。調停 remote (ADR 0011) で別々のマシンの loop が同じ issue 置き場を分担すると、どのマシンも同じ版の workflow 定義を読むので、マシンごとに違う上限を置けない。一時的に絞る・広げるだけでも、repo の file を書き換えて commit する必要があった (#262)。
+並列上限は、loop を回すマシンが同時に捌ける worker の数で決まる値で、project の宣言ではない。それでも、loop を回すマシンを替えるとき・一時的に絞る・広げるときに、repo の file を書き換えて commit する必要があった (#262)。調停 remote (ADR 0011。未実装 #167) で別々のマシンの loop が同じ issue 置き場を分担するようになれば、どのマシンも同じ版の workflow 定義を読むので、マシンごとに違う上限を置けない。
 
 ## Decision
 
@@ -19,8 +19,8 @@
 
 ### 良い影響
 
-- 同じ workflow 定義を読むマシンごとに、捌ける数に合わせた並列上限を置ける
-- 一時的に上限を変えるときに、repo への commit が要らない
+- loop を回すマシンの捌ける数に合わせた並列上限を、repo への commit なしに置ける。一時的に上限を変えるときも同じ
+- 調停 remote で分担するようになれば、同じ workflow 定義を読むマシンごとに違う並列上限を置ける
 
 ### 悪い影響 / 制約
 

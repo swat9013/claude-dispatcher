@@ -262,45 +262,60 @@ func failureExit(err error) int {
 
 // --- loop ---
 
-// runLoop は `loop [--dry-run] [<workflow の path>]` を撃つ。
-func runLoop(args []string, stdout, stderr io.Writer) int {
-	var path string
-	var dryRun bool
+// loopOptions は `loop` の引数を読んだもの。
+type loopOptions struct {
+	path   string
+	dryRun bool
 	// maxConcurrent は --max-concurrent の値。0 は渡されていない (1 以上しか受けない)
-	var maxConcurrent int
+	maxConcurrent int
+}
+
+// loopFlags は `loop [--dry-run] [--max-concurrent <N>] [<workflow の path>]` の引数を読む (formats.md §5・§6)。
+func loopFlags(args []string) (loopOptions, error) {
+	var o loopOptions
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		name, value, inline := strings.Cut(arg, "=")
 		switch {
 		case arg == "--dry-run":
-			dryRun = true
+			o.dryRun = true
 		case name == "--max-concurrent":
 			if !inline {
 				if i+1 >= len(args) {
-					return usageError(stderr, "--max-concurrent に値が要る")
+					return o, errors.New("--max-concurrent に値が要る")
 				}
 				i++
 				value = args[i]
 			}
-			if maxConcurrent != 0 {
-				return usageError(stderr, "--max-concurrent を 2 回書いている")
+			if o.maxConcurrent != 0 {
+				return o, errors.New("--max-concurrent を 2 回書いている")
 			}
 			n, err := strconv.Atoi(value)
 			if err != nil || n < 1 {
-				return usageError(stderr, "--max-concurrent は 1 以上の整数 (%q)", value)
+				return o, fmt.Errorf("--max-concurrent は 1 以上の整数 (%q)", value)
 			}
-			maxConcurrent = n
+			o.maxConcurrent = n
 		case strings.HasPrefix(arg, "-"):
-			return usageError(stderr, "未知の flag: %s", arg)
-		case path == "":
-			path = arg
+			return o, fmt.Errorf("未知の flag: %s", arg)
+		case o.path == "":
+			o.path = arg
 		default:
-			return usageError(stderr, "引数が多い: %s", arg)
+			return o, fmt.Errorf("引数が多い: %s", arg)
 		}
 	}
-	if path == "" {
-		path = defaultWorkflowFile
+	if o.path == "" {
+		o.path = defaultWorkflowFile
 	}
+	return o, nil
+}
+
+// runLoop は `loop [--dry-run] [--max-concurrent <N>] [<workflow の path>]` を撃つ。
+func runLoop(args []string, stdout, stderr io.Writer) int {
+	opts, err := loopFlags(args)
+	if err != nil {
+		return usageError(stderr, "%v", err)
+	}
+	path, dryRun, maxConcurrent := opts.path, opts.dryRun, opts.maxConcurrent
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		fmt.Fprintf(stderr, "workflow 定義の path を解決できない (%s): %v\n", path, err)

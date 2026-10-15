@@ -111,6 +111,23 @@ func TestLoopRejectsAnUnknownFlag(t *testing.T) {
 	s.assertNoGh("flag が誤っているのに")
 }
 
+func TestOnlyLoopAcceptsTheConcurrencyLimitFlag(t *testing.T) {
+	for _, args := range [][]string{
+		{"status", "--max-concurrent", "2"},
+		{"doctor", "--max-concurrent", "2"},
+		{"paths", "--json", "--max-concurrent", "2"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			s := newSandbox(t)
+
+			r := s.run(args...)
+
+			assertExit(t, r, 2)
+			s.assertNoGh("flag が誤っているのに")
+		})
+	}
+}
+
 func TestLoopRejectsAMalformedConcurrencyLimitFlag(t *testing.T) {
 	for _, args := range [][]string{
 		{"--max-concurrent", "0"},
