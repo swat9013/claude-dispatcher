@@ -42,6 +42,8 @@ const (
 
 // usage の形式は formats.md §10
 const usage = `Usage: claude-dispatcher <command> [options] [WORKFLOW]
+       claude-dispatcher -h | --help | help
+       claude-dispatcher --version
 
 Commands:
   loop      前面で tick を回し続け、止めるまで戻らない (Ctrl+C で止める)
@@ -57,8 +59,8 @@ Options:
   --kind jira        (setup) Jira を issue 置き場にする。--host と --repo と一緒に書く
   --host <site>      (setup) Jira の site
   --repo <key>       (setup) Jira の project key
-  -h, --help         この一覧を出す
-  --version          版を出す
+  -h, --help         (command の代わり) この一覧を出す。help でも同じ
+  --version          (command の代わり) 版を出す
 
 Arguments:
   WORKFLOW   workflow 定義の path。省くと cwd の WORKFLOW.md (guide では受けない)

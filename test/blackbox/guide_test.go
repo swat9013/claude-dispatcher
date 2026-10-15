@@ -63,6 +63,17 @@ func TestUsageEndsWithAPointerToTheGuide(t *testing.T) {
 	}
 }
 
+// usageSection は usage の出力から、見出し name の節の中身 (次の空行まで) を切り出す。節の綴りは formats.md §10
+func usageSection(t *testing.T, out, name string) string {
+	t.Helper()
+	_, body, found := strings.Cut(out, "\n"+name+":\n")
+	if !found {
+		t.Fatalf("usage に節 %s が無い:\n%s", name, out)
+	}
+	body, _, _ = strings.Cut(body, "\n\n")
+	return body
+}
+
 func TestUsageListsSectionsInTheStandardOrder(t *testing.T) {
 	// 節の並びは formats.md §10
 	s := newSandbox(t)
@@ -81,12 +92,29 @@ func TestUsageListsSectionsInTheStandardOrder(t *testing.T) {
 		}
 		last = i
 	}
-	_, options, _ := strings.Cut(r.stdout, "\nOptions:\n")
-	options, _, _ = strings.Cut(options, "\nArguments:\n")
+}
+
+func TestUsageListsEveryAcceptedFlagUnderOptions(t *testing.T) {
+	// 一覧は parser が受ける flag (main.go の run・runLoop・runPaths、setup.go の setupFlags)。flag を足したらここにも足す
+	s := newSandbox(t)
+
+	options := usageSection(t, s.run("--help").stdout, "Options")
+
 	for _, flag := range []string{"--dry-run", "--json", "--kind", "--host", "--repo", "-h, --help", "--version"} {
 		if !strings.Contains("\n"+options, "\n  "+flag+" ") {
 			t.Errorf("Options に %s が無い", flag)
 		}
+	}
+}
+
+func TestUsageWithoutArgumentsGoesToStderrWithExit2(t *testing.T) {
+	s := newSandbox(t)
+
+	r := s.run()
+
+	assertExit(t, r, 2)
+	if r.stdout != "" || !strings.HasPrefix(r.stderr, "Usage: claude-dispatcher ") {
+		t.Fatalf("引数が無いのに usage だけを stderr に出していない: stdout = %q\nstderr:\n%s", r.stdout, r.stderr)
 	}
 }
 
@@ -95,8 +123,7 @@ func TestGuideCoversEverySubcommandInTheUsage(t *testing.T) {
 	s := newSandbox(t)
 	usage := s.run("--help")
 	guide := s.run("guide")
-	commands, _, _ := strings.Cut(usage.stdout, "\nOptions:")
-	_, commands, _ = strings.Cut(commands, "\nCommands:\n")
+	commands := usageSection(t, usage.stdout, "Commands")
 	subcommand := regexp.MustCompile(`(?m)^  ([a-z]+) `)
 
 	matches := subcommand.FindAllStringSubmatch(commands, -1)

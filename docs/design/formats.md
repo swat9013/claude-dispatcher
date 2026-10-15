@@ -741,13 +741,14 @@ claude-dispatcher -h
 claude-dispatcher help
 ```
 
-使い方の一覧を stdout に出す。引数が無いとき・引数の誤り (exit 2) のときは、誤りの行の後ろに同じ一覧を stderr に出す。
+使い方の一覧を stdout に出す。引数が無いときは同じ一覧だけを、引数の誤りのときは誤りの行の後ろに同じ一覧を、stderr に出す。
 
-- 節を `Usage:` の 1 行 → `Commands:` → `Options:` → `Arguments:` の順に並べ、節の間を空行で区切る。主流の CLI help (clig.dev・cobra・clap・argparse が出す形) と同じ並びにし、一覧として流し読みできるようにする
+- 節を `Usage:` → `Commands:` → `Options:` → `Arguments:` の順に並べ、節の間を空行で区切る。主流の CLI help と同じ節の並び (見出しの綴りは tool ごとに違う) にし、一覧として流し読みできるようにする
+- `Usage:` は撃ち方の形を 1 つにつき 1 行で並べる: command を取る形 (`<command> [options] [WORKFLOW]`)・`-h | --help | help`・`--version`。2 行目からは `claude-dispatcher` の桁を 1 行目に揃える
 - `Commands:` は subcommand 1 つにつき 1 行で、名前と 1 行の説明を桁を揃えて並べる。行は 2 桁の字下げで始める
-- `Options:` は受けるすべての flag (`-h, --help`・`--version` を含む) を 1 つにつき 1 行で並べる。subcommand に限る flag は、説明の頭に `(<subcommand>)` を書く
+- `Options:` は受けるすべての flag (`-h, --help`・`--version` を含む) を 1 つにつき 1 行で並べる。subcommand に限る flag は、説明の頭に `(<subcommand>)` を書く。command の代わりにだけ書ける flag (`-h, --help`・`--version`) は、説明の頭に `(command の代わり)` を書く
 - `Arguments:` は位置引数を並べる。workflow 定義の path は `WORKFLOW` と書き、省いたときの既定 (cwd の `WORKFLOW.md`) を説明に書く
-- placeholder は ASCII で空白を含めない (`<site>`・`<key>`・`WORKFLOW`)。引数がいくつかを一目で読めるようにする
+- usage の placeholder は ASCII で空白を含めない (`<site>`・`<key>`・`WORKFLOW`)。引数がいくつかを一目で読めるようにする
 - 最後の行は案内 (§9) を指す
 
-exit: 0。
+exit: 0 (`--help`・`-h`・`help`) / 2 = 引数が無い・引数の誤り。
