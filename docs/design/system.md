@@ -265,6 +265,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。claim の段階と打�
   - 並列上限・attempt の上限・backoff の上限・stall の上限・worker 1 回分の上限時間 (既定 1 時間。0 で無効)
   - 周期
   - `claude` の起動 command と引数
+- **`loop` の引数で上書きできるのは、loop を回すマシンの資源で決まる値だけ** (今は並列上限。ADR 0019)。workflow 定義は repo に commit され、その版を読むどの loop にも同じ値が効く。マシンの資源で決まる値を宣言だけで決めると、loop を回すマシンを替える・一時的に絞るたびに commit が要り、調停 remote (ADR 0011。未実装 #167) で分担するようになれば、マシンごとに違う値を置けない。trigger・action・hooks・置き場・周期・retry と時間の上限・起動の command と引数は project の宣言なので、引数では変えない。引数で上書きした値は loop が止まるまで固定し、tick ごとの読み直しでは変わらない
 - **本文は共通 prompt**
 - **秘密は `$VAR` で間接参照する**。値そのものは書かない (SPEC §5.3.1)
   - loop は、起動した shell の環境変数を引き継ぐ
@@ -272,7 +273,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。claim の段階と打�
   - `tracker.token` は、loop が撃つ置き場の CLI・worker・hooks のすべてに、その CLI が読む環境変数 (gh は `GH_TOKEN`、glab は `GITLAB_TOKEN`) として渡す
     - glab は `GITLAB_TOKEN` を host を問わず使う。worker と hooks が `tracker.host` と別の GitLab の host へ glab を撃つと、token がその host にも送られる。host を絞る手段は glab の設定 file に token を書くことしかなく、dispatcher は秘密を持たない線 (ADR 0014) を保つので絞らない。この露出と回避は案内で告げる
 - **tick ごとに読み直す** (SPEC §6.2)
-  - 直せば、loop を起動し直さずに効く
+  - 直せば、loop を起動し直さずに効く。`loop` の引数で上書きした値は除く (上の「`loop` の引数で上書きできるのは」)
   - 読めない版・文法に合わない版では、新しい起動を止める。走っている worker の突き合わせは続ける
 - **未知の key は名指しで失敗させる** (ADR 0009「未知の key は失敗させる」)
 - **事前検査** (SPEC §6.3)

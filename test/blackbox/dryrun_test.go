@@ -49,6 +49,15 @@ func TestDryRunListsTheIssuesThatMatchATriggerOldestFirst(t *testing.T) {
 	assertCandidates(t, r, candidate("implement", 50), candidate("implement", 42), candidate("implement", 43))
 }
 
+func TestDryRunWithAConcurrencyLimitFlagStillListsEveryCandidate(t *testing.T) {
+	s := newSandbox(t)
+	s.setIssues(readyIssue(42), readyIssue(43))
+
+	r := s.dryRun("--max-concurrent", "1")
+
+	assertCandidates(t, r, candidate("implement", 42), candidate("implement", 43))
+}
+
 func TestDryRunListsCandidatesInTriggerDeclarationOrderBeforeCreationOrder(t *testing.T) {
 	s := newSandbox(t)
 	s.writeWorkflowWithCommands(workflowWithTriggers(`

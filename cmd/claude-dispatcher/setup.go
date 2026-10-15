@@ -76,32 +76,12 @@ type setupOptions struct {
 	kind, host, repo string
 }
 
-// setupFlags は args から setup の flag を抜き出し、残りの引数を返す。`--name value` と `--name=value` を読む。
+// setupFlags は args から setup の flag を抜き出し、残りの引数を返す。
 func setupFlags(args []string) (setupOptions, []string, error) {
 	var o setupOptions
-	var rest []string
-	targets := map[string]*string{"--kind": &o.kind, "--host": &o.host, "--repo": &o.repo}
-	for i := 0; i < len(args); i++ {
-		name, value, inline := strings.Cut(args[i], "=")
-		target, known := targets[name]
-		if !known {
-			rest = append(rest, args[i])
-			continue
-		}
-		if !inline {
-			if i+1 >= len(args) {
-				return o, nil, fmt.Errorf("%s に値が要る", name)
-			}
-			i++
-			value = args[i]
-		}
-		if *target != "" {
-			return o, nil, fmt.Errorf("%s を 2 回書いている", name)
-		}
-		if value == "" {
-			return o, nil, fmt.Errorf("%s の値が空", name)
-		}
-		*target = value
+	rest, err := valueFlags(args, map[string]*string{"--kind": &o.kind, "--host": &o.host, "--repo": &o.repo})
+	if err != nil {
+		return o, nil, err
 	}
 	if o.kind == "" && (o.host != "" || o.repo != "") {
 		return o, nil, fmt.Errorf("--host と --repo は --kind %s と一緒にだけ書ける", flagKinds())
