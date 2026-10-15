@@ -72,6 +72,15 @@ triggers:
 ---
 `
 
+const githubWithCLTrigger = `---
+tracker:
+  kind: github
+  repo: acme/widgets
+triggers:
+  - {name: fix, on: cl, action: /fix}
+---
+`
+
 const jiraWithCL = `---
 tracker:
   kind: jira
@@ -94,14 +103,18 @@ func TestTrackerTokenReachesTheIssuePlaceButNotTheSeparateCLPlace(t *testing.T) 
 
 	New(def, s.runtime([]string{"HOME=/h"})).Store()
 
-	if len(s.built) != 2 {
-		t.Fatalf("組んだ Runner = %+v, want issue 置き場と CL 置き場の 2 つ", s.built)
+	// issue 置き場と CL 置き場は同じ gh を撃つので、組んだ順ではなく token の有無で数える
+	var withToken, withoutToken int
+	for _, b := range s.built {
+		switch {
+		case slices.Contains(b.env, "GH_TOKEN=secret"):
+			withToken++
+		case !slices.ContainsFunc(b.env, func(kv string) bool { return strings.HasPrefix(kv, "GH_TOKEN=") }):
+			withoutToken++
+		}
 	}
-	if !slices.Contains(s.built[0].env, "GH_TOKEN=secret") {
-		t.Errorf("issue 置き場の環境 = %v, want GH_TOKEN=secret を含む", s.built[0].env)
-	}
-	if slices.ContainsFunc(s.built[1].env, func(kv string) bool { return strings.HasPrefix(kv, "GH_TOKEN=") }) {
-		t.Errorf("CL 置き場の環境 = %v, want GH_TOKEN を含まない", s.built[1].env)
+	if withToken != 1 || withoutToken != 1 || len(s.built) != 2 {
+		t.Fatalf("組んだ Runner = %+v, want token を置いた issue 置き場と置かない CL 置き場の 1 つずつ", s.built)
 	}
 }
 
@@ -148,13 +161,32 @@ func TestScopeKeyIsReadWithoutRunningAnyCLI(t *testing.T) {
 	}
 }
 
-func TestRequiredCommandsAddGitOnlyForCLTriggers(t *testing.T) {
+func TestRequiredCommandsLeaveOutGitWithoutCLTriggers(t *testing.T) {
 	def := load(t, jiraWithCL)
 
-	if got := RequiredCommands(def); slices.Contains(got, "git") || !slices.Contains(got, "acli") || !slices.Contains(got, "gh") {
+	got := RequiredCommands(def)
+
+	if !slices.Equal(got, []string{"acli", "gh", "claude"}) {
 		t.Fatalf("loop が撃つ CLI = %v", got)
 	}
-	if got := Commands(def); !slices.Contains(got, "git") {
-		t.Fatalf("PATH を解決する CLI = %v, want git を含む", got)
+}
+
+func TestRequiredCommandsAddGitForCLTriggers(t *testing.T) {
+	def := load(t, githubWithCLTrigger)
+
+	got := RequiredCommands(def)
+
+	if !slices.Equal(got, []string{"gh", "claude", "git"}) {
+		t.Fatalf("loop が撃つ CLI = %v", got)
+	}
+}
+
+func TestCommandsAlwaysResolveGitForWorkersAndHooks(t *testing.T) {
+	def := load(t, jiraWithCL)
+
+	got := Commands(def)
+
+	if !slices.Equal(got, []string{"acli", "gh", "claude", "git"}) {
+		t.Fatalf("PATH を解決する CLI = %v", got)
 	}
 }
