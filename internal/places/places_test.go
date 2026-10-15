@@ -14,33 +14,29 @@ import (
 
 // stub は CLI を撃たず、撃った CLI と環境を記録する Runner を作る。
 type stub struct {
-	// built は Runner を作った順の CLI と環境
-	built []built
 	// calls は撃った CLI と引数 (`<command> <args...>`)
 	calls []string
+	// lastEnv は直近に撃った Runner の環境
+	lastEnv []string
 	// reply は CLI と引数への応答
 	reply func(command string, args []string) ([]byte, error)
-}
-
-type built struct {
-	command string
-	env     []string
 }
 
 type stubRunner struct {
 	s       *stub
 	command string
+	env     []string
 }
 
 func (r stubRunner) Run(args ...string) ([]byte, error) {
 	r.s.calls = append(r.s.calls, r.command+" "+strings.Join(args, " "))
+	r.s.lastEnv = r.env
 	return r.s.reply(r.command, args)
 }
 
 func (s *stub) runtime(env []string) provider.Runtime {
 	return provider.Runtime{Env: env, Runner: func(command string, env []string) provider.Runner {
-		s.built = append(s.built, built{command: command, env: env})
-		return stubRunner{s: s, command: command}
+		return stubRunner{s: s, command: command, env: env}
 	}}
 }
 
@@ -101,20 +97,19 @@ func TestTrackerTokenReachesTheIssuePlaceButNotTheSeparateCLPlace(t *testing.T) 
 	def.CL = &workflow.CL{Kind: provider.GitHub, Place: clProvider.NewPlace("", "acme/cls")}
 	s := &stub{reply: func(string, []string) ([]byte, error) { return nil, errors.New("stub") }}
 
-	New(def, s.runtime([]string{"HOME=/h"})).Store()
+	store := New(def, s.runtime([]string{"HOME=/h"})).Store()
 
-	// issue 置き場と CL 置き場は同じ gh を撃つので、組んだ順ではなく token の有無で数える
-	var withToken, withoutToken int
-	for _, b := range s.built {
-		switch {
-		case slices.Contains(b.env, "GH_TOKEN=secret"):
-			withToken++
-		case !slices.ContainsFunc(b.env, func(kv string) bool { return strings.HasPrefix(kv, "GH_TOKEN=") }):
-			withoutToken++
-		}
+	// issue 置き場と CL 置き場は同じ gh を撃つので、それぞれの部品を撃たせて、撃った Runner の環境を見る
+	_, _ = store.Issues.OpenIssues()
+	issueEnv := s.lastEnv
+	_, _ = store.CLs.OpenCLs()
+	clEnv := s.lastEnv
+
+	if !slices.Contains(issueEnv, "GH_TOKEN=secret") {
+		t.Errorf("issue 置き場の環境 = %v, want GH_TOKEN=secret を含む", issueEnv)
 	}
-	if withToken != 1 || withoutToken != 1 || len(s.built) != 2 {
-		t.Fatalf("組んだ Runner = %+v, want token を置いた issue 置き場と置かない CL 置き場の 1 つずつ", s.built)
+	if clEnv == nil || slices.ContainsFunc(clEnv, func(kv string) bool { return strings.HasPrefix(kv, "GH_TOKEN=") }) {
+		t.Errorf("CL 置き場の環境 = %v, want GH_TOKEN を含まない", clEnv)
 	}
 }
 
