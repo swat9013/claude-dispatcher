@@ -20,7 +20,7 @@ glab で token を host に絞る手段は、glab の設定 file に host ごと
 ### 良い影響
 
 - dispatcher は token を環境変数で CLI に渡すだけで、file に書かない線を保つ
-- 利用者自身の glab 設定 (別の host の認証など) は worker と hooks からもそのまま見える
+- 利用者自身の glab 設定 (token 以外の host ごとの設定など) は worker と hooks からもそのまま見える
 
 ### 悪い影響 / 制約
 
@@ -36,6 +36,10 @@ glab で token を host に絞る手段は、glab の設定 file に host ごと
 ### `GLAB_CONFIG_DIR` で dispatcher 用の設定 dir に差し替える
 
 - 却下理由: 差し替えた dir にも token を書く必要があり、上の案と同じく秘密を持つ。加えて、worker と hooks から利用者自身の glab 設定も見えなくなる
+
+### worker と hooks には `GITLAB_TOKEN` を渡さない
+
+- 却下理由: ADR 0014 の Decision 2 を覆す。観測は通るのに worker が CL を開く段で認証に落ち、観測と worker が別の token で動くずれも生む
 
 ### ADR を起こさず、理由と退けた案を `docs/design/system.md` §8 に残す
 
