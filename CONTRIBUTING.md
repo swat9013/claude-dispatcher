@@ -2,6 +2,8 @@
 
 この repo で作業する agent (worker) と人間に向けた開発フローの宣言。
 
+設計の資料は、設計 doc の索引 [docs/design/README.md](docs/design/README.md)・用語集 [CONTEXT.md](CONTEXT.md)・ADR の一覧 [docs/adr/](docs/adr/) から辿る。
+
 ## セットアップ
 
 - 前提ツールは [README の「前提」](README.md#前提) のとおり
