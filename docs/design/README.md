@@ -37,7 +37,7 @@
 
 [![ドメインモデル図](domain.svg)](domain.svg)
 
-正本は [`domain.puml`](domain.puml)。`domain.svg` はそこから描いた生成物なので、直すのは `.puml` の側で、直したら `plantuml -tsvg docs/design/domain.puml` で描き直して対で commit する。`-tsvg` は構文の誤りでも誤りの画像を出して exit 0 を返しうるので、先に `plantuml --check-syntax docs/design/domain.puml` の exit code で構文を確かめる。
+正本は [`domain.puml`](domain.puml)。`domain.svg` はそこから描いた生成物なので、直すのは `.puml` の側で、直したら `plantuml -tsvg docs/design/domain.puml` で描き直して対で commit する。描く plantuml は `scripts/plantuml.version` の版に固定している。構文 (`plantuml --check-syntax` の exit code。`-tsvg` は構文の誤りでも誤りの画像を出して exit 0 を返しうる) と、svg が固定した版で今の `.puml` から描かれたかは、commit 時の hook と CI が検査する (CONTRIBUTING.md の「gate」)。
 
 entity に付けた印は、その entity の正本がどこにあるかを表す。dispatcher は外部 store に書かないので、`«外部 store»` の entity (issue・CL と、その置き場) の正本は dispatcher の外にある。adapter は読むたびにそれを作業対象へ写すだけで、写しを持ち越さない (`system.md` §13)。dispatcher が自分で持つのは、loop の process と寿命を共にする `«loop の記憶»` (claim・打ち切り) と、disk に残る `«CLI の disk»` (workspace) だけ。
 
@@ -70,4 +70,4 @@ entity に付けた印は、その entity の正本がどこにあるかを表�
 - **網羅の正本は図、規則の正本は §7**: どの「段階 × 出来事」にどの遷移があるかは図が持ち、遷移の条件と効果を決める規則 (backoff の式・再起動の前の読み直し・曖昧な CL の扱い 等) は §7 が散文で持つ。同じ遷移を図と §7 の両方に列挙しない。図の遷移のラベルは `出来事 [条件] / 出口` の形で、条件は同じ出来事で行き先が分かれるときだけ、出口は claim を出入りするとき (claim を立てる・完了・失敗・claim を解く・打ち切りを解く) だけ書く
 - **§7・§9 が反応を定める組み合わせは自己遷移で描く**: 待ち直す・確かめ直すなど、段階を変えずに反応する組み合わせ
 - **当てない組み合わせには理由を書く**: 遷移の無い組み合わせは、図の中に `' uncovered: <状態> x <出来事> — <理由>` の行で理由を書く。出来事の名前は空白を含めない (宣言が空白で切る)。状態は図の中の ASCII の alias で書く
-- **直したら手で 3 つを通し直す** (どれも gate には入っていない): 描き直しと構文の確かめ方は上のドメインモデル図と同じ (`plantuml --check-syntax docs/design/statechart.puml` の exit code を見てから `plantuml -tsvg docs/design/statechart.puml`)。網羅は Claude Code plugin `swat-skills` の sud-design skill に同梱の `scripts/check-statechart.py` に `docs/design/statechart.puml` を渡して撃ち、exit 0 を確かめる。理由の無い組み合わせ・遷移のある組み合わせへの宣言の残骸・初期状態から届かない状態があると落ちる
+- **直したら描き直して対で commit する**: 描き直し方は上のドメインモデル図と同じ (`plantuml -tsvg docs/design/statechart.puml`)。構文・描き直し漏れ・網羅は commit 時の hook と CI が検査する (CONTRIBUTING.md の「gate」)。網羅の検査は repo に vendor した `scripts/check-statechart.py` で、理由の無い組み合わせ・遷移のある組み合わせへの宣言の残骸・初期状態から届かない状態があると落ちる。手元で撃つなら `python3 -I scripts/check-statechart.py docs/design/statechart.puml`

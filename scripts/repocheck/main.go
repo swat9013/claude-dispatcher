@@ -3,6 +3,7 @@
 //
 //	go run ./scripts/repocheck files     # repo の root で撃つ。pre-commit の hook が撃つ
 //	go run ./scripts/repocheck adr       # ADR の番号の一意。commit 時の hook と adr-numbers.yml が撃つ (PR の gate では撃たない)
+//	go run ./scripts/repocheck diagrams  # docs/design の svg が、固定した版の plantuml で今の .puml から描かれたか。commit 時の hook が撃つ
 //	gh api repos/<owner>/<repo>/rules/branches/main | go run ./scripts/repocheck ruleset
 //
 // 不一致は 1 件 1 行で標準エラーに出し、exit 1 で終わる。検査そのものの失敗 (file が読めない等) は exit 2
@@ -46,7 +47,7 @@ var adrNumberForm = regexp.MustCompile(`^([0-9]{4}).*\.md$`)
 
 func main() {
 	if len(os.Args) != 2 {
-		fatal(errors.New("使い方: repocheck files | repocheck adr | repocheck ruleset < rules.json"))
+		fatal(errors.New("使い方: repocheck files | repocheck adr | repocheck diagrams | repocheck ruleset < rules.json"))
 	}
 	var problems []string
 	var err error
@@ -65,6 +66,8 @@ func main() {
 		}
 	case "ruleset":
 		problems, err = runRuleset()
+	case "diagrams":
+		problems, err = runDiagrams()
 	default:
 		err = fmt.Errorf("知らない検査: %s", os.Args[1])
 	}
