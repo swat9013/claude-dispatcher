@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -41,9 +42,9 @@ const (
 )
 
 const usage = `usage:
-  claude-dispatcher loop [<workflow の path>]
-      前面で tick を回し続け、止めるまで戻らない (Ctrl+C で止める)
-  claude-dispatcher loop --dry-run [<workflow の path>]
+  claude-dispatcher loop [--max-concurrent <N>] [<workflow の path>]
+      前面で tick を回し続け、止めるまで戻らない (Ctrl+C で止める)。--max-concurrent は limits.max_concurrent を上書きする
+  claude-dispatcher loop --dry-run [--max-concurrent <N>] [<workflow の path>]
       起動するはずの作業対象と trigger を示す。何も起動せず、何も書かない
   claude-dispatcher status [<workflow の path>]
       loop の今の状態を描く。何も書かず、tracker の CLI も撃たない
@@ -265,10 +266,30 @@ func failureExit(err error) int {
 func runLoop(args []string, stdout, stderr io.Writer) int {
 	var path string
 	var dryRun bool
-	for _, arg := range args {
+	// maxConcurrent は --max-concurrent の値。0 は渡されていない (1 以上しか受けない)
+	var maxConcurrent int
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		name, value, inline := strings.Cut(arg, "=")
 		switch {
 		case arg == "--dry-run":
 			dryRun = true
+		case name == "--max-concurrent":
+			if !inline {
+				if i+1 >= len(args) {
+					return usageError(stderr, "--max-concurrent に値が要る")
+				}
+				i++
+				value = args[i]
+			}
+			if maxConcurrent != 0 {
+				return usageError(stderr, "--max-concurrent を 2 回書いている")
+			}
+			n, err := strconv.Atoi(value)
+			if err != nil || n < 1 {
+				return usageError(stderr, "--max-concurrent は 1 以上の整数 (%q)", value)
+			}
+			maxConcurrent = n
 		case strings.HasPrefix(arg, "-"):
 			return usageError(stderr, "未知の flag: %s", arg)
 		case path == "":
@@ -286,7 +307,14 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 		return exitFailed
 	}
 	// workflow 定義は PATH を使わずに読めるので、撃つ依存 CLI が決まる前の環境で読む
-	load := func() (workflow.Definition, error) { return workflow.Load(abs, unresolvedEnvironment().getenv) }
+	// --max-concurrent は読み直すたびに limits.max_concurrent を上書きし、loop が止まるまで変わらない (system.md §8)
+	load := func() (workflow.Definition, error) {
+		def, err := workflow.Load(abs, unresolvedEnvironment().getenv)
+		if err == nil && maxConcurrent != 0 {
+			def.MaxConcurrent = maxConcurrent
+		}
+		return def, err
+	}
 	def, err := load()
 	if err != nil {
 		fmt.Fprintln(stderr, err)

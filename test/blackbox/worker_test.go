@@ -454,6 +454,39 @@ func TestTickLineCarriesTheConcurrencyLimitReadAgainInThatTick(t *testing.T) {
 	t.Fatalf("tick の行 = %v, want issue#43 を起動した行がある", s.events("tick"))
 }
 
+func TestConcurrencyLimitFlagOverridesTheWorkflowDefinition(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflowWithCommands(s.workerWorkflow("limits:\n  max_concurrent: 1\n"))
+	s.setIssues(readyIssue(42), readyIssue(43))
+	s.onClaude(stubwire.Rule{ReleaseFile: s.releaseFile()})
+
+	s.startLoop("--max-concurrent", "2")
+
+	tick := s.waitEvents("tick", 1)[0]
+	if len(tick["launched"].([]any)) != 2 || tick["max_concurrent"] != float64(2) {
+		t.Fatalf("最初の tick の行 = %v, want 引数の並列上限 2 で issue#42 と issue#43 を起動", tick)
+	}
+}
+
+func TestConcurrencyLimitFromTheFlagStaysWhenTheWorkflowDefinitionIsRewritten(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflowWithCommands(s.workerWorkflow("limits:\n  max_concurrent: 1\n"))
+	s.setIssues(readyIssue(42), readyIssue(43))
+	s.onClaude(stubwire.Rule{ReleaseFile: s.releaseFile()})
+	s.startLoop("--max-concurrent=1")
+	s.waitEvents("start", 1)
+
+	s.writeWorkflowWithCommands(s.workerWorkflow("limits:\n  max_concurrent: 2\n"))
+
+	ticks := s.waitEvents("tick", len(s.events("tick"))+2)
+	if starts := s.events("start"); len(starts) != 1 {
+		t.Fatalf("start の行 = %v, want 引数の並列上限 1 のまま issue#42 の 1 本だけ", starts)
+	}
+	if tick := ticks[len(ticks)-1]; tick["max_concurrent"] != float64(1) {
+		t.Fatalf("書き換えた後の tick の行 = %v, want 引数の並列上限 1", tick)
+	}
+}
+
 func TestFirstStopRequestWaitsForTheRunningWorker(t *testing.T) {
 	s := newSandbox(t)
 	s.writeWorkflowWithCommands(s.workerWorkflow(""))

@@ -265,7 +265,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。claim の段階と打�
   - 並列上限・attempt の上限・backoff の上限・stall の上限・worker 1 回分の上限時間 (既定 1 時間。0 で無効)
   - 周期
   - `claude` の起動 command と引数
-- **`loop` の引数で上書きできるのは、loop を回すマシンの資源で決まる値だけ** (今は並列上限。ADR 0018)。workflow 定義は repo に commit され、調停 remote で分担するどのマシンの loop も同じ版を読むので、マシンごとに違ってよい値を宣言だけで決めると、どのマシンにも合わない。trigger・action・hooks・置き場・周期・retry と時間の上限・起動の command と引数は project の宣言なので、引数では変えない。引数で上書きした値は loop が止まるまで固定し、tick ごとの読み直しでは変わらない
+- **`loop` の引数で上書きできるのは、loop を回すマシンの資源で決まる値だけ** (今は並列上限。ADR 0019)。workflow 定義は repo に commit され、調停 remote で分担するどのマシンの loop も同じ版を読むので、マシンごとに違ってよい値を宣言だけで決めると、どのマシンにも合わない。trigger・action・hooks・置き場・周期・retry と時間の上限・起動の command と引数は project の宣言なので、引数では変えない。引数で上書きした値は loop が止まるまで固定し、tick ごとの読み直しでは変わらない
 - **本文は共通 prompt**
 - **秘密は `$VAR` で間接参照する**。値そのものは書かない (SPEC §5.3.1)
   - loop は、起動した shell の環境変数を引き継ぐ

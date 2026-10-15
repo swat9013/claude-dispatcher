@@ -181,7 +181,7 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 - `target` は、issue なら `issue#<番号>`、CL なら `cl#<番号>`
 - `tick` の行の起動の判定に使った値は、§6 の tick の手順 7 (候補の起動) の判定のもの
   - `running`・`waiting_retry`: その tick で候補の起動を始める前の、走っている worker と再起動待ちの claim の数 (手順 7 が `limits.max_concurrent` から引く数)
-  - `max_concurrent`: その tick で読み直した workflow 定義の `limits.max_concurrent`
+  - `max_concurrent`: `loop` に `--max-concurrent` (§6) を渡したならその値、渡さなければその tick で読み直した workflow 定義の `limits.max_concurrent`
   - 手順 7 は、`running`・`waiting_retry`・その tick で起動した数 (`launched` の数) の和が `max_concurrent` に達したところで候補の起動をやめる
 - `outcome`
 
@@ -220,8 +220,10 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 ## 5. 試運転 (`loop --dry-run`)
 
 ```
-claude-dispatcher loop --dry-run [<workflow の path>]
+claude-dispatcher loop --dry-run [--max-concurrent <N>] [<workflow の path>]
 ```
+
+`--max-concurrent` は `loop` (§6) と同じ綴りと検査で受ける。試運転は並列上限に依らずに候補を出すので、渡しても出力は変わらない。
 
 workflow 定義を読んで検査し、事前検査 (§2.9) を通し、snapshot を作って trigger を評価し、起動するはずの作業対象を示して終わる。**何も書かない** (state dir を作らず、lock も取らない)。
 
@@ -246,10 +248,14 @@ fix-ci	cl	#51	ログインの失敗を記録する
 ## 6. `loop`
 
 ```
-claude-dispatcher loop [<workflow の path>]
+claude-dispatcher loop [--max-concurrent <N>] [<workflow の path>]
 ```
 
 実装 repo の clone を cwd にして撃つ。
+
+- `--max-concurrent <N>` は、workflow 定義の `limits.max_concurrent` を上書きする並列上限 (`system.md` §8)。`--max-concurrent 3` の形でも `--max-concurrent=3` の形でも書ける。1 以上の整数でないか、値が無いか、2 回書いたら引数の誤り (exit 2)
+  - 渡した値は loop が止まるまで変わらない。tick ごとに workflow 定義を読み直しても、`limits.max_concurrent` は効かない
+  - 本節と §4 の `limits.max_concurrent` は、`--max-concurrent` を渡した loop ではその値と読み替える
 
 **起動時の検査** (落ちたら stderr に理由を出して終わる):
 
