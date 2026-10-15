@@ -48,7 +48,7 @@ func (g *Group) Err() error { return g.err }
 // 子の終了と止める理由が同時に来たら、終了を優先する (呼び出し側の select はどちらも選びうる)。自分で終わった子を止めたことに
 // すると、終わり方 (exit code・決定ファイル) を確かめないまま後始末に進んでしまう。
 //
-// 止めるときは process group に SIGTERM を送り、grace のうちに子が終わらなければ SIGKILL を送って、終わるまで待つ。子が
+// 止めるときは process group に SIGTERM を送り、grace のうちに子が終わらなければ SIGKILL を送って、終わるまで待つ (grace が 0 以下なら SIGTERM を送らず SIGKILL だけ)。子が
 // 終わった後も group に残った孫を SIGKILL で止める (workspace を消すか次が使う前に、そこを cwd にした process を残さないため)。
 // err は signal を送れなかった理由。
 func (g *Group) Stop(grace time.Duration) (exited bool, err error) {
@@ -59,14 +59,20 @@ func (g *Group) Stop(grace time.Duration) (exited bool, err error) {
 	}
 	pid := g.cmd.Process.Pid
 	var errs []error
-	if err := kill(pid, syscall.SIGTERM); err != nil {
-		errs = append(errs, err)
+	if grace > 0 {
+		if err := kill(pid, syscall.SIGTERM); err != nil {
+			errs = append(errs, err)
+		}
+		timer := time.NewTimer(grace)
+		defer timer.Stop()
+		select {
+		case <-g.done:
+		case <-timer.C:
+		}
 	}
-	timer := time.NewTimer(grace)
-	defer timer.Stop()
 	select {
 	case <-g.done:
-	case <-timer.C:
+	default:
 		if err := kill(pid, syscall.SIGKILL); err != nil {
 			errs = append(errs, err)
 		}
