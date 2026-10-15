@@ -63,14 +63,43 @@ func TestUsageEndsWithAPointerToTheGuide(t *testing.T) {
 	}
 }
 
+func TestUsageListsSectionsInTheStandardOrder(t *testing.T) {
+	// 節の並びは formats.md §10
+	s := newSandbox(t)
+
+	r := s.run("--help")
+
+	assertExit(t, r, 0)
+	if !strings.HasPrefix(r.stdout, "Usage: claude-dispatcher ") {
+		t.Fatalf("usage が `Usage:` の行で始まらない:\n%s", r.stdout)
+	}
+	last := 0
+	for _, section := range []string{"\nCommands:\n", "\nOptions:\n", "\nArguments:\n"} {
+		i := strings.Index(r.stdout, section)
+		if i < last {
+			t.Fatalf("節 %q が無いか、並びが違う:\n%s", strings.TrimSpace(section), r.stdout)
+		}
+		last = i
+	}
+	_, options, _ := strings.Cut(r.stdout, "\nOptions:\n")
+	options, _, _ = strings.Cut(options, "\nArguments:\n")
+	for _, flag := range []string{"--dry-run", "--json", "--kind", "--host", "--repo", "-h, --help", "--version"} {
+		if !strings.Contains("\n"+options, "\n  "+flag+" ") {
+			t.Errorf("Options に %s が無い", flag)
+		}
+	}
+}
+
 func TestGuideCoversEverySubcommandInTheUsage(t *testing.T) {
 	// 利用者の手元には README が無いので、usage に並ぶ subcommand の使い方は案内にしか無い
 	s := newSandbox(t)
 	usage := s.run("--help")
 	guide := s.run("guide")
-	subcommand := regexp.MustCompile(`(?m)^  claude-dispatcher ([a-z]+)`)
+	commands, _, _ := strings.Cut(usage.stdout, "\nOptions:")
+	_, commands, _ = strings.Cut(commands, "\nCommands:\n")
+	subcommand := regexp.MustCompile(`(?m)^  ([a-z]+) `)
 
-	matches := subcommand.FindAllStringSubmatch(usage.stdout, -1)
+	matches := subcommand.FindAllStringSubmatch(commands, -1)
 
 	if len(matches) == 0 {
 		t.Fatalf("usage から subcommand を読めない:\n%s", usage.stdout)

@@ -40,23 +40,28 @@ const (
 	exitAuth        = 4
 )
 
-const usage = `usage:
-  claude-dispatcher loop [<workflow の path>]
-      前面で tick を回し続け、止めるまで戻らない (Ctrl+C で止める)
-  claude-dispatcher loop --dry-run [<workflow の path>]
-      起動するはずの作業対象と trigger を示す。何も起動せず、何も書かない
-  claude-dispatcher status [<workflow の path>]
-      loop の今の状態を描く。何も書かず、tracker の CLI も撃たない
-  claude-dispatcher paths --json [<workflow の path>]
-      state dir・log・状態 file・workspace の置き場を JSON で出す
-  claude-dispatcher setup [--kind jira --host <site> --repo <project key>] [<workflow の path>]
-      cwd に WORKFLOW.md の雛形を書く。既にある file は上書きしない
-  claude-dispatcher doctor [<workflow の path>]
-      workflow 定義・issue 置き場・依存 CLI・事前検査を確かめる
-  claude-dispatcher guide
-      導入の流れ・回し方・WORKFLOW.md の書き方の案内を出す
-  claude-dispatcher --version
-      版を出す
+// usage の形式は formats.md §10
+const usage = `Usage: claude-dispatcher <command> [options] [WORKFLOW]
+
+Commands:
+  loop      前面で tick を回し続け、止めるまで戻らない (Ctrl+C で止める)
+  status    loop の今の状態を描く。何も書かず、tracker の CLI も撃たない
+  paths     state dir・log・状態 file・workspace の置き場を出す
+  setup     cwd に WORKFLOW.md の雛形を書く。既にある file は上書きしない
+  doctor    workflow 定義・issue 置き場・依存 CLI・事前検査を確かめる
+  guide     導入の流れ・回し方・WORKFLOW.md の書き方の案内を出す
+
+Options:
+  --dry-run          (loop) 起動するはずの作業対象と trigger を示す。何も起動せず、何も書かない
+  --json             (paths) JSON で出す (paths では必須)
+  --kind jira        (setup) Jira を issue 置き場にする。--host と --repo と一緒に書く
+  --host <site>      (setup) Jira の site
+  --repo <key>       (setup) Jira の project key
+  -h, --help         この一覧を出す
+  --version          版を出す
+
+Arguments:
+  WORKFLOW   workflow 定義の path。省くと cwd の WORKFLOW.md (guide では受けない)
 
 ` + "`WORKFLOW.md` の書き方と導入の流れは `claude-dispatcher guide` を参照\n"
 
