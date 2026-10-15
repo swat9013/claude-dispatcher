@@ -94,19 +94,6 @@ func TestUsageListsSectionsInTheStandardOrder(t *testing.T) {
 	}
 }
 
-func TestUsageListsEveryAcceptedFlagUnderOptions(t *testing.T) {
-	// 一覧は parser が受ける flag (main.go の run・runLoop・runPaths、setup.go の setupFlags)。flag を足したらここにも足す
-	s := newSandbox(t)
-
-	options := usageSection(t, s.run("--help").stdout, "Options")
-
-	for _, flag := range []string{"--dry-run", "--max-concurrent", "--json", "--kind", "--host", "--repo", "-h, --help", "--version"} {
-		if !strings.Contains("\n"+options, "\n  "+flag+" ") {
-			t.Errorf("Options に %s が無い", flag)
-		}
-	}
-}
-
 func TestUsageWithoutArgumentsGoesToStderrWithExit2(t *testing.T) {
 	s := newSandbox(t)
 

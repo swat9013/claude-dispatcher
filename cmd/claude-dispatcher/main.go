@@ -41,8 +41,8 @@ const (
 	exitAuth        = 4
 )
 
-// usage の形式は formats.md §10
-const usage = `Usage: claude-dispatcher <command> [options] [WORKFLOW]
+// usage の形式は formats.md §10。Options 節は引数の宣言 (args.go) から生成し、Commands と Arguments は手で書く
+var usage = `Usage: claude-dispatcher <command> [options] [WORKFLOW]
        claude-dispatcher -h | --help | help
        claude-dispatcher --version
 
@@ -55,15 +55,7 @@ Commands:
   guide     導入の流れ・回し方・WORKFLOW.md の書き方の案内を出す
 
 Options:
-  --dry-run              (loop) 起動するはずの作業対象と trigger を示す。何も起動せず、何も書かない
-  --max-concurrent <N>   (loop) limits.max_concurrent を上書きする並列上限 (1 以上の整数)
-  --json                 (paths) JSON で出す (paths では必須)
-  --kind jira            (setup) Jira を issue 置き場にする。--host と --repo と一緒に書く
-  --host <site>          (setup) Jira の site
-  --repo <key>           (setup) Jira の project key
-  -h, --help             (command の代わり) この一覧を出す。help でも同じ
-  --version              (command の代わり) 版を出す
-
+` + options() + `
 Arguments:
   WORKFLOW   workflow 定義の path。省くと cwd の WORKFLOW.md (guide では受けない)
 
@@ -111,8 +103,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 // runGuide は `guide` を撃つ (formats.md §9)。workflow 定義も state dir も読まず、tracker の CLI も撃たない。導入が壊れて
 // いても、利用者のセッションが書き方を読めるようにする
 func runGuide(args []string, stdout, stderr io.Writer) int {
-	if len(args) > 0 {
-		return usageError(stderr, "引数が多い: %s", args[0])
+	if _, err := commandSpecOf("guide").parse(args); err != nil {
+		return usageError(stderr, "%v", err)
 	}
 	fmt.Fprint(stdout, guide.Text())
 	return 0
@@ -278,65 +270,16 @@ type loopOptions struct {
 	maxConcurrent int
 }
 
-// valueFlags は args から targets の値付き flag を抜き出し、残りの引数を返す。`--name value` と `--name=value` を読み、
-// 値が無い・空・2 回書いたら誤りにする (formats.md §6・§7.4)。
-func valueFlags(args []string, targets map[string]*string) ([]string, error) {
-	var rest []string
-	for i := 0; i < len(args); i++ {
-		name, value, inline := strings.Cut(args[i], "=")
-		target, known := targets[name]
-		if !known {
-			rest = append(rest, args[i])
-			continue
-		}
-		if !inline {
-			// 次が flag の綴りなら値は書かれていない。値として取ると、後段の読み方しだいで flag の綴りが値として通る
-			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
-				return nil, fmt.Errorf("%s に値が要る", name)
-			}
-			i++
-			value = args[i]
-		}
-		if *target != "" {
-			return nil, fmt.Errorf("%s を 2 回書いている", name)
-		}
-		if value == "" {
-			return nil, fmt.Errorf("%s の値が空", name)
-		}
-		*target = value
-	}
-	return rest, nil
-}
-
 // loopFlags は `loop [--dry-run] [--max-concurrent <N>] [<workflow の path>]` の引数を読む (formats.md §5・§6)。
-func loopFlags(args []string) (loopOptions, error) {
-	var o loopOptions
-	var maxConcurrent string
-	rest, err := valueFlags(args, map[string]*string{"--max-concurrent": &maxConcurrent})
+func loopFlags(argv []string) (loopOptions, error) {
+	a, err := commandSpecOf("loop").parse(argv)
 	if err != nil {
-		return o, err
+		return loopOptions{}, err
 	}
-	if maxConcurrent != "" {
-		n, err := strconv.Atoi(maxConcurrent)
-		if err != nil || n < 1 {
-			return o, fmt.Errorf("--max-concurrent は 1 以上の整数 (%q)", maxConcurrent)
-		}
-		o.maxConcurrent = n
-	}
-	for _, arg := range rest {
-		switch {
-		case arg == "--dry-run":
-			o.dryRun = true
-		case strings.HasPrefix(arg, "-"):
-			return o, fmt.Errorf("未知の flag: %s", arg)
-		case o.path == "":
-			o.path = arg
-		default:
-			return o, fmt.Errorf("引数が多い: %s", arg)
-		}
-	}
-	if o.path == "" {
-		o.path = defaultWorkflowFile
+	o := loopOptions{path: a.workflowPath, dryRun: a.has("--dry-run")}
+	if v := a.value("--max-concurrent"); v != "" {
+		// 値は宣言の検査 (positiveInt) を通っている
+		o.maxConcurrent, _ = strconv.Atoi(v)
 	}
 	return o, nil
 }
@@ -505,34 +448,14 @@ func surviveClosedStdout() {
 
 // --- status / paths ---
 
-// workflowArg は subcommand の引数から workflow 定義の path を読む。required は必ず付ける flag。
-func workflowArg(args []string, required []string, stderr io.Writer) (string, bool) {
-	var path string
-	seen := map[string]bool{}
-	for _, arg := range args {
-		switch {
-		case slices.Contains(required, arg):
-			seen[arg] = true
-		case strings.HasPrefix(arg, "-"):
-			usageError(stderr, "未知の flag: %s", arg)
-			return "", false
-		case path == "":
-			path = arg
-		default:
-			usageError(stderr, "引数が多い: %s", arg)
-			return "", false
-		}
+// workflowArg は引数を subcommand の宣言で読み、workflow 定義の path を返す。誤りなら stderr に出して false。
+func workflowArg(command string, argv []string, stderr io.Writer) (string, bool) {
+	a, err := commandSpecOf(command).parse(argv)
+	if err != nil {
+		usageError(stderr, "%v", err)
+		return "", false
 	}
-	for _, flag := range required {
-		if !seen[flag] {
-			usageError(stderr, "%s が要る", flag)
-			return "", false
-		}
-	}
-	if path == "" {
-		path = defaultWorkflowFile
-	}
-	return path, true
+	return a.workflowPath, true
 }
 
 // loadForReading は、status と paths のために workflow 定義を読む。誤りなら stderr に出して exit code を返す。
@@ -552,7 +475,7 @@ func loadForReading(e environment, path string, stderr io.Writer) (workflow.Defi
 
 // runStatus は `status [<workflow の path>]` を撃つ (formats.md §7.2)。何も書かず、gh も撃たない。
 func runStatus(args []string, stdout, stderr io.Writer) int {
-	path, ok := workflowArg(args, nil, stderr)
+	path, ok := workflowArg("status", args, stderr)
 	if !ok {
 		return exitUsage
 	}
@@ -586,7 +509,7 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 
 // runPaths は `paths --json [<workflow の path>]` を撃つ (formats.md §7.3)。
 func runPaths(args []string, stdout, stderr io.Writer) int {
-	path, ok := workflowArg(args, []string{"--json"}, stderr)
+	path, ok := workflowArg("paths", args, stderr)
 	if !ok {
 		return exitUsage
 	}
