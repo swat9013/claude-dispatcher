@@ -104,3 +104,27 @@ func TestEveryTemplateBlocksTheSameReentryToolsAsTheGuideExample(t *testing.T) {
 		})
 	}
 }
+
+// reentryNote は案内の項目の表の下にある、再入の仕組みを塞ぐ理由と見分け方の注記の見出し
+const reentryNote = "再入の仕組みを塞ぐ"
+
+func TestEveryTemplateAndTheGuideExamplePointToTheReentryNote(t *testing.T) {
+	// 注記の見出しを変えて片方だけ直すと、雛形のコメントが案内に無い置き場を指す
+	if !strings.Contains(guide.Text(), "**"+reentryNote+"**:") {
+		t.Fatalf("案内に注記 %q が無い", reentryNote)
+	}
+	pointer := "注記「" + reentryNote + "」"
+	texts := map[string]string{
+		"guide example": strings.Join(guideExample(t), "\n"),
+		"github":        GitHub("acme/widgets"),
+		"gitlab":        GitLab("gitlab.example.com", "acme/widgets"),
+		"jira":          Jira("acme.atlassian.net", "WIDGETS", GitLabCL("gitlab.example.com", "acme/widgets")),
+	}
+	for name, text := range texts {
+		t.Run(name, func(t *testing.T) {
+			if !strings.Contains(text, pointer) {
+				t.Fatalf("args のコメントが注記 %q を指さない", reentryNote)
+			}
+		})
+	}
+}

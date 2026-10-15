@@ -140,7 +140,7 @@ limits:
   run_timeout: 1h            # 任意。worker 1 回分の上限時間。既定 1h。0 で無効
 claude:
   command: claude            # 任意。既定 claude
-  # 任意。既定は空。再入の仕組みを塞ぐ (理由は下の項目の表の claude.args の行)。
+  # 任意。既定は空。再入の仕組みを塞ぐ (理由は下の項目の表の下の注記「再入の仕組みを塞ぐ」)。
   # --disallowedTools は値を複数取るが、dispatcher が後ろに渡す -p で止まる
   args: [--permission-mode, auto, --disallowedTools, "ScheduleWakeup,CronCreate,CronList,CronDelete"]
 triggers:                    # 必須。1 つ以上
@@ -192,12 +192,14 @@ triggers:                    # 必須。1 つ以上
 | `limits.stall_timeout` | 文字列 | worker の stream (stdout の stream-json) に progress (heartbeat (`tool_progress`)・rate limit の通知・読めない行を除いた行) が書かれなくなってから、止めて失敗とするまでの時間。既定 15m。`0s` で無効。claude が行を書かない区間 (長い build や test などの tool の実行・API の retry の backoff・compaction) より長くする |
 | `limits.run_timeout` | 文字列 | worker 1 回分の上限時間。起動からの経過が超えたら止めて失敗とする。既定 1h。`0s` で無効 |
 | `claude.command` | 文字列 | worker として起動する command。PATH から探す。既定 `claude` |
-| `claude.args` | 文字列の列 | command に、dispatcher が渡す引数 (上の「action が守る約束」の起動のコマンド) より前に渡す引数。既定は空。permission の扱い (`--permission-mode` など) はここで決める。worker が再入の仕組み (`ScheduleWakeup`・`CronCreate`・`CronList`・`CronDelete`) を使うと、`-p` は仕事を終えた後も pending な wakeup の発火を待って終わらず、並列の枠を塞ぐ。`--disallowedTools` で塞ぐことを勧める (background の subagent の完了は、`-p` が自分で新しい turn を始めて拾うので、待つための wakeup は要らない)。塞ぐのは名前の固定の列なので、Claude Code が再入の tool を足す・改名すると、黙って素通りする (`--disallowedTools` は知らない名前を検査しない)。そのときは、仕事を終えたはずの worker が `status` に走ったまま残り、`limits.stall_timeout` か `limits.run_timeout` で止められるまで枠を塞いで、失敗として数えられる。長い build や test で止められたのと見分けるには、worker の stream (`<state_dir>/workers/<作業対象>.log`) の最後の tool の呼び出しを見る。再入の tool なら、その名前を列に足す |
+| `claude.args` | 文字列の列 | command に、dispatcher が渡す引数 (上の「action が守る約束」の起動のコマンド) より前に渡す引数。既定は空。permission の扱い (`--permission-mode` など) はここで決める。再入の仕組み (`ScheduleWakeup`・`CronCreate`・`CronList`・`CronDelete`) を `--disallowedTools` で塞ぐことを勧める (理由と見分け方は表の下の「再入の仕組みを塞ぐ」) |
 | `triggers` | 列 | trigger の宣言。1 つ以上。宣言順が起動の優先順 (先頭の trigger ほど先に起動する) |
 | `triggers[].name` | 文字列 | trigger の名前。`[A-Za-z0-9._-]+`。trigger の間で重複しない |
 | `triggers[].on` | 文字列 | 作業対象の種類。`issue` か `cl` (`gitlab` では merge request)。`cl` は CL 置き場の CL に当たる (`jira` では `cl:` の CL 置き場) |
 | `triggers[].when` | 対応表 | 述語。書いた条件はすべて AND で評価する。書ける key は `on` で変わる (下の「issue 側の述語」「CL 側の述語」)。省くと、その種類の open な作業対象のすべてに当たる |
 | `triggers[].action` | 文字列 | worker に渡す prompt の template (下の「template」)。空にできない |
+
+**再入の仕組みを塞ぐ**: worker が再入の仕組み (`ScheduleWakeup`・`CronCreate`・`CronList`・`CronDelete`) を使うと、`-p` は仕事を終えた後も pending な wakeup の発火を待って終わらず、並列の枠を塞ぐ。`claude.args` の `--disallowedTools` で塞ぐことを勧める (background の subagent の完了は、`-p` が自分で新しい turn を始めて拾うので、待つための wakeup は要らない)。塞ぐのは名前の固定の列なので、Claude Code が再入の tool を足す・改名すると、黙って素通りする (`--disallowedTools` は知らない名前を検査しない)。そのときは、仕事を終えたはずの worker が `status` に走ったまま残り、`limits.stall_timeout` か `limits.run_timeout` で止められるまで枠を塞いで、失敗として数えられる。長い build や test で止められたのと見分けるには、worker の stream (`<state_dir>/workers/<作業対象>.log`) の最後の tool の呼び出しを見る。再入の tool なら、その名前を列に足す。
 
 **YAML の読み方**: 値を書いていない key (`when:` だけの行) は、空の対応表として読む。anchor と alias は辿る。merge key (`<<: *base`) は持たない (`<<` は未知の key として失敗する)。
 
