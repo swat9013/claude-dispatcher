@@ -632,7 +632,7 @@ hooks:
 limits:
   max_concurrent: 1
 claude:
-  args: [--permission-mode, auto]
+  args: [--permission-mode, auto, --disallowedTools, "ScheduleWakeup,CronCreate,CronList,CronDelete"]
 triggers:
   - name: implement
     on: issue
