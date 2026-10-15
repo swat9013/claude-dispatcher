@@ -361,6 +361,36 @@ func TestTickWhoseCLDeclarationIsUnchangedObserves(t *testing.T) {
 	}
 }
 
+// githubAt は tracker.repo に repo を書いた github の定義の版。
+func githubAt(repo string) func(int) (workflow.Definition, error) {
+	return func(maxConcurrent int) (workflow.Definition, error) {
+		def := definition(time.Minute, maxConcurrent)
+		github, _ := provider.Of(provider.GitHub)
+		def.Tracker = workflow.Tracker{Kind: provider.GitHub, Place: github.NewPlace("", repo)}
+		return def, nil
+	}
+}
+
+// 大文字と小文字だけの書き換えは scope key と同じく同じ置き場とみなす (formats.md §6 の tick)。
+func TestTickWhoseCLPlaceDiffersOnlyInCaseObserves(t *testing.T) {
+	for name, c := range map[string]struct {
+		start, reloaded func(int) (workflow.Definition, error)
+	}{
+		"github の tracker.repo": {githubAt("acme/widgets"), githubAt("Acme/Widgets")},
+		"jira の cl.repo":        {jiraWithCL("acme/widgets"), jiraWithCL("Acme/Widgets")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := &harness{start: c.start, plans: []tickPlan{{load: c.reloaded}}}
+
+			h.run(t)
+
+			if h.reads == 0 {
+				t.Fatalf("大文字と小文字だけが違う CL 置き場の版を採らなかった:\n%s", h.stdout.String())
+			}
+		})
+	}
+}
+
 var rateLimited = &target.Failure{Kind: target.RateLimit, Place: "acme/widgets", Err: errors.New("API rate limit exceeded")}
 
 func TestFailedObservationIsReportedWithItsKind(t *testing.T) {
