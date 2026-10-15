@@ -33,9 +33,31 @@ func TestUsageListsEveryDeclaredFlagUnderOptions(t *testing.T) {
 			}
 		}
 	}
-	for _, f := range globalFlags {
-		if !strings.Contains(options, "\n  "+f.name+" ") {
-			t.Errorf("Options に %s が無い:%s", f.name, options)
+	for _, g := range globalFlags {
+		for _, spelling := range g.spellings {
+			if !strings.Contains(options, "\n  "+spelling) && !strings.Contains(options, ", "+spelling+" ") {
+				t.Errorf("Options に %s が無い:%s", spelling, options)
+			}
+		}
+	}
+}
+
+func TestEveryDeclaredGlobalFlagIsAcceptedInPlaceOfACommand(t *testing.T) {
+	for _, g := range globalFlags {
+		spellings := g.spellings
+		if g.word != "" {
+			spellings = append(spellings[:len(spellings):len(spellings)], g.word)
+		}
+		for _, spelling := range spellings {
+			t.Run(spelling, func(t *testing.T) {
+				var stdout, stderr bytes.Buffer
+
+				code := run([]string{spelling}, &stdout, &stderr)
+
+				if code != 0 || stdout.Len() == 0 {
+					t.Fatalf("run(%s) = %d, stdout %q, stderr %q", spelling, code, stdout.String(), stderr.String())
+				}
+			})
 		}
 	}
 }
@@ -70,9 +92,9 @@ func TestEveryCommandRejectsAnUnknownFlag(t *testing.T) {
 }
 
 func TestPositionalArgumentAndFlagsMayBeMixed(t *testing.T) {
-	got, err := commandSpecOf("loop").parse([]string{"W.md", "--max-concurrent=2", "--dry-run"})
+	got, err := loopFlags([]string{"W.md", "--max-concurrent=2", "--dry-run"})
 
-	if err != nil || got.workflowPath != "W.md" || got.value("--max-concurrent") != "2" || !got.has("--dry-run") {
-		t.Fatalf("parse = %+v, %v", got, err)
+	if want := (loopOptions{path: "W.md", dryRun: true, maxConcurrent: 2}); err != nil || got != want {
+		t.Fatalf("loopFlags = %+v, %v, want %+v", got, err, want)
 	}
 }

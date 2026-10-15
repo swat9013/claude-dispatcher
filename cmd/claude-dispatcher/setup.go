@@ -75,8 +75,8 @@ type setupOptions struct {
 }
 
 // checkSetupFlags は setup の flag の組み合わせを検査する (宣言の commandSpec.check)。
-func checkSetupFlags(a parsedArgs) error {
-	if a.value("--kind") == "" && (a.value("--host") != "" || a.value("--repo") != "") {
+func checkSetupFlags(values map[string]string) error {
+	if values["--kind"] == "" && (values["--host"] != "" || values["--repo"] != "") {
 		return fmt.Errorf("--host と --repo は --kind %s と一緒にだけ書ける", flagKinds())
 	}
 	return nil
