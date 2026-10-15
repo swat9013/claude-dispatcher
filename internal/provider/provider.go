@@ -352,8 +352,8 @@ func (s Setup) ReadsClone() bool { return s.currentPlace != nil }
 // WritesTemplate は雛形を書けるか。書けない種類に Template を撃てば panic する。
 func (s Setup) WritesTemplate() bool { return s.template != nil }
 
-// CurrentPlace は cwd の clone の置き場を CLI で引く。origin を認めない種類 (ForOrigin が返さない種類) に撃てば呼び出し側の
-// 誤りなので panic する。
+// CurrentPlace は cwd の clone の置き場を CLI で引く。clone から置き場を引けない種類 (ReadsClone が false。ForOrigin が
+// 返さない種類) に撃てば呼び出し側の誤りなので panic する。
 func (s Setup) CurrentPlace(rt Runtime) (Place, error) {
 	if !s.ReadsClone() {
 		panic("この種類の provider は cwd の clone から置き場を引けない")
