@@ -53,8 +53,8 @@ func TestStopKillsAChildThatIgnoresSIGTERMOnceTheGraceRunsOut(t *testing.T) {
 }
 
 func TestStopReapsAGrandchildLeftInTheGroupAfterTheChildEnds(t *testing.T) {
-	// 子は SIGTERM で終わるが、SIGTERM を無視する孫を group に残す
-	cmd, line := startGroup(t, `sh -c "trap '' TERM; while :; do sleep 0.05; done" & echo $!; trap 'exit 0' TERM; while :; do sleep 0.05; done`)
+	// 子は SIGTERM で自分から終わるが、SIGTERM を無視する孫を group に残す。合図は孫が trap を張った後に自分の pid を書く
+	cmd, line := startGroup(t, `trap 'exit 0' TERM; sh -c "trap '' TERM; echo \$\$; while :; do sleep 0.05; done" & while :; do sleep 0.05; done`)
 	grandchild, err := strconv.Atoi(line)
 	if err != nil {
 		t.Fatalf("孫の pid を読めない: %q", line)
@@ -63,6 +63,10 @@ func TestStopReapsAGrandchildLeftInTheGroupAfterTheChildEnds(t *testing.T) {
 
 	if _, err := group.Stop(5 * time.Second); err != nil {
 		t.Fatal(err)
+	}
+	// 猶予切れの SIGKILL でなく、子が終わった後の SIGKILL で孫が止まる筋を確かめる
+	if !cmd.ProcessState.Exited() || cmd.ProcessState.ExitCode() != 0 {
+		t.Fatalf("子が SIGTERM で自分から終わっていない: %v", cmd.ProcessState)
 	}
 
 	deadline := time.Now().Add(3 * time.Second)
