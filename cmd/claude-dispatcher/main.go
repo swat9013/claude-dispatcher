@@ -270,31 +270,54 @@ type loopOptions struct {
 	maxConcurrent int
 }
 
+// valueFlags は args から targets の値付き flag を抜き出し、残りの引数を返す。`--name value` と `--name=value` を読み、
+// 値が無い・空・2 回書いたら誤りにする (formats.md §6・§7.4)。
+func valueFlags(args []string, targets map[string]*string) ([]string, error) {
+	var rest []string
+	for i := 0; i < len(args); i++ {
+		name, value, inline := strings.Cut(args[i], "=")
+		target, known := targets[name]
+		if !known {
+			rest = append(rest, args[i])
+			continue
+		}
+		if !inline {
+			if i+1 >= len(args) {
+				return nil, fmt.Errorf("%s に値が要る", name)
+			}
+			i++
+			value = args[i]
+		}
+		if *target != "" {
+			return nil, fmt.Errorf("%s を 2 回書いている", name)
+		}
+		if value == "" {
+			return nil, fmt.Errorf("%s の値が空", name)
+		}
+		*target = value
+	}
+	return rest, nil
+}
+
 // loopFlags は `loop [--dry-run] [--max-concurrent <N>] [<workflow の path>]` の引数を読む (formats.md §5・§6)。
 func loopFlags(args []string) (loopOptions, error) {
 	var o loopOptions
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		name, value, inline := strings.Cut(arg, "=")
+	var maxConcurrent string
+	rest, err := valueFlags(args, map[string]*string{"--max-concurrent": &maxConcurrent})
+	if err != nil {
+		return o, err
+	}
+	if maxConcurrent != "" {
+		n, err := strconv.Atoi(maxConcurrent)
+		if err != nil || n < 1 {
+			return o, fmt.Errorf("--max-concurrent は 1 以上の整数 (%q)", maxConcurrent)
+		}
+		o.maxConcurrent = n
+	}
+	for _, arg := range rest {
 		switch {
 		case arg == "--dry-run":
 			o.dryRun = true
-		case name == "--max-concurrent":
-			if !inline {
-				if i+1 >= len(args) {
-					return o, errors.New("--max-concurrent に値が要る")
-				}
-				i++
-				value = args[i]
-			}
-			if o.maxConcurrent != 0 {
-				return o, errors.New("--max-concurrent を 2 回書いている")
-			}
-			n, err := strconv.Atoi(value)
-			if err != nil || n < 1 {
-				return o, fmt.Errorf("--max-concurrent は 1 以上の整数 (%q)", value)
-			}
-			o.maxConcurrent = n
 		case strings.HasPrefix(arg, "-"):
 			return o, fmt.Errorf("未知の flag: %s", arg)
 		case o.path == "":
