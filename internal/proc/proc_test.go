@@ -75,7 +75,7 @@ func TestStopReapsAGrandchildLeftInTheGroupAfterTheChildEnds(t *testing.T) {
 	}
 }
 
-func TestStopReportsExitedWithoutSignallingAChildThatAlreadyEnded(t *testing.T) {
+func TestStopReportsExitedAndKeepsTheExitCodeOfAChildThatAlreadyEnded(t *testing.T) {
 	cmd, _ := startGroup(t, `echo ready; exit 3`)
 	group := proc.Watch(cmd)
 	<-group.Done()
@@ -88,7 +88,7 @@ func TestStopReportsExitedWithoutSignallingAChildThatAlreadyEnded(t *testing.T) 
 	}
 }
 
-func TestWaitKillsTheGroupWhenTheTimeoutPasses(t *testing.T) {
+func TestWaitReportsTimedOutWhenTheTimeoutPasses(t *testing.T) {
 	cmd, _ := startGroup(t, `trap '' TERM; echo ready; while :; do sleep 0.05; done`)
 
 	end, _ := proc.Wait(cmd, 100*time.Millisecond)

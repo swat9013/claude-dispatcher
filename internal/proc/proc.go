@@ -40,8 +40,11 @@ func Watch(cmd *exec.Cmd) *Group {
 // Done は子が終わると閉じる。
 func (g *Group) Done() <-chan struct{} { return g.done }
 
-// Err は終わった子の cmd.Wait の結果。Done が閉じた後に呼ぶ。
-func (g *Group) Err() error { return g.err }
+// Err は子の終了を待ち、cmd.Wait の結果を返す。
+func (g *Group) Err() error {
+	<-g.done
+	return g.err
+}
 
 // Stop は子を止め、終わるまで待つ。子がもう終わっていれば何も送らず exited を true で返す。
 //
