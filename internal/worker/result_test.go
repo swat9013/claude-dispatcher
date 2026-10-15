@@ -1,25 +1,22 @@
 package worker
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
+	"time"
 )
 
 // attempt の最後の result の行の要約の読み方 (formats.md §4)。
 
-// summarizeStream は content を書いた worker log から、offset より後の行の最後の result を要約する。
-func summarizeStream(t *testing.T, content string, offset int64) (*ResultSummary, error) {
+// summarizeStream は前の attempt が previous を書いた worker log に、今の attempt が content を追記したときの要約。
+func summarizeStream(t *testing.T, previous, content string) (*ResultSummary, error) {
 	t.Helper()
-	file := filepath.Join(t.TempDir(), "stream.log")
-	if err := os.WriteFile(file, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return summarizeLastResult(file, offset)
+	w := watchFrom(t, previous, time.Now(), limits{})
+	write(t, w, content)
+	return w.lastResult()
 }
 
 func TestResultLineWithoutAnItemLeavesOnlyThatItemOut(t *testing.T) {
-	summary, err := summarizeStream(t, `{"type":"result","is_error":true,"permission_denials":[{}]}`+"\n", 0)
+	summary, err := summarizeStream(t, "", `{"type":"result","is_error":true,"permission_denials":[{}]}`+"\n")
 
 	if err != nil || summary == nil || summary.IsError == nil || !*summary.IsError || summary.NumTurns != nil ||
 		summary.PermissionDenialCount == nil || *summary.PermissionDenialCount != 1 {
@@ -28,7 +25,7 @@ func TestResultLineWithoutAnItemLeavesOnlyThatItemOut(t *testing.T) {
 }
 
 func TestResultLineThatIsStillBeingWrittenIsNotRead(t *testing.T) {
-	summary, err := summarizeStream(t, `{"type":"result","num_turns":3}`+"\n"+`{"type":"result","num_turns":5}`, 0)
+	summary, err := summarizeStream(t, "", `{"type":"result","num_turns":3}`+"\n"+`{"type":"result","num_turns":5}`)
 
 	if err != nil || summary == nil || summary.NumTurns == nil || *summary.NumTurns != 3 {
 		t.Fatalf("要約 = %+v, %v, want 改行で終わらない 2 つ目を読まず num_turns 3", summary, err)
@@ -36,7 +33,7 @@ func TestResultLineThatIsStillBeingWrittenIsNotRead(t *testing.T) {
 }
 
 func TestResultLineWithAnItemOfAnotherTypeLeavesThatItemOutAndReportsIt(t *testing.T) {
-	summary, err := summarizeStream(t, `{"type":"result","is_error":true,"num_turns":"five"}`+"\n", 0)
+	summary, err := summarizeStream(t, "", `{"type":"result","is_error":true,"num_turns":"five"}`+"\n")
 
 	if err == nil || summary == nil || summary.IsError == nil || !*summary.IsError || summary.NumTurns != nil {
 		t.Fatalf("要約 = %+v, %v, want is_error true だけを載せ、num_turns を読めないことを返す", summary, err)
@@ -44,19 +41,63 @@ func TestResultLineWithAnItemOfAnotherTypeLeavesThatItemOutAndReportsIt(t *testi
 }
 
 func TestResultLinesBeforeTheOffsetAreNotRead(t *testing.T) {
-	previous := `{"type":"result","num_turns":3}` + "\n"
-
-	summary, err := summarizeStream(t, previous+`{"type":"assistant"}`+"\n", int64(len(previous)))
+	summary, err := summarizeStream(t, `{"type":"result","num_turns":3}`+"\n", `{"type":"assistant"}`+"\n")
 
 	if err != nil || summary != nil {
 		t.Fatalf("要約 = %+v, %v, want 前の attempt の result を読まない", summary, err)
 	}
 }
 
-func TestWorkerLogThatCannotBeOpenedIsReported(t *testing.T) {
-	summary, err := summarizeLastResult(filepath.Join(t.TempDir(), "missing.log"), 0)
+func TestResultLongerThanTheLineHeadIsReadWhole(t *testing.T) {
+	long := `{"type":"result","num_turns":4,"result":"` + pad(lineHeadLimit) + `"}` + "\n"
+
+	summary, err := summarizeStream(t, "", long)
+
+	if err != nil || summary == nil || summary.NumTurns == nil || *summary.NumTurns != 4 {
+		t.Fatalf("要約 = %+v, %v, want 監視が持つ行の頭より長い result も行全体を読んで num_turns 4", summary, err)
+	}
+}
+
+func TestResultWrittenAfterTheStreamShrankIsSummarized(t *testing.T) {
+	w := watchFrom(t, pad(1024)+"\n", time.Now(), limits{})
+	write(t, w, `{"type":"result","num_turns":1}`+"\n")
+	shrinkTo(t, w, `{"type":"result","num_turns":2}`+"\n")
+
+	summary, err := w.lastResult()
+
+	if err != nil || summary == nil || summary.NumTurns == nil || *summary.NumTurns != 2 {
+		t.Fatalf("要約 = %+v, %v, want attempt の途中で縮んだら頭から読み、縮んだ後の result で num_turns 2", summary, err)
+	}
+}
+
+func TestWorkerLogThatCannotBeStattedIsReported(t *testing.T) {
+	w := watchFrom(t, "", time.Now(), limits{})
+	write(t, w, `{"type":"result","num_turns":1}`+"\n")
+	unstattable(w)
+
+	summary, err := w.lastResult()
 
 	if err == nil || summary != nil {
-		t.Fatalf("要約 = %+v, %v, want 開けないことを返す", summary, err)
+		t.Fatalf("要約 = %+v, %v, want 大きさを確かめられないことを返す", summary, err)
 	}
+}
+
+func TestWorkerLogThatCannotBeReadIsReported(t *testing.T) {
+	w := watchFrom(t, "", time.Now(), limits{})
+	write(t, w, `{"type":"result","num_turns":1}`+"\n")
+	unreadable(w)
+
+	summary, err := w.lastResult()
+
+	if err == nil || summary != nil {
+		t.Fatalf("要約 = %+v, %v, want 読み出せないことを返す", summary, err)
+	}
+}
+
+func pad(n int) string {
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = 'x'
+	}
+	return string(b)
 }
