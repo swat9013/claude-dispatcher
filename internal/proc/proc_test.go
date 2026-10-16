@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -99,5 +100,126 @@ func TestWaitReportsTimedOutWhenTheTimeoutPasses(t *testing.T) {
 
 	if end != proc.TimedOut {
 		t.Fatalf("end = %v", end)
+	}
+}
+
+// waitGone は pid の process が消えるまで待つ。上限を過ぎたら止めて test を落とす。
+func waitGone(t *testing.T, pid int) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for alive(pid) {
+		if time.Now().After(deadline) {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+			t.Fatalf("孫 %d が残った", pid)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func TestWatchReapsAGrandchildLeftInTheGroupWhenTheChildExitsByItself(t *testing.T) {
+	// 子は SIGTERM を無視する孫を group に残して exit 0 する。止める理由は無い
+	cmd, line := startGroup(t, `sh -c "trap '' TERM; echo \$\$; while :; do sleep 0.05; done" & sleep 0.3; exit 0`)
+	grandchild, err := strconv.Atoi(line)
+	if err != nil {
+		t.Fatalf("孫の pid を読めない: %q", line)
+	}
+	group := proc.Watch(cmd)
+
+	if err := group.Err(); err != nil {
+		t.Fatalf("子が exit 0 で終わっていない: %v", err)
+	}
+	if exited, err := group.Stop(time.Second); !exited || err != nil {
+		t.Fatalf("exited = %v, err = %v", exited, err)
+	}
+	waitGone(t, grandchild)
+}
+
+func TestStopSendsNoSignalToTheGroupAfterTheChildIsReaped(t *testing.T) {
+	var (
+		mu        sync.Mutex
+		group     *proc.Group
+		afterReap []string
+	)
+	proc.SetKillGroup(t, func(pgid int, sig syscall.Signal) error {
+		mu.Lock()
+		defer mu.Unlock()
+		if group == nil {
+			return syscall.Kill(-pgid, sig)
+		}
+		select {
+		case <-group.Done():
+			afterReap = append(afterReap, sig.String())
+		default:
+		}
+		return syscall.Kill(-pgid, sig)
+	})
+	for _, script := range []string{`echo ready; exit 0`, `trap '' TERM; echo ready; while :; do sleep 0.05; done`} {
+		cmd, _ := startGroup(t, script)
+		mu.Lock()
+		// mu を握ったまま Watch するので、Watch の goroutine が送る signal は新しい group と照らされる
+		group = proc.Watch(cmd)
+		g := group
+		mu.Unlock()
+		_, _ = g.Stop(100 * time.Millisecond)
+		<-g.Done()
+		_, _ = g.Stop(100 * time.Millisecond)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(afterReap) != 0 {
+		t.Fatalf("回収後の group に signal を送った (pgid が再利用されうる): %v", afterReap)
+	}
+}
+
+func TestStopReturnsTheReasonWithoutWaitingWhenSIGKILLCannotBeSent(t *testing.T) {
+	proc.SetKillGroup(t, func(pgid int, sig syscall.Signal) error {
+		if sig == syscall.SIGKILL {
+			return syscall.EPERM
+		}
+		return syscall.Kill(-pgid, sig)
+	})
+	cmd, _ := startGroup(t, `trap '' TERM; echo ready; while :; do sleep 0.05; done`)
+	t.Cleanup(func() { _ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) })
+	group := proc.Watch(cmd)
+
+	returned := make(chan error, 1)
+	go func() {
+		exited, err := group.Stop(50 * time.Millisecond)
+		if exited {
+			err = errors.New("exited が true")
+		}
+		returned <- err
+	}()
+	select {
+	case err := <-returned:
+		if !errors.Is(err, syscall.EPERM) {
+			t.Fatalf("err = %v; want SIGKILL を送れなかった理由 (EPERM)", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("SIGKILL を送れないのに Stop が子の終わりを待ち続けた")
+	}
+}
+
+func TestWaitReturnsTheReasonWithoutWaitingWhenSIGKILLCannotBeSent(t *testing.T) {
+	proc.SetKillGroup(t, func(int, syscall.Signal) error { return syscall.EPERM })
+	cmd, _ := startGroup(t, `trap '' TERM; echo ready; while :; do sleep 0.05; done`)
+	t.Cleanup(func() { _ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) })
+
+	type outcome struct {
+		end proc.End
+		err error
+	}
+	returned := make(chan outcome, 1)
+	go func() {
+		end, err := proc.Wait(cmd, 50*time.Millisecond)
+		returned <- outcome{end, err}
+	}()
+	select {
+	case o := <-returned:
+		if o.end != proc.TimedOut || !errors.Is(o.err, syscall.EPERM) {
+			t.Fatalf("end = %v, err = %v", o.end, o.err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("SIGKILL を送れないのに Wait が子の終わりを待ち続けた")
 	}
 }

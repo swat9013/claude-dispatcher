@@ -237,7 +237,9 @@ func (r Runner) wait(cmd *exec.Cmd, run *Run, w *streamWatch) Result {
 	result, ended := watch(group.Done(), run, w, ticker.C)
 	ticker.Stop()
 	if ended {
-		return r.exited(cmd, Result{})
+		// 子が自分で終わった。group に残った孫は Watch が止めたので、止められなかった理由だけを拾う
+		_, err := group.Stop(stopGrace)
+		return r.exited(cmd, stopError(Result{}, err))
 	}
 	if run.stopped() {
 		// stall や上限時間と停止要求が重なったら、loop が止めたことを優先する
@@ -245,12 +247,23 @@ func (r Runner) wait(cmd *exec.Cmd, run *Run, w *streamWatch) Result {
 	}
 	exited, err := group.Stop(stopGrace)
 	if exited {
-		return r.exited(cmd, Result{})
+		return r.exited(cmd, stopError(Result{}, err))
 	}
+	select {
+	case <-group.Done():
+		return r.exited(cmd, stopError(result, err))
+	default:
+		// SIGKILL を送れず claude はまだ終わっていない。終わり方は無いので、止めた理由のまま返す
+		return stopError(result, err)
+	}
+}
+
+// stopError は process group へ signal を送れなかった理由を result に足す。
+func stopError(result Result, err error) Result {
 	if err != nil {
 		result.StopError = err.Error()
 	}
-	return r.exited(cmd, result)
+	return result
 }
 
 // watch は claude が終わるまで待つ (ended が true)。先に止める理由ができたら、その理由を持った result を返す。
