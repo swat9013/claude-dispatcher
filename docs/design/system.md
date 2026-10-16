@@ -190,7 +190,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。claim の段階と打�
    - 走っている作業対象を外部 store で読み直し、終端になっていれば worker を止めて workspace を消す
    - trigger から外れただけでは止めない (ADR 0009「走っている worker は終端でだけ止める」)
    - 止めた worker が止められて終われば claim を解く。止める前に worker が終わっていた (stall・上限時間で止まったか、自分で終わった) ときは、止めなかった worker と同じく終わりを確かめる (worker の 1 回分の手順 5)
-   - worker を止めようとして SIGKILL を送れず、claude がまだ終わっていなければ (stall・上限時間・終端・停止要求のどれで止めたときも)、worker は終わっていないものとして扱う。`after_run` を撃たず、終わりを確かめず、再起動もせず、workspace も消さない。claude がその workspace と session を使い続けうるので、後始末と次の attempt が claude と重ならないようにする
+   - worker を止めようとして SIGKILL を送れず、claude がまだ終わっていなければ、worker は終わっていないものとして扱う。`after_run` を撃たず、終わりを確かめず、再起動もせず、workspace も消さない。claude がその workspace と session を使い続けうるので、後始末と次の attempt が claude と重ならないようにする
    - その claim は「止めている」段階のまま loop の終了まで持ち続ける。claim を持つので、同じ作業対象は候補にならず、workspace は掃除されない。並列の枠も 1 つ使い続ける (claude が走り続けうるため)
    - loop の停止はその worker の終わりを待たない (終わりを知らせる手段が無く、待つと止まれなくなる)。loop の終了で、claude を残したまま止まることを error として log に残す。残った claude を止めて workspace を片付けるのは人の作業とする
 2. **workflow 定義の読み直しと事前検査** (§8)
