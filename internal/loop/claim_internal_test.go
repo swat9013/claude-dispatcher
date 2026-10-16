@@ -15,7 +15,7 @@ import (
 // WaitingRetry) から出る遷移と、その 4 段階で uncovered とした組を、statechart を見ながら手で 1 行ずつ写す。
 // 「候補になる」は claim の無い作業対象の出来事なので、claim の入口を持たない (4 段階ではどれも uncovered)。
 
-// io は effect のうち loop がする I/O と出口。
+// claimIO は effect のうち loop がする I/O と出口。
 type claimIO struct {
 	stopWorker, startWorker, removeWorkspace, readItem bool
 	exit                                               exit
@@ -39,14 +39,14 @@ func stopAsked(s stopRequests) func(*claim, target.Ref, claimEnv) effect {
 }
 
 func elapsed(h hindrance) func(*claim, target.Ref, claimEnv) effect {
-	return func(c *claim, ref target.Ref, env claimEnv) effect { return c.backoffElapsed(ref, h, env) }
+	return func(c *claim, ref target.Ref, env claimEnv) effect { return c.backoffElapsed(ref, h, nil, env) }
 }
 
 func loopEnd(c *claim, _ target.Ref, _ claimEnv) effect { return c.loopEnded() }
 
 var (
 	workerEnd      = claimEvent{"worker終了", ended(worker.Result{})}
-	stoppedEnd     = claimEvent{"worker終了 (止められて)", ended(worker.Result{Stopped: true})}
+	stoppedEnd     = claimEvent{"worker終了 [止められて終わった]", ended(worker.Result{Stopped: true})}
 	stall          = claimEvent{"stall上限", ended(worker.Result{Failure: "stall"})}
 	timeLimit      = claimEvent{"上限時間", ended(worker.Result{Failure: "上限時間"})}
 	terminal       = claimEvent{"終端の観測", seen(observation{observed: trigger.ObservedTerminal})}
@@ -59,6 +59,7 @@ var (
 	backoffDone    = claimEvent{"backoffの明け", elapsed(hindranceNone)}
 	noSlot         = claimEvent{"空きが無い", elapsed(hindranceNoSlot)}
 	ambiguousCL    = claimEvent{"曖昧なCL", elapsed(hindranceAmbiguousCL)}
+	branchHeld     = claimEvent{"branchの重なり", elapsed(hindranceBranchHeld)}
 	earlierTrigger = claimEvent{"先のtriggerに当たる", elapsed(hindranceEarlierTrigger)}
 	precheckFailed = claimEvent{"事前検査に落ちた", elapsed(hindrancePrecheck)}
 	noDefinition   = claimEvent{"workflow定義を採れない", elapsed(hindranceDefinitionUnavailable)}
@@ -74,7 +75,7 @@ func (w *fakeWorker) Activity() status.Activity { return status.Activity{} }
 
 func TestClaimTransitions(t *testing.T) {
 	const maxAttempts = 3
-	stay := claimIO{}
+	noIO := claimIO{}
 	tests := []struct {
 		from    phase
 		attempt int
@@ -87,83 +88,90 @@ func TestClaimTransitions(t *testing.T) {
 		{phaseRunning, 1, stall, phaseAwaitingVerification, claimIO{readItem: true}},
 		{phaseRunning, 1, timeLimit, phaseAwaitingVerification, claimIO{readItem: true}},
 		{phaseRunning, 1, terminal, phaseStopping, claimIO{stopWorker: true}},
-		{phaseRunning, 1, firstStop, phaseRunning, stay},
+		{phaseRunning, 1, firstStop, phaseRunning, noIO},
 		{phaseRunning, 1, secondStop, phaseStopping, claimIO{stopWorker: true}},
-		{phaseRunning, 1, loopEnded, phaseRunning, stay},
+		{phaseRunning, 1, loopEnded, phaseRunning, noIO},
 		// uncovered
-		{phaseRunning, 1, leftTrigger, phaseRunning, stay},
-		{phaseRunning, 1, stillMatches, phaseRunning, stay},
-		{phaseRunning, 1, undecided, phaseRunning, stay},
-		{phaseRunning, 1, readFailure, phaseRunning, stay},
-		{phaseRunning, 1, backoffDone, phaseRunning, stay},
-		{phaseRunning, 1, noSlot, phaseRunning, stay},
-		{phaseRunning, 1, ambiguousCL, phaseRunning, stay},
-		{phaseRunning, 1, precheckFailed, phaseRunning, stay},
-		{phaseRunning, 1, noDefinition, phaseRunning, stay},
-		{phaseRunning, 1, earlierTrigger, phaseRunning, stay},
-		{phaseRunning, 1, triggerRemoved, phaseRunning, stay},
+		{phaseRunning, 1, leftTrigger, phaseRunning, noIO},
+		{phaseRunning, 1, stillMatches, phaseRunning, noIO},
+		{phaseRunning, 1, undecided, phaseRunning, noIO},
+		{phaseRunning, 1, readFailure, phaseRunning, noIO},
+		{phaseRunning, 1, backoffDone, phaseRunning, noIO},
+		{phaseRunning, 1, noSlot, phaseRunning, noIO},
+		{phaseRunning, 1, ambiguousCL, phaseRunning, noIO},
+		{phaseRunning, 1, branchHeld, phaseRunning, noIO},
+		{phaseRunning, 1, precheckFailed, phaseRunning, noIO},
+		{phaseRunning, 1, noDefinition, phaseRunning, noIO},
+		{phaseRunning, 1, earlierTrigger, phaseRunning, noIO},
+		{phaseRunning, 1, triggerRemoved, phaseRunning, noIO},
 
 		// --- 止めている ---
 		{phaseStopping, 1, stoppedEnd, phaseStopping, claimIO{removeWorkspace: true, exit: release}},
-		{phaseStopping, 1, loopEnded, phaseStopping, stay},
+		{phaseStopping, 1, workerEnd, phaseAwaitingVerification, claimIO{readItem: true}},
+		{phaseStopping, 1, stall, phaseAwaitingVerification, claimIO{readItem: true}},
+		{phaseStopping, 1, timeLimit, phaseAwaitingVerification, claimIO{readItem: true}},
+		{phaseStopping, 1, loopEnded, phaseStopping, noIO},
 		// uncovered
-		{phaseStopping, 1, terminal, phaseStopping, stay},
-		{phaseStopping, 1, leftTrigger, phaseStopping, stay},
-		{phaseStopping, 1, stillMatches, phaseStopping, stay},
-		{phaseStopping, 1, undecided, phaseStopping, stay},
-		{phaseStopping, 1, readFailure, phaseStopping, stay},
-		{phaseStopping, 1, backoffDone, phaseStopping, stay},
-		{phaseStopping, 1, noSlot, phaseStopping, stay},
-		{phaseStopping, 1, ambiguousCL, phaseStopping, stay},
-		{phaseStopping, 1, precheckFailed, phaseStopping, stay},
-		{phaseStopping, 1, noDefinition, phaseStopping, stay},
-		{phaseStopping, 1, firstStop, phaseStopping, stay},
-		{phaseStopping, 1, secondStop, phaseStopping, stay},
-		{phaseStopping, 1, earlierTrigger, phaseStopping, stay},
-		{phaseStopping, 1, triggerRemoved, phaseStopping, stay},
+		{phaseStopping, 1, terminal, phaseStopping, noIO},
+		{phaseStopping, 1, leftTrigger, phaseStopping, noIO},
+		{phaseStopping, 1, stillMatches, phaseStopping, noIO},
+		{phaseStopping, 1, undecided, phaseStopping, noIO},
+		{phaseStopping, 1, readFailure, phaseStopping, noIO},
+		{phaseStopping, 1, backoffDone, phaseStopping, noIO},
+		{phaseStopping, 1, noSlot, phaseStopping, noIO},
+		{phaseStopping, 1, ambiguousCL, phaseStopping, noIO},
+		{phaseStopping, 1, branchHeld, phaseStopping, noIO},
+		{phaseStopping, 1, precheckFailed, phaseStopping, noIO},
+		{phaseStopping, 1, noDefinition, phaseStopping, noIO},
+		{phaseStopping, 1, firstStop, phaseStopping, noIO},
+		{phaseStopping, 1, secondStop, phaseStopping, noIO},
+		{phaseStopping, 1, earlierTrigger, phaseStopping, noIO},
+		{phaseStopping, 1, triggerRemoved, phaseStopping, noIO},
 
 		// --- 終わりを確かめ待ち ---
 		{phaseAwaitingVerification, 1, terminal, phaseAwaitingVerification, claimIO{removeWorkspace: true, exit: release}},
 		{phaseAwaitingVerification, 1, leftTrigger, phaseAwaitingVerification, claimIO{exit: release}},
-		{phaseAwaitingVerification, 1, stillMatches, phaseWaitingRetry, stay},
+		{phaseAwaitingVerification, 1, stillMatches, phaseWaitingRetry, noIO},
 		{phaseAwaitingVerification, maxAttempts, stillMatches, phaseAwaitingVerification, claimIO{exit: abandon}},
-		{phaseAwaitingVerification, 1, readFailure, phaseAwaitingVerification, stay},
-		{phaseAwaitingVerification, 1, undecided, phaseAwaitingVerification, stay},
-		{phaseAwaitingVerification, 1, loopEnded, phaseAwaitingVerification, stay},
+		{phaseAwaitingVerification, 1, readFailure, phaseAwaitingVerification, noIO},
+		{phaseAwaitingVerification, 1, undecided, phaseAwaitingVerification, noIO},
+		{phaseAwaitingVerification, 1, loopEnded, phaseAwaitingVerification, noIO},
 		// uncovered
-		{phaseAwaitingVerification, 1, workerEnd, phaseAwaitingVerification, stay},
-		{phaseAwaitingVerification, 1, stall, phaseAwaitingVerification, stay},
-		{phaseAwaitingVerification, 1, timeLimit, phaseAwaitingVerification, stay},
-		{phaseAwaitingVerification, 1, backoffDone, phaseAwaitingVerification, stay},
-		{phaseAwaitingVerification, 1, noSlot, phaseAwaitingVerification, stay},
-		{phaseAwaitingVerification, 1, ambiguousCL, phaseAwaitingVerification, stay},
-		{phaseAwaitingVerification, 1, precheckFailed, phaseAwaitingVerification, stay},
-		{phaseAwaitingVerification, 1, noDefinition, phaseAwaitingVerification, stay},
-		{phaseAwaitingVerification, 1, firstStop, phaseAwaitingVerification, stay},
-		{phaseAwaitingVerification, 1, secondStop, phaseAwaitingVerification, stay},
-		{phaseAwaitingVerification, 1, earlierTrigger, phaseAwaitingVerification, stay},
-		{phaseAwaitingVerification, 1, triggerRemoved, phaseAwaitingVerification, stay},
+		{phaseAwaitingVerification, 1, workerEnd, phaseAwaitingVerification, noIO},
+		{phaseAwaitingVerification, 1, stall, phaseAwaitingVerification, noIO},
+		{phaseAwaitingVerification, 1, timeLimit, phaseAwaitingVerification, noIO},
+		{phaseAwaitingVerification, 1, backoffDone, phaseAwaitingVerification, noIO},
+		{phaseAwaitingVerification, 1, noSlot, phaseAwaitingVerification, noIO},
+		{phaseAwaitingVerification, 1, ambiguousCL, phaseAwaitingVerification, noIO},
+		{phaseAwaitingVerification, 1, branchHeld, phaseAwaitingVerification, noIO},
+		{phaseAwaitingVerification, 1, precheckFailed, phaseAwaitingVerification, noIO},
+		{phaseAwaitingVerification, 1, noDefinition, phaseAwaitingVerification, noIO},
+		{phaseAwaitingVerification, 1, firstStop, phaseAwaitingVerification, noIO},
+		{phaseAwaitingVerification, 1, secondStop, phaseAwaitingVerification, noIO},
+		{phaseAwaitingVerification, 1, earlierTrigger, phaseAwaitingVerification, noIO},
+		{phaseAwaitingVerification, 1, triggerRemoved, phaseAwaitingVerification, noIO},
 
 		// --- 再起動待ち ---
 		{phaseWaitingRetry, 1, backoffDone, phaseRunning, claimIO{startWorker: true}},
-		{phaseWaitingRetry, 1, noSlot, phaseWaitingRetry, stay},
-		{phaseWaitingRetry, 1, readFailure, phaseWaitingRetry, stay},
-		{phaseWaitingRetry, 1, undecided, phaseWaitingRetry, stay},
-		{phaseWaitingRetry, 1, ambiguousCL, phaseWaitingRetry, stay},
-		{phaseWaitingRetry, 1, earlierTrigger, phaseWaitingRetry, stay},
-		{phaseWaitingRetry, 1, precheckFailed, phaseWaitingRetry, stay},
-		{phaseWaitingRetry, 1, noDefinition, phaseWaitingRetry, stay},
-		{phaseWaitingRetry, 1, firstStop, phaseWaitingRetry, stay},
+		{phaseWaitingRetry, 1, noSlot, phaseWaitingRetry, noIO},
+		{phaseWaitingRetry, 1, readFailure, phaseWaitingRetry, noIO},
+		{phaseWaitingRetry, 1, undecided, phaseWaitingRetry, noIO},
+		{phaseWaitingRetry, 1, ambiguousCL, phaseWaitingRetry, noIO},
+		{phaseWaitingRetry, 1, branchHeld, phaseWaitingRetry, noIO},
+		{phaseWaitingRetry, 1, earlierTrigger, phaseWaitingRetry, noIO},
+		{phaseWaitingRetry, 1, precheckFailed, phaseWaitingRetry, noIO},
+		{phaseWaitingRetry, 1, noDefinition, phaseWaitingRetry, noIO},
+		{phaseWaitingRetry, 1, firstStop, phaseWaitingRetry, noIO},
 		{phaseWaitingRetry, 1, terminal, phaseWaitingRetry, claimIO{removeWorkspace: true, exit: release}},
 		{phaseWaitingRetry, 1, leftTrigger, phaseWaitingRetry, claimIO{exit: release}},
 		{phaseWaitingRetry, 1, triggerRemoved, phaseWaitingRetry, claimIO{exit: release}},
-		{phaseWaitingRetry, 1, loopEnded, phaseWaitingRetry, stay},
+		{phaseWaitingRetry, 1, loopEnded, phaseWaitingRetry, noIO},
 		// uncovered
-		{phaseWaitingRetry, 1, workerEnd, phaseWaitingRetry, stay},
-		{phaseWaitingRetry, 1, stall, phaseWaitingRetry, stay},
-		{phaseWaitingRetry, 1, timeLimit, phaseWaitingRetry, stay},
-		{phaseWaitingRetry, 1, stillMatches, phaseWaitingRetry, stay},
-		{phaseWaitingRetry, 1, secondStop, phaseWaitingRetry, stay},
+		{phaseWaitingRetry, 1, workerEnd, phaseWaitingRetry, noIO},
+		{phaseWaitingRetry, 1, stall, phaseWaitingRetry, noIO},
+		{phaseWaitingRetry, 1, timeLimit, phaseWaitingRetry, noIO},
+		{phaseWaitingRetry, 1, stillMatches, phaseWaitingRetry, noIO},
+		{phaseWaitingRetry, 1, secondStop, phaseWaitingRetry, noIO},
 	}
 	for _, tt := range tests {
 		t.Run(phaseNames[tt.from]+" x "+tt.event.name, func(t *testing.T) {

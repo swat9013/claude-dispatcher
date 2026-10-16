@@ -248,15 +248,11 @@ func (l *loop) requestStop(sig os.Signal) {
 	l.stop = l.stop.next()
 	l.lastStop = sig
 	running := l.running()
-	if running == 0 {
-		return
-	}
-	if l.stop == stopFirst {
-		l.rec.human(LineStopping, "停止待ち", ": 走っている worker %d 本の終了を待つ (もう一度で止める)", running)
-		return
-	}
 	for ref, c := range l.claims {
 		l.apply(ref, c, c.stopRequested(l.stop))
+	}
+	if running > 0 && l.stop == stopFirst {
+		l.rec.human(LineStopping, "停止待ち", ": 走っている worker %d 本の終了を待つ (もう一度で止める)", running)
 	}
 }
 
@@ -597,7 +593,7 @@ func (l *loop) launch(def workflow.Definition, c trigger.Candidate) bool {
 		l.rec.error(ref, err.Error())
 		return false
 	}
-	claimed := &claim{item: c.Item, trigger: *c.Trigger, attempt: 1, sessionID: sessionID, workspaceRoot: def.WorkspaceRoot}
+	claimed := newClaim(c.Item, *c.Trigger, sessionID, def.WorkspaceRoot)
 	l.claims[ref] = claimed
 	l.start(claimed)
 	return true
@@ -667,9 +663,7 @@ func (l *loop) claimOf(ref target.Ref) (*claim, bool) {
 	return c, ok
 }
 
-// verify は終わった worker の作業対象を読み直し、終わり方を決める。完了なら claim を解き、失敗なら再起動に回す。読み直せないか
-// trigger に当たるかをまだ決められなければ、claim を持ったまま次の tick で確かめ直す (完了とも失敗とも数えない)。作業対象が終端か trigger から外れていれば、worker 自身の
-// 失敗に関わらず完了とする。
+// verify は終わった worker の作業対象を読み直し、観測を claim の入口に渡す (終わり方の規則は claim.verified)。
 func (l *loop) verify(store Store, ref target.Ref, c *claim) {
 	o, _ := l.read(store, ref, c.trigger.Observe)
 	l.apply(ref, c, c.observed(ref, o, l.env()))

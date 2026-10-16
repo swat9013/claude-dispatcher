@@ -24,11 +24,11 @@ func (l *loop) apply(ref target.Ref, c *claim, e effect) {
 	if e.startWorker {
 		l.start(c)
 	}
-	switch e.exit {
-	case release:
-		delete(l.claims, ref)
-	case abandon:
-		delete(l.claims, ref)
+	if e.exit == stay {
+		return
+	}
+	delete(l.claims, ref)
+	if e.exit == abandon {
 		l.abandoned[ref] = c.trigger.Name
 	}
 }

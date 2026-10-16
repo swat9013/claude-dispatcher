@@ -59,12 +59,12 @@ func (l *loop) retry(store Store, v *view) {
 			continue
 		}
 		if l.running() >= l.def.MaxConcurrent {
-			l.apply(ref, c, c.backoffElapsed(ref, hindranceNoSlot, l.env()))
+			l.apply(ref, c, c.backoffElapsed(ref, hindranceNoSlot, nil, l.env()))
 			continue
 		}
 		current, ok := triggerNamed(l.def, c.trigger.Name)
 		if !ok {
-			l.apply(ref, c, c.backoffElapsed(ref, hindranceTriggerRemoved, l.env()))
+			l.apply(ref, c, c.backoffElapsed(ref, hindranceTriggerRemoved, nil, l.env()))
 			continue
 		}
 		if ref.Kind == target.KindCL && v == outsideTick {
@@ -72,27 +72,22 @@ func (l *loop) retry(store Store, v *view) {
 			continue
 		}
 		o, item := l.read(store, ref, current.Observe)
-		if o.readErr == nil {
-			c.trigger = current
-		}
+		o.current = &current
+		l.apply(ref, c, c.observed(ref, o, l.env()))
 		if o.readErr != nil || o.observed != trigger.ObservedStillMatches {
-			l.apply(ref, c, c.observed(ref, o, l.env()))
+			// 当たったままのときだけ backoff の明けへ進む (ほかは観測の入口が待ち直すか claim を解いた)
 			continue
 		}
-		if cl, isCL := item.(target.CL); isCL {
-			if v.ambiguous[ref] || v.branchHeld(cl, ref) {
-				// claim している作業対象の branch に重なる CL も、曖昧な CL と同じく CL の除外として待ち直す
-				l.apply(ref, c, c.backoffElapsed(ref, hindranceAmbiguousCL, l.env()))
-				continue
-			}
-		}
-		if !l.restartable(c) {
+		h := hindranceNone
+		if cl, isCL := item.(target.CL); isCL && v.ambiguous[ref] {
+			h = hindranceAmbiguousCL
+		} else if isCL && v.branchHeld(cl, ref) {
+			h = hindranceBranchHeld
+		} else if !l.restartable(c) {
 			// 事前検査に落ちている trigger は、直るまで attempt を進めずに待ち直す (tick が確かめ直す)
-			l.apply(ref, c, c.backoffElapsed(ref, hindrancePrecheck, l.env()))
-			continue
+			h = hindrancePrecheck
 		}
-		c.item = item
-		l.apply(ref, c, c.backoffElapsed(ref, hindranceNone, l.env()))
+		l.apply(ref, c, c.backoffElapsed(ref, h, item, l.env()))
 	}
 }
 

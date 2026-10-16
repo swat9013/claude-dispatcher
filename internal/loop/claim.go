@@ -27,7 +27,10 @@ const (
 
 // next は停止要求をもう 1 回受けた後の値。
 func (s stopRequests) next() stopRequests {
-	return min(s+1, stopSecond)
+	if s == stopNone {
+		return stopFirst
+	}
+	return stopSecond
 }
 
 // requested は停止要求を 1 回以上受けたか。
@@ -57,7 +60,7 @@ type logLine struct {
 }
 
 // effect は入口が返す、書くログの行と loop がする I/O。loop の apply は removeWorkspace・lines・stopWorker・startWorker・
-// readItem・exit の順に実行する。
+// exit の順に実行する。readItem だけは apply でなく呼び出し側 (loop.handle) が受ける。
 type effect struct {
 	// removeWorkspace は workspace を消す (作業対象が終端)
 	removeWorkspace bool
@@ -85,8 +88,8 @@ type claimEnv struct {
 // 進めて作業対象を読み直させる。
 func (c *claim) workerEnded(ref target.Ref, result worker.Result) effect {
 	if c.phase != phaseRunning && c.phase != phaseStopping {
-		// 走っていない claim に終わる worker は無い
-		return effect{}
+		// 走っていない claim に終わる worker は無い (起きれば loop の誤り)
+		return effect{lines: []logLine{errorLine("走っていない claim の worker の終わりを受けた")}}
 	}
 	c.run = nil
 	if c.phase == phaseStopping && result.Stopped {
@@ -105,6 +108,8 @@ type observation struct {
 	observed trigger.Observation
 	// readErr は読み直しの失敗。nil でなければ observed を見ない
 	readErr error
+	// current は再起動待ちの claim が続ける trigger をそのときの workflow 定義から引き直したもの。読み直せたら claim の trigger をこれに替える
+	current *trigger.Trigger
 }
 
 // observed は作業対象の読み直しの観測を受ける。走っている claim は終端でだけ止め (ADR 0009)、確かめ待ちの claim は終わり方
@@ -125,6 +130,9 @@ func (c *claim) observed(ref target.Ref, o observation, env claimEnv) effect {
 	case phaseWaitingRetry:
 		if o.readErr != nil {
 			return effect{lines: []logLine{errorLine("再起動を待つ作業対象を読み直せない (次の tick で読み直す): " + oneLine(o.readErr))}}
+		}
+		if o.current != nil {
+			c.trigger = *o.current
 		}
 		switch o.observed {
 		case trigger.ObservedTerminal, trigger.ObservedLeftTrigger:
@@ -208,6 +216,8 @@ const (
 	hindranceNoSlot
 	// hindranceAmbiguousCL は CL が tick の一覧で曖昧に見える
 	hindranceAmbiguousCL
+	// hindranceBranchHeld は CL の head branch を別の claim の workspace が checkout している (か branch を読めない)
+	hindranceBranchHeld
 	// hindranceEarlierTrigger は宣言順で先の trigger に当たる。再起動は同じ trigger で続ける (system.md §7) ので、loop は
 	// 渡さない。statechart の組を表で引けるよう値を持つ
 	hindranceEarlierTrigger
@@ -222,13 +232,13 @@ const (
 // backoffElapsed は再起動待ちの claim の backoff の明けを受ける。妨げが無ければ次の attempt を起動し、trigger が消えて
 // いれば起動せずに claim を解く。ほかの妨げでは attempt を進めずに待ち直す (曖昧に見えても claim は解かない。formats.md §6
 // の再起動)。
-func (c *claim) backoffElapsed(ref target.Ref, h hindrance, env claimEnv) effect {
+func (c *claim) backoffElapsed(ref target.Ref, h hindrance, item target.Item, env claimEnv) effect {
 	if c.phase != phaseWaitingRetry {
 		return effect{}
 	}
 	switch h {
 	case hindranceNone:
-		c.waitingSlot = false
+		c.item, c.waitingSlot = item, false
 		c.attempt++
 		c.phase, c.startedAt, c.activity = phaseRunning, nil, nil
 		return effect{startWorker: true}
@@ -247,6 +257,11 @@ func (c *claim) backoffElapsed(ref target.Ref, h hindrance, env claimEnv) effect
 		return effect{lines: []logLine{c.releaseLine(ref, reasonTriggerRemoved)}, exit: release}
 	}
 	return effect{}
+}
+
+// newClaim は候補になった作業対象に立てる claim。attempt 1 の worker が走っている段階で始まる。
+func newClaim(item target.Item, t trigger.Trigger, sessionID, workspaceRoot string) *claim {
+	return &claim{item: item, trigger: t, attempt: 1, sessionID: sessionID, workspaceRoot: workspaceRoot, phase: phaseRunning}
 }
 
 // loopEnded は loop の終了を受ける。claim を持ったまま止まることを error の行に残す。
