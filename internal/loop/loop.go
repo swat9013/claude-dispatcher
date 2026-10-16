@@ -252,12 +252,12 @@ func Run(o Options) int {
 func (l *loop) requestStop(sig os.Signal) {
 	l.stop = l.stop.next()
 	l.lastStop = sig
-	running := l.awaited()
+	awaited := l.awaited()
 	for ref, c := range l.claims {
 		l.apply(ref, c, c.stopRequested(l.stop))
 	}
-	if running > 0 && l.stop == stopFirst {
-		l.rec.human(LineStopping, "停止待ち", ": 走っている worker %d 本の終了を待つ (もう一度で止める)", running)
+	if awaited > 0 && l.stop == stopFirst {
+		l.rec.human(LineStopping, "停止待ち", ": 走っている worker %d 本の終了を待つ (もう一度で止める)", awaited)
 	}
 }
 
@@ -275,7 +275,7 @@ func (l *loop) exit() int {
 func (l *loop) awaited() int {
 	n := 0
 	for _, c := range l.claims {
-		if (c.phase == phaseRunning || c.phase == phaseStopping) && !c.unstopped {
+		if c.holdsWorker() && !c.unstopped {
 			n++
 		}
 	}
@@ -286,12 +286,15 @@ func (l *loop) awaited() int {
 func (l *loop) running() int {
 	n := 0
 	for _, c := range l.claims {
-		if c.phase == phaseRunning || c.phase == phaseStopping {
+		if c.holdsWorker() {
 			n++
 		}
 	}
 	return n
 }
+
+// holdsWorker は claim が worker (止めている途中と、止められない worker を含む) を持つ段階か。
+func (c *claim) holdsWorker() bool { return c.phase == phaseRunning || c.phase == phaseStopping }
 
 // tick は 1 周期分の仕事をする (formats.md §6 の tick の手順)。
 func (l *loop) tick() {
@@ -652,7 +655,12 @@ func (l *loop) handle(ev worker.Event) {
 			return
 		}
 		result := ev.Result
-		for _, message := range []string{result.AfterRunError, result.StopError, result.ResultSummaryError} {
+		stopError := result.StopError
+		if result.Unstopped {
+			// 止められない worker の行 (claim.workerEnded) が理由を併せて書く
+			stopError = ""
+		}
+		for _, message := range []string{result.AfterRunError, stopError, result.ResultSummaryError} {
 			if message != "" {
 				l.rec.error(ev.Target, message)
 			}

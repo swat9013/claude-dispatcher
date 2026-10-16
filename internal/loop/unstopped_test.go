@@ -97,7 +97,7 @@ func TestAWorkerWhoseClaudeCannotBeStoppedIsNeitherVerifiedNorRestartedAndKeepsI
 		messages = append(messages, e["error"].(string))
 	}
 	joined := strings.Join(messages, "\n")
-	for _, want := range []string{"claude を止められない (pid 1)", "claude を止められないまま止まる (pid 1"} {
+	for _, want := range []string{"claude を止められない (pid 1, workspace ", "子を止められない: EPERM", "claude を止められないまま止まる (pid 1"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("error の行 = %q, want %q を含む", joined, want)
 		}

@@ -256,7 +256,7 @@ func (r Runner) wait(cmd *exec.Cmd, run *Run, w *streamWatch) Result {
 		// stall や上限時間と停止要求が重なったら、loop が止めたことを優先する
 		result = Result{Stopped: true}
 	}
-	exited, err := group.Stop(stopGrace)
+	exited, err := stopGroup(group, stopGrace)
 	if exited {
 		return r.exited(cmd, stopError(Result{}, err))
 	}
@@ -269,6 +269,10 @@ func (r Runner) wait(cmd *exec.Cmd, run *Run, w *streamWatch) Result {
 		return stopError(result, err)
 	}
 }
+
+// stopGroup は止める理由ができた claude の process group を止める。test が SIGKILL を送れない場合を差し込めるよう変数に置く
+// (SIGKILL の失敗は proc の中にあり、worker の test からは起こせない)。
+var stopGroup = func(g *proc.Group, grace time.Duration) (exited bool, err error) { return g.Stop(grace) }
 
 // stopError は process group へ signal を送れなかった理由を result に足す。
 func stopError(result Result, err error) Result {

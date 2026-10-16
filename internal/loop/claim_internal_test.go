@@ -106,6 +106,8 @@ func TestClaimTransitions(t *testing.T) {
 		// --- 止めている ---
 		{phaseStopping, 1, stoppedEnd, phaseStopping, claimIO{removeWorkspace: true, exit: release}},
 		{phaseStopping, 1, unstoppedEnd, phaseStopping, noIO},
+		{phaseStopping, 1, stallUnstopped, phaseStopping, noIO},
+		{phaseStopping, 1, timeUnstopped, phaseStopping, noIO},
 		{phaseStopping, 1, workerEnd, phaseAwaitingVerification, claimIO{readItem: true}},
 		{phaseStopping, 1, stall, phaseAwaitingVerification, claimIO{readItem: true}},
 		{phaseStopping, 1, timeLimit, phaseAwaitingVerification, claimIO{readItem: true}},
@@ -214,8 +216,8 @@ func TestAnUnstoppedWorkerIsHeldUntilTheLoopEnds(t *testing.T) {
 
 	e := c.workerEnded(ref, worker.Result{Failure: "stall", Unstopped: true})
 
-	if !c.unstopped || len(e.lines) != 1 || e.lines[0].errorMessage == "" {
-		t.Fatalf("unstopped = %v, 行 = %+v, want 止められない claim と error の行 1 つ", c.unstopped, e.lines)
+	if len(e.lines) != 1 || e.lines[0].errorMessage == "" {
+		t.Fatalf("行 = %+v, want error の行 1 つ", e.lines)
 	}
 	for _, later := range []claimEvent{terminal, secondStop, backoffDone, stoppedEnd} {
 		if got := later.fire(c, ref, env); got.removeWorkspace || got.startWorker || got.readItem || got.exit != stay {

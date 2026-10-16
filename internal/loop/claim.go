@@ -84,8 +84,9 @@ type claimEnv struct {
 }
 
 // workerEnded は worker の終わりを受ける。stall 上限・上限時間で止まった worker も、ここで worker の終わりとして受ける
-// (理由は result の Failure が持つ)。止めている worker が止められて終われば claim を解き、それ以外は終わりを確かめ待ちへ
-// 進めて作業対象を読み直させる。
+// (理由は result の Failure が持つ)。SIGKILL を送れず claude が終わっていなければ (result.Unstopped)、止めている段階の
+// まま loop の終了まで持つ。止めている worker が止められて終われば claim を解き、それ以外は終わりを確かめ待ちへ進めて
+// 作業対象を読み直させる。
 func (c *claim) workerEnded(ref target.Ref, result worker.Result) effect {
 	if (c.phase != phaseRunning && c.phase != phaseStopping) || c.unstopped {
 		// 走っていない claim に終わる worker は無い (起きれば loop の誤り)。止められない worker の終わりは 1 回しか届かない
@@ -96,7 +97,7 @@ func (c *claim) workerEnded(ref target.Ref, result worker.Result) effect {
 		// claude がまだ workspace と session を使いうるので、確かめも再起動も workspace の削除もせず、loop の終了まで持つ
 		// (system.md §7 の tick の手順 1)
 		c.phase, c.unstopped = phaseStopping, true
-		return effect{lines: []logLine{errorLine(fmt.Sprintf("claude を止められない (pid %d): workspace を残し、終わりを確かめず再起動もしない", c.pid))}}
+		return effect{lines: []logLine{errorLine(fmt.Sprintf("claude を止められない (pid %d, workspace %s): workspace を残し、終わりを確かめず再起動もしない: %s", c.pid, c.workspace, result.StopError))}}
 	}
 	if c.phase == phaseStopping && result.Stopped {
 		return effect{
@@ -246,7 +247,7 @@ func (c *claim) backoffElapsed(ref target.Ref, h hindrance, item target.Item, en
 	case hindranceNone:
 		c.item, c.waitingSlot = item, false
 		c.attempt++
-		c.phase, c.startedAt, c.activity = phaseRunning, nil, nil
+		c.phase, c.startedAt, c.activity, c.pid, c.workspace = phaseRunning, nil, nil, 0, ""
 		return effect{startWorker: true}
 	case hindranceNoSlot:
 		if c.waitingSlot {
