@@ -39,7 +39,10 @@ func TestAWorkerWhoseClaudeCannotBeStoppedIsNeitherVerifiedNorRestartedAndKeepsI
 	// 持ち、workspace を消さない。停止要求はその worker を待たずに loop を止める
 	r := newRig()
 	periods := 0
-	r.timer = func(time.Duration) timing {
+	r.timer = func(kind timerKind, _ time.Duration) timing {
+		if kind != period {
+			return timing{fate: neverFires}
+		}
 		periods++
 		if periods == 1 {
 			return timing{fate: fires}
@@ -88,12 +91,12 @@ func TestAWorkerWhoseClaudeCannotBeStoppedIsNeitherVerifiedNorRestartedAndKeepsI
 		t.Errorf("消した workspace = %v, want なし", ws.removed)
 	}
 	for _, name := range []string{"end", "retry", "abandon"} {
-		if got := r.events(t, name); len(got) != 0 {
+		if got := r.logEvents(t, name); len(got) != 0 {
 			t.Errorf("%s の行 = %v, want なし", name, got)
 		}
 	}
 	var messages []string
-	for _, e := range r.events(t, "error") {
+	for _, e := range r.logEvents(t, "error") {
 		messages = append(messages, e["error"].(string))
 	}
 	joined := strings.Join(messages, "\n")
