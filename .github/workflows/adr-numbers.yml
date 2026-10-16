@@ -49,7 +49,7 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           {
-            echo "main の docs/adr で ADR の番号が重なっているか、file 名の形が崩れている。重なりは後から足した方を次の空き番号へ振り直し、形の崩れは先頭をちょうど 4 桁の番号に・拡張子を小文字の .md に改める (どちらも参照している文書の名前も直す)。run: $RUN_URL"
+            echo "main の docs/adr で ADR の番号が重なっているか、file 名の形が崩れている。直し方は下の検査の出力に従う (参照している文書の名前も直す)。run: $RUN_URL"
             echo
             echo "手元での再現: \`go run ./scripts/repocheck adr\`"
           } > prelude.md

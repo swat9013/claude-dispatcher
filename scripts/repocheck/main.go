@@ -1,8 +1,8 @@
-// repocheck は、同じ値を 2 箇所以上に書いている設定の一致と、ADR の番号の一意と、docs/design の図の描き直し漏れを検査する (方針は CONTRIBUTING.md の「gate」)。
+// repocheck は、同じ値を 2 箇所以上に書いている設定の一致と、ADR の番号の一意と file 名の形と、docs/design の図の描き直し漏れを検査する (方針は CONTRIBUTING.md の「gate」)。
 // network は使わない。ruleset は呼び出し側が gh で取った JSON を標準入力で渡す。
 //
 //	go run ./scripts/repocheck files     # repo の root で撃つ。pre-commit の hook が撃つ
-//	go run ./scripts/repocheck adr       # ADR の番号の一意。commit 時の hook と adr-numbers.yml が撃つ (PR の gate では撃たない)
+//	go run ./scripts/repocheck adr       # ADR の番号の一意と file 名の形。commit 時の hook と adr-numbers.yml が撃つ (PR の gate では撃たない)
 //	go run ./scripts/repocheck diagrams  # docs/design の svg が、固定した版の plantuml で今の .puml から描かれたか。commit 時の hook が撃つ
 //	gh api repos/<owner>/<repo>/rules/branches/main | go run ./scripts/repocheck ruleset
 //
@@ -42,9 +42,9 @@ const (
 // goVersionForm は期待値が取る版の形 (patch まで書いた版)
 var goVersionForm = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
 
-// adrNumberForm は ADR の file 名の形: 先頭がちょうど 4 桁の番号で、拡張子が小文字の .md。
+// adrNameForm は ADR の file 名の形: 先頭がちょうど 4 桁の番号で、拡張子が小文字の .md。
 // この形でない file は番号の検査から外し、ADR のつもりの名前 (isADRIntended) なら malformedADRNames が報告する
-var adrNumberForm = regexp.MustCompile(`^([0-9]{4})[^0-9].*\.md$`)
+var adrNameForm = regexp.MustCompile(`^([0-9]{4})[^0-9].*\.md$`)
 
 func main() {
 	if len(os.Args) != 2 {
@@ -63,7 +63,7 @@ func main() {
 		var names []string
 		names, err = readADRNames()
 		if err == nil {
-			problems = append(duplicateADRNumbers(names), malformedADRNames(names)...)
+			problems = checkADR(names)
 		}
 	case "ruleset":
 		problems, err = runRuleset()
@@ -188,7 +188,7 @@ func checkFiles(f repoFiles) ([]string, error) {
 func duplicateADRNumbers(names []string) []string {
 	byNumber := map[string][]string{}
 	for _, name := range names {
-		if m := adrNumberForm.FindStringSubmatch(name); m != nil {
+		if m := adrNameForm.FindStringSubmatch(name); m != nil {
 			byNumber[m[1]] = append(byNumber[m[1]], name)
 		}
 	}
@@ -202,13 +202,18 @@ func duplicateADRNumbers(names []string) []string {
 	return problems
 }
 
-// malformedADRNames は、ADR のつもりの名前のうち adrNumberForm に合わないものを 1 件 1 行で返す。
+// checkADR は repocheck adr が報告する問題 (番号の重なりと file 名の形の崩れ) を返す
+func checkADR(names []string) []string {
+	return append(duplicateADRNumbers(names), malformedADRNames(names)...)
+}
+
+// malformedADRNames は、ADR のつもりの名前のうち adrNameForm に合わないものを 1 件 1 行で返す。
 // 合わない名前は番号の検査から黙って外れるので、重なりも命名規則 (先頭 4 桁) の崩れも見逃される
 func malformedADRNames(names []string) []string {
 	var problems []string
 	for _, name := range names {
-		if isADRIntended(name) && !adrNumberForm.MatchString(name) {
-			problems = append(problems, fmt.Sprintf("%s の ADR の file 名 %s が形に合わない: 先頭をちょうど 4 桁の番号にし、拡張子を小文字の .md にする",
+		if isADRIntended(name) && !adrNameForm.MatchString(name) {
+			problems = append(problems, fmt.Sprintf("%s の ADR の file 名 %s が形に合わない: 先頭をちょうど 4 桁の番号にし、その直後に数字でない文字 (区切り) を置き、拡張子を小文字の .md にする",
 				adrDir, name))
 		}
 	}

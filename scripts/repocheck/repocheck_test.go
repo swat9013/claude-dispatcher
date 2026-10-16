@@ -239,10 +239,10 @@ func TestDuplicateADRNumbers_先頭が番号でないmdとmdでないfileはADR�
 	}
 }
 
-func TestMalformedADRNames_先頭がちょうど4桁でないか拡張子が小文字のmdでないADRの名前を1件1行で出す(t *testing.T) {
+func TestCheckADR_先頭がちょうど4桁でないか拡張子が小文字のmdでないADRの名前を1件1行で出す(t *testing.T) {
 	for _, name := range []string{"17-other.md", "0017_other.MD", "017-other.md", "00170-other.md"} {
 		t.Run(name, func(t *testing.T) {
-			problems := malformedADRNames(append(slices.Clone(adrNames), name))
+			problems := checkADR(append(slices.Clone(adrNames), name))
 
 			if len(problems) != 1 {
 				t.Fatalf("got %q", problems)
@@ -252,10 +252,10 @@ func TestMalformedADRNames_先頭がちょうど4桁でないか拡張子が小�
 	}
 }
 
-func TestMalformedADRNames_READMEとmdで終わらないfileと区切りが違うADRは形の崩れとして出さない(t *testing.T) {
-	names := append(slices.Clone(adrNames), "README.md", "0001-first.md.orig", "0003_other.md")
+func TestCheckADR_READMEとmdで終わらないfileと区切りが違うADRは形の崩れとして出さない(t *testing.T) {
+	names := append(slices.Clone(adrNames), "README.md", "0001-first.md.orig", "0004_other.md")
 
-	problems := malformedADRNames(names)
+	problems := checkADR(names)
 
 	if len(problems) != 0 {
 		t.Fatalf("got %q", problems)
