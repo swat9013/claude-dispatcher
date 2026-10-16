@@ -7,8 +7,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/swat9013/claude-dispatcher/internal/workflow"
 )
 
 // stall の判定 (formats.md §6 の progress)。stall の時計は progress の行で戻り、活動の表示とは別に読む。
@@ -17,92 +15,137 @@ const heartbeat = `{"type":"tool_progress","tool_name":"Bash","elapsed_time_seco
 
 const taskProgress = `{"type":"system","subtype":"task_progress"}` + "\n"
 
-// stallClock は空の stream を started から見始めた streamWatch と、stall の上限が stall の Runner を作る。
-func stallClock(t *testing.T, started time.Time, stall time.Duration) (*streamWatch, Runner) {
-	t.Helper()
-	return newStreamWatch(streamFile(t, "").Name(), 0, started, "/work"), Runner{Definition: workflow.Definition{StallTimeout: stall}}
+// errReadFails は fake の file handle が返す、読めない理由。
+var errReadFails = errors.New("読み出せない")
+
+// flakyHandle は claude に渡した worker log の fd を包み、Stat と読み出しを落とせる fake の file handle。
+type flakyHandle struct {
+	file *os.File
+	// statFails が true なら Stat が落ちる
+	statFails bool
+	// readFails が true なら、offset readFrom から先の読み出しが落ちる
+	readFails bool
+	readFrom  int64
 }
 
-// write は stream に line を追記する (worker が書くのと同じく、loop とは別に開いて書く)。
-func write(t *testing.T, w *streamWatch, line string) {
+func (h *flakyHandle) Stat() (os.FileInfo, error) {
+	if h.statFails {
+		return nil, errReadFails
+	}
+	return h.file.Stat()
+}
+
+func (h *flakyHandle) ReadAt(p []byte, off int64) (int, error) {
+	if !h.readFails {
+		return h.file.ReadAt(p, off)
+	}
+	if off >= h.readFrom {
+		return 0, errReadFails
+	}
+	if limit := h.readFrom - off; int64(len(p)) > limit {
+		n, err := h.file.ReadAt(p[:limit], off)
+		if err != nil {
+			return n, err
+		}
+		return n, errReadFails
+	}
+	return h.file.ReadAt(p, off)
+}
+
+// watched は test が claude の代わりに fd へ追記する worker log と、その fd を読む streamWatch。
+type watched struct {
+	*streamWatch
+	// path は worker log の path。fd とは別に、path の rename・置き換えを試すのに使う
+	path   string
+	handle *flakyHandle
+}
+
+// check は活動だけを返す (止める理由は stopReason で読む)。
+func (w *watched) check(now time.Time) (activity string, changed bool) {
+	return w.streamWatch.check(now).seen()
+}
+
+func (o observation) seen() (activity string, changed bool) { return o.activity, o.changed }
+
+// stallClock は空の worker log を、stall の上限を stall にして started から見始める。
+func stallClock(t *testing.T, started time.Time, stall time.Duration) *watched {
 	t.Helper()
-	f, err := os.OpenFile(w.path, os.O_WRONLY|os.O_APPEND, 0o644)
+	return watchFrom(t, "", started, limits{stall: stall})
+}
+
+// watchFrom は content を書いた worker log を、content の後 (今の attempt が書く行) から started で見始める。
+func watchFrom(t *testing.T, content string, started time.Time, l limits) *watched {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "stream.log")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f, err := openStream(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
-	if _, err := f.WriteString(line); err != nil {
+	t.Cleanup(func() { f.Close() })
+	h := &flakyHandle{file: f}
+	return &watched{streamWatch: newStreamWatch(h, int64(len(content)), started, "/work", l), path: path, handle: h}
+}
+
+// write は claude と同じく、worker log の fd へ line を追記する。
+func write(t *testing.T, w *watched, line string) {
+	t.Helper()
+	if _, err := w.handle.file.WriteString(line); err != nil {
 		t.Fatal(err)
 	}
 }
 
-// appendAt は stream に line を追記し、now の時点で w に確かめさせる。
-func appendAt(t *testing.T, w *streamWatch, line string, now time.Time) {
+// appendAt は worker log に line を追記し、now の時点で確かめさせる。
+func appendAt(t *testing.T, w *watched, line string, now time.Time) {
 	t.Helper()
 	write(t, w, line)
 	w.check(now)
 }
 
-// replaceWith は stream の path を、content を書いた別の file に置き換える。
-func replaceWith(t *testing.T, w *streamWatch, content string) {
+// shrinkTo は worker log を fd で切り詰め、content を書き直す。
+func shrinkTo(t *testing.T, w *watched, content string) {
 	t.Helper()
-	next := filepath.Join(t.TempDir(), "next.log")
-	if err := os.WriteFile(next, []byte(content), 0o644); err != nil {
+	if err := w.handle.file.Truncate(0); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Rename(next, w.path); err != nil {
-		t.Fatal(err)
-	}
+	write(t, w, content)
 }
 
-// unreadableUntilRestored は stream の path を、大きさは確かめられるが中身を読み出せない dir に置き換え、元へ戻す関数を返す。
-func unreadableUntilRestored(t *testing.T, w *streamWatch) (restore func()) {
-	t.Helper()
-	aside := w.path + ".aside"
-	if err := os.Rename(w.path, aside); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Mkdir(w.path, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	// dir の大きさは file system で違う。前に読めた大きさと同じだと、確かめても伸びていないとして読み出さない
-	if info, err := os.Stat(w.path); err != nil || info.Size() == w.lines.size {
-		t.Fatalf("dir の大きさ %v が前に読めた大きさ %d と同じか、確かめられない (%v)。stream の中身の大きさを変える", info, w.lines.size, err)
-	}
-	return func() {
-		t.Helper()
-		if err := os.Remove(w.path); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Rename(aside, w.path); err != nil {
-			t.Fatal(err)
-		}
-	}
+// failReadsFrom は worker log の offset from から先を読み出せなくし、元へ戻す関数を返す。from より前の行は each へ渡った
+// 後に、読み出しが落ちる。
+func failReadsFrom(w *watched, from int64) (restore func()) {
+	w.handle.readFails, w.handle.readFrom = true, from
+	return func() { w.handle.readFails = false }
 }
 
-// removed は stream の path を消し、元へ戻す関数を返す (大きさも確かめられない)。
-func removed(t *testing.T, w *streamWatch) (restore func()) {
+// failReads は worker log の中身を読み出せなくし (大きさは確かめられる)、元へ戻す関数を返す。
+func failReads(w *watched) (restore func()) { return failReadsFrom(w, 0) }
+
+// failStat は worker log の大きさを確かめられなくし、元へ戻す関数を返す。
+func failStat(w *watched) (restore func()) {
+	w.handle.statFails = true
+	return func() { w.handle.statFails = false }
+}
+
+func logSize(t *testing.T, w *watched) int64 {
 	t.Helper()
-	aside := w.path + ".aside"
-	if err := os.Rename(w.path, aside); err != nil {
+	info, err := w.handle.file.Stat()
+	if err != nil {
 		t.Fatal(err)
 	}
-	return func() {
-		t.Helper()
-		if err := os.Rename(aside, w.path); err != nil {
-			t.Fatal(err)
-		}
-	}
+	return info.Size()
 }
 
 func TestWorkerWritingOnlyHeartbeatsStallsAfterTheStallTimeout(t *testing.T) {
 	started := time.Now()
-	w, r := stallClock(t, started, time.Minute)
+	w := stallClock(t, started, time.Minute)
 	for s := 30; s <= 90; s += 30 {
 		appendAt(t, w, heartbeat, started.Add(time.Duration(s)*time.Second))
 	}
 
-	reason := r.overdue(90*time.Second, w.sinceProgress(started.Add(90*time.Second)), w.readError)
+	reason := w.stopReason(started.Add(90 * time.Second))
 
 	if !strings.Contains(reason, "stall") {
 		t.Fatalf("heartbeat だけが 90s 続いて stall の上限 1m を過ぎたのに止めない: %q", reason)
@@ -111,7 +154,7 @@ func TestWorkerWritingOnlyHeartbeatsStallsAfterTheStallTimeout(t *testing.T) {
 
 func TestProgressThatIsNotActivityResetsTheStallClock(t *testing.T) {
 	started := time.Now()
-	w, _ := stallClock(t, started, time.Minute)
+	w := stallClock(t, started, time.Minute)
 	appendAt(t, w, text("前"), started.Add(10*time.Second))
 
 	appendAt(t, w, taskProgress, started.Add(50*time.Second))
@@ -123,7 +166,7 @@ func TestProgressThatIsNotActivityResetsTheStallClock(t *testing.T) {
 
 func TestProgressDoesNotChangeTheActivity(t *testing.T) {
 	started := time.Now()
-	w, _ := stallClock(t, started, time.Minute)
+	w := stallClock(t, started, time.Minute)
 	appendAt(t, w, text("前"), started.Add(10*time.Second))
 	write(t, w, taskProgress)
 
@@ -136,7 +179,7 @@ func TestProgressDoesNotChangeTheActivity(t *testing.T) {
 
 func TestProgressPushedOutOfTheActivityTailStillResetsTheStallClock(t *testing.T) {
 	started := time.Now()
-	w, _ := stallClock(t, started, time.Minute)
+	w := stallClock(t, started, time.Minute)
 	read := `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/work/big.go"}}]}}` + "\n"
 
 	// 1 回の確認のあいだに、progress の後へ 64 KiB を超える heartbeat が続く
@@ -149,7 +192,7 @@ func TestProgressPushedOutOfTheActivityTailStillResetsTheStallClock(t *testing.T
 
 func TestProgressWithTheSameSummaryResetsTheStallClock(t *testing.T) {
 	started := time.Now()
-	w, _ := stallClock(t, started, time.Minute)
+	w := stallClock(t, started, time.Minute)
 	appendAt(t, w, text("同じ"), started.Add(10*time.Second))
 	appendAt(t, w, heartbeat, started.Add(40*time.Second))
 
@@ -162,11 +205,9 @@ func TestProgressWithTheSameSummaryResetsTheStallClock(t *testing.T) {
 
 func TestShrinkingTheStreamDoesNotResetTheStallClock(t *testing.T) {
 	started := time.Now()
-	w, _ := stallClock(t, started, time.Minute)
+	w := stallClock(t, started, time.Minute)
 	appendAt(t, w, text("前"), started.Add(10*time.Second))
-	if err := os.Truncate(w.path, 0); err != nil {
-		t.Fatal(err)
-	}
+	shrinkTo(t, w, "")
 
 	w.check(started.Add(30 * time.Second))
 
@@ -177,11 +218,9 @@ func TestShrinkingTheStreamDoesNotResetTheStallClock(t *testing.T) {
 
 func TestProgressWrittenAfterTheStreamShrankResetsTheStallClock(t *testing.T) {
 	started := time.Now()
-	w, _ := stallClock(t, started, time.Minute)
+	w := stallClock(t, started, time.Minute)
 	appendAt(t, w, text("前の長い行"), started.Add(10*time.Second))
-	if err := os.Truncate(w.path, 0); err != nil {
-		t.Fatal(err)
-	}
+	shrinkTo(t, w, "")
 	w.check(started.Add(20 * time.Second))
 
 	appendAt(t, w, text("後"), started.Add(30*time.Second))
@@ -191,26 +230,24 @@ func TestProgressWrittenAfterTheStreamShrankResetsTheStallClock(t *testing.T) {
 	}
 }
 
-func TestProgressInASmallerReplacementResetsTheStallClock(t *testing.T) {
+func TestProgressInAStreamThatShrankBetweenChecksResetsTheStallClock(t *testing.T) {
 	started := time.Now()
-	w, _ := stallClock(t, started, time.Minute)
+	w := stallClock(t, started, time.Minute)
 	appendAt(t, w, text("前の長い行"), started.Add(10*time.Second))
-	replaceWith(t, w, text("後"))
+	shrinkTo(t, w, text("後"))
 
 	w.check(started.Add(30 * time.Second))
 
 	if got := w.sinceProgress(started.Add(30 * time.Second)); got != 0 {
-		t.Fatalf("progress が途絶えた時間 = %s, want 小さい file に置き換わったら頭から見て 0s", got)
+		t.Fatalf("progress が途絶えた時間 = %s, want 縮んだら頭から見て 0s", got)
 	}
 }
 
 func TestActivityAfterTheStreamShrankComesFromItsHead(t *testing.T) {
 	started := time.Now()
-	w, _ := stallClock(t, started, time.Minute)
+	w := stallClock(t, started, time.Minute)
 	appendAt(t, w, text("前の長い行"), started.Add(10*time.Second))
-	if err := os.Truncate(w.path, 0); err != nil {
-		t.Fatal(err)
-	}
+	shrinkTo(t, w, "")
 	w.check(started.Add(20 * time.Second))
 	write(t, w, text("後"))
 
@@ -221,12 +258,107 @@ func TestActivityAfterTheStreamShrankComesFromItsHead(t *testing.T) {
 	}
 }
 
+func TestStreamThatShrankAndCouldNotBeReadIsReadFromItsHeadAfterGrowingPastItsOldSize(t *testing.T) {
+	started := time.Now()
+	w := stallClock(t, started, time.Minute)
+	appendAt(t, w, text(strings.Repeat("前", 50)), started.Add(10*time.Second))
+	old := logSize(t, w)
+	shrinkTo(t, w, text("後"))
+	restore := failReads(w)
+	w.check(started.Add(20 * time.Second))
+	restore()
+	// 読めるようになるまでに、縮む前の大きさを超えて伸びる。後に続くのは progress と数えない行だけ
+	for logSize(t, w) <= old {
+		write(t, w, heartbeat)
+	}
+
+	w.check(started.Add(30 * time.Second))
+
+	if got := w.sinceProgress(started.Add(30 * time.Second)); got != 0 {
+		t.Fatalf("progress が途絶えた時間 = %s, want 縮んだことを覚えて頭から読み、後 の行で時計が戻って 0s", got)
+	}
+}
+
+func TestStreamThatShrankAfterAFailedReadOfAHalfWrittenLineIsReadFromItsHead(t *testing.T) {
+	started := time.Now()
+	w := stallClock(t, started, time.Minute)
+	appendAt(t, w, text("前の長い行"), started.Add(10*time.Second))
+	// 書きかけの行を読み終えてから、伸びた分の読み出しに落ちる
+	appendAt(t, w, text(strings.Repeat("前", 100))[:200], started.Add(20*time.Second))
+	write(t, w, "xxxxxxxxxx")
+	restore := failReads(w)
+	w.check(started.Add(30 * time.Second))
+	restore()
+	// 書きかけの行の頭より大きく、前に読み終えた offset より小さく縮む
+	shrinkTo(t, w, text("後")+text("後"))
+
+	activity, changed := w.check(started.Add(40 * time.Second))
+
+	if !changed || activity != "後" || w.sinceProgress(started.Add(40*time.Second)) != 0 {
+		t.Fatalf("活動 = %q, %v; want 前に読み終えた offset より縮んだので頭から読んで 後・0s", activity, changed)
+	}
+}
+
+func TestRenamingThePathDoesNotStopWatchingTheStream(t *testing.T) {
+	started := time.Now()
+	w := stallClock(t, started, time.Minute)
+	appendAt(t, w, text("前"), started.Add(10*time.Second))
+	if err := os.Rename(w.path, w.path+".moved"); err != nil {
+		t.Fatal(err)
+	}
+	write(t, w, text("動かした後"))
+
+	activity, changed := w.check(started.Add(20 * time.Second))
+
+	if !changed || activity != "動かした後" || w.sinceProgress(started.Add(20*time.Second)) != 0 {
+		t.Fatalf("活動 = %q, %v, progress が途絶えた時間 %s; want path を動かしても fd の行を読んで 動かした後・0s",
+			activity, changed, w.sinceProgress(started.Add(20*time.Second)))
+	}
+}
+
+func TestRemovingThePathDoesNotStopWatchingTheStream(t *testing.T) {
+	started := time.Now()
+	w := stallClock(t, started, time.Minute)
+	appendAt(t, w, text("前"), started.Add(10*time.Second))
+	if err := os.Remove(w.path); err != nil {
+		t.Fatal(err)
+	}
+	write(t, w, text("消した後"))
+
+	activity, changed := w.check(started.Add(20 * time.Second))
+
+	if !changed || activity != "消した後" || w.sinceProgress(started.Add(20*time.Second)) != 0 {
+		t.Fatalf("活動 = %q, %v, progress が途絶えた時間 %s; want path を消しても fd の行を読んで 消した後・0s",
+			activity, changed, w.sinceProgress(started.Add(20*time.Second)))
+	}
+}
+
+func TestReplacingThePathWithALargerFileDoesNotChangeWhatIsWatched(t *testing.T) {
+	started := time.Now()
+	w := stallClock(t, started, time.Minute)
+	appendAt(t, w, text("前"), started.Add(10*time.Second))
+	other := filepath.Join(t.TempDir(), "other.log")
+	if err := os.WriteFile(other, []byte(strings.Repeat(heartbeat, 10)+text("置き換えた file")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(other, w.path); err != nil {
+		t.Fatal(err)
+	}
+	write(t, w, text("後"))
+
+	activity, changed := w.check(started.Add(20 * time.Second))
+
+	if !changed || activity != "後" {
+		t.Fatalf("活動 = %q, %v; want path の置き換えに関わらず fd に書かれた 後", activity, changed)
+	}
+}
+
 func TestStallClockDoesNotResetWhileTheStreamCannotBeRead(t *testing.T) {
 	started := time.Now()
-	w, _ := stallClock(t, started, time.Minute)
+	w := stallClock(t, started, time.Minute)
 	appendAt(t, w, text("前"), started.Add(10*time.Second))
 	write(t, w, text("後"))
-	unreadableUntilRestored(t, w)
+	failReads(w)
 
 	w.check(started.Add(30 * time.Second))
 
@@ -237,9 +369,10 @@ func TestStallClockDoesNotResetWhileTheStreamCannotBeRead(t *testing.T) {
 
 func TestStallClockDoesNotResetWhileTheStreamCannotBeStatted(t *testing.T) {
 	started := time.Now()
-	w, _ := stallClock(t, started, time.Minute)
+	w := stallClock(t, started, time.Minute)
 	appendAt(t, w, text("前"), started.Add(10*time.Second))
-	removed(t, w)
+	write(t, w, text("後"))
+	failStat(w)
 
 	w.check(started.Add(30 * time.Second))
 
@@ -250,9 +383,9 @@ func TestStallClockDoesNotResetWhileTheStreamCannotBeStatted(t *testing.T) {
 
 func TestActivityTellsWhyTheStreamCannotBeRead(t *testing.T) {
 	started := time.Now()
-	w, _ := stallClock(t, started, time.Minute)
+	w := stallClock(t, started, time.Minute)
 	write(t, w, text("後"))
-	unreadableUntilRestored(t, w)
+	failReads(w)
 
 	activity, changed := w.check(started.Add(10 * time.Second))
 
@@ -263,9 +396,9 @@ func TestActivityTellsWhyTheStreamCannotBeRead(t *testing.T) {
 
 func TestProgressWrittenWhileTheStreamCouldNotBeReadResetsTheStallClockOnceItCanBeRead(t *testing.T) {
 	started := time.Now()
-	w, _ := stallClock(t, started, time.Minute)
+	w := stallClock(t, started, time.Minute)
 	write(t, w, text("後"))
-	restore := removed(t, w)
+	restore := failStat(w)
 	w.check(started.Add(10 * time.Second))
 	restore()
 
@@ -279,72 +412,31 @@ func TestProgressWrittenWhileTheStreamCouldNotBeReadResetsTheStallClockOnceItCan
 
 func TestStreamThatCouldNotBeReadIsReadAgainEvenWithoutGrowing(t *testing.T) {
 	started := time.Now()
-	w, r := stallClock(t, started, time.Minute)
+	w := stallClock(t, started, time.Minute)
 	appendAt(t, w, text("前の行")+text("前の行"), started.Add(10*time.Second))
-	// 中身を読み出せなくしてから、読めた時と同じ file に戻す (戻した後の確認では、file は伸びていない)
-	restore := unreadableUntilRestored(t, w)
+	restore := failReads(w)
 	w.check(started.Add(20 * time.Second))
 	restore()
 
 	w.check(started.Add(30 * time.Second))
 
-	if reason := r.overdue(time.Hour, w.sinceProgress(started.Add(80*time.Second)), w.readError); strings.Contains(reason, "読めない") {
+	if reason := w.stopReason(started.Add(80 * time.Second)); strings.Contains(reason, "読めない") {
 		t.Fatalf("理由 = %q, want 伸びていなくても読み直して読めたので、stall の理由に読めない理由を添えない", reason)
 	}
 }
 
-// errReadFails は差し替えた読み出しが返す、読み出せない理由。
-var errReadFails = errors.New("読み出せない")
-
-// failsFrom は、offset from より前だけを読み出せ、from から先を読もうとすると落ちる file。
-type failsFrom struct {
-	readerAtCloser
-	from int64
-}
-
-func (f *failsFrom) ReadAt(p []byte, off int64) (int, error) {
-	if off >= f.from {
-		return 0, errReadFails
-	}
-	if limit := f.from - off; int64(len(p)) > limit {
-		n, err := f.readerAtCloser.ReadAt(p[:limit], off)
-		if err != nil {
-			return n, err
-		}
-		return n, errReadFails
-	}
-	return f.readerAtCloser.ReadAt(p, off)
-}
-
-// unreadableFromUntilRestored は stream の file を、offset from より前だけ読めて続きを読めなくし、元へ戻す関数を返す。from
-// より前の行は each へ渡った後に、読み出しが落ちる。
-func unreadableFromUntilRestored(w *streamWatch, from int64) (restore func()) {
-	prev := w.lines.open
-	w.lines.open = func(path string) (readerAtCloser, error) {
-		f, err := prev(path)
-		if err != nil {
-			return nil, err
-		}
-		return &failsFrom{readerAtCloser: f, from: from}, nil
-	}
-	return func() { w.lines.open = prev }
-}
-
-// writeProgressThenUnreadable は stream に progress の行と progress に数えない heartbeat の行を追記し、heartbeat の行から
-// 先を読めなくして、元へ戻す関数を返す。1 回の確認の中で、progress の行を読んだ後に読み出しが落ちる。
-func writeProgressThenUnreadable(t *testing.T, w *streamWatch) (restore func()) {
+// writeProgressThenUnreadable は worker log に progress の行と progress に数えない heartbeat の行を追記し、heartbeat の
+// 行から先を読めなくして、元へ戻す関数を返す。1 回の確認の中で、progress の行を読んだ後に読み出しが落ちる。
+func writeProgressThenUnreadable(t *testing.T, w *watched) (restore func()) {
 	t.Helper()
-	info, err := os.Stat(w.path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	from := logSize(t, w) + int64(len(taskProgress))
 	write(t, w, taskProgress+heartbeat)
-	return unreadableFromUntilRestored(w, info.Size()+int64(len(taskProgress)))
+	return failReadsFrom(w, from)
 }
 
 func TestStallClockDoesNotResetWhenTheStreamBecomesUnreadablePartway(t *testing.T) {
 	started := time.Now()
-	w, _ := stallClock(t, started, time.Minute)
+	w := stallClock(t, started, time.Minute)
 	appendAt(t, w, text("前"), started.Add(10*time.Second))
 	writeProgressThenUnreadable(t, w)
 
@@ -357,7 +449,7 @@ func TestStallClockDoesNotResetWhenTheStreamBecomesUnreadablePartway(t *testing.
 
 func TestProgressReadBeforeTheStreamBecameUnreadablePartwayResetsTheStallClockOnceItCanBeRead(t *testing.T) {
 	started := time.Now()
-	w, _ := stallClock(t, started, time.Minute)
+	w := stallClock(t, started, time.Minute)
 	appendAt(t, w, text("前"), started.Add(10*time.Second))
 	restore := writeProgressThenUnreadable(t, w)
 	if activity, _ := w.check(started.Add(20 * time.Second)); !strings.Contains(activity, "読めない") {
@@ -374,7 +466,7 @@ func TestProgressReadBeforeTheStreamBecameUnreadablePartwayResetsTheStallClockOn
 }
 
 // watchAt は watch を別の goroutine で走らせ、ticks の時刻で確かめさせる。watch が途中で終われば、その時点で返す。
-func watchAt(t *testing.T, r Runner, w *streamWatch, ticks ...time.Time) (result Result, ended bool, returned bool) {
+func watchAt(t *testing.T, w *watched, ticks ...time.Time) (result Result, ended bool, returned bool) {
 	t.Helper()
 	tick := make(chan time.Time)
 	type outcome struct {
@@ -384,7 +476,7 @@ func watchAt(t *testing.T, r Runner, w *streamWatch, ticks ...time.Time) (result
 	out := make(chan outcome, 1)
 	run := &Run{stop: make(chan struct{})}
 	go func() {
-		result, ended := r.watch(make(chan error), run, w, tick)
+		result, ended := watch(make(chan error), run, w.streamWatch, tick)
 		out <- outcome{result, ended}
 	}()
 	for _, now := range ticks {
@@ -407,10 +499,10 @@ func watchAt(t *testing.T, r Runner, w *streamWatch, ticks ...time.Time) (result
 
 func TestWatchStopsAWorkerThatWritesOnlyHeartbeats(t *testing.T) {
 	started := time.Now()
-	w, r := stallClock(t, started, time.Minute)
+	w := stallClock(t, started, time.Minute)
 	write(t, w, heartbeat)
 
-	result, ended, returned := watchAt(t, r, w, started.Add(30*time.Second), started.Add(61*time.Second))
+	result, ended, returned := watchAt(t, w, started.Add(30*time.Second), started.Add(61*time.Second))
 
 	if !returned || ended || !strings.Contains(result.Failure, "stall") {
 		t.Fatalf("watch = %+v, ended %v, 返った %v; want heartbeat だけが続くので stall で止める", result, ended, returned)
@@ -419,10 +511,10 @@ func TestWatchStopsAWorkerThatWritesOnlyHeartbeats(t *testing.T) {
 
 func TestWatchWaitsForTheStallTimeoutWhenTheStreamCannotBeStatted(t *testing.T) {
 	started := time.Now()
-	w, r := stallClock(t, started, time.Minute)
-	removed(t, w)
+	w := stallClock(t, started, time.Minute)
+	failStat(w)
 
-	_, _, returned := watchAt(t, r, w, started.Add(250*time.Millisecond), started.Add(59*time.Second))
+	_, _, returned := watchAt(t, w, started.Add(250*time.Millisecond), started.Add(59*time.Second))
 
 	if returned {
 		t.Fatal("大きさを確かめられないだけで、stall の上限を待たずに止めた")
@@ -431,32 +523,24 @@ func TestWatchWaitsForTheStallTimeoutWhenTheStreamCannotBeStatted(t *testing.T) 
 
 func TestWatchStallsWithTheReasonWhenTheStreamCannotBeStattedPastTheTimeout(t *testing.T) {
 	started := time.Now()
-	w, r := stallClock(t, started, time.Minute)
-	removed(t, w)
+	w := stallClock(t, started, time.Minute)
+	failStat(w)
 
-	result, _, returned := watchAt(t, r, w, started.Add(250*time.Millisecond), started.Add(61*time.Second))
+	result, _, returned := watchAt(t, w, started.Add(250*time.Millisecond), started.Add(61*time.Second))
 
 	if !returned || !strings.Contains(result.Failure, "stall") || !strings.Contains(result.Failure, "stream を読めない") {
 		t.Fatalf("watch = %+v, 返った %v; want stall で止め、読めない理由を添える", result, returned)
 	}
 }
 
-func TestStallReasonCarriesWhyTheStreamCannotBeRead(t *testing.T) {
-	r := Runner{Definition: workflow.Definition{StallTimeout: time.Minute, RunTimeout: time.Hour}}
+func TestWatchStopsAtTheRunTimeoutWithoutWhyTheStreamCannotBeRead(t *testing.T) {
+	started := time.Now()
+	w := watchFrom(t, "", started, limits{stall: time.Hour, run: time.Minute})
+	failStat(w)
 
-	reason := r.overdue(2*time.Minute, 2*time.Minute, "stream を読めない: 消えた")
+	result, _, returned := watchAt(t, w, started.Add(250*time.Millisecond), started.Add(2*time.Minute))
 
-	if !strings.Contains(reason, "stall") || !strings.Contains(reason, "stream を読めない: 消えた") {
-		t.Fatalf("理由 = %q, want stall に読めない理由を添える", reason)
-	}
-}
-
-func TestRunTimeoutReasonDoesNotCarryWhyTheStreamCannotBeRead(t *testing.T) {
-	r := Runner{Definition: workflow.Definition{StallTimeout: time.Hour, RunTimeout: time.Minute}}
-
-	reason := r.overdue(2*time.Minute, 2*time.Minute, "stream を読めない: 消えた")
-
-	if strings.Contains(reason, "読めない") {
-		t.Fatalf("理由 = %q, want 上限時間の理由には読めない理由を添えない", reason)
+	if !returned || !strings.Contains(result.Failure, "上限時間") || strings.Contains(result.Failure, "読めない") {
+		t.Fatalf("watch = %+v, 返った %v; want 上限時間で止め、読めない理由を添えない", result, returned)
 	}
 }

@@ -55,7 +55,7 @@ claude-dispatcher-dev loop
 検査の置き場は次の点で決めている。
 
 - **CI に置く検査は、同じものを手元 (pre-commit) でも撃てるようにする**。dispatcher は CL の CI が落ちると `fix-ci` の trigger で worker を起動し、worker は手元で再現できない失敗を推測で直さず人へ返す ([WORKFLOW.md](WORKFLOW.md) の共通 prompt)。CI にしか無い検査が落ちると、worker は毎回人へ返すことになる
-- **CL の変更と無関係に赤くなりうる検査は、PR の gate にしない**。network 上の脆弱性 DB を引く govulncheck がこれに当たる。gate にすると、新しい脆弱性が公開されたときに、開いている worker の CL に一斉に `fix-ci` の trigger が当たる
+- **CL の変更と無関係に赤くなりうる検査は、PR の gate にしない**。network 上の脆弱性 DB を引く govulncheck と、並行する PR の merge で main 側に重なりうる ADR の番号の一意がこれに当たる。gate にすると、新しい脆弱性の公開や番号の重なった merge のたびに、開いている worker の CL に一斉に `fix-ci` の trigger が当たる
 - **gate で撃つ検査の script とその test は repo の中に置く**。repo の外 (plugin 等) の script は vendor してから gate に入れ、版の固定は vendor した commit で表す
 - **shell script の test は Go の test から bash を撃つ形で置き** (`go test ./...` に載せる)、別の test 基盤を足さない
 - **gate の前提 tool (plantuml 等) を足すときは**、「セットアップ」と CI の両方に入れ方を書く
@@ -67,7 +67,8 @@ claude-dispatcher-dev loop
   - gofmt (`go fmt ./...`): 整形し直した file があれば落ちる。file は書き換わった後なので、見直して stage し直す
   - go mod tidy (`go mod tidy -diff`): go.mod / go.sum に差分が出れば落ちる
   - actionlint: workflow の静的検査。`run:` の script は、hook 環境に版を固定して入れた shellcheck で検査する
-  - repocheck (`go run ./scripts/repocheck files`): 同じ値を 2 箇所以上に書いている設定の一致を検査する。GoReleaser の版 (checks.yml と release.yml) と、下の「PR に付く check 名」の列挙 (checks.yml の job 名と matrix から組み立てた名前) と、go.mod の `go` 行 (下の「版の更新」の「手で見るもの」に書いた期待値) がずれていれば落ちる。加えて、[docs/adr/](docs/adr/) の file 名の先頭 4 桁 (ADR の番号) が重なれば、重なった番号と file 名を出して落ちる。network は使わない
+  - repocheck (`go run ./scripts/repocheck files`): 同じ値を 2 箇所以上に書いている設定の一致を検査する。GoReleaser の版 (checks.yml と release.yml) と、下の「PR に付く check 名」の列挙 (checks.yml の job 名と matrix から組み立てた名前) と、go.mod の `go` 行 (下の「版の更新」の「手で見るもの」に書いた期待値) がずれていれば落ちる。network は使わない
+  - repocheck-adr (`go run ./scripts/repocheck adr`): [docs/adr/](docs/adr/) の file 名の先頭 4 桁 (ADR の番号) が重なれば、重なった番号と file 名を出して落ちる。手元の branch の中の重なりはその CL の作者が直せるので commit 時には撃つが、CI の `pre-commit` job では撃たない (下の「定期」の adr-numbers が拾う)。hook は docs/adr 全体を見るので、main から取り込んだ重なりでも落ちる。そのときは CL で振り直さず (振り直しは adr-numbers が起こした issue で扱う)、その commit だけ `SKIP=repocheck-adr git commit ...` で撃たずに commit する
 - push 前: `go vet ./...`・`golangci-lint run ./...` (設定は [.golangci.yml](.golangci.yml)。binary の入れ方は上の「セットアップ」) ・`go test -race ./...` (データ競合の検出付き) が通ること。加えて gitleaks が、push する commit のうち remote に無いもの (merge commit を除く) を 1 つずつ検査する。CI の `pre-commit` job は同じ hook を PR の commit 範囲に撃つ。`pre-commit install` 済みなら push 時に hook が走り、落ちると push を止める
   - golangci-lint の既定セットも govet を含むが、`go vet ./...` も撃つ (理由は .pre-commit-config.yaml の go-vet の hook のコメント)
   - `test/blackbox` は binary を build して外から撃つ black-box テスト (外から観測できる契約の検査。正本は [docs/design/formats.md](docs/design/formats.md))。外部 CLI は stub に差し替えるので、network も認証も要らず、マシンに在る実物にも届かない。例外: Homebrew の prefix 等に gh / claude の実物があるマシン (macOS の runner の gh 等) では、「解決できない」を確かめるテストが skip される
@@ -75,7 +76,7 @@ claude-dispatcher-dev loop
   - `test`: `go vet ./...` と `go test -race ./...` を ubuntu と macOS の runner (配布対象の OS) で撃つ。skip したテストは理由とともに job の log の最後に並ぶ
   - `lint`: `golangci-lint run ./...` を ubuntu の runner だけで撃つ (理由は checks.yml の `lint` job のコメント)
   - `goreleaser-check`: `goreleaser check` で [.goreleaser.yaml](.goreleaser.yaml) を検査する
-  - `pre-commit`: commit 時の hook を `pre-commit run --all-files` で撃つ。PR では加えて、push 前の gitleaks の hook を PR の commit 範囲 (base..head。merge commit を除く) に撃つ。merge commit を許しているので、途中の commit で入れて後の commit で消した秘匿情報も main の履歴に残るため。merge commit で解いた conflict の中身は検査されない。手元での再現は `pre-commit run --hook-stage pre-push --from-ref origin/main --to-ref HEAD gitleaks` (stack した CL なら `origin/main` を前段の branch にする)
+  - `pre-commit`: commit 時の hook を `pre-commit run --all-files` で撃つ。ただし repocheck-adr は `SKIP` で外す (並行する PR が同じ番号を取って merge されると、無関係な PR の merge ref まで赤くなるため)。PR では加えて、push 前の gitleaks の hook を PR の commit 範囲 (base..head。merge commit を除く) に撃つ。merge commit を許しているので、途中の commit で入れて後の commit で消した秘匿情報も main の履歴に残るため。merge commit で解いた conflict の中身は検査されない。手元での再現は `pre-commit run --hook-stage pre-push --from-ref origin/main --to-ref HEAD gitleaks` (stack した CL なら `origin/main` を前段の branch にする)
   - 同じ PR に push が重なると、古い run を中止する。main への push の run は中止しない
   - PR に付く check 名: `checks / test (ubuntu-latest)`・`checks / test (macos-latest)`・`checks / lint`・`checks / goreleaser-check`・`checks / pre-commit`。名前は checks.yml の job 名と matrix から決まる。変えたら、この列挙と、下の ruleset の required status checks を一緒に直す。列挙のずれは commit 時の repocheck が、ruleset のずれは下の「定期」の required-checks が拾う。この列挙は repocheck が機械で読む (読み方は scripts/repocheck の listedCheckNames)
 - main の保護: repo の ruleset `main` (対象は既定 branch) が、「main へは PR 経由でだけ入れる」と「CI が通った PR だけを merge する」を機械で強制する。設定は repo の管理権限が要るので、worker は変えられない
@@ -84,6 +85,7 @@ claude-dispatcher-dev loop
   - 「merge 前に branch を最新にする」(strict) は無効にする。有効にすると main が進むたびに開いている全 PR の branch 更新が要り、worker の CL ではそれが手直しの trigger の起動や人への返却を招く。main への push で走る CI が事後に検知する
   - bypass は置かない (管理者も main へ直接 push できない)
 - 定期: [.github/workflows/govulncheck.yml](.github/workflows/govulncheck.yml) が、週 1 回 (月曜 0:00 UTC)・main への push・手動 (`workflow_dispatch`) で、依存と標準ライブラリの脆弱性を `go tool govulncheck ./...` で検査する。検出したら `needs-triage` の issue を 1 件起こし (同じ題名の open な issue があれば起こさない。手順は `scripts/open-triage-issue.sh`)、run を落とす。run を落とすのは、issue を起こせなかったとき (権限・API の失敗) にも検出を見落とさないため。手元での再現は同じコマンド (版は go.mod の `tool` 行で固定している)
+  - [.github/workflows/adr-numbers.yml](.github/workflows/adr-numbers.yml) が、同じ契機 (週 1 回・main への push・手動) で、main の ADR の番号の重なりを `go run ./scripts/repocheck adr` で検査する。重なっていれば govulncheck と同じく `needs-triage` の issue を 1 件起こし、run を落とす。番号の振り直しはその issue で扱う。手元での再現は同じコマンド
   - [.github/workflows/required-checks.yml](.github/workflows/required-checks.yml) が、同じ契機 (週 1 回・main への push・手動) で、main の ruleset の required status checks が checks.yml の job から決まる check 名と一致するかを検査する。ruleset は API でしか読めず CL と無関係に変わりうるので、PR では撃たない。ずれていれば govulncheck と同じく `needs-triage` の issue を 1 件起こし、run を落とす。手元での再現は `scripts/check-required-checks.sh` (`gh` の認証が要る)
 - 版の更新: 2 つの bot が週 1 回、版を上げる PR を出す。auto-merge はしない。分担の理由は [ADR 0016](docs/adr/0016-renovate-regex-beside-dependabot.md)
   - [.github/dependabot.yml](.github/dependabot.yml): GitHub Actions・Go の依存 (indirect と、govulncheck を含む)・pre-commit の hook の `rev` を、それぞれ 1 本の PR で上げる

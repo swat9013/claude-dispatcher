@@ -33,11 +33,39 @@ func (t Trigger) Matches(item target.Item) bool {
 	return false
 }
 
-// Undecided は、作業対象が trigger に当たるかをまだ決められないか。conflict の条件を持つ CL の trigger は、CL host が
+// undecided は、作業対象が trigger に当たるかをまだ決められないか。conflict の条件を持つ CL の trigger は、CL host が
 // conflict を計算し終えるまで当たるとも外れたとも決めない。終端の CL は決められる (終端として扱う)。
-func (t Trigger) Undecided(item target.Item) bool {
+func (t Trigger) undecided(item target.Item) bool {
 	cl, ok := item.(target.CL)
 	return ok && !cl.Closed && t.On == target.KindCL && t.CL.Conflict != nil && cl.Mergeable == target.MergeUnknown
+}
+
+// Observation は読み直した作業対象を trigger に照らした観測。名前は statechart.puml の出来事に揃える。
+type Observation int
+
+const (
+	// ObservedStillMatches は当たったままの観測
+	ObservedStillMatches Observation = iota
+	// ObservedTerminal は終端の観測
+	ObservedTerminal
+	// ObservedLeftTrigger は trigger 外れの観測
+	ObservedLeftTrigger
+	// ObservedUndecided は当たるか未決
+	ObservedUndecided
+)
+
+// Observe は読み直した作業対象を trigger に照らし、4 つの観測のどれかを返す。判定の順は「終端 → 未決 → 外れた →
+// 当たったまま」に固定する (終端の CL は conflict を計算しないので、未決より先に見る)。副作用を持たない。
+func (t Trigger) Observe(item target.Item) Observation {
+	switch {
+	case item.Terminal():
+		return ObservedTerminal
+	case t.undecided(item):
+		return ObservedUndecided
+	case !t.Matches(item):
+		return ObservedLeftTrigger
+	}
+	return ObservedStillMatches
 }
 
 // Author は作者の立場の条件。空なら立場を問わない。
