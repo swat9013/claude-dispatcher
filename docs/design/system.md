@@ -189,6 +189,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。claim の段階と打�
    - 起動からの経過が worker 1 回分の上限時間 (既定 1 時間。0 で無効) を超えた worker も止め、失敗として扱う。progress を書き続けて stall にかからない worker が、並列の枠を塞ぎ続けないようにする
    - 走っている作業対象を外部 store で読み直し、終端になっていれば worker を止めて workspace を消す
    - trigger から外れただけでは止めない (ADR 0009「走っている worker は終端でだけ止める」)
+   - 止めた worker が止められて終われば claim を解く。止める前に worker が終わっていた (stall・上限時間で止まったか、自分で終わった) ときは、止めなかった worker と同じく終わりを確かめる (worker の 1 回分の手順 5)
 2. **workflow 定義の読み直しと事前検査** (§8)
    - 読めない・文法に合わないときは、この tick は何も起動しない。突き合わせは続ける
    - action の template の先頭の `/名前` が見つからない trigger だけは、その trigger を評価から外し、再起動もしない。他の trigger は評価する
@@ -225,6 +226,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。claim の段階と打�
   - 空きが無ければ、attempt を進めずに待ち直す (ADR 0009「空きを待つ間は attempt を進めない」)
   - CL が tick の一覧で曖昧な CL (§6) に見えても claim を解かず、attempt を進めずに次の tick で試み直す。曖昧さは一覧でしか決まらず、古い一覧が close 直後の兄弟 CL を open のまま返すと曖昧に見える。そこで claim を解くと、次の tick で attempt 1 から数え直して起動しうる (attempt の上限をすり抜ける)
   - 曖昧な間も claim は再起動待ちとして残り、並列の枠を 1 つ使い続ける。曖昧な CL は `status` に出るので、人が片方を close すれば解ける
+  - CL の head branch を別の claim の workspace が checkout している (branch の重なり) か、その branch を読めないときも、claim を解かず、attempt を進めずに次の tick で試み直す。同じ branch に worker を重ねないため
   - 再起動は同じ trigger で続ける。宣言順で先の trigger に当たるようになっていても、その評価は claim が解けた後の tick で行う
   - 再起動を試みるときに、起動した trigger が workflow 定義から消えていれば、作業対象を読み直さずに claim を解く (続ける trigger が無いため)。trigger は名前で引き当てるので、名前を変えた trigger は消えたものと数える。試みるのは backoff が明けて空きがあるときなので、それまでは claim を持ったまま待つ
 - **attempt が上限に達したら打ち切る**
