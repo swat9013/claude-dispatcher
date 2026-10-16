@@ -44,7 +44,7 @@ func (s staleTicks) run(t *testing.T) ([]worker.Job, *rig) {
 	// 周期は、起動した worker の終わりを loop が処理し終えてから明ける。時計は workflow 定義を読むたびに周期だけ進むので、
 	// worker の終わりは必ずそれを起動した tick の時刻で受け取る
 	r.timer = func(kind timerKind, _ time.Duration) timing {
-		if kind != period {
+		if kind != periodTimer {
 			return timing{fate: neverFires}
 		}
 		periods++

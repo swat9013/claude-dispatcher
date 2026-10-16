@@ -54,7 +54,7 @@ func (s wakeLoop) run(t *testing.T) *wakeRun {
 	w := &wakeRun{rig: newRig(), launchesAtTick: map[int]int{}}
 	periods := 0
 	w.timer = func(kind timerKind, _ time.Duration) timing {
-		if kind == period {
+		if kind == periodTimer {
 			periods++
 			p := s.period(periods, w)
 			p.keepClock = true
