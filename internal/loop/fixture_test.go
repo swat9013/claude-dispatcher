@@ -23,7 +23,7 @@ import (
 //
 // rig は loop を 1 本の筋で進める。loop は select の直前に必ず状態 file を書き出す (Publish) ので、rig はそこで
 // loop が待ちに入ったと知り、次に届けるものを 1 つだけ用意する: 起動した worker の event が残っていれば、送った順に
-// 1 つ。残っていなければ、明ける timer のうち時刻の最も早いもの (同じ時刻なら先に置いたもの) を 1 つ。select で
+// 1 つ。残っていなければ、明ける timer のうち時刻の最も早いもの (同じ時刻なら wake) を 1 つ。select で
 // 受け取れるものが常に 1 つなので、受け取る順と loop が読む時刻は goroutine の割り振りに依らない。
 
 const startScope = "scope-a"
@@ -67,9 +67,9 @@ type timerKind int
 
 const (
 	// period は次の tick までの周期
-	period timerKind = iota
+	periodTimer timerKind = iota
 	// wake は再起動の backoff の明けを知らせる wake
-	wake
+	wakeTimer
 )
 
 // fate は After が返した timer の行き先。
@@ -128,12 +128,11 @@ type rig struct {
 	now time.Time
 	// events は送る番を待つ worker の event (送った順)
 	events []queued
-	// next と wake は loop が待っている周期と wake。loop は周期を明けるまで置き直さず、wake は早い予定が出るたびに
-	// 置き直す (前の wake は捨てる)
-	next, wake *armed
-	// periodArmed は loop が周期を待っているか。周期は、loop の起動の後と周期の明けの後の最初の After で置かれる
-	periodArmed bool
-	stopped     bool
+	// period と wake は loop が待っている周期と wake。loop は周期を明けるまで置き直さず、wake は早い予定が出るたびに
+	// 置き直す (前の wake は捨てる)。周期は、loop の起動の後と周期の明けの後の最初の After で置かれる (loop.go の Run で
+	// 周期を置いてから arm が wake を置く) ので、周期を待っていない間の After を周期とみなす
+	period, wake *armed
+	stopped      bool
 	// done は loop が止まると閉じる
 	done chan struct{}
 
@@ -191,6 +190,9 @@ func (r *rig) run(t *testing.T, o loop.Options) {
 	if o.Signals == nil {
 		o.Signals = r.signals
 	}
+	if o.Publish != nil || o.Now != nil || o.After != nil {
+		t.Fatal("rig.run: Publish・Now・After は rig が持つので渡さない")
+	}
 	o.Publish, o.Now, o.After = r.publish, r.clock, r.after
 	exit := loop.Run(o)
 	close(r.done)
@@ -230,17 +232,17 @@ func (r *rig) send(events chan<- worker.Event, evs ...worker.Event) {
 // after は timer の扱いに従う channel を返す。待った周期は waits に残す。
 func (r *rig) after(d time.Duration) <-chan time.Time {
 	r.waits = append(r.waits, d)
-	kind := wake
-	if !r.periodArmed {
-		kind, r.periodArmed = period, true
+	kind := wakeTimer
+	if r.period == nil {
+		kind = periodTimer
 	}
 	t := timing{fate: neverFires}
 	if r.timer != nil {
 		t = r.timer(kind, d)
 	}
 	a := &armed{ch: make(chan time.Time, 1), at: r.now.Add(d), timing: t}
-	if kind == period {
-		r.next = a
+	if kind == periodTimer {
+		r.period = a
 	} else {
 		r.wake = a
 	}
@@ -261,7 +263,7 @@ func (r *rig) publish(s status.Snapshot) error {
 		}()
 		return nil
 	}
-	if r.stopped {
+	if r.stopped || exiting(s) {
 		return nil
 	}
 	a := r.due()
@@ -277,8 +279,8 @@ func (r *rig) publish(s status.Snapshot) error {
 		r.signals <- sig
 		return nil
 	}
-	if a == r.next {
-		r.next, r.periodArmed = nil, false
+	if a == r.period {
+		r.period = nil
 	} else {
 		r.wake = nil
 	}
@@ -289,10 +291,23 @@ func (r *rig) publish(s status.Snapshot) error {
 	return nil
 }
 
+// exiting は、loop が select に入らずに止まる直前の Publish か (停止要求を受け、走っている worker が無い)。
+func exiting(s status.Snapshot) bool {
+	if !s.Stopping {
+		return false
+	}
+	for _, w := range s.Workers {
+		if w.Phase == status.Running || w.Phase == status.Stopping {
+			return false
+		}
+	}
+	return true
+}
+
 // due は次に届ける timer。明けない timer は選ばない。周期と wake が同じ時刻なら wake を先にする。
 func (r *rig) due() *armed {
 	var best *armed
-	for _, a := range []*armed{r.wake, r.next} {
+	for _, a := range []*armed{r.wake, r.period} {
 		if a == nil || a.timing.fate == neverFires {
 			continue
 		}
