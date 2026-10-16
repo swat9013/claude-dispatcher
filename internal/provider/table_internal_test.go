@@ -42,10 +42,10 @@ func TestEveryProviderDeclaresTheHostAndTheSetupConsistently(t *testing.T) {
 			if p.Host.Required() && p.Host.RequiredHint() == "" {
 				t.Fatalf("tracker.host は必須なのに、欠落の誤りに添える案内が無い")
 			}
-			if p.Setup.ownsOrigin != nil && (p.Setup.currentPlace == nil || p.Setup.template == nil) {
+			if p.Setup.DeclaresOrigin() && (!p.Setup.DeclaresCurrentPlace() || !p.Setup.DeclaresTemplate()) {
 				t.Fatalf("origin を認めるのに、clone から雛形を書けない")
 			}
-			if p.Setup.TakesFlags() && (p.Setup.template == nil || !p.Host.Writable()) {
+			if p.Setup.TakesFlags() && (!p.Setup.DeclaresTemplate() || !p.Host.Writable()) {
 				t.Fatalf("flag で受けるのに、--host を読めないか雛形を書けない")
 			}
 		})
@@ -55,7 +55,7 @@ func TestEveryProviderDeclaresTheHostAndTheSetupConsistently(t *testing.T) {
 func TestTheProviderForAnUnrecognizedOriginWritesTheTemplateFromTheClone(t *testing.T) {
 	p, _ := Of(originFallback)
 
-	if p.Setup.currentPlace == nil || p.Setup.template == nil {
+	if !p.Setup.DeclaresCurrentPlace() || !p.Setup.DeclaresTemplate() {
 		t.Fatalf("origin の host を認める provider が無いときの種類 %s が、clone から雛形を書けない", p.Kind)
 	}
 }
