@@ -366,7 +366,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。claim の段階と打�
 - **loop の監督** (boot 時の起動・落ちた loop の起こし直し): 人が同じコマンドで起動し直す (ADR 0006)
 - **tracker 以外の起点** (定期実行・外部の webhook): SPEC §2.2 の「汎用の workflow engine にしない」に従う
 - **SPEC §13.7 の HTTP API と dashboard**: 観測は loop の画面・状態 file・`status` で足りる
-- **GitHub・GitLab・Jira 以外の tracker / CL host**: tracker の adapter を足す形で広げる (§13)。scope key の粒度は adapter が決める
+- **GitHub・GitLab・Jira 以外の tracker / CL host**: tracker の adapter を足す形で広げる (§13)。scope key の粒度は、issue 置き場の役割を担う provider が置き場から返す scope key の中で決める (§13・ADR 0021)
   - GitLab と GitHub は、issue 置き場と同じ場所を CL 置き場とする構成だけを扱う。issue 置き場と別の CL 置き場を宣言できるのは `tracker.kind: jira` のときだけ (`cl:`)
   - Jira は Jira Cloud の issue 置き場だけを扱う。Jira に CL 置き場は無いので、`cl:` で GitHub か GitLab の CL 置き場をかならず宣言する。project の CL 置き場はちょうど 1 つ (ADR 0015)
   - Jira Data Center / Server は扱わない (acli が Jira Cloud だけを扱う)
