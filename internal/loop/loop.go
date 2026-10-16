@@ -165,6 +165,12 @@ type claim struct {
 	startedAt *time.Time
 	// activity は今の attempt の worker の最新の活動。まだ無ければ nil
 	activity *status.Activity
+	// pid と workspace は今の attempt で起動した claude の pid と workspace の path (止められない claude を人が探すため)
+	pid       int
+	workspace string
+	// unstopped は、SIGKILL を送れず claude が終わっていない worker を持つこと。段階は phaseStopping のまま loop の終了まで
+	// 残し、loop の停止はこの worker を待たない (system.md §7)
+	unstopped bool
 }
 
 type loop struct {
@@ -210,7 +216,7 @@ func Run(o Options) int {
 			l.requestStop(sig)
 		default:
 		}
-		if l.stop.requested() && l.running() == 0 {
+		if l.stop.requested() && l.awaited() == 0 {
 			return l.exit()
 		}
 		if next == nil {
@@ -246,12 +252,12 @@ func Run(o Options) int {
 func (l *loop) requestStop(sig os.Signal) {
 	l.stop = l.stop.next()
 	l.lastStop = sig
-	running := l.running()
+	awaited := l.awaited()
 	for ref, c := range l.claims {
 		l.apply(ref, c, c.stopRequested(l.stop))
 	}
-	if running > 0 && l.stop == stopFirst {
-		l.rec.human(LineStopping, "停止待ち", ": 走っている worker %d 本の終了を待つ (もう一度で止める)", running)
+	if awaited > 0 && l.stop == stopFirst {
+		l.rec.human(LineStopping, "停止待ち", ": 走っている worker %d 本の終了を待つ (もう一度で止める)", awaited)
 	}
 }
 
@@ -265,16 +271,30 @@ func (l *loop) exit() int {
 	return 0
 }
 
-// running は走っている worker (止めている途中を含む) の数。
-func (l *loop) running() int {
+// awaited は loop の停止が終わりを待つ worker の数。止められない worker は終わりが届かないので数えない。
+func (l *loop) awaited() int {
 	n := 0
 	for _, c := range l.claims {
-		if c.phase == phaseRunning || c.phase == phaseStopping {
+		if c.holdsWorker() && !c.unstopped {
 			n++
 		}
 	}
 	return n
 }
+
+// running は走っている worker (止めている途中と、止められない worker を含む) の数。並列の枠を数えるのに使う。
+func (l *loop) running() int {
+	n := 0
+	for _, c := range l.claims {
+		if c.holdsWorker() {
+			n++
+		}
+	}
+	return n
+}
+
+// holdsWorker は claim が worker (止めている途中と、止められない worker を含む) を持つ段階か。
+func (c *claim) holdsWorker() bool { return c.phase == phaseRunning || c.phase == phaseStopping }
 
 // tick は 1 周期分の仕事をする (formats.md §6 の tick の手順)。
 func (l *loop) tick() {
@@ -621,7 +641,7 @@ func (l *loop) handle(ev worker.Event) {
 		if !ok {
 			return
 		}
-		c.sessionStarted = true
+		c.sessionStarted, c.pid, c.workspace = true, ev.PID, ev.Workspace
 		now := l.o.Now()
 		c.startedAt = &now
 		name := ev.Target.String()
@@ -635,7 +655,12 @@ func (l *loop) handle(ev worker.Event) {
 			return
 		}
 		result := ev.Result
-		for _, message := range []string{result.AfterRunError, result.StopError, result.ResultSummaryError} {
+		stopError := result.StopError
+		if result.Unstopped {
+			// 止められない worker の行 (claim.workerEnded) が理由を併せて書く
+			stopError = ""
+		}
+		for _, message := range []string{result.AfterRunError, stopError, result.ResultSummaryError} {
 			if message != "" {
 				l.rec.error(ev.Target, message)
 			}
