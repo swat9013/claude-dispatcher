@@ -66,6 +66,9 @@ type Result struct {
 	AfterRunError string
 	// StopError は止めるときに process group へ signal を送れなかった理由
 	StopError string
+	// Unstopped は止めるときに SIGKILL を送れず、claude がまだ終わっていないこと (system.md §7)。true なら after_run を撃たず、
+	// ResultSummary も読まない。loop はこの worker を終わったものとして扱わない
+	Unstopped bool
 	// ResultSummary は attempt の最後の stream-json の result の行の要約。claude を起動しなかった・result の行が無い・worker log を
 	// 最後まで読めなかったなら nil。項目の型が違えば、その項目を除いた要約
 	ResultSummary *ResultSummary
@@ -142,6 +145,10 @@ func (r Runner) attempt(job Job, run *Run, started func(pid int, workspace strin
 		return Result{Failure: err.Error()}
 	}
 	result := r.launch(job, run, path, started)
+	if result.Unstopped {
+		// claude がまだ workspace を使いうるので、後始末をしない
+		return result
+	}
 	if err := r.Workspaces.AfterRun(ref); err != nil {
 		result.AfterRunError = err.Error()
 	}
@@ -196,6 +203,10 @@ func (r Runner) launch(job Job, run *Run, workspacePath string, started func(pid
 	watch := newStreamWatch(stream, before.Size(), time.Now(), workspacePath,
 		limits{stall: r.Definition.StallTimeout, run: r.Definition.RunTimeout})
 	result := r.wait(cmd, run, watch)
+	if result.Unstopped {
+		// claude がまだ result の行を書きうる
+		return result
+	}
 	// claude の process が終わった後に読むので、claude が書く result の行はそろっている
 	result.ResultSummary, err = watch.lastResult()
 	if err != nil {
@@ -254,6 +265,7 @@ func (r Runner) wait(cmd *exec.Cmd, run *Run, w *streamWatch) Result {
 		return r.exited(cmd, stopError(result, err))
 	default:
 		// SIGKILL を送れず claude はまだ終わっていない。終わり方は無いので、止めた理由のまま返す
+		result.Unstopped = true
 		return stopError(result, err)
 	}
 }

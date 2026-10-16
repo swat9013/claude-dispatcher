@@ -48,6 +48,9 @@ var (
 	stoppedEnd     = claimEvent{"worker終了 [止められて終わった]", ended(worker.Result{Stopped: true})}
 	stall          = claimEvent{"stall上限", ended(worker.Result{Failure: "stall"})}
 	timeLimit      = claimEvent{"上限時間", ended(worker.Result{Failure: "上限時間"})}
+	stallUnstopped = claimEvent{"stall上限 [SIGKILL を送れず claude が残る]", ended(worker.Result{Failure: "stall", Unstopped: true})}
+	timeUnstopped  = claimEvent{"上限時間 [SIGKILL を送れず claude が残る]", ended(worker.Result{Failure: "上限時間", Unstopped: true})}
+	unstoppedEnd   = claimEvent{"worker終了 [SIGKILL を送れず claude が残る]", ended(worker.Result{Stopped: true, Unstopped: true})}
 	terminal       = claimEvent{"終端の観測", seen(observation{observed: trigger.ObservedTerminal})}
 	leftTrigger    = claimEvent{"trigger外れの観測", seen(observation{observed: trigger.ObservedLeftTrigger})}
 	stillMatches   = claimEvent{"当たったままの観測", seen(observation{observed: trigger.ObservedStillMatches})}
@@ -80,6 +83,8 @@ func TestClaimTransitions(t *testing.T) {
 		{phaseRunning, 1, workerEnd, phaseAwaitingVerification, claimIO{readItem: true}},
 		{phaseRunning, 1, stall, phaseAwaitingVerification, claimIO{readItem: true}},
 		{phaseRunning, 1, timeLimit, phaseAwaitingVerification, claimIO{readItem: true}},
+		{phaseRunning, 1, stallUnstopped, phaseStopping, noIO},
+		{phaseRunning, 1, timeUnstopped, phaseStopping, noIO},
 		{phaseRunning, 1, terminal, phaseStopping, claimIO{stopWorker: true}},
 		{phaseRunning, 1, firstStop, phaseRunning, noIO},
 		{phaseRunning, 1, secondStop, phaseStopping, claimIO{stopWorker: true}},
@@ -100,6 +105,7 @@ func TestClaimTransitions(t *testing.T) {
 
 		// --- 止めている ---
 		{phaseStopping, 1, stoppedEnd, phaseStopping, claimIO{removeWorkspace: true, exit: release}},
+		{phaseStopping, 1, unstoppedEnd, phaseStopping, noIO},
 		{phaseStopping, 1, workerEnd, phaseAwaitingVerification, claimIO{readItem: true}},
 		{phaseStopping, 1, stall, phaseAwaitingVerification, claimIO{readItem: true}},
 		{phaseStopping, 1, timeLimit, phaseAwaitingVerification, claimIO{readItem: true}},
@@ -198,6 +204,26 @@ func TestLoopEndedLeavesAnErrorLine(t *testing.T) {
 		if lines := c.loopEnded().lines; len(lines) != 1 || lines[0].errorMessage == "" {
 			t.Errorf("%s の loop の終了の行 = %+v, want error の行 1 つ", phaseNames[p], lines)
 		}
+	}
+}
+
+func TestAnUnstoppedWorkerIsHeldUntilTheLoopEnds(t *testing.T) {
+	ref := target.Ref{Kind: target.KindIssue, Number: 1}
+	c := &claim{phase: phaseRunning, attempt: 1, trigger: trigger.Trigger{Name: "t"}, run: &FakeWorker{}, pid: 42}
+	env := claimEnv{now: time.Unix(0, 0), maxAttempts: 3, maxRetryBackoff: time.Minute, maxConcurrent: 1}
+
+	e := c.workerEnded(ref, worker.Result{Failure: "stall", Unstopped: true})
+
+	if !c.unstopped || len(e.lines) != 1 || e.lines[0].errorMessage == "" {
+		t.Fatalf("unstopped = %v, 行 = %+v, want 止められない claim と error の行 1 つ", c.unstopped, e.lines)
+	}
+	for _, later := range []claimEvent{terminal, secondStop, backoffDone, stoppedEnd} {
+		if got := later.fire(c, ref, env); got.removeWorkspace || got.startWorker || got.readItem || got.exit != stay {
+			t.Errorf("%s の後の I/O = %+v, want 何もしない", later.name, got)
+		}
+	}
+	if lines := c.loopEnded().lines; len(lines) != 1 || lines[0].errorMessage == "" {
+		t.Errorf("loop の終了の行 = %+v, want error の行 1 つ", lines)
 	}
 }
 

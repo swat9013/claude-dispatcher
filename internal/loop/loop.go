@@ -165,6 +165,12 @@ type claim struct {
 	startedAt *time.Time
 	// activity は今の attempt の worker の最新の活動。まだ無ければ nil
 	activity *status.Activity
+	// pid と workspace は今の attempt で起動した claude の pid と workspace の path (止められない claude を人が探すため)
+	pid       int
+	workspace string
+	// unstopped は、SIGKILL を送れず claude が終わっていない worker を持つこと。段階は phaseStopping のまま loop の終了まで
+	// 残し、loop の停止はこの worker を待たない (system.md §7)
+	unstopped bool
 }
 
 type loop struct {
@@ -210,7 +216,7 @@ func Run(o Options) int {
 			l.requestStop(sig)
 		default:
 		}
-		if l.stop.requested() && l.running() == 0 {
+		if l.stop.requested() && l.awaited() == 0 {
 			return l.exit()
 		}
 		if next == nil {
@@ -246,7 +252,7 @@ func Run(o Options) int {
 func (l *loop) requestStop(sig os.Signal) {
 	l.stop = l.stop.next()
 	l.lastStop = sig
-	running := l.running()
+	running := l.awaited()
 	for ref, c := range l.claims {
 		l.apply(ref, c, c.stopRequested(l.stop))
 	}
@@ -265,7 +271,18 @@ func (l *loop) exit() int {
 	return 0
 }
 
-// running は走っている worker (止めている途中を含む) の数。
+// awaited は loop の停止が終わりを待つ worker の数。止められない worker は終わりが届かないので数えない。
+func (l *loop) awaited() int {
+	n := 0
+	for _, c := range l.claims {
+		if (c.phase == phaseRunning || c.phase == phaseStopping) && !c.unstopped {
+			n++
+		}
+	}
+	return n
+}
+
+// running は走っている worker (止めている途中と、止められない worker を含む) の数。並列の枠を数えるのに使う。
 func (l *loop) running() int {
 	n := 0
 	for _, c := range l.claims {
@@ -621,7 +638,7 @@ func (l *loop) handle(ev worker.Event) {
 		if !ok {
 			return
 		}
-		c.sessionStarted = true
+		c.sessionStarted, c.pid, c.workspace = true, ev.PID, ev.Workspace
 		now := l.o.Now()
 		c.startedAt = &now
 		name := ev.Target.String()
