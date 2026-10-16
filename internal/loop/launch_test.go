@@ -56,7 +56,7 @@ func (o oneTick) run(t *testing.T) ([]worker.Job, string) {
 // recheckSkips は tick を 1 回だけ回し、log.jsonl に書いた recheck_skip の行を返す。
 func (o oneTick) recheckSkips(t *testing.T) []map[string]any {
 	t.Helper()
-	return o.rig(t).events(t, "recheck_skip")
+	return o.rig(t).logEvents(t, "recheck_skip")
 }
 
 // assertOneRecheckSkip は、recheck_skip の行が 1 行だけで、その target・trigger・reason の値が want と同じことを確かめる

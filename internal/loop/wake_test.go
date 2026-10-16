@@ -31,7 +31,8 @@ type wakeLoop struct {
 	precheck func(workflow.Definition) []precheck.Problem
 	// deliverWakes は wake を届けるか (届けなければ、再起動は tick と worker の終わりでだけ試みる)
 	deliverWakes bool
-	// period は n 回目 (1 始まり) の周期の扱いを返す。wake は、起動した worker の event を loop が受け取り終えてから明ける
+	// period は n 回目 (1 始まり) の周期の扱いを返す。周期も wake も、起動した worker の event を loop が処理し終えてから、
+	// 予定の時刻の順に明ける (backoff の wake は周期より早いので先に明ける)
 	period func(n int, w *wakeRun) timing
 }
 
@@ -52,8 +53,8 @@ func (s wakeLoop) run(t *testing.T) *wakeRun {
 	t.Helper()
 	w := &wakeRun{rig: newRig(), launchesAtTick: map[int]int{}}
 	periods := 0
-	w.timer = func(d time.Duration) timing {
-		if d == wakeInterval {
+	w.timer = func(kind timerKind, _ time.Duration) timing {
+		if kind == period {
 			periods++
 			p := s.period(periods, w)
 			p.keepClock = true
@@ -90,9 +91,6 @@ func (s wakeLoop) run(t *testing.T) *wakeRun {
 	return w
 }
 
-// afterAWake は、loop が wake を 1 つ受け取ってから明ける周期。
-var afterAWake = timing{fate: fires, until: func(r *rig) bool { return r.fired >= 1 }}
-
 func TestWaitingRetryOfACLThatCannotRestartOutsideATickWakesTheLoopOnlyOnceBeforeTheNextTick(t *testing.T) {
 	// CL は tick の中でだけ再起動を試みるので、backoff が明けても次の tick までは起動できない
 	fixCI := trigger.Trigger{Name: "fix-ci", On: target.KindCL}
@@ -107,8 +105,8 @@ func TestWaitingRetryOfACLThatCannotRestartOutsideATickWakesTheLoopOnlyOnceBefor
 		deliverWakes: true,
 		period: func(n int, w *wakeRun) timing {
 			if n == 1 {
-				// 最初の worker の終わりで置かれた backoff の wake を loop が受け取ってから、周期を明ける
-				return afterAWake
+				// 最初の worker の終わりで置かれた backoff の wake (10s) が、周期 (1m) より先に明ける
+				return timing{fate: fires}
 			}
 			wakesBeforeSecondTick = w.wakes
 			return timing{fate: stopsTheLoop}
@@ -142,7 +140,7 @@ func TestWakeRestartsWithThePrecheckOfTheLastTick(t *testing.T) {
 		deliverWakes: true,
 		period: func(n int, _ *wakeRun) timing {
 			if n == 1 {
-				return afterAWake
+				return timing{fate: fires}
 			}
 			return timing{fate: stopsTheLoop}
 		},
@@ -175,7 +173,8 @@ func TestWaitingRetryForASlotIsRestartedWhenAStoppedWorkerFreesTheSlot(t *testin
 			return readyIssue(ref.Number)
 		},
 		stoppable: running,
-		// 周期 1 は issue#1 の終わりを、周期 3 は止めた issue#2 の終わりを loop が受け取ってから明ける
+		// 周期 1 は issue#1 の終わりを、周期 2 は issue#2 の起動を、周期 3 は止めた issue#2 の終わりを loop が処理し終えて
+		// から明ける (wake は届けないので、周期のほかに明けるものは無い)
 		period: func(n int, _ *wakeRun) timing {
 			if n <= 3 {
 				return timing{fate: fires}

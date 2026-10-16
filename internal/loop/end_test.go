@@ -33,7 +33,7 @@ func endedThenReadAs(afterEnd target.Issue, failure string) oneTick {
 func (o oneTick) endLine(t *testing.T) (map[string]any, string) {
 	t.Helper()
 	r := o.rig(t)
-	ends := r.events(t, "end")
+	ends := r.logEvents(t, "end")
 	if len(ends) != 1 {
 		t.Fatalf("end の行 = %v, want 1 行", ends)
 	}
