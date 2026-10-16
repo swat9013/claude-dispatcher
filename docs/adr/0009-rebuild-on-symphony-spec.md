@@ -1,6 +1,6 @@
 # ADR 0009: Symphony の SPEC を土台に、宣言した trigger で機械が worker を直接起動する形へ作り直す
 
-- Status: Accepted (「claim はマシンを跨いで効かない」「1 つの issue 置き場は 1 台から回す」とした部分と、機械が外部 store に何も書かないとした部分のうち調停用の独自 ref は、ADR 0011 が置き換えた)
+- Status: Accepted (「claim はマシンを跨いで効かない」「1 つの issue 置き場は 1 台から回す」とした部分と、機械が外部 store に何も書かないとした部分のうち調停用の独自 ref は、ADR 0011 が置き換えた。「scope key は tracker の adapter が返す」とした部分は、ADR 0021 が置き換えた)
 - Date: 2026-09-30
 - 次の決定を置き換える
   - ADR 0001: claim を label に置く部分、orchestrator を起こす部分、「実装済み」を紐づく CL の存在で表す部分とその Alternatives での却下、tick を跨いで何も記憶しない部分 (claim・attempt・打ち切りを loop の memory に持つ)

@@ -387,7 +387,7 @@ CLI の中で、呼び出し側から中身を隠す部品と、差し替えの�
   - issue と CL の紐づけは返さない (ADR 0009)
   - 失敗は 認証 / 見えない / 読み切れない / rate limit に分けて返す (SPEC §11.4)
   - 一覧は読めたが、観測の結果を変えない補助の要求 (GitLab に conflict の計算し直しを求める、など) が落ちたときは、一覧とともに処理を続けられる失敗 (non-fatal) を返す。loop は一覧で tick を続け、その失敗を log.jsonl の `error` の行に残す (formats.md §3)
-  - scope key は issue 置き場の役割を担う provider が、読んだ置き場 (Place) から返す。issue 置き場の部品を組まずに得られる。tracker ごとの粒度 (GitHub は owner と repo、GitLab は host と repo の path、Jira は site と project key) を provider の外に出さない
+  - scope key は issue 置き場の役割を担う provider が、読んだ置き場 (Place) から返す。issue 置き場の部品を組まずに得られる (ADR 0021)。tracker ごとの粒度 (GitHub は owner と repo、GitLab は host と repo の path、Jira は site と project key) を provider の外に出さない
   - Jira の作業対象の番号は issue の key (`WIDGETS-123`) の数字の部分。scope key が project key を含むので、scope の中で一意になる (ADR 0010)。project key を改名したら scope key が変わるので、workflow 定義を書き換えて loop を起動し直す
   - どの adapter で組み立てるかは、置き場の役割を担う provider が決める。issue 置き場の部品は `tracker.kind` の provider、CL 置き場の部品は CL 置き場の役割を担う provider (github・gitlab では `tracker.kind`、jira では `cl.kind`) が組み立てる
 - **tracker の種類の知識は provider に閉じる**
@@ -395,7 +395,8 @@ CLI の中で、呼び出し側から中身を隠す部品と、差し替えの�
   - workflow 定義の検査・`setup`・`doctor`・loop の組み立ては、種類で分岐せずに provider を引く。種類を足すときは provider を 1 つ足す
   - 宣言を書けるかは、その宣言が属する置き場の役割を担う provider の、その役割の宣言で決める。issue 側の述語と `tracker.*` は issue 置き場の provider が、CL 側の述語は CL 置き場の provider が決める。CL 置き場の provider は、github・gitlab では issue 置き場と同じ provider、jira では `cl:` の `kind` の provider。issue 置き場の provider が CL 置き場の役割を持たなければ `cl:` を必須にし、どの workflow 定義にも CL 置き場の provider がちょうど 1 つある (ADR 0015)
   - 支える宣言の無いものは支えないものとして扱い、名指しで失敗させる (§8)
-  - provider は seam ではない。adapter を差し替える口ではなく、どの adapter を組むかを種類から引く表なので、テストの adapter を持たない
+  - provider の表は seam ではない。adapter を差し替える口ではなく、どの adapter を組むかを種類から引く表なので、テストの adapter を持たない
+  - 部品が撃つ CLI (gh / glab / acli) の Runner は、provider に渡す `provider.Runtime.Runner` で差し替える seam にする。adapter は実物の CLI とテストの stub の 2 つ。provider の表を差し替えるのではなく、表が組む部品へ渡す Runner だけを差し替える
 - **起動部は、1 つの worker の起動・stream の読み取り・停止・回収を 1 つの部品に閉じる** (ADR 0005)
   - stream の event (起動・活動・終了) は中立の形で返す
   - 停止は process group ごと行い、上限時間か停止要求のどちらで止まったかを区別して返す
