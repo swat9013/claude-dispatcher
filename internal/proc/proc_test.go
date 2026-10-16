@@ -70,14 +70,7 @@ func TestStopReapsAGrandchildLeftInTheGroupAfterTheChildEnds(t *testing.T) {
 		t.Fatalf("子が SIGTERM で自分から終わっていない: %v", cmd.ProcessState)
 	}
 
-	deadline := time.Now().Add(3 * time.Second)
-	for alive(grandchild) {
-		if time.Now().After(deadline) {
-			_ = syscall.Kill(grandchild, syscall.SIGKILL)
-			t.Fatalf("孫 %d が残った", grandchild)
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	waitGone(t, grandchild)
 }
 
 func TestStopReportsExitedAndKeepsTheExitCodeOfAChildThatAlreadyEnded(t *testing.T) {
@@ -221,5 +214,40 @@ func TestWaitReturnsTheReasonWithoutWaitingWhenSIGKILLCannotBeSent(t *testing.T)
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("SIGKILL を送れないのに Wait が子の終わりを待ち続けた")
+	}
+}
+
+func TestWaitLeavesAGrandchildInTheGroupWhenTheChildExitsByItself(t *testing.T) {
+	// 外部 CLI と hook の経路は、自分で終わった子が残した process (credential helper 等) を止めない
+	cmd, line := startGroup(t, `sh -c "echo \$\$; exec sleep 30" & sleep 0.3; exit 0`)
+	grandchild, err := strconv.Atoi(line)
+	if err != nil {
+		t.Fatalf("孫の pid を読めない: %q", line)
+	}
+	t.Cleanup(func() { _ = syscall.Kill(grandchild, syscall.SIGKILL) })
+
+	end, err := proc.Wait(cmd, 10*time.Second)
+
+	if end != proc.Exited || err != nil {
+		t.Fatalf("end = %v, err = %v", end, err)
+	}
+	if !alive(grandchild) {
+		t.Fatalf("自分で終わった子の孫 %d を止めた", grandchild)
+	}
+}
+
+func TestCommandReportsTheReasonWhenItCannotStopATimedOutChild(t *testing.T) {
+	proc.SetKillGroup(t, func(int, syscall.Signal) error { return syscall.EPERM })
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 子は止められないまま 3 秒で自分から終わる
+	c := proc.Command{Path: sh, Timeout: 50 * time.Millisecond}
+
+	_, err = c.Output("-c", "sleep 3")
+
+	if err == nil || !strings.Contains(err.Error(), syscall.EPERM.Error()) {
+		t.Fatalf("err = %v; want SIGKILL を送れなかった理由を含む", err)
 	}
 }

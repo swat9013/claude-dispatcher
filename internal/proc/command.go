@@ -2,6 +2,7 @@ package proc
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -79,7 +80,13 @@ func (c Command) OutputWithInput(input string, args ...string) (string, error) {
 	}
 	end, err := Wait(cmd, c.Timeout)
 	if end == TimedOut {
-		return "", &Error{Name: name, Args: args, Exit: -1, Stderr: fmt.Sprintf("%s を超えても終わらない", c.Timeout)}
+		msg := fmt.Sprintf("%s を超えても終わらない", c.Timeout)
+		var exit *exec.ExitError
+		if err != nil && !errors.As(err, &exit) {
+			// 止める signal を送れず、まだ終わっていない
+			msg += " (" + err.Error() + ")"
+		}
+		return "", &Error{Name: name, Args: args, Exit: -1, Stderr: msg}
 	}
 	if err != nil {
 		return "", &Error{Name: name, Args: args, Exit: cmd.ProcessState.ExitCode(), Stderr: stderr.String()}

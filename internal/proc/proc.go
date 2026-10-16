@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -26,11 +27,17 @@ const (
 type Group struct {
 	cmd  *exec.Cmd
 	done chan struct{}
-	// ended は子が終わると閉じる (回収の前)。done より先に閉じうる
-	ended chan struct{}
-	err   error
-	// sweepErr は子の終了後に group へ SIGKILL を送れなかった理由
+	err  error
+	// sweepOnExit は子が自分で終わったときも group に残った孫を止めるか
+	sweepOnExit bool
+	// sweepErr は子の終了後の後始末 (回収せずに終了を待つ・group へ SIGKILL を送る) をできなかった理由
 	sweepErr error
+
+	// mu は「子が終わったか確かめて group へ signal を送る」(Stop) と「子が終わったと記録する」(Watch の goroutine) を排他にする。
+	// 終わったと記録した後は Stop が signal を送らないので、回収した後の pgid へ届かない
+	mu       sync.Mutex
+	ended    bool
+	stopping bool
 }
 
 // Watch は開始済みの cmd の終了を別の goroutine で待ち始める。
@@ -38,23 +45,43 @@ type Group struct {
 // 子が終わったら、回収 (reap) する前に process group に残った孫を SIGKILL で止めてから回収し、Done を閉じる。workspace を消すか
 // 次が使う前に、そこを cwd にした process を残さないため。回収の前に送るのは、回収した後だと group が空になった pgid が別の
 // process group に再利用されうるため (回収前は zombie の子が pgid を持ち続ける)。
-func Watch(cmd *exec.Cmd) *Group {
-	g := &Group{cmd: cmd, done: make(chan struct{}), ended: make(chan struct{})}
+func Watch(cmd *exec.Cmd) *Group { return watch(cmd, true) }
+
+// watch は Watch と同じ。sweepOnExit が false なら、子が自分で終わったときの孫は止めない (Stop で止めたときだけ止める)。
+func watch(cmd *exec.Cmd, sweepOnExit bool) *Group {
+	g := &Group{cmd: cmd, done: make(chan struct{}), sweepOnExit: sweepOnExit}
 	go func() {
 		pid := cmd.Process.Pid
 		if err := waitExit(pid); err != nil {
 			// 回収せずに待てないなら、再利用されうる pgid へ送らないよう後始末を諦める
+			g.markEnded()
 			g.sweepErr = err
-			g.err = cmd.Wait()
-			close(g.ended)
-		} else {
-			close(g.ended)
+		} else if g.markEnded() {
 			g.sweepErr = sweep(pid)
-			g.err = cmd.Wait()
 		}
+		g.err = cmd.Wait()
 		close(g.done)
 	}()
 	return g
+}
+
+// markEnded は子が終わったと記録し、group に残った孫を止めるかを返す。
+func (g *Group) markEnded() (sweep bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.ended = true
+	return g.sweepOnExit || g.stopping
+}
+
+// signal は子がまだ終わっていなければ group へ sig を送る。終わっていれば何も送らず sent を false で返す (孫は Watch が止める)。
+func (g *Group) signal(sig syscall.Signal) (sent bool, err error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.ended {
+		return false, nil
+	}
+	g.stopping = true
+	return true, kill(g.cmd.Process.Pid, sig)
 }
 
 // Done は子が終わり、group に残った孫を止めてから閉じる。
@@ -72,18 +99,17 @@ func (g *Group) Err() error {
 // すると、終わり方 (exit code・決定ファイル) を確かめないまま後始末に進んでしまう。
 //
 // 止めるときは process group に SIGTERM を送り、grace のうちに子が終わらなければ SIGKILL を送って、終わるまで待つ (grace が 0 以下なら SIGTERM を送らず SIGKILL だけ)。
-// SIGKILL を送れなければ、子の終わりを待たずに返す (exited は false)。group に残った孫は Watch が止める。
-// err は signal を送れなかった理由。
+// SIGKILL を送れず子も終わらなければ、子の終わりを待たずに返す (exited は false。Done はまだ閉じていない)。
+// err は後始末をできなかった理由 (signal を送れなかった・Watch が孫を止められなかった)。
 func (g *Group) Stop(grace time.Duration) (exited bool, err error) {
 	select {
 	case <-g.done:
 		return true, g.sweepErr
 	default:
 	}
-	pid := g.cmd.Process.Pid
 	var errs []error
 	if grace > 0 {
-		if err := kill(pid, syscall.SIGTERM); err != nil {
+		if _, err := g.signal(syscall.SIGTERM); err != nil {
 			errs = append(errs, err)
 		}
 		timer := time.NewTimer(grace)
@@ -96,11 +122,13 @@ func (g *Group) Stop(grace time.Duration) (exited bool, err error) {
 	select {
 	case <-g.done:
 	default:
-		if err := kill(pid, syscall.SIGKILL); err != nil {
+		if _, err := g.signal(syscall.SIGKILL); err != nil {
+			// 届いた後でも失敗が返りうる (darwin は group に zombie が居ると EPERM を返す) ので、少しだけ終わりを待つ
+			timer := time.NewTimer(killSettle)
+			defer timer.Stop()
 			select {
-			case <-g.ended:
-				// 送る前に子が終わっていた (darwin は zombie だけの group への signal を EPERM で拒む)。孫は Watch が止める
-			default:
+			case <-g.done:
+			case <-timer.C:
 				return false, errors.Join(append(errs, err)...)
 			}
 		}
@@ -108,6 +136,9 @@ func (g *Group) Stop(grace time.Duration) (exited bool, err error) {
 	}
 	return false, errors.Join(append(errs, g.sweepErr)...)
 }
+
+// killSettle は SIGKILL の送信が失敗を返した後、子の終わりを待つ上限。
+const killSettle = time.Second
 
 // killGroup は process group pgid に sig を送る関数。test が失敗を差し込めるよう atomic に置く (Watch の goroutine も読む)。
 var killGroup atomic.Pointer[func(pgid int, sig syscall.Signal) error]
@@ -137,9 +168,10 @@ func kill(pid int, sig syscall.Signal) error {
 }
 
 // Wait は開始済みの cmd の終了を待つ。timeout を超えたら猶予なしで process group ごと止めて、終わるまで待つ。
-// 止めるための signal を送れなければ、終わりを待たずに TimedOut と送れなかった理由を返す。
+// 止めるための signal を送れず子も終わらなければ、終わりを待たずに TimedOut と送れなかった理由を返す (*exec.ExitError ではない)。
+// 子が自分で終わったときは group に残った孫を止めない (credential helper 等が後に残る使い方を妨げない)。
 func Wait(cmd *exec.Cmd, timeout time.Duration) (End, error) {
-	g := Watch(cmd)
+	g := watch(cmd, false)
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	select {
