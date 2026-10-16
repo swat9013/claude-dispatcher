@@ -37,7 +37,7 @@ type tickPlan struct {
 }
 
 // harness は plans を順に 1 tick ずつ回し、読み切ったところで stop の停止要求を送る。timer (周期と再起動の予定) は、
-// 起動した worker の event を loop が受け取り終えてから明ける。
+// 起動した worker の event を loop が処理し終えてから、予定の時刻の順に明け、時計をその時刻へ進める。
 type harness struct {
 	plans []tickPlan
 	// start は起動時の workflow 定義の版。nil なら definition
@@ -75,7 +75,7 @@ func (h *harness) run(t *testing.T) []string {
 	h.rig = newRig()
 	h.stopSignal = h.stop
 	tick := 0
-	h.timer = func(time.Duration) timing {
+	h.timer = func(timerKind, time.Duration) timing {
 		if tick >= len(h.plans) {
 			return timing{fate: stopsTheLoop}
 		}

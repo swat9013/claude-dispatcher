@@ -33,18 +33,18 @@ type staleTicks struct {
 	readFails int
 }
 
-// run は loop を ticks 回の tick まで回して止め、起動した worker と log.jsonl の行を返す。
-func (s staleTicks) run(t *testing.T) ([]worker.Job, []map[string]any) {
+// run は loop を ticks 回の tick まで回して止め、起動した worker と、回した fixture (log.jsonl の行を引く) を返す。
+func (s staleTicks) run(t *testing.T) ([]worker.Job, *rig) {
 	t.Helper()
 	const interval = time.Minute
 	def := workflow.Definition{Tracker: githubTracker, Interval: interval, MaxConcurrent: 1, MaxAttempts: s.maxAttempts, MaxRetryBackoff: 5 * time.Minute, Triggers: s.triggers}
 	r := newRig()
 	r.script = func(worker.Job) workerScript { return exits(1) }
 	tick, periods := 0, 0
-	// 周期は、起動した worker の終わりを loop が受け取ってから明ける。時計は workflow 定義を読むたびに周期だけ進むので、
+	// 周期は、起動した worker の終わりを loop が処理し終えてから明ける。時計は workflow 定義を読むたびに周期だけ進むので、
 	// worker の終わりは必ずそれを起動した tick の時刻で受け取る
-	r.timer = func(d time.Duration) timing {
-		if d != interval {
+	r.timer = func(kind timerKind, _ time.Duration) timing {
+		if kind != period {
 			return timing{fate: neverFires}
 		}
 		periods++
@@ -72,18 +72,7 @@ func (s staleTicks) run(t *testing.T) ([]worker.Job, []map[string]any) {
 			}.store()
 		},
 	})
-	return r.jobs, r.events(t, "")
-}
-
-// eventsNamed は log.jsonl の行のうち event が name のもの。
-func eventsNamed(lines []map[string]any, name string) []map[string]any {
-	var found []map[string]any
-	for _, line := range lines {
-		if line["event"] == name {
-			found = append(found, line)
-		}
-	}
-	return found
+	return r.jobs, r
 }
 
 func closedIssue(number int) target.Issue {
@@ -124,9 +113,9 @@ func TestRetryOfAnIssueClosedDuringTheBackoffIsNotLaunchedWhileTheListIsStale(t 
 }
 
 func TestRetryOfAnIssueClosedDuringTheBackoffIsReleasedAsTerminal(t *testing.T) {
-	_, lines := closedDuringTheBackoffWhileTheListIsStale().run(t)
+	_, r := closedDuringTheBackoffWhileTheListIsStale().run(t)
 
-	releases := eventsNamed(lines, "release")
+	releases := r.logEvents(t, "release")
 	if len(releases) != 1 || releases[0]["target"] != "issue#1" || releases[0]["reason"] != "terminal" {
 		t.Fatalf("release の行 = %v, want issue#1 を terminal で 1 行", releases)
 	}
@@ -173,18 +162,18 @@ func abandonedThenListed(inSecondTick []target.Item, read target.Item) staleTick
 }
 
 func TestAbandonmentIsKeptWhenTheIssueDropsOutOfAStaleListButStillMatches(t *testing.T) {
-	jobs, lines := abandonedThenListed(nil, readyIssue(1)).run(t)
+	jobs, r := abandonedThenListed(nil, readyIssue(1)).run(t)
 
-	if len(jobs) != 1 || len(eventsNamed(lines, "unabandon")) != 0 {
-		t.Fatalf("起動した数 = %d, unabandon の行 = %v, want 打ち切ったまま (古い一覧から抜けただけで解いた)", len(jobs), eventsNamed(lines, "unabandon"))
+	if len(jobs) != 1 || len(r.logEvents(t, "unabandon")) != 0 {
+		t.Fatalf("起動した数 = %d, unabandon の行 = %v, want 打ち切ったまま (古い一覧から抜けただけで解いた)", len(jobs), r.logEvents(t, "unabandon"))
 	}
 }
 
 func TestAbandonmentIsKeptWhenAStaleListShowsTheIssueOutOfTheTriggerButItStillMatches(t *testing.T) {
-	jobs, lines := abandonedThenListed([]target.Item{unlabeledIssue(1)}, readyIssue(1)).run(t)
+	jobs, r := abandonedThenListed([]target.Item{unlabeledIssue(1)}, readyIssue(1)).run(t)
 
-	if len(jobs) != 1 || len(eventsNamed(lines, "unabandon")) != 0 {
-		t.Fatalf("起動した数 = %d, unabandon の行 = %v, want 打ち切ったまま (古い一覧で外れて見えただけで解いた)", len(jobs), eventsNamed(lines, "unabandon"))
+	if len(jobs) != 1 || len(r.logEvents(t, "unabandon")) != 0 {
+		t.Fatalf("起動した数 = %d, unabandon の行 = %v, want 打ち切ったまま (古い一覧で外れて見えただけで解いた)", len(jobs), r.logEvents(t, "unabandon"))
 	}
 }
 
@@ -197,17 +186,17 @@ func unreadableAfterDroppingOut() staleTicks {
 }
 
 func TestAbandonmentIsKeptWhenTheIssueThatDroppedOutOfTheListCannotBeReadAgain(t *testing.T) {
-	_, lines := unreadableAfterDroppingOut().run(t)
+	_, r := unreadableAfterDroppingOut().run(t)
 
-	if unabandons := eventsNamed(lines, "unabandon"); len(unabandons) != 0 {
+	if unabandons := r.logEvents(t, "unabandon"); len(unabandons) != 0 {
 		t.Fatalf("unabandon の行 = %v, want 無し (読み直せないのに打ち切りを解いた)", unabandons)
 	}
 }
 
 func TestAbandonedIssueThatCannotBeReadAgainLeavesAnErrorLine(t *testing.T) {
-	_, lines := unreadableAfterDroppingOut().run(t)
+	_, r := unreadableAfterDroppingOut().run(t)
 
-	errs := eventsNamed(lines, "error")
+	errs := r.logEvents(t, "error")
 	if len(errs) != 1 || errs[0]["target"] != "issue#1" || !strings.Contains(asText(errs[0]["error"]), "打ち切った作業対象を読み直せない") {
 		t.Fatalf("error の行 = %v, want issue#1 の「打ち切った作業対象を読み直せない」を 1 行", errs)
 	}
@@ -232,9 +221,9 @@ func TestAbandonmentOfACLIsKeptWhenAStaleListMakesItLookAmbiguous(t *testing.T) 
 		},
 		read: func(int) target.Item { return abandoned }}
 
-	_, lines := s.run(t)
+	_, r := s.run(t)
 
-	if abandons, unabandons := eventsNamed(lines, "abandon"), eventsNamed(lines, "unabandon"); len(abandons) != 1 || len(unabandons) != 0 {
+	if abandons, unabandons := r.logEvents(t, "abandon"), r.logEvents(t, "unabandon"); len(abandons) != 1 || len(unabandons) != 0 {
 		t.Fatalf("abandon の行 = %v, unabandon の行 = %v, want cl#7 を打ち切ったまま (古い一覧で曖昧に見えただけで解いた)", abandons, unabandons)
 	}
 }
@@ -259,25 +248,25 @@ func TestAbandonmentOfACLIsLiftedWhenItIsMergedEvenIfItsConflictIsUnknown(t *tes
 			return inConflict
 		}}
 
-	_, lines := s.run(t)
+	_, r := s.run(t)
 
-	if unabandons := eventsNamed(lines, "unabandon"); len(unabandons) != 1 || unabandons[0]["target"] != "cl#7" {
+	if unabandons := r.logEvents(t, "unabandon"); len(unabandons) != 1 || unabandons[0]["target"] != "cl#7" {
 		t.Fatalf("unabandon の行 = %v, want cl#7 を 1 行 (merge した CL の打ち切りを保った)", unabandons)
 	}
 }
 
 func TestAbandonmentIsLiftedWhenTheIssueReadAgainLeftTheTrigger(t *testing.T) {
-	_, lines := abandonedThenListed([]target.Item{unlabeledIssue(1)}, unlabeledIssue(1)).run(t)
+	_, r := abandonedThenListed([]target.Item{unlabeledIssue(1)}, unlabeledIssue(1)).run(t)
 
-	if unabandons := eventsNamed(lines, "unabandon"); len(unabandons) != 1 || unabandons[0]["target"] != "issue#1" {
+	if unabandons := r.logEvents(t, "unabandon"); len(unabandons) != 1 || unabandons[0]["target"] != "issue#1" {
 		t.Fatalf("unabandon の行 = %v, want issue#1 を 1 行", unabandons)
 	}
 }
 
 func TestAbandonmentIsLiftedWhenTheIssueReadAgainIsClosed(t *testing.T) {
-	_, lines := abandonedThenListed(nil, closedIssue(1)).run(t)
+	_, r := abandonedThenListed(nil, closedIssue(1)).run(t)
 
-	if unabandons := eventsNamed(lines, "unabandon"); len(unabandons) != 1 || unabandons[0]["target"] != "issue#1" {
+	if unabandons := r.logEvents(t, "unabandon"); len(unabandons) != 1 || unabandons[0]["target"] != "issue#1" {
 		t.Fatalf("unabandon の行 = %v, want issue#1 を 1 行", unabandons)
 	}
 }
