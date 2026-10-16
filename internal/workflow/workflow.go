@@ -123,7 +123,7 @@ func (d Definition) SeparateCLHost() (provider.Provider, provider.Place, bool) {
 	return mustProvider(d.CL.Kind), d.CL.Place, true
 }
 
-// CLPlace は CL 置き場を指す綴り (`<種類> <置き場>`)。読み直した定義の CL 置き場が起動時と同じかを比べるのに使う。
+// CLPlace は CL 置き場を指す綴り (`<種類> <置き場>`)。書いたとおりの綴りを返す (tick error の行にもこの綴りが出る)。読み直した定義の CL 置き場が起動時と同じかを比べるのに使う。
 func (d Definition) CLPlace() string {
 	p, place := d.CLHost()
 	return string(p.Kind) + " " + place.String()
