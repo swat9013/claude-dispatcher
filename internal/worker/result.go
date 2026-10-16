@@ -1,12 +1,9 @@
 package worker
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
-	"os"
 	"strings"
 )
 
@@ -27,43 +24,17 @@ type resultItems struct {
 	PermissionDenials json.RawMessage `json:"permission_denials"`
 }
 
-// summarizeLastResult は file の offset より後の完結した行 (今の attempt が追記した行) から、最後の type: result の行を要約する。
-// result の行が無ければ nil。最後まで読めなければ、どれが最後の result か決まらないので nil と理由を返す。項目の型が違えば、
-// その項目を除いた要約とともに理由を返す。
-func summarizeLastResult(file string, offset int64) (*ResultSummary, error) {
-	f, err := os.Open(file)
-	if err != nil {
-		return nil, err
+// parseResult は完結した行が type: result の行なら、その項目を返す。worker log は数 MB になり、ほとんどの行は result で
+// ないので、"result" を含む行だけを decode する。
+func parseResult(line []byte) (*resultItems, bool) {
+	if !bytes.Contains(line, []byte(`"result"`)) {
+		return nil, false
 	}
-	defer f.Close()
-	if _, err := f.Seek(offset, io.SeekStart); err != nil {
-		return nil, err
+	var items resultItems
+	if json.Unmarshal(line, &items) != nil || items.Type != "result" {
+		return nil, false
 	}
-	reader := bufio.NewReader(f)
-	var last *resultItems
-	for {
-		line, err := reader.ReadBytes('\n')
-		if err == io.EOF {
-			// 改行で終わらない末尾は書きかけの行
-			break
-		}
-		if err != nil {
-			return nil, err
-		}
-		// worker log は数 MB になり、ほとんどの行は result でないので、"result" を含む行だけを decode する
-		if !bytes.Contains(line, []byte(`"result"`)) {
-			continue
-		}
-		var items resultItems
-		if json.Unmarshal(line, &items) != nil || items.Type != "result" {
-			continue
-		}
-		last = &items
-	}
-	if last == nil {
-		return nil, nil
-	}
-	return last.summarize()
+	return &items, true
 }
 
 // summarize は result の行の項目を要約する。型の違う項目は要約に載せず、その理由を返す。
