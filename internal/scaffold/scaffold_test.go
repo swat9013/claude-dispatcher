@@ -107,6 +107,25 @@ func TestEveryTemplateBlocksTheSameReentryToolsAsTheGuideExample(t *testing.T) {
 	}
 }
 
+func TestRepoWorkflowAndDesignExampleBlockTheSameReentryToolsAsTheGuideExample(t *testing.T) {
+	// 列を直すときに repo の WORKFLOW.md か設計の正本の雛形の例を直し漏らすと、正本と雛形が食い違う
+	want := argsLine(t, guideExample(t))
+	repoWorkflow, err := os.ReadFile(filepath.Join("..", "..", "WORKFLOW.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := argsLine(t, frontMatter(string(repoWorkflow))); got != want {
+		t.Fatalf("repo の WORKFLOW.md の args が案内の書式例と違う:\nWORKFLOW.md: %s\n案内: %s", got, want)
+	}
+	formats, err := os.ReadFile(filepath.Join("..", "..", "docs", "design", "formats.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(formats), want) {
+		t.Fatalf("docs/design/formats.md の雛形の例に案内の書式例の args が無い: %s", want)
+	}
+}
+
 // reentryNote は案内の項目の表の下にある、再入の仕組みを塞ぐ理由と見分け方の注記の見出し
 const reentryNote = "再入の仕組みを塞ぐ"
 
