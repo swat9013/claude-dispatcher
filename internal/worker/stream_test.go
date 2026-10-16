@@ -12,7 +12,7 @@ import (
 
 func TestALineWrittenAcrossChecksResetsTheStallClockOnceItIsComplete(t *testing.T) {
 	started := time.Now()
-	w, _ := stallClock(t, started, time.Minute)
+	w := stallClock(t, started, time.Minute)
 	line := text("分けて書く")
 	appendAt(t, w, line[:10], started.Add(10*time.Second))
 	appendAt(t, w, line[10:20], started.Add(20*time.Second))
@@ -26,7 +26,7 @@ func TestALineWrittenAcrossChecksResetsTheStallClockOnceItIsComplete(t *testing.
 
 func TestALineWrittenAcrossChecksDoesNotResetTheStallClockBeforeItIsComplete(t *testing.T) {
 	started := time.Now()
-	w, _ := stallClock(t, started, time.Minute)
+	w := stallClock(t, started, time.Minute)
 	line := text("分けて書く")
 	appendAt(t, w, line[:10], started.Add(10*time.Second))
 
@@ -39,7 +39,7 @@ func TestALineWrittenAcrossChecksDoesNotResetTheStallClockBeforeItIsComplete(t *
 
 func TestALineWrittenAcrossChecksBecomesTheActivityOnceItIsComplete(t *testing.T) {
 	started := time.Now()
-	w, _ := stallClock(t, started, time.Minute)
+	w := stallClock(t, started, time.Minute)
 	line := text("分けて書く")
 	appendAt(t, w, line[:10], started.Add(10*time.Second))
 	write(t, w, line[10:])
@@ -53,7 +53,7 @@ func TestALineWrittenAcrossChecksBecomesTheActivityOnceItIsComplete(t *testing.T
 
 func TestALongLineWrittenAcrossChecksCountsAsProgressWhateverItsType(t *testing.T) {
 	started := time.Now()
-	w, _ := stallClock(t, started, time.Minute)
+	w := stallClock(t, started, time.Minute)
 	line := heartbeatPadded(t, progressLineLimit+1)
 	appendAt(t, w, line[:progressLineLimit/2], started.Add(10*time.Second))
 
@@ -66,10 +66,10 @@ func TestALongLineWrittenAcrossChecksCountsAsProgressWhateverItsType(t *testing.
 
 func TestALineHalfWrittenWhenTheStreamCouldNotBeReadIsJudgedWholeOnceItCanBeRead(t *testing.T) {
 	started := time.Now()
-	w, _ := stallClock(t, started, time.Minute)
+	w := stallClock(t, started, time.Minute)
 	line := text("分けて書く")
 	appendAt(t, w, line[:10], started.Add(10*time.Second))
-	restore := unreadableUntilRestored(t, w)
+	restore := failReads(w)
 	w.check(started.Add(20 * time.Second))
 	restore()
 	write(t, w, line[10:])
@@ -81,17 +81,17 @@ func TestALineHalfWrittenWhenTheStreamCouldNotBeReadIsJudgedWholeOnceItCanBeRead
 	}
 }
 
-func TestAHalfWrittenLineIsDroppedWhenTheStreamIsReplaced(t *testing.T) {
+func TestAHalfWrittenLineIsDroppedWhenTheStreamShrinks(t *testing.T) {
 	started := time.Now()
-	w, _ := stallClock(t, started, time.Minute)
-	// 書きかけの頭は置き換え後の file より大きいので、縮んだとみなせる
+	w := stallClock(t, started, time.Minute)
+	// 書きかけの頭は書き直した後の大きさより大きいので、縮んだとみなせる
 	appendAt(t, w, text(strings.Repeat("前", 100))[:200], started.Add(10*time.Second))
-	replaceWith(t, w, text("後"))
+	shrinkTo(t, w, text("後"))
 
 	activity, changed := w.check(started.Add(20 * time.Second))
 
 	if !changed || activity != "後" {
-		t.Fatalf("活動 = %q, %v; want 置き換え前の書きかけの頭を捨てて 後", activity, changed)
+		t.Fatalf("活動 = %q, %v; want 縮む前の書きかけの頭を捨てて 後", activity, changed)
 	}
 }
 
@@ -113,12 +113,12 @@ func BenchmarkCheckWhileALongLineIsWrittenInPieces(b *testing.B) {
 		if err := os.WriteFile(file, nil, 0o644); err != nil {
 			b.Fatal(err)
 		}
-		f, err := os.OpenFile(file, os.O_WRONLY|os.O_APPEND, 0o644)
+		f, err := openStream(file)
 		if err != nil {
 			b.Fatal(err)
 		}
 		started := time.Now()
-		w := newStreamWatch(file, 0, started, "/work")
+		w := newStreamWatch(f, 0, started, "/work", limits{})
 		b.StartTimer()
 		for written := 0; written < len(line); written += piece {
 			if _, err := f.WriteString(line[written:min(written+piece, len(line))]); err != nil {

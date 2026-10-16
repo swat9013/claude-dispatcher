@@ -59,7 +59,7 @@ func heartbeatPadded(t *testing.T, size int) string {
 func progressed(t *testing.T, content string, offset int64) bool {
 	t.Helper()
 	started := time.Now()
-	w := newStreamWatch(streamFile(t, content).Name(), offset, started, "/work")
+	w := newStreamWatch(streamFile(t, content), offset, started, "/work", limits{})
 	w.check(started.Add(10 * time.Second))
 	return w.sinceProgress(started.Add(10*time.Second)) == 0
 }

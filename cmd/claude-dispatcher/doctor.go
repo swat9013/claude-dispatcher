@@ -18,7 +18,7 @@ import (
 // runDoctor は `doctor [<workflow の path>]` を撃つ (formats.md §7.4)。何も書かない。確かめたことを 1 件 1 行で出し、
 // NG があれば exit 1 (警告では落とさない)。
 func runDoctor(args []string, stdout, stderr io.Writer) int {
-	path, ok := workflowArg(args, nil, stderr)
+	path, ok := workflowArg("doctor", args, stderr)
 	if !ok {
 		return exitUsage
 	}

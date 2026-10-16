@@ -15,7 +15,7 @@ const (
 // 2 回目の停止要求で worker を止めた理由 (stoppedByRequest)
 const reasonStopRequested Reason = "stop_requested"
 
-// 再起動を待つ claim を起動せずに解く理由のうち、起動した trigger が workflow 定義から消えたこと (ほかの理由は settle が返す)
+// 再起動を待つ claim を起動せずに解く理由のうち、起動した trigger が workflow 定義から消えたこと (ほかの理由は reasonOf が Trigger.Observe の観測から写す)
 const reasonTriggerRemoved Reason = "trigger_removed"
 
 // 当たるかをまだ決められない理由。終わった worker の確かめ (verify_wait) と起動の直前の読み直し (recheck_skip) で使う

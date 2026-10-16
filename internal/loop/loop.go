@@ -303,8 +303,8 @@ func (l *loop) tick() {
 		l.tickFailed(fmt.Sprintf("workflow 定義の scope key %s が起動時の %s と違う (loop を起動し直す)", key, l.o.ScopeKey))
 		return
 	}
-	if place, start := def.CLPlace(), l.o.Definition.CLPlace(); place != start {
-		// claim している CL を、起動時と別の CL 置き場で読み直さない
+	if place, start := def.CLPlace(), l.o.Definition.CLPlace(); !strings.EqualFold(place, start) {
+		// claim している CL を、起動時と別の CL 置き場で読み直さない。scope key と同じく大文字と小文字は区別しない (formats.md §6)
 		l.tickFailed(fmt.Sprintf("workflow 定義の CL 置き場 %q が起動時の %q と違う (loop を起動し直す)", place, start))
 		return
 	}
@@ -585,12 +585,10 @@ func RecheckCandidate(store Store, triggers []trigger.Trigger, c trigger.Candida
 	if err != nil {
 		return nil, "", err
 	}
-	switch out := outOfTrigger(*c.Trigger, item); {
-	case c.Trigger.Undecided(item):
-		return nil, reasonUndecided, nil
-	case out != "":
-		return nil, out, nil
-	case matchesEarlier(triggers, *c.Trigger, item):
+	if observed := c.Trigger.Observe(item); observed != trigger.ObservedStillMatches {
+		return nil, reasonOf(observed), nil
+	}
+	if matchesEarlier(triggers, *c.Trigger, item) {
 		return nil, reasonEarlierTrigger, nil
 	}
 	return item, "", nil
@@ -703,16 +701,19 @@ func (l *loop) verify(store Store, ref target.Ref, c *claim) {
 		return
 	}
 	result := *c.ended
-	if c.trigger.Undecided(item) {
+	switch observed := c.trigger.Observe(item); observed {
+	case trigger.ObservedUndecided:
 		// 失敗ではない正常な待ちなので、error ではなく verify_wait の行で残す
 		l.rec.event("verify_wait", map[string]any{
 			"target": ref.String(), "trigger": c.trigger.Name, "attempt": c.attempt,
 			"session_id": c.sessionID, "reason": reasonUndecided,
 		}, LineNote, "確かめ待ち", " %s (%s, attempt %d): %s", ref, c.trigger.Name, c.attempt, reasonUndecided.screen())
 		return
-	}
-	if settled := l.settle(ref, c, item); settled != "" {
-		l.end(ref, c, completed, settled, result)
+	case trigger.ObservedTerminal, trigger.ObservedLeftTrigger:
+		if observed == trigger.ObservedTerminal {
+			l.remove(l.o.Workspaces(l.definitionOf(c)), ref)
+		}
+		l.end(ref, c, completed, reasonOf(observed), result)
 		delete(l.claims, ref)
 		return
 	}
@@ -720,24 +721,19 @@ func (l *loop) verify(store Store, ref target.Ref, c *claim) {
 	l.fail(ref, c)
 }
 
-// settle は読み直した作業対象が claim を解く状態かを見て、解く理由を返す。終端なら workspace も消す。当たったままなら ""。
-func (l *loop) settle(ref target.Ref, c *claim, item target.Item) Reason {
-	if item.Terminal() {
-		l.remove(l.o.Workspaces(l.definitionOf(c)), ref)
-	}
-	return outOfTrigger(c.trigger, item)
-}
-
-// outOfTrigger は、読み直した作業対象が trigger で走らせる対象から外れた理由を返す。終端か trigger から外れていれば
-// その理由、当たったままなら ""。
-func outOfTrigger(t trigger.Trigger, item target.Item) Reason {
-	switch {
-	case item.Terminal():
+// reasonOf は読み直した作業対象の観測を、loop の理由に写す。
+func reasonOf(observed trigger.Observation) Reason {
+	switch observed {
+	case trigger.ObservedStillMatches:
+		return reasonStillMatches
+	case trigger.ObservedTerminal:
 		return reasonTerminal
-	case !t.Matches(item):
+	case trigger.ObservedLeftTrigger:
 		return reasonLeftTrigger
+	case trigger.ObservedUndecided:
+		return reasonUndecided
 	}
-	return ""
+	panic(fmt.Sprintf("trigger.Observation の値 %d を写せない", observed))
 }
 
 // endScreen は終了の行に出す、終わり方の理由の文。worker 自身が失敗していれば、completed では理由に失敗を添え、failed

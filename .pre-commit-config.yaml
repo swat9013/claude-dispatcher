@@ -1,5 +1,5 @@
 # `pre-commit install` 1 回で commit 時 (gitleaks / gofmt / go mod tidy / actionlint) と push 前 (gitleaks の commit 範囲 / go vet / golangci-lint / go test) の両方の hook が入る。
-# CI (.github/workflows/checks.yml) は commit 時の hook を `pre-commit run --all-files` で撃つので、手元と同じ検査が CI でも落ちる
+# CI (.github/workflows/checks.yml) は commit 時の hook を `pre-commit run --all-files` で撃つので、手元と同じ検査が CI でも落ちる (repocheck-adr を除く。理由は repocheck-adr の hook のコメント)
 default_install_hook_types: [pre-commit, pre-push]
 # stages を書かない hook は commit 時だけに撃つ (書かないと install した全 stage で撃たれ、push 前にも走る)
 default_stages: [pre-commit]
@@ -58,6 +58,15 @@ repos:
       - id: repocheck
         name: repocheck (設定の一致)
         entry: go run ./scripts/repocheck files
+        language: unsupported
+        pass_filenames: false
+        always_run: true
+      # ADR の番号の一意。手元の branch の中の重なりは CL の作者が直せるので commit 時に撃つ。
+      # CI の pre-commit job は SKIP で外す (merge の後の main 側の重なりで、無関係な PR の merge ref まで赤くするため)。
+      # main 側の重なりは .github/workflows/adr-numbers.yml が拾って issue にする
+      - id: repocheck-adr
+        name: repocheck (ADR の番号の一意)
+        entry: go run ./scripts/repocheck adr
         language: unsupported
         pass_filenames: false
         always_run: true

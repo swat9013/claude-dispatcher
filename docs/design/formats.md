@@ -286,7 +286,7 @@ claude-dispatcher loop [--max-concurrent <N>] [<workflow の path>]
 
 - 読み直した workflow 定義が検査に落ちたら、その tick は何も起動しない (#74 Q38)。周期は、最後に検査に通った版のものを使う
 - 読み直した workflow 定義の scope key が起動時と違えば、その tick は何も起動しない (lock は起動時の scope key で取っている)
-- 読み直した workflow 定義の CL 置き場 (`jira` では `cl.kind`・`cl.host`・`cl.repo`。`github`・`gitlab` では issue 置き場と同じ場所なので、上の scope key の規則で先に止まる) が起動時と違っても、その tick は何も起動しない。claim している CL を、起動時と別の CL 置き場で読み直さないため
+- 読み直した workflow 定義の CL 置き場 (`jira` では `cl.kind`・`cl.host`・`cl.repo`。`github`・`gitlab` では issue 置き場と同じ場所なので、大文字と小文字以外の違いは上の scope key の規則で先に止まる) が起動時と違っても、その tick は何も起動しない。claim している CL を、起動時と別の CL 置き場で読み直さないため。比べるときは scope key と同じく大文字と小文字を区別しない。`tracker.repo` (`github`・`gitlab`) か `cl.repo` (`jira`) の大文字と小文字だけを書き換えた版は同じ CL 置き場とみなし、tick を続ける
 
 **tick の手順** (system.md §7):
 
@@ -632,7 +632,7 @@ hooks:
 limits:
   max_concurrent: 1
 claude:
-  args: [--permission-mode, auto]
+  args: [--permission-mode, auto, --disallowedTools, "ScheduleWakeup,CronCreate,CronList,CronDelete"]
 triggers:
   - name: implement
     on: issue

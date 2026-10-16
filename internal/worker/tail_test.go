@@ -29,7 +29,7 @@ func streamFile(t *testing.T, content string) *os.File {
 func summarizeAfter(t *testing.T, content string, after int64) (summary string, ok bool) {
 	t.Helper()
 	started := time.Now()
-	return newStreamWatch(streamFile(t, content).Name(), after, started, "/work").check(started.Add(time.Second))
+	return newStreamWatch(streamFile(t, content), after, started, "/work", limits{}).check(started.Add(time.Second)).seen()
 }
 
 func text(s string) string {
@@ -59,7 +59,7 @@ func TestActivityLooksBackPastLinesThatAreNotCounted(t *testing.T) {
 
 func TestActivityDoesNotReturnALineAlreadySummarized(t *testing.T) {
 	started := time.Now()
-	w, _ := stallClock(t, started, time.Minute)
+	w := stallClock(t, started, time.Minute)
 	appendAt(t, w, text("old")+text("new"), started.Add(10*time.Second))
 	write(t, w, thinkingTokens)
 

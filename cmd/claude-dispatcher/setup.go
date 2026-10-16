@@ -17,14 +17,12 @@ import (
 // flag があれば jira の雛形を、無ければ cwd の clone の origin から tracker.kind と issue 置き場を決めて、その種類の雛形を書く。
 // CL 置き場は、どちらも cwd の clone の origin から決める (jira は cl: に書く)。既にある file は上書きしない。
 func runSetup(args []string, stdout, stderr io.Writer) int {
-	flags, rest, err := setupFlags(args)
+	parsed, err := commandSpecOf("setup").parse(args)
 	if err != nil {
 		return usageError(stderr, "%v", err)
 	}
-	path, ok := workflowArg(rest, nil, stderr)
-	if !ok {
-		return exitUsage
-	}
+	path := parsed.workflowPath
+	flags := setupOptions{kind: parsed.value("--kind"), host: parsed.value("--host"), repo: parsed.value("--repo")}
 	// flag の綴りは、file の有無に依らず確かめる
 	var flagged *flaggedPlace
 	if flags.kind != "" {
@@ -76,17 +74,12 @@ type setupOptions struct {
 	kind, host, repo string
 }
 
-// setupFlags は args から setup の flag を抜き出し、残りの引数を返す。
-func setupFlags(args []string) (setupOptions, []string, error) {
-	var o setupOptions
-	rest, err := valueFlags(args, map[string]*string{"--kind": &o.kind, "--host": &o.host, "--repo": &o.repo})
-	if err != nil {
-		return o, nil, err
+// checkSetupFlags は setup の flag の組み合わせを検査する (宣言の commandSpec.check)。
+func checkSetupFlags(a parsedArgs) error {
+	if a.value("--kind") == "" && (a.value("--host") != "" || a.value("--repo") != "") {
+		return fmt.Errorf("--host と --repo は --kind %s と一緒にだけ書ける", flagKinds())
 	}
-	if o.kind == "" && (o.host != "" || o.repo != "") {
-		return o, nil, fmt.Errorf("--host と --repo は --kind %s と一緒にだけ書ける", flagKinds())
-	}
-	return o, rest, nil
+	return nil
 }
 
 // flaggedPlace は flag から読んだ置き場と、その種類の provider。
@@ -114,9 +107,6 @@ func (o setupOptions) place() (flaggedPlace, error) {
 	return flaggedPlace{provider: p, place: place}, nil
 }
 
-// placeFlags は置き場の項目を受ける flag の名前。
-var placeFlags = map[provider.PlaceField]string{provider.HostField: "--host", provider.RepoField: "--repo"}
-
 // flagError は ReadPlace の誤りを、項目を受けた flag の名前で名指しする。ReadPlace の誤りは *provider.PlaceError だけで、
 // それ以外の誤りか、flag の無い項目が届けば呼び出し側の誤りなので panic する。
 func flagError(err error) error {
@@ -124,11 +114,12 @@ func flagError(err error) error {
 	if !errors.As(err, &placeErr) {
 		panic(fmt.Sprintf("ReadPlace が *provider.PlaceError でない誤りを返した: %v", err))
 	}
-	flag, ok := placeFlags[placeErr.Field]
-	if !ok {
-		panic(fmt.Sprintf("置き場の項目 %s を受ける flag が無い", placeErr.Field))
+	for _, f := range commandSpecOf("setup").flags {
+		if f.field != "" && f.field == placeErr.Field {
+			return placeErr.Named(f.name)
+		}
 	}
-	return placeErr.Named(flag)
+	panic(fmt.Sprintf("置き場の項目 %s を受ける flag が無い", placeErr.Field))
 }
 
 // placeOfOrigin は cwd の clone の origin の host を認める provider (host が github.com なら github、それ以外は gitlab) と、

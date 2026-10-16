@@ -48,7 +48,7 @@ var adrNames = []string{"0001-first.md", "0002-second.md", "0003-third.md"}
 
 // validFiles は、すべての検査が一致する file の組を返す。各テストは変える file だけを上書きする
 func validFiles() repoFiles {
-	return repoFiles{ci: ciYAML, checks: checksYAML, release: releaseYAML, contributing: contributing, goMod: goMod, adrNames: adrNames}
+	return repoFiles{ci: ciYAML, checks: checksYAML, release: releaseYAML, contributing: contributing, goMod: goMod}
 }
 
 var wantNames = []string{"checks / test (ubuntu-latest)", "checks / test (macos-latest)", "checks / lint", "checks / goreleaser-check"}
@@ -203,43 +203,39 @@ func TestCheckFiles_go_modにgo行が無ければエラーにする(t *testing.T
 	}
 }
 
-func TestCheckFiles_ADRの先頭4桁が重なれば番号とfile名を出して落とす(t *testing.T) {
-	files := validFiles()
-	files.adrNames = append(slices.Clone(adrNames), "0002-another.md")
+func TestDuplicateADRNumbers_ADRの先頭4桁が重なれば番号とfile名を出して落とす(t *testing.T) {
+	names := append(slices.Clone(adrNames), "0002-another.md")
 
-	problems, _ := checkFiles(files)
+	problems := duplicateADRNumbers(names)
 
 	assertProblem(t, problems, "0002 が重なる: 0002-second.md / 0002-another.md")
 }
 
-func TestCheckFiles_ADRの先頭4桁が重ならなければ通す(t *testing.T) {
-	files := validFiles()
-	files.adrNames = append(slices.Clone(adrNames), "0004-fourth.md")
+func TestDuplicateADRNumbers_ADRの先頭4桁が重ならなければ通す(t *testing.T) {
+	names := append(slices.Clone(adrNames), "0004-fourth.md")
 
-	problems, err := checkFiles(files)
+	problems := duplicateADRNumbers(names)
 
-	if err != nil || len(problems) != 0 {
-		t.Fatalf("got %q, %v", problems, err)
+	if len(problems) != 0 {
+		t.Fatalf("got %q", problems)
 	}
 }
 
-func TestCheckFiles_区切りが違ってもADRの先頭4桁が重なれば落とす(t *testing.T) {
-	files := validFiles()
-	files.adrNames = append(slices.Clone(adrNames), "0003_other.md")
+func TestDuplicateADRNumbers_区切りが違ってもADRの先頭4桁が重なれば落とす(t *testing.T) {
+	names := append(slices.Clone(adrNames), "0003_other.md")
 
-	problems, _ := checkFiles(files)
+	problems := duplicateADRNumbers(names)
 
 	assertProblem(t, problems, "0003 が重なる: 0003-third.md / 0003_other.md")
 }
 
-func TestCheckFiles_先頭が番号でないmdとmdでないfileはADRの番号として数えない(t *testing.T) {
-	files := validFiles()
-	files.adrNames = append(slices.Clone(adrNames), "README.md", "0001-first.md.orig")
+func TestDuplicateADRNumbers_先頭が番号でないmdとmdでないfileはADRの番号として数えない(t *testing.T) {
+	names := append(slices.Clone(adrNames), "README.md", "0001-first.md.orig")
 
-	problems, err := checkFiles(files)
+	problems := duplicateADRNumbers(names)
 
-	if err != nil || len(problems) != 0 {
-		t.Fatalf("got %q, %v", problems, err)
+	if len(problems) != 0 {
+		t.Fatalf("got %q", problems)
 	}
 }
 
