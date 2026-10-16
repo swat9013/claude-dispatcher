@@ -164,7 +164,7 @@ func TestStopSendsNoSignalToTheGroupAfterTheChildIsReaped(t *testing.T) {
 	}
 }
 
-func TestStopReturnsTheReasonWithoutWaitingWhenSIGKILLCannotBeSent(t *testing.T) {
+func TestStopReturnsTheReasonWithoutWaitingForTheChildWhenSIGKILLCannotBeSent(t *testing.T) {
 	proc.SetKillGroup(t, func(pgid int, sig syscall.Signal) error {
 		if sig == syscall.SIGKILL {
 			return syscall.EPERM
@@ -193,7 +193,7 @@ func TestStopReturnsTheReasonWithoutWaitingWhenSIGKILLCannotBeSent(t *testing.T)
 	}
 }
 
-func TestWaitReturnsTheReasonWithoutWaitingWhenSIGKILLCannotBeSent(t *testing.T) {
+func TestWaitReturnsTheReasonWithoutWaitingForTheChildWhenSIGKILLCannotBeSent(t *testing.T) {
 	proc.SetKillGroup(t, func(int, syscall.Signal) error { return syscall.EPERM })
 	cmd, _ := startGroup(t, `trap '' TERM; echo ready; while :; do sleep 0.05; done`)
 	t.Cleanup(func() { _ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) })

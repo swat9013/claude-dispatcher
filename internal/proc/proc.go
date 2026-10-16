@@ -54,12 +54,16 @@ func watch(cmd *exec.Cmd, sweepOnExit bool) *Group {
 		pid := cmd.Process.Pid
 		if err := waitExit(pid); err != nil {
 			// 回収せずに待てないなら、再利用されうる pgid へ送らないよう後始末を諦める
-			g.markEnded()
+			// 子が終わったかも分からないので、回収まで Stop が signal を送れるようにしておく
 			g.sweepErr = err
-		} else if g.markEnded() {
-			g.sweepErr = sweep(pid)
+			g.err = cmd.Wait()
+			g.markEnded()
+		} else {
+			if g.markEnded() {
+				g.sweepErr = sweep(pid)
+			}
+			g.err = cmd.Wait()
 		}
-		g.err = cmd.Wait()
 		close(g.done)
 	}()
 	return g
@@ -99,7 +103,7 @@ func (g *Group) Err() error {
 // すると、終わり方 (exit code・決定ファイル) を確かめないまま後始末に進んでしまう。
 //
 // 止めるときは process group に SIGTERM を送り、grace のうちに子が終わらなければ SIGKILL を送って、終わるまで待つ (grace が 0 以下なら SIGTERM を送らず SIGKILL だけ)。
-// SIGKILL を送れず子も終わらなければ、子の終わりを待たずに返す (exited は false。Done はまだ閉じていない)。
+// SIGKILL を送れず子も終わらなければ、killSettle だけ待ってから ErrNotStopped を包んだ err を返す (exited は false。Done はまだ閉じていない)。
 // err は後始末をできなかった理由 (signal を送れなかった・Watch が孫を止められなかった)。
 func (g *Group) Stop(grace time.Duration) (exited bool, err error) {
 	select {
@@ -109,33 +113,49 @@ func (g *Group) Stop(grace time.Duration) (exited bool, err error) {
 	}
 	var errs []error
 	if grace > 0 {
-		if _, err := g.signal(syscall.SIGTERM); err != nil {
-			errs = append(errs, err)
+		sent, err := g.signal(syscall.SIGTERM)
+		if !sent {
+			// 確かめた後、送る前に子が自分で終わっていた
+			<-g.done
+			return true, g.sweepErr
 		}
 		timer := time.NewTimer(grace)
 		defer timer.Stop()
 		select {
 		case <-g.done:
+			// 終わったなら、zombie だけの group への拒否 (darwin の EPERM) と区別できないので SIGTERM の失敗は数えない
+			return false, g.sweepErr
 		case <-timer.C:
+		}
+		if err != nil {
+			errs = append(errs, err)
 		}
 	}
 	select {
 	case <-g.done:
 	default:
-		if _, err := g.signal(syscall.SIGKILL); err != nil {
+		sent, err := g.signal(syscall.SIGKILL)
+		if !sent && grace <= 0 {
+			<-g.done
+			return true, g.sweepErr
+		}
+		if err != nil {
 			// 届いた後でも失敗が返りうる (darwin は group に zombie が居ると EPERM を返す) ので、少しだけ終わりを待つ
 			timer := time.NewTimer(killSettle)
 			defer timer.Stop()
 			select {
 			case <-g.done:
 			case <-timer.C:
-				return false, errors.Join(append(errs, err)...)
+				return false, fmt.Errorf("%w: %w", ErrNotStopped, errors.Join(append(errs, err)...))
 			}
 		}
 		<-g.done
 	}
 	return false, errors.Join(append(errs, g.sweepErr)...)
 }
+
+// ErrNotStopped は SIGKILL を送れず、子がまだ終わっていないこと。
+var ErrNotStopped = errors.New("子を止められない")
 
 // killSettle は SIGKILL の送信が失敗を返した後、子の終わりを待つ上限。
 const killSettle = time.Second
@@ -168,7 +188,7 @@ func kill(pid int, sig syscall.Signal) error {
 }
 
 // Wait は開始済みの cmd の終了を待つ。timeout を超えたら猶予なしで process group ごと止めて、終わるまで待つ。
-// 止めるための signal を送れず子も終わらなければ、終わりを待たずに TimedOut と送れなかった理由を返す (*exec.ExitError ではない)。
+// 止めるための signal を送れず子も終わらなければ、killSettle だけ待ってから TimedOut と ErrNotStopped を包んだ理由を返す。
 // 子が自分で終わったときは group に残った孫を止めない (credential helper 等が後に残る使い方を妨げない)。
 func Wait(cmd *exec.Cmd, timeout time.Duration) (End, error) {
 	g := watch(cmd, false)

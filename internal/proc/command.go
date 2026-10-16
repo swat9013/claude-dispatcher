@@ -81,8 +81,7 @@ func (c Command) OutputWithInput(input string, args ...string) (string, error) {
 	end, err := Wait(cmd, c.Timeout)
 	if end == TimedOut {
 		msg := fmt.Sprintf("%s を超えても終わらない", c.Timeout)
-		var exit *exec.ExitError
-		if err != nil && !errors.As(err, &exit) {
+		if errors.Is(err, ErrNotStopped) {
 			// 止める signal を送れず、まだ終わっていない
 			msg += " (" + err.Error() + ")"
 		}
