@@ -1,4 +1,4 @@
-# `pre-commit install` 1 回で commit 時 (gitleaks / gofmt / go mod tidy / actionlint) と push 前 (gitleaks の commit 範囲 / go vet / golangci-lint / go test) の両方の hook が入る。
+# `pre-commit install` 1 回で commit 時 (gitleaks / gofmt / go mod tidy / actionlint / 設定の一致 / 図の検査) と push 前 (gitleaks の commit 範囲 / go vet / golangci-lint / go test) の両方の hook が入る。
 # CI (.github/workflows/checks.yml) は commit 時の hook を `pre-commit run --all-files` で撃つので、手元と同じ検査が CI でも落ちる (repocheck-adr を除く。理由は repocheck-adr の hook のコメント)
 default_install_hook_types: [pre-commit, pre-push]
 # stages を書かない hook は commit 時だけに撃つ (書かないと install した全 stage で撃たれ、push 前にも走る)
@@ -70,6 +70,28 @@ repos:
         language: unsupported
         pass_filenames: false
         always_run: true
+      # docs/design の図。描画の版は scripts/plantuml.version に固定する。svg の一致の比べ方とその理由は CONTRIBUTING.md の「gate」。
+      # plantuml と python3 を撃つ 2 つは、図と無関係な commit を前提 tool の有無で止めないよう、読む file と自身の script に絞る。
+      # repocheck-diagrams は network も外部 tool も使わないので、隣の repocheck と同じく毎回撃つ
+      - id: plantuml-syntax
+        name: plantuml (構文)
+        entry: scripts/plantuml-check.sh
+        language: unsupported
+        pass_filenames: false
+        files: ^(docs/design/[^/]*\.puml|scripts/plantuml\.version|scripts/plantuml-check\.sh)$
+      - id: repocheck-diagrams
+        name: repocheck (図の描き直し漏れ)
+        entry: go run ./scripts/repocheck diagrams
+        language: unsupported
+        pass_filenames: false
+        always_run: true
+      # 状態機械図の網羅。script は sud-design skill から vendor した版 (版は scripts/check-statechart.py の commit で固定)
+      - id: check-statechart
+        name: check-statechart (状態機械図の網羅)
+        entry: python3 -I scripts/check-statechart.py docs/design/statechart.puml
+        language: unsupported
+        pass_filenames: false
+        files: ^(docs/design/statechart\.puml|scripts/check-statechart\.py)$
       # binary は CI と同じ版を人が公式の手段で入れる (CONTRIBUTING.md の「セットアップ」)。公式の hook は
       # language: golang で source から build し (公式が保証しない導入経路)、--fix も付くので使わない。
       # script は手元の版が checks.yml の lint job の version: と違えば lint を撃たずに落とす

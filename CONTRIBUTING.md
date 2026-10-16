@@ -16,6 +16,9 @@
   - push 前の hook は、手元の版が checks.yml の `version:` と違えば lint を撃たずに落とし、入れ直しのコマンドを出す。Renovate が golangci-lint の版を上げた PR を merge した後は、入れ直すまで push が止まる (worker の workspace を含む)
 - 加えて `pre-commit` を最低版 ([.pre-commit-config.yaml](.pre-commit-config.yaml) の `minimum_pre_commit_version`) 以上で入れ、clone ごとに 1 回 `pre-commit install` を撃つ (commit 時と push 前の hook が両方入る)。gitleaks・actionlint・shellcheck は pre-commit が hook 環境として build するので別途の導入は要らない (初回の build に network が要る)
   - Go は手元の版が [go.mod](go.mod) の `toolchain` 行より古くても、`go` コマンドがその版を取ってきて使う (`GOTOOLCHAIN` の既定の `auto`)。hook も `go` コマンド経由で撃つので、手元と CI で同じ版の Go が動く
+- 加えて、図の検査の hook (下の「gate」) が撃つ 2 つを入れる
+  - `plantuml` を [scripts/plantuml.version](scripts/plantuml.version) に書いた版で入れる。[plantuml の Releases](https://github.com/plantuml/plantuml/releases) のその版の tag から、`native-plantuml-<OS>-<arch>-<版>.zip` を展開して PATH に置く (Java も graphviz も要らない)。Apple Silicon 以外の macOS は native の binary が無いので、同じ版の `plantuml-<版>.jar` を Java で撃つ wrapper を `plantuml` の名前で PATH に置く。brew などの package manager は版を選べないので使わない。hook は手元の版が違えば検査を撃たずに落とす
+  - `python3` (3.11 以上)。vendor した `scripts/check-statechart.py` を撃つ。標準ライブラリだけで動く。`go test ./...` も、この script の test で撃つ
 
 ## 開発中の claude-dispatcher を試す
 
@@ -69,6 +72,9 @@ claude-dispatcher-dev loop
   - actionlint: workflow の静的検査。`run:` の script は、hook 環境に版を固定して入れた shellcheck で検査する
   - repocheck (`go run ./scripts/repocheck files`): 同じ値を 2 箇所以上に書いている設定の一致を検査する。GoReleaser の版 (checks.yml と release.yml) と、下の「PR に付く check 名」の列挙 (checks.yml の job 名と matrix から組み立てた名前) と、go.mod の `go` 行 (下の「版の更新」の「手で見るもの」に書いた期待値) がずれていれば落ちる。network は使わない
   - repocheck-adr (`go run ./scripts/repocheck adr`): [docs/adr/](docs/adr/) の file 名の先頭 4 桁 (ADR の番号) が重なれば、重なった番号と file 名を出して落ちる。手元の branch の中の重なりはその CL の作者が直せるので commit 時には撃つが、CI の `pre-commit` job では撃たない (下の「定期」の adr-numbers が拾う)。hook は docs/adr 全体を見るので、main から取り込んだ重なりでも落ちる。そのときは CL で振り直さず (振り直しは adr-numbers が起こした issue で扱う)、その commit だけ `SKIP=repocheck-adr git commit ...` で撃たずに commit する
+  - plantuml-syntax (`scripts/plantuml-check.sh`): docs/design の直下の `.puml`・scripts/plantuml.version・この script を変えた commit でだけ撃つ (図と無関係な commit を前提 tool の有無で止めない)。手元の plantuml が scripts/plantuml.version の版でなければ撃たずに落ちる。版が合えば [docs/design/](docs/design/) の直下の `.puml` の構文を `plantuml --check-syntax` の exit code で確かめる
+  - repocheck-diagrams (`go run ./scripts/repocheck diagrams`): docs/design の直下の `.puml` ごとに、隣の `.svg` が scripts/plantuml.version の版の plantuml で、今の `.puml` から描かれたかを検査する。`.puml` を直して描き直していない、または別の版で描いたら落ちる。描き直して比べるのでなく、plantuml が svg に埋める版と元の source で比べる (同じ版でも font や OS で座標が変わり、CL と無関係に赤くなるため)
+  - check-statechart (`python3 -I scripts/check-statechart.py docs/design/statechart.puml`): statechart.puml かこの script を変えた commit でだけ撃ち、状態機械図の網羅を検査する。理由付きの `uncovered` 宣言の無い組み合わせ・遷移のある組み合わせへの宣言の残骸・初期状態から届かない状態があれば落ちる。script は Claude Code plugin `swat-skills` の sud-design skill から vendor したもので、版は vendor 元の commit を script の冒頭に書き、この repo の commit で固定する。直すときは vendor 元を直してから写し直す
 - push 前: `go vet ./...`・`golangci-lint run ./...` (設定は [.golangci.yml](.golangci.yml)。binary の入れ方は上の「セットアップ」) ・`go test -race ./...` (データ競合の検出付き) が通ること。加えて gitleaks が、push する commit のうち remote に無いもの (merge commit を除く) を 1 つずつ検査する。CI の `pre-commit` job は同じ hook を PR の commit 範囲に撃つ。`pre-commit install` 済みなら push 時に hook が走り、落ちると push を止める
   - golangci-lint の既定セットも govet を含むが、`go vet ./...` も撃つ (理由は .pre-commit-config.yaml の go-vet の hook のコメント)
   - `test/blackbox` は binary を build して外から撃つ black-box テスト (外から観測できる契約の検査。正本は [docs/design/formats.md](docs/design/formats.md))。外部 CLI は stub に差し替えるので、network も認証も要らず、マシンに在る実物にも届かない。例外: Homebrew の prefix 等に gh / claude の実物があるマシン (macOS の runner の gh 等) では、「解決できない」を確かめるテストが skip される
@@ -96,6 +102,7 @@ claude-dispatcher-dev loop
     - checks.yml の `lint` job で golangci-lint-action に渡す `version:` (上げたら手元の binary も同じ版にする。上の「セットアップ」)
     - .pre-commit-config.yaml の actionlint の `additional_dependencies` に固定した shellcheck (go-shellcheck) の版 (Dependabot が上げるのは hook の `rev`)
   - Renovate は GitHub App [Renovate](https://github.com/apps/renovate) を repo に入れて初めて動く。導入は repo の管理権限を持つ人の作業で、worker はできない。入っているかは repo の Settings の「GitHub Apps」で確かめ、動いているかは `renovate/` で始まる branch の PR が出るかで確かめる
+  - 手で上げるもの: scripts/plantuml.version (図の検査の plantuml の版)。bot はどちらも拾わない。上げるなら、同じ PR で scripts/plantuml.sha256 (CI が入れる linux-amd64 の zip の sha256。hash だけを書く。合っていなければ CI の `pre-commit` job の導入の step が落ちる) と docs/design の svg をその版に合わせ、手元の plantuml も入れ直す (上の「セットアップ」)
   - 手で見るもの: go.mod の `go` 行 (利用者に求める最低の版。サポート中の最も古い Go の版に合わせる)。期待値: `1.26.0`。依存の go.mod の `go` 行より下げられないので、Dependabot が上げた依存 (govulncheck の `golang.org/x/vuln` とその依存を含む) や CL で足した依存に引き上げられることがある。`go` 行が期待値とずれると、commit 時の repocheck が落ちる。引き上げを受け入れるなら、利用者に求める版が上がってよいかを人が見てから、同じ PR でこの期待値を書き換える。期待値を書き換えるのは人だけで、worker は書き換えずに WORKFLOW.md の「人へ返す」に従って人へ返す
 - release: tag (`v*`) は main の commit に打つ。push すると [.github/workflows/release.yml](.github/workflows/release.yml) が、上の CI と同じ検査の本体 (checks.yml) を tag の commit で通し、tag の commit が main に在ることを確かめてから GoReleaser で GitHub Releases に binary を出し、tap `swat9013/homebrew-tap` の cask を更新する ([.goreleaser.yaml](.goreleaser.yaml))
   - prerelease の tag (`v1.2.0-rc.1` 等) は、Release を prerelease として出し、tap を更新しない
