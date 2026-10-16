@@ -476,7 +476,7 @@ func watchAt(t *testing.T, w *watched, ticks ...time.Time) (result Result, ended
 	out := make(chan outcome, 1)
 	run := &Run{stop: make(chan struct{})}
 	go func() {
-		result, ended := watch(make(chan error), run, w.streamWatch, tick)
+		result, ended := watch(make(chan struct{}), run, w.streamWatch, tick)
 		out <- outcome{result, ended}
 	}()
 	for _, now := range ticks {
