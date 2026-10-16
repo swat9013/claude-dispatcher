@@ -47,7 +47,7 @@ func TestSectionsTheReadmePointsToExistInTheGuide(t *testing.T) {
 	}
 	for _, r := range refs {
 		if _, err := FindSection(text, r.section); err != nil {
-			t.Errorf("README.md:%d が指す案内の節「%s」が guide.md に無い", r.line, r.section)
+			t.Errorf("README.md:%d が指す案内の節 %q が guide.md に無い", r.line, r.section)
 		}
 	}
 }
