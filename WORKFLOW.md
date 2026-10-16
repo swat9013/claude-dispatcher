@@ -17,7 +17,7 @@ limits:
   # go test -race の数分は heartbeat しか書かず、heartbeat は活動として数えない
   stall_timeout: 30m
 claude:
-  # 再入の仕組みを塞ぐ (理由は internal/guide/guide.md の claude.args の行)。
+  # 再入の仕組みを塞ぐ (理由は internal/guide/guide.md の項目の表の下の注記「再入の仕組みを塞ぐ」)。
   # --disallowedTools は値を複数取るが、dispatcher が後ろに渡す -p で止まる
   args: [--permission-mode, auto, --disallowedTools, "ScheduleWakeup,CronCreate,CronList,CronDelete"]
 triggers:
