@@ -104,11 +104,14 @@ func (l *loop) retry(store Store, v *view) {
 			continue
 		}
 		c.trigger = current
-		if current.Undecided(item) {
+		switch observed := current.Observe(item); observed {
+		case trigger.ObservedUndecided:
 			continue
-		}
-		if settled := l.settle(ref, c, item); settled != "" {
-			l.releaseWaiting(ref, c, settled)
+		case trigger.ObservedTerminal, trigger.ObservedLeftTrigger:
+			if observed == trigger.ObservedTerminal {
+				l.remove(l.o.Workspaces(l.definitionOf(c)), ref)
+			}
+			l.releaseWaiting(ref, c, reasonOf(observed))
 			continue
 		}
 		if cl, isCL := item.(target.CL); isCL {
@@ -209,8 +212,6 @@ func (l *loop) stillAbandoned(store Store, def workflow.Definition, v *view, ref
 // conflict を計算しないので、当たるかを決められないままになりうる)。終端でなく、当たるかをまだ決められなければ当たった
 // ままとする。
 func matchesAbandoned(t trigger.Trigger, item target.Item) bool {
-	if item.Terminal() {
-		return false
-	}
-	return t.Undecided(item) || outOfTrigger(t, item) == ""
+	observed := t.Observe(item)
+	return observed == trigger.ObservedStillMatches || observed == trigger.ObservedUndecided
 }

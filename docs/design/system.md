@@ -271,7 +271,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。claim の段階と打�
   - loop は、起動した shell の環境変数を引き継ぐ
   - loop の環境は worker と hooks にもそのまま渡る。`$VAR` で渡した秘密は worker からも読めるので、秘密を worker に見せない手段は持たない
   - `tracker.token` は、loop が撃つ置き場の CLI・worker・hooks のすべてに、その CLI が読む環境変数 (gh は `GH_TOKEN`、glab は `GITLAB_TOKEN`) として渡す
-    - glab は `GITLAB_TOKEN` を host を問わず使う。worker と hooks が `tracker.host` と別の GitLab の host へ glab を撃つと、token がその host にも送られる。host を絞る手段は glab の設定 file に token を書くことしかなく、dispatcher は秘密を持たない線 (ADR 0014) を保つので絞らない。この露出と回避は案内で告げる
+    - glab は `GITLAB_TOKEN` を host を問わず使う。dispatcher はそれを `tracker.host` に絞らない。worker と hooks が `tracker.host` と別の GitLab の host へ glab を撃つと、token がその host にも送られうる。理由と退けた案は ADR 0020。この露出と回避は案内で告げる
 - **tick ごとに読み直す** (SPEC §6.2)
   - 直せば、loop を起動し直さずに効く。`loop` の引数で上書きした値は除く (上の「`loop` の引数で上書きできるのは」)
   - 読めない版・文法に合わない版では、新しい起動を止める。走っている worker の突き合わせは続ける
@@ -318,7 +318,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。claim の段階と打�
 - **別の端末からは `status` で見る**。loop が state dir に書き出す状態 file を読む
   - 状態 file は表示のためだけの痕跡で、loop は読み戻さない
 - **permission posture は workflow 定義の起動引数が決める**
-  - 雛形は `--permission-mode auto` を置く
+  - 雛形は `--permission-mode auto` を置き、worker が自分を起こし直す再入の tool (`ScheduleWakeup`・`CronCreate`・`CronList`・`CronDelete`) を `--disallowedTools` で塞ぐ
   - permission 層を外すかどうかは利用者が決める
 - **依存 CLI (置き場の CLI・claude・git) の path は CLI が自分でも解決する**。最小の PATH の shell (ssh 越しなど) から起動されても動くようにする
   - 解決するのは workflow 定義が撃つ CLI だけ。tracker の CLI は `tracker.kind` で決まる (`github` は gh、`gitlab` は glab、`jira` は acli)。`jira` では `cl.kind` の CLI (gh か glab) も撃つ。使わない置き場の CLI が無いことは、PATH を書き換える理由にしない
