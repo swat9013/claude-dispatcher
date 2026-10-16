@@ -15,12 +15,19 @@ const statusAndType = "status と issue type は Jira の issue にだけある"
 // sameCLHost は github と gitlab が cl: を支えない理由
 const sameCLHost = "issue 置き場と同じ場所が CL 置き場"
 
+// 役割を担う CLI の名前。Provider.Command と、部品が撃つ Runner の名前 (Runtime.runner) に同じ綴りを使う
+const (
+	ghCommand   = "gh"
+	glabCommand = "glab"
+	acliCommand = "acli"
+)
+
 // providers は種類ごとの provider の表。並びは誤りで候補を挙げる順。支えない理由の文言は formats.md §2.8・案内の
 // 「置き場のサービスごとの違い」と合わせる。
 var providers = []Provider{
 	{
 		Kind:    GitHub,
-		Command: "gh",
+		Command: ghCommand,
 		ParseRepo: func(s string) (string, error) {
 			repo, err := github.ParseRepo(s)
 			return repo.String(), err
@@ -29,6 +36,7 @@ var providers = []Provider{
 			r := mustParse(github.ParseRepo, repo)
 			return Place{name: r.String(), value: r}
 		},
+		scopeKey: func(p Place) string { return github.ScopeKey(p.value.(github.Repo)) },
 		Tracker: TrackerRole{
 			declared: Declarations{
 				Supports: []Feature{Author, Milestone, Blocked},
@@ -47,13 +55,13 @@ var providers = []Provider{
 			},
 		},
 		Build: func(rt Runtime, s Setting) Parts {
-			store := github.NewStore(github.Exec{Env: rt.Env, Timeout: rt.Timeout}, s.Place.value.(github.Repo))
+			store := github.NewStore(rt.runner(ghCommand, github.Exec{Env: rt.Env, Timeout: rt.Timeout}), s.Place.value.(github.Repo))
 			return Parts{Issues: store, CLs: store}
 		},
 		Setup: Setup{
 			ownsOrigin: func(host string) bool { return host == "github.com" },
 			currentPlace: func(rt Runtime) (Place, error) {
-				repo, err := github.CurrentRepo(github.Exec{Env: rt.Env, Timeout: rt.Timeout})
+				repo, err := github.CurrentRepo(rt.runner(ghCommand, github.Exec{Env: rt.Env, Timeout: rt.Timeout}))
 				return Place{name: repo.String(), value: repo}, err
 			},
 			template: func(p Place, _ scaffold.CLHost) string { return scaffold.GitHub(p.value.(github.Repo).String()) },
@@ -61,13 +69,14 @@ var providers = []Provider{
 	},
 	{
 		Kind:      GitLab,
-		Command:   "glab",
+		Command:   glabCommand,
 		Host:      Host{parse: gitlab.ParseHost, defaultHost: gitlab.DefaultHost, hasDefault: true},
 		ParseRepo: gitlab.ParsePath,
 		NewPlace: func(host, repo string) Place {
 			p := gitlab.Project{Host: host, Path: repo}
 			return Place{name: p.String(), value: p}
 		},
+		scopeKey: func(p Place) string { return gitlab.ScopeKey(p.value.(gitlab.Project)) },
 		Tracker: TrackerRole{
 			declared: Declarations{
 				Supports: []Feature{Author, Milestone},
@@ -93,12 +102,12 @@ var providers = []Provider{
 			},
 		},
 		Build: func(rt Runtime, s Setting) Parts {
-			store := gitlab.NewStore(gitlab.Exec{Env: rt.Env, Timeout: rt.Timeout}, s.Place.value.(gitlab.Project))
+			store := gitlab.NewStore(rt.runner(glabCommand, gitlab.Exec{Env: rt.Env, Timeout: rt.Timeout}), s.Place.value.(gitlab.Project))
 			return Parts{Issues: store, CLs: store}
 		},
 		Setup: Setup{
 			currentPlace: func(rt Runtime) (Place, error) {
-				p, err := gitlab.CurrentProject(gitlab.Exec{Env: rt.Env, Timeout: rt.Timeout})
+				p, err := gitlab.CurrentProject(rt.runner(glabCommand, gitlab.Exec{Env: rt.Env, Timeout: rt.Timeout}))
 				return Place{name: p.String(), value: p}, err
 			},
 			template: func(p Place, _ scaffold.CLHost) string {
@@ -109,13 +118,14 @@ var providers = []Provider{
 	},
 	{
 		Kind:      Jira,
-		Command:   "acli",
+		Command:   acliCommand,
 		Host:      Host{parse: jira.ParseSite, requiredHint: "Jira Cloud の site を書く"},
 		ParseRepo: jira.ParseKey,
 		NewPlace: func(host, repo string) Place {
 			p := jira.Project{Site: host, Key: repo}
 			return Place{name: p.String(), value: p}
 		},
+		scopeKey: func(p Place) string { return jira.ScopeKey(p.value.(jira.Project)) },
 		Tracker: TrackerRole{
 			declared: Declarations{
 				Supports: []Feature{CLPlace, Blocked, Status, Type},
@@ -130,7 +140,7 @@ var providers = []Provider{
 			Settings:    []string{"Bash(acli jira workitem:*)"},
 		},
 		Build: func(rt Runtime, s Setting) Parts {
-			store := jira.NewStore(jira.Exec{Env: rt.Env, Timeout: rt.Timeout}, s.Place.value.(jira.Project), s.Triggers)
+			store := jira.NewStore(rt.runner(acliCommand, jira.Exec{Env: rt.Env, Timeout: rt.Timeout}), s.Place.value.(jira.Project), s.Triggers)
 			return Parts{Issues: store, Confirm: func() error { return store.Confirm(jira.NamesOf(s.Triggers)) }}
 		},
 		Setup: Setup{

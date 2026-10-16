@@ -59,3 +59,11 @@ func TestTheProviderForAnUnrecognizedOriginWritesTheTemplateFromTheClone(t *test
 		t.Fatalf("origin の host を認める provider が無いときの種類 %s が、clone から雛形を書けない", p.Kind)
 	}
 }
+
+func TestEveryProviderReturnsTheScopeKeyFromItsPlace(t *testing.T) {
+	for _, p := range providers {
+		if p.scopeKey == nil {
+			t.Errorf("%s の provider は scope key の決め方を持たない", p.Kind)
+		}
+	}
+}
