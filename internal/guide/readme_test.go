@@ -13,6 +13,26 @@ const readmePath = "../../README.md"
 // quoted は「」で囲んだ語
 var quoted = regexp.MustCompile(`「([^」]+)」`)
 
+// readmeRef は README が案内の節を指す 1 箇所
+type readmeRef struct {
+	line    int
+	section string
+}
+
+// guideRefs は README の `claude-dispatcher guide` を含む行の「」の語を、すべて案内の節名の参照とみなして返す
+func guideRefs(readme string) []readmeRef {
+	var refs []readmeRef
+	for i, l := range strings.Split(readme, "\n") {
+		if !strings.Contains(l, "claude-dispatcher guide") {
+			continue
+		}
+		for _, m := range quoted.FindAllStringSubmatch(l, -1) {
+			refs = append(refs, readmeRef{line: i + 1, section: m[1]})
+		}
+	}
+	return refs
+}
+
 func TestSectionsTheReadmePointsToExistInTheGuide(t *testing.T) {
 	data, err := os.ReadFile(readmePath)
 	if err != nil {
@@ -20,20 +40,14 @@ func TestSectionsTheReadmePointsToExistInTheGuide(t *testing.T) {
 	}
 	text := Text()
 
-	refs := 0
-	for i, l := range strings.Split(string(data), "\n") {
-		if !strings.Contains(l, "claude-dispatcher guide") {
-			continue
-		}
-		for _, m := range quoted.FindAllStringSubmatch(l, -1) {
-			refs++
-			if _, err := FindSection(text, m[1]); err != nil {
-				t.Errorf("README.md:%d が指す案内の節「%s」が guide.md に無い: %v", i+1, m[1], err)
-			}
-		}
-	}
+	refs := guideRefs(string(data))
 
-	if refs == 0 {
+	if len(refs) == 0 {
 		t.Fatalf("README.md に `claude-dispatcher guide` の節名の参照が 1 つも無い (読み方が README とずれている)")
+	}
+	for _, r := range refs {
+		if _, err := FindSection(text, r.section); err != nil {
+			t.Errorf("README.md:%d が指す案内の節「%s」が guide.md に無い", r.line, r.section)
+		}
 	}
 }
