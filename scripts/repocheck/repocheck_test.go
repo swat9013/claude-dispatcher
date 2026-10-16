@@ -240,7 +240,7 @@ func TestDuplicateADRNumbers_先頭が番号でないmdとmdでないfileはADR�
 }
 
 func TestCheckADR_先頭がちょうど4桁でないか拡張子が小文字のmdでないADRの名前を1件1行で出す(t *testing.T) {
-	for _, name := range []string{"17-other.md", "0017_other.MD", "017-other.md", "00170-other.md"} {
+	for _, name := range []string{"17-other.md", "0017_other.MD", "017-other.md", "00170-other.md", "0017.md"} {
 		t.Run(name, func(t *testing.T) {
 			problems := checkADR(append(slices.Clone(adrNames), name))
 

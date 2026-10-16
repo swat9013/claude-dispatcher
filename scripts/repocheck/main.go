@@ -213,7 +213,7 @@ func malformedADRNames(names []string) []string {
 	var problems []string
 	for _, name := range names {
 		if isADRIntended(name) && !adrNameForm.MatchString(name) {
-			problems = append(problems, fmt.Sprintf("%s の ADR の file 名 %s が形に合わない: 先頭をちょうど 4 桁の番号にし、その直後に数字でない文字 (区切り) を置き、拡張子を小文字の .md にする",
+			problems = append(problems, fmt.Sprintf("%s の ADR の file 名 %s が形に合わない: 先頭をちょうど 4 桁の番号にし、その直後に数字でない文字 (区切り) と名前を置き、拡張子を小文字の .md にする (0017.md のような番号だけの名前は形に合わない)",
 				adrDir, name))
 		}
 	}
