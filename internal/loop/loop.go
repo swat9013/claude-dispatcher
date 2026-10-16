@@ -303,8 +303,8 @@ func (l *loop) tick() {
 		l.tickFailed(fmt.Sprintf("workflow 定義の scope key %s が起動時の %s と違う (loop を起動し直す)", key, l.o.ScopeKey))
 		return
 	}
-	if place, start := def.CLPlace(), l.o.Definition.CLPlace(); place != start {
-		// claim している CL を、起動時と別の CL 置き場で読み直さない
+	if place, start := def.CLPlace(), l.o.Definition.CLPlace(); !strings.EqualFold(place, start) {
+		// claim している CL を、起動時と別の CL 置き場で読み直さない。scope key と同じく大文字と小文字は区別しない (formats.md §6)
 		l.tickFailed(fmt.Sprintf("workflow 定義の CL 置き場 %q が起動時の %q と違う (loop を起動し直す)", place, start))
 		return
 	}
