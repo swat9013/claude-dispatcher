@@ -18,8 +18,10 @@ NoClaim --> [*] : loopの終了
 
 ' --- 走っている ---
 Running --> AwaitingVerification : worker終了
-Running --> AwaitingVerification : stall上限
-Running --> AwaitingVerification : 上限時間
+Running --> AwaitingVerification : stall上限 [claude が終わった]
+Running --> AwaitingVerification : 上限時間 [claude が終わった]
+Running --> Stopping : stall上限 [SIGKILL を送れず claude が残る] / workspace を残す
+Running --> Stopping : 上限時間 [SIGKILL を送れず claude が残る] / workspace を残す
 Running --> Stopping : 終端の観測
 Running --> Running : 停止要求1回目
 Running --> Stopping : 停止要求2回目
@@ -27,6 +29,7 @@ Running --> [*] : loopの終了
 
 ' --- 止めている ---
 Stopping --> NoClaim : worker終了 [止められて終わった] / claim を解く
+Stopping --> Stopping : worker終了 [SIGKILL を送れず claude が残る] / workspace を残し、loopの終了まで持つ
 Stopping --> AwaitingVerification : worker終了 [止める前に終わっていた]
 Stopping --> AwaitingVerification : stall上限 [止める前に終わっていた]
 Stopping --> AwaitingVerification : 上限時間 [止める前に終わっていた]
