@@ -49,10 +49,10 @@ var phases = map[phase]status.Phase{
 func (l *loop) snapshot() status.Snapshot {
 	s := status.Snapshot{
 		Scope: l.o.ScopeKey, Workflow: l.o.Workflow, StartedAt: l.board.startedAt, Version: l.o.Build.Version, Commit: l.o.Build.Commit, UpdatedAt: l.o.Now(),
-		Stopping: l.stopping > 0, LastTick: l.board.lastTick,
+		Stopping: l.stop.requested(), LastTick: l.board.lastTick,
 		Workers: []status.Worker{}, Abandoned: []status.Abandoned{}, Ambiguous: []status.Ambiguous{}, Blocked: []status.Blocked{},
 	}
-	if l.stopping == 0 && !l.board.nextTickAt.IsZero() {
+	if !l.stop.requested() && !l.board.nextTickAt.IsZero() {
 		next := l.board.nextTickAt
 		s.NextTickAt = &next
 	}

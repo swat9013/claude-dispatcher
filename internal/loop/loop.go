@@ -176,8 +176,8 @@ type loop struct {
 	abandoned map[target.Ref]string
 	events    chan worker.Event
 	rec       recorder
-	// stopping は受けた停止要求の数
-	stopping int
+	// stop は受けた停止要求
+	stop     stopRequests
 	lastStop os.Signal
 	// wake は最も早い再起動の予定に届く channel、wakeAt はその時刻。予定が無ければ nil
 	wake   <-chan time.Time
@@ -211,7 +211,7 @@ func Run(o Options) int {
 			l.requestStop(sig)
 		default:
 		}
-		if l.stopping > 0 && l.running() == 0 {
+		if l.stop.requested() && l.running() == 0 {
 			return l.exit()
 		}
 		if next == nil {
@@ -227,14 +227,14 @@ func Run(o Options) int {
 			l.handle(ev)
 		case <-next:
 			next = nil
-			if l.stopping == 0 {
+			if !l.stop.requested() {
 				l.tick()
 			} else {
 				l.reconcile(l.o.Store(l.def))
 			}
 		case <-l.wake:
 			l.wake = nil
-			if l.stopping == 0 {
+			if !l.stop.requested() {
 				l.retry(l.o.Store(l.def), outsideTick)
 			}
 		case <-o.Refresh:
@@ -245,30 +245,24 @@ func Run(o Options) int {
 
 // requestStop は停止要求を受ける。1 回目は新しい起動をやめて worker の終了を待ち、2 回目は worker を止める。
 func (l *loop) requestStop(sig os.Signal) {
-	l.stopping++
+	l.stop = l.stop.next()
 	l.lastStop = sig
 	running := l.running()
 	if running == 0 {
 		return
 	}
-	if l.stopping == 1 {
+	if l.stop == stopFirst {
 		l.rec.human(LineStopping, "停止待ち", ": 走っている worker %d 本の終了を待つ (もう一度で止める)", running)
 		return
 	}
-	for _, c := range l.claims {
-		if c.phase == phaseRunning {
-			l.stop(c, stoppedByRequest)
-		}
+	for ref, c := range l.claims {
+		l.apply(ref, c, c.stopRequested(l.stop))
 	}
 }
 
 func (l *loop) exit() int {
 	for ref, c := range l.claims {
-		if c.phase == phaseWaitingRetry {
-			l.rec.error(ref, fmt.Sprintf("再起動を待ったまま止まる (%s, attempt %d まで)", c.trigger.Name, c.attempt))
-			continue
-		}
-		l.rec.error(ref, fmt.Sprintf("終わり方を確かめられないまま止まる (%s)", c.trigger.Name))
+		l.apply(ref, c, c.loopEnded())
 	}
 	// 止まる時点の claim を状態 file に残す (loop が止まった後の status は worker を出さないが、file は読み返せる)
 	l.publish()
@@ -504,20 +498,9 @@ func (l *loop) reconcile(store Store) {
 		if c.phase != phaseRunning {
 			continue
 		}
-		item, err := store.Read(ref)
-		if err != nil {
-			l.rec.error(ref, "走っている worker の作業対象を読み直せない: "+oneLine(err))
-			continue
-		}
-		if item.Terminal() {
-			l.stop(c, stoppedAtTerminal)
-		}
+		o, _ := l.read(store, ref, terminalOnly)
+		l.apply(ref, c, c.observed(ref, o, l.env()))
 	}
-}
-
-func (l *loop) stop(c *claim, reason stopReason) {
-	c.phase, c.stopReason = phaseStopping, reason
-	c.run.Stop()
 }
 
 // recheck は、終わり方を確かめ待ちの worker (phaseAwaitingVerification) を確かめ直す。
@@ -623,7 +606,6 @@ func (l *loop) launch(def workflow.Definition, c trigger.Candidate) bool {
 // start は claim の今の attempt の worker を、そのときの workflow 定義で起動する。
 func (l *loop) start(c *claim) {
 	def := l.definitionOf(c)
-	c.phase, c.startedAt, c.activity = phaseRunning, nil, nil
 	job := worker.Job{Item: c.item, Trigger: c.trigger, Attempt: c.attempt, SessionID: c.sessionID, Resume: c.sessionStarted, Prompt: def.Prompt}
 	c.run = l.o.Launch(def, job, l.events)
 }
@@ -658,24 +640,18 @@ func (l *loop) handle(ev worker.Event) {
 			return
 		}
 		result := ev.Result
-		c.run = nil
 		for _, message := range []string{result.AfterRunError, result.StopError, result.ResultSummaryError} {
 			if message != "" {
 				l.rec.error(ev.Target, message)
 			}
 		}
 		store := l.o.Store(l.def)
-		if result.Stopped {
-			if c.stopReason == stoppedAtTerminal {
-				l.remove(l.o.Workspaces(l.definitionOf(c)), ev.Target)
-			}
-			l.end(ev.Target, c, stopped, Reason(c.stopReason), result)
-			delete(l.claims, ev.Target)
-		} else {
-			c.phase, c.ended = phaseAwaitingVerification, &result
+		e := c.workerEnded(ev.Target, result)
+		l.apply(ev.Target, c, e)
+		if e.readItem {
 			l.verify(store, ev.Target, c)
 		}
-		if l.stopping == 0 {
+		if !l.stop.requested() {
 			// 空いた枠で、空きを待っていた再起動を試みる
 			l.retry(store, outsideTick)
 		}
@@ -695,30 +671,8 @@ func (l *loop) claimOf(ref target.Ref) (*claim, bool) {
 // trigger に当たるかをまだ決められなければ、claim を持ったまま次の tick で確かめ直す (完了とも失敗とも数えない)。作業対象が終端か trigger から外れていれば、worker 自身の
 // 失敗に関わらず完了とする。
 func (l *loop) verify(store Store, ref target.Ref, c *claim) {
-	item, err := store.Read(ref)
-	if err != nil {
-		l.rec.error(ref, "終わった worker の作業対象を読み直せない (次の tick で読み直す): "+oneLine(err))
-		return
-	}
-	result := *c.ended
-	switch observed := c.trigger.Observe(item); observed {
-	case trigger.ObservedUndecided:
-		// 失敗ではない正常な待ちなので、error ではなく verify_wait の行で残す
-		l.rec.event("verify_wait", map[string]any{
-			"target": ref.String(), "trigger": c.trigger.Name, "attempt": c.attempt,
-			"session_id": c.sessionID, "reason": reasonUndecided,
-		}, LineNote, "確かめ待ち", " %s (%s, attempt %d): %s", ref, c.trigger.Name, c.attempt, reasonUndecided.screen())
-		return
-	case trigger.ObservedTerminal, trigger.ObservedLeftTrigger:
-		if observed == trigger.ObservedTerminal {
-			l.remove(l.o.Workspaces(l.definitionOf(c)), ref)
-		}
-		l.end(ref, c, completed, reasonOf(observed), result)
-		delete(l.claims, ref)
-		return
-	}
-	l.end(ref, c, failed, reasonStillMatches, result)
-	l.fail(ref, c)
+	o, _ := l.read(store, ref, c.trigger.Observe)
+	l.apply(ref, c, c.observed(ref, o, l.env()))
 }
 
 // reasonOf は読み直した作業対象の観測を、loop の理由に写す。
@@ -755,34 +709,6 @@ func (l *loop) remove(ws Workspaces, ref target.Ref) bool {
 		return false
 	}
 	return true
-}
-
-// end は worker 1 回分の終わり方の行を書く。worker 自身が失敗していれば、その理由を reason とは別の failure に載せる。
-// claim を解くかは呼び出し側が決める。
-func (l *loop) end(ref target.Ref, c *claim, o outcome, reason Reason, result worker.Result) {
-	name := ref.String()
-	fields := map[string]any{
-		"target": name, "trigger": c.trigger.Name, "attempt": c.attempt, "session_id": c.sessionID,
-		"outcome": string(o), "reason": reason,
-	}
-	if result.Failure != "" {
-		fields["failure"] = result.Failure
-	}
-	if result.ExitCode != nil {
-		fields["exit_code"] = *result.ExitCode
-	}
-	if summary := result.ResultSummary; summary != nil {
-		if summary.IsError != nil {
-			fields["is_error"] = *summary.IsError
-		}
-		if summary.NumTurns != nil {
-			fields["num_turns"] = *summary.NumTurns
-		}
-		if summary.PermissionDenialCount != nil {
-			fields["permission_denial_count"] = *summary.PermissionDenialCount
-		}
-	}
-	l.rec.event("end", fields, endKinds[o], "終了", " %s (%s): %s — %s", name, c.trigger.Name, o, endScreen(o, reason, result.Failure))
 }
 
 func nonNil(s []string) []string {

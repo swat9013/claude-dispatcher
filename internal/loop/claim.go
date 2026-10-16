@@ -1,0 +1,299 @@
+package loop
+
+import (
+	"fmt"
+	"time"
+
+	"github.com/swat9013/claude-dispatcher/internal/target"
+	"github.com/swat9013/claude-dispatcher/internal/trigger"
+	"github.com/swat9013/claude-dispatcher/internal/worker"
+)
+
+// claim の遷移 (docs/design/statechart.puml の claim の 4 つの段階 Running・Stopping・AwaitingVerification・WaitingRetry)。
+// 入口は出来事をまとめた 5 つ (workerEnded・observed・stopRequested・backoffElapsed・loopEnded)。入口は claim の段階を
+// 進め、書くログの行と loop がする I/O を effect で返す。I/O の実行と、claim の記録 (l.claims) からの削除は loop の apply
+// がする。打ち切った作業対象が解けるか (stillAbandoned) は claim の外に残す (打ち切った作業対象は claim を持たない)。
+
+// stopRequests は受けた停止要求 (なし・1 回目・2 回目)。2 回目より後の要求は 2 回目と同じに扱う。
+type stopRequests int
+
+const (
+	stopNone stopRequests = iota
+	// stopFirst は 1 回目の停止要求: 新しい起動をやめ、走っている worker の終わりを待つ
+	stopFirst
+	// stopSecond は 2 回目の停止要求: 走っている worker を止める
+	stopSecond
+)
+
+// next は停止要求をもう 1 回受けた後の値。
+func (s stopRequests) next() stopRequests {
+	return min(s+1, stopSecond)
+}
+
+// requested は停止要求を 1 回以上受けたか。
+func (s stopRequests) requested() bool { return s != stopNone }
+
+// exit は claim の出口。
+type exit int
+
+const (
+	// stay は claim を持ったまま
+	stay exit = iota
+	// release は claim を解く
+	release
+	// abandon は claim を解いて打ち切る
+	abandon
+)
+
+// logLine はログの 1 行。errorMessage があれば error の行 (recorder.error)、無ければ event の行。
+type logLine struct {
+	errorMessage string
+	event        string
+	fields       map[string]any
+	kind         LineKind
+	label        string
+	format       string
+	args         []any
+}
+
+// effect は入口が返す、書くログの行と loop がする I/O。loop の apply は removeWorkspace・lines・stopWorker・startWorker・
+// readItem・exit の順に実行する。
+type effect struct {
+	// removeWorkspace は workspace を消す (作業対象が終端)
+	removeWorkspace bool
+	lines           []logLine
+	// stopWorker は走っている worker を止める
+	stopWorker bool
+	// startWorker は今の attempt の worker を起動する
+	startWorker bool
+	// readItem は作業対象を読み直し、結果を observed の入口へ渡す (終わりを確かめる)
+	readItem bool
+	exit     exit
+}
+
+// claimEnv は入口が段階を進めるのに読む、loop のそのときの値。
+type claimEnv struct {
+	now             time.Time
+	stop            stopRequests
+	maxAttempts     int
+	maxRetryBackoff time.Duration
+	maxConcurrent   int
+}
+
+// workerEnded は worker の終わりを受ける。stall 上限・上限時間で止まった worker も、ここで worker の終わりとして受ける
+// (理由は result の Failure が持つ)。止めている worker が止められて終われば claim を解き、それ以外は終わりを確かめ待ちへ
+// 進めて作業対象を読み直させる。
+func (c *claim) workerEnded(ref target.Ref, result worker.Result) effect {
+	if c.phase != phaseRunning && c.phase != phaseStopping {
+		// 走っていない claim に終わる worker は無い
+		return effect{}
+	}
+	c.run = nil
+	if c.phase == phaseStopping && result.Stopped {
+		return effect{
+			removeWorkspace: c.stopReason == stoppedAtTerminal,
+			lines:           []logLine{c.endLine(ref, stopped, Reason(c.stopReason), result)},
+			exit:            release,
+		}
+	}
+	c.phase, c.ended = phaseAwaitingVerification, &result
+	return effect{readItem: true}
+}
+
+// observation は作業対象の読み直しの結果: 02 (Trigger.Observe) の 4 値か、読み直しの失敗。
+type observation struct {
+	observed trigger.Observation
+	// readErr は読み直しの失敗。nil でなければ observed を見ない
+	readErr error
+}
+
+// observed は作業対象の読み直しの観測を受ける。走っている claim は終端でだけ止め (ADR 0009)、確かめ待ちの claim は終わり方
+// を決め、再起動待ちの claim は終端か trigger から外れていれば起動せずに解く。止めている claim の作業対象は読み直さない。
+func (c *claim) observed(ref target.Ref, o observation, env claimEnv) effect {
+	switch c.phase {
+	case phaseRunning:
+		if o.readErr != nil {
+			return effect{lines: []logLine{errorLine("走っている worker の作業対象を読み直せない: " + oneLine(o.readErr))}}
+		}
+		if o.observed == trigger.ObservedTerminal {
+			c.phase, c.stopReason = phaseStopping, stoppedAtTerminal
+			return effect{stopWorker: true}
+		}
+		return effect{}
+	case phaseAwaitingVerification:
+		return c.verified(ref, o, env)
+	case phaseWaitingRetry:
+		if o.readErr != nil {
+			return effect{lines: []logLine{errorLine("再起動を待つ作業対象を読み直せない (次の tick で読み直す): " + oneLine(o.readErr))}}
+		}
+		switch o.observed {
+		case trigger.ObservedTerminal, trigger.ObservedLeftTrigger:
+			return effect{removeWorkspace: o.observed == trigger.ObservedTerminal, lines: []logLine{c.releaseLine(ref, reasonOf(o.observed))}, exit: release}
+		}
+		// 当たるか未決なら待ち直す。当たったままは backoffElapsed で再起動する条件として読む
+		return effect{}
+	}
+	return effect{}
+}
+
+// verified は終わりを確かめ待ちの claim の終わり方を決める。終端か trigger から外れていれば、worker 自身の失敗に関わらず
+// 完了として claim を解く。当たったままなら失敗とし、attempt の上限で打ち切るか、再起動待ちへ進める。読み直せないか当たるかを
+// まだ決められなければ、claim を持ったまま次の tick で確かめ直す (完了とも失敗とも数えない)。
+func (c *claim) verified(ref target.Ref, o observation, env claimEnv) effect {
+	if o.readErr != nil {
+		return effect{lines: []logLine{errorLine("終わった worker の作業対象を読み直せない (次の tick で読み直す): " + oneLine(o.readErr))}}
+	}
+	result := *c.ended
+	switch o.observed {
+	case trigger.ObservedUndecided:
+		// 失敗ではない正常な待ちなので、error ではなく verify_wait の行で残す
+		return effect{lines: []logLine{{
+			event: "verify_wait", fields: map[string]any{
+				"target": ref.String(), "trigger": c.trigger.Name, "attempt": c.attempt,
+				"session_id": c.sessionID, "reason": reasonUndecided,
+			}, kind: LineNote, label: "確かめ待ち", format: " %s (%s, attempt %d): %s",
+			args: []any{ref, c.trigger.Name, c.attempt, reasonUndecided.screen()},
+		}}}
+	case trigger.ObservedTerminal, trigger.ObservedLeftTrigger:
+		return effect{
+			removeWorkspace: o.observed == trigger.ObservedTerminal,
+			lines:           []logLine{c.endLine(ref, completed, reasonOf(o.observed), result)},
+			exit:            release,
+		}
+	}
+	lines := []logLine{c.endLine(ref, failed, reasonStillMatches, result)}
+	name := ref.String()
+	if c.attempt >= env.maxAttempts {
+		return effect{lines: append(lines, logLine{
+			event:  "abandon",
+			fields: map[string]any{"target": name, "trigger": c.trigger.Name, "attempt": c.attempt, "session_id": c.sessionID},
+			kind:   LineNote, label: "打ち切り", format: " %s (%s, attempt %d 回): label を外して trigger から外すと解ける (外してから 1 周期待つ)",
+			args: []any{name, c.trigger.Name, c.attempt},
+		}), exit: abandon}
+	}
+	// 前の attempt の起動の時刻と活動は、次の attempt を起動するまで持たない
+	c.phase, c.ended, c.retryAt, c.startedAt, c.activity = phaseWaitingRetry, nil, time.Time{}, nil, nil
+	if env.stop.requested() {
+		// 停止要求を受けた後は再起動を予定しない (loop は再起動待ちを error の行に残して止まる)
+		return effect{lines: lines}
+	}
+	wait := backoff(c.attempt, env.maxRetryBackoff)
+	c.retryAt = env.now.Add(wait)
+	return effect{lines: append(lines, logLine{
+		event: "retry", fields: map[string]any{
+			"target": name, "trigger": c.trigger.Name, "attempt": c.attempt, "next_attempt": c.attempt + 1,
+			"session_id": c.sessionID, "backoff": wait.Seconds(),
+		}, kind: LineRetry, label: "再起動を予定", format: " %s (%s, attempt %d, %s 後)",
+		args: []any{name, c.trigger.Name, c.attempt + 1, wait},
+	})}
+}
+
+// stopRequested は停止要求を受ける。2 回目で走っている worker を止める。1 回目ではどの段階も変わらない (再起動待ちは、
+// 停止要求の後に再起動を予定しないことで止まる)。
+func (c *claim) stopRequested(requests stopRequests) effect {
+	if requests == stopSecond && c.phase == phaseRunning {
+		c.phase, c.stopReason = phaseStopping, stoppedByRequest
+		return effect{stopWorker: true}
+	}
+	return effect{}
+}
+
+// hindrance は backoff の明けた再起動待ちの claim の起動を妨げる事情。
+type hindrance int
+
+const (
+	// hindranceNone は妨げが無い (作業対象は当たったまま)
+	hindranceNone hindrance = iota
+	// hindranceNoSlot は並列上限に空きが無い
+	hindranceNoSlot
+	// hindranceAmbiguousCL は CL が tick の一覧で曖昧に見える
+	hindranceAmbiguousCL
+	// hindranceEarlierTrigger は宣言順で先の trigger に当たる。再起動は同じ trigger で続ける (system.md §7) ので、loop は
+	// 渡さない。statechart の組を表で引けるよう値を持つ
+	hindranceEarlierTrigger
+	// hindrancePrecheck は trigger が事前検査に落ちている
+	hindrancePrecheck
+	// hindranceDefinitionUnavailable は workflow 定義を採れない。その tick は retry を撃たないので、loop は渡さない
+	hindranceDefinitionUnavailable
+	// hindranceTriggerRemoved は起動した trigger が workflow 定義から消えた
+	hindranceTriggerRemoved
+)
+
+// backoffElapsed は再起動待ちの claim の backoff の明けを受ける。妨げが無ければ次の attempt を起動し、trigger が消えて
+// いれば起動せずに claim を解く。ほかの妨げでは attempt を進めずに待ち直す (曖昧に見えても claim は解かない。formats.md §6
+// の再起動)。
+func (c *claim) backoffElapsed(ref target.Ref, h hindrance, env claimEnv) effect {
+	if c.phase != phaseWaitingRetry {
+		return effect{}
+	}
+	switch h {
+	case hindranceNone:
+		c.waitingSlot = false
+		c.attempt++
+		c.phase, c.startedAt, c.activity = phaseRunning, nil, nil
+		return effect{startWorker: true}
+	case hindranceNoSlot:
+		if c.waitingSlot {
+			return effect{}
+		}
+		c.waitingSlot = true
+		return effect{lines: []logLine{{
+			event:  "wait_slot",
+			fields: map[string]any{"target": ref.String(), "trigger": c.trigger.Name, "next_attempt": c.attempt + 1, "max_concurrent": env.maxConcurrent},
+			kind:   LineNote, label: "再起動を待つ", format: " %s (%s, attempt %d): 並列上限 %d に空きが出るまで待つ",
+			args: []any{ref, c.trigger.Name, c.attempt + 1, env.maxConcurrent},
+		}}}
+	case hindranceTriggerRemoved:
+		return effect{lines: []logLine{c.releaseLine(ref, reasonTriggerRemoved)}, exit: release}
+	}
+	return effect{}
+}
+
+// loopEnded は loop の終了を受ける。claim を持ったまま止まることを error の行に残す。
+func (c *claim) loopEnded() effect {
+	if c.phase == phaseWaitingRetry {
+		return effect{lines: []logLine{errorLine(fmt.Sprintf("再起動を待ったまま止まる (%s, attempt %d まで)", c.trigger.Name, c.attempt))}}
+	}
+	return effect{lines: []logLine{errorLine(fmt.Sprintf("終わり方を確かめられないまま止まる (%s)", c.trigger.Name))}}
+}
+
+func errorLine(message string) logLine { return logLine{errorMessage: message} }
+
+// releaseLine は再起動を待つ claim を、起動せずに解いた行。
+func (c *claim) releaseLine(ref target.Ref, reason Reason) logLine {
+	name := ref.String()
+	return logLine{
+		event:  "release",
+		fields: map[string]any{"target": name, "trigger": c.trigger.Name, "attempt": c.attempt, "session_id": c.sessionID, "reason": reason},
+		kind:   LineNote, label: "再起動せずに解いた", format: " %s (%s): %s",
+		args: []any{name, c.trigger.Name, reason.screen()},
+	}
+}
+
+// endLine は worker 1 回分の終わり方の行。worker 自身が失敗していれば、その理由を reason とは別の failure に載せる。
+func (c *claim) endLine(ref target.Ref, o outcome, reason Reason, result worker.Result) logLine {
+	name := ref.String()
+	fields := map[string]any{
+		"target": name, "trigger": c.trigger.Name, "attempt": c.attempt, "session_id": c.sessionID,
+		"outcome": string(o), "reason": reason,
+	}
+	if result.Failure != "" {
+		fields["failure"] = result.Failure
+	}
+	if result.ExitCode != nil {
+		fields["exit_code"] = *result.ExitCode
+	}
+	if summary := result.ResultSummary; summary != nil {
+		if summary.IsError != nil {
+			fields["is_error"] = *summary.IsError
+		}
+		if summary.NumTurns != nil {
+			fields["num_turns"] = *summary.NumTurns
+		}
+		if summary.PermissionDenialCount != nil {
+			fields["permission_denial_count"] = *summary.PermissionDenialCount
+		}
+	}
+	return logLine{event: "end", fields: fields, kind: endKinds[o], label: "終了", format: " %s (%s): %s — %s",
+		args: []any{name, c.trigger.Name, o, endScreen(o, reason, result.Failure)}}
+}
