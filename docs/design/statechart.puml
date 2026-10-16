@@ -118,7 +118,7 @@ Abandoned --> [*] : loopの終了
 ' uncovered: Stopping x 停止要求1回目 — 既に止めている
 ' uncovered: Stopping x 停止要求2回目 — 既に止めている
 ' uncovered: Stopping x 先のtriggerに当たる — 止めている worker の作業対象は読み直さず、worker が終わるのを待つ (止められない worker は終わりを待たず、loopの終了 まで持つ)
-' uncovered: Stopping x triggerの削除 — 止めている worker は trigger を見ずに終わるのを待つ。止められて終われば claim を解き、止める前に終わっていれば起動したときの trigger で終わりを確かめる
+' uncovered: Stopping x triggerの削除 — 止めている worker は trigger を見ずに終わるのを待つ。止められて終われば claim を解き、止める前に終わっていれば起動したときの trigger で終わりを確かめる (止められない worker は終わりを待たず、loopの終了 まで持つ)
 ' 終わりを確かめ待ち
 ' uncovered: AwaitingVerification x 候補になる — claim されている作業対象は候補にならない (§4 の候補の定義)
 ' uncovered: AwaitingVerification x worker終了 — worker は既に終わっている

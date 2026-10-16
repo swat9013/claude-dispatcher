@@ -50,7 +50,7 @@ func TestAWorkerWhoseClaudeCannotBeStoppedIsNeitherVerifiedNorRestartedAndKeepsI
 		return timing{fate: stopsTheLoop}
 	}
 	r.script = func(worker.Job) workerScript {
-		return workerScript{result: worker.Result{Failure: "stall", StopError: "子を止められない: EPERM", Unstopped: true}}
+		return workerScript{result: worker.Result{Failure: "stall", StopError: "子を止められない: EPERM\nEPERM", Unstopped: true}}
 	}
 	reads := 0
 	ws := &removals{}
@@ -100,7 +100,7 @@ func TestAWorkerWhoseClaudeCannotBeStoppedIsNeitherVerifiedNorRestartedAndKeepsI
 		messages = append(messages, e["error"].(string))
 	}
 	joined := strings.Join(messages, "\n")
-	for _, want := range []string{"claude を止められない (pid 1, workspace ", "子を止められない: EPERM", "claude を止められないまま止まる (pid 1"} {
+	for _, want := range []string{"claude を止められない (pid 1, workspace ", "子を止められない: EPERM / EPERM", "claude を止められないまま止まる (pid 1"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("error の行 = %q, want %q を含む", joined, want)
 		}

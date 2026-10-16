@@ -2,6 +2,7 @@ package loop
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/swat9013/claude-dispatcher/internal/target"
@@ -97,7 +98,7 @@ func (c *claim) workerEnded(ref target.Ref, result worker.Result) effect {
 		// claude がまだ workspace と session を使いうるので、確かめも再起動も workspace の削除もせず、loop の終了まで持つ
 		// (system.md §7 の tick の手順 1)
 		c.phase, c.unstopped = phaseStopping, true
-		return effect{lines: []logLine{errorLine(fmt.Sprintf("claude を止められない (pid %d, workspace %s): workspace を残し、終わりを確かめず再起動もしない: %s", c.pid, c.workspace, result.StopError))}}
+		return effect{lines: []logLine{errorLine(fmt.Sprintf("claude を止められない (pid %d, workspace %s): workspace を残し、終わりを確かめず再起動もしない: %s", c.pid, c.workspace, strings.ReplaceAll(result.StopError, "\n", " / ")))}}
 	}
 	if c.phase == phaseStopping && result.Stopped {
 		return effect{
