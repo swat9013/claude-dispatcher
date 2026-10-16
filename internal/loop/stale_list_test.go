@@ -64,8 +64,7 @@ func (s staleTicks) run(t *testing.T) ([]worker.Job, []map[string]any) {
 		Precheck:   noProblems,
 		Store: func(workflow.Definition) loop.Store {
 			return memoryStore{
-				scopeKey: func() string { return startScope },
-				observe:  func() ([]target.Item, error) { return s.open(tick), nil },
+				observe: func() ([]target.Item, error) { return s.open(tick), nil },
 				reread: func(target.Ref) (target.Item, error) {
 					if tick == s.readFails {
 						return nil, errors.New("gh の失敗")
@@ -87,6 +86,7 @@ func (s staleTicks) run(t *testing.T) ([]worker.Job, []map[string]any) {
 			return endedWorker{}
 		},
 		NewSessionID: func() (string, error) { return "session-1", nil },
+		ScopeKeyOf:   sameScope,
 		ScopeKey:     startScope,
 		Log:          &log,
 		Output:       loop.Appender{W: &stdout},

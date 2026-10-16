@@ -120,8 +120,6 @@ type Store struct {
 
 func NewStore(glab Runner, project Project) Store { return Store{glab: glab, project: project} }
 
-func (s Store) ScopeKey() string { return ScopeKey(s.project) }
-
 // OpenIssues は open な issue を全件読む。失敗は *target.Failure。
 func (s Store) OpenIssues() ([]target.Item, error) { return items(s.openIssues()) }
 

@@ -308,6 +308,7 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 		Workflow:     abs,
 		Build:        version.Current(),
 		ScopeKey:     scopeKey,
+		ScopeKeyOf:   places.ScopeKey,
 		Log:          logFile,
 		Output:       output,
 		Signals:      stopRequests(),

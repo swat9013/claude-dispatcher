@@ -90,8 +90,6 @@ func NewStore(acli Runner, project Project, triggers []trigger.Trigger) Store {
 	return Store{acli: acli, project: project, blockers: blockers}
 }
 
-func (s Store) ScopeKey() string { return ScopeKey(s.project) }
-
 // OpenIssues は open な issue を全件読む。失敗は *target.Failure。
 func (s Store) OpenIssues() ([]target.Item, error) {
 	issues, err := s.openIssues()

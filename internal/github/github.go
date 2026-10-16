@@ -80,8 +80,6 @@ type Store struct {
 
 func NewStore(gh Runner, repo Repo) Store { return Store{gh: gh, repo: repo} }
 
-func (s Store) ScopeKey() string { return ScopeKey(s.repo) }
-
 // OpenIssues は open な issue を全件読む。失敗は *target.Failure。
 func (s Store) OpenIssues() ([]target.Item, error) { return items(s.openIssues()) }
 

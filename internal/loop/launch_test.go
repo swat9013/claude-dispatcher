@@ -99,9 +99,8 @@ func (o oneTick) runLogging(t *testing.T, log io.Writer) ([]worker.Job, string) 
 		Precheck:   noProblems,
 		Store: func(workflow.Definition) loop.Store {
 			return memoryStore{
-				scopeKey: func() string { return startScope },
-				observe:  func() ([]target.Item, error) { return o.open, nil },
-				reread:   o.read,
+				observe: func() ([]target.Item, error) { return o.open, nil },
+				reread:  o.read,
 			}.store()
 		},
 		Workspaces: func(workflow.Definition) loop.Workspaces { return branchWorkspaces(o.branches) },
@@ -115,6 +114,7 @@ func (o oneTick) runLogging(t *testing.T, log io.Writer) ([]worker.Job, string) 
 			return endedWorker{}
 		},
 		NewSessionID: func() (string, error) { return "session-1", nil },
+		ScopeKeyOf:   sameScope,
 		ScopeKey:     startScope,
 		Log:          log,
 		Output:       loop.Appender{W: &stdout},

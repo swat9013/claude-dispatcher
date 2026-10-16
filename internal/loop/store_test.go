@@ -13,7 +13,6 @@ import (
 // issuesOnly は issue だけを持つ issue 置き場の部品。
 type issuesOnly struct{}
 
-func (issuesOnly) ScopeKey() string { return "issues" }
 func (issuesOnly) OpenIssues() ([]target.Item, error) {
 	return []target.Item{target.Issue{Number: 1}}, nil
 }

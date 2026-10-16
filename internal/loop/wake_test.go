@@ -85,9 +85,8 @@ func (s wakeLoop) run(t *testing.T) *wakeRun {
 		Precheck:   check,
 		Store: func(workflow.Definition) loop.Store {
 			return memoryStore{
-				scopeKey: func() string { return startScope },
-				observe:  func() ([]target.Item, error) { return s.open, nil },
-				reread:   func(ref target.Ref) (target.Item, error) { return s.read(w.tick, ref), nil },
+				observe: func() ([]target.Item, error) { return s.open, nil },
+				reread:  func(ref target.Ref) (target.Item, error) { return s.read(w.tick, ref), nil },
 			}.store()
 		},
 		Workspaces: func(workflow.Definition) loop.Workspaces { return noWorkspaces{} },
@@ -112,6 +111,7 @@ func (s wakeLoop) run(t *testing.T) *wakeRun {
 			return endedWorker{}
 		},
 		NewSessionID: func() (string, error) { return "session-1", nil },
+		ScopeKeyOf:   sameScope,
 		ScopeKey:     startScope,
 		Log:          io.Discard,
 		Output:       loop.Appender{W: io.Discard},

@@ -314,8 +314,6 @@ type Setting struct {
 // IssueStore は issue 置き場の部品 (system.md §13)。失敗は *target.Failure。一覧は、補助の要求だけが落ちたときに
 // *target.NonFatal を一覧とともに返しうる (受け手は一覧で処理を続ける)。
 type IssueStore interface {
-	// ScopeKey は issue 置き場を指す scope key
-	ScopeKey() string
 	// OpenIssues は open な issue を全件読む
 	OpenIssues() ([]target.Item, error)
 	// ReadIssue は issue 1 件を読み直す。終端になっているか消えていれば Terminal

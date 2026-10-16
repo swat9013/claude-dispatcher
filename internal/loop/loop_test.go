@@ -43,12 +43,13 @@ type tickPlan struct {
 
 // memoryStore は in-memory の置き場。observe は作業対象の種類に依らず同じものを返す。
 type memoryStore struct {
-	scopeKey func() string
-	observe  func() ([]target.Item, error)
-	reread   func(ref target.Ref) (target.Item, error)
+	observe func() ([]target.Item, error)
+	reread  func(ref target.Ref) (target.Item, error)
 }
 
-func (m memoryStore) ScopeKey() string                   { return m.scopeKey() }
+// sameScope は、どの版の workflow 定義にも起動時の scope key を返す。
+func sameScope(workflow.Definition) string { return startScope }
+
 func (m memoryStore) OpenIssues() ([]target.Item, error) { return m.observe() }
 func (m memoryStore) OpenCLs() ([]target.Item, error)    { return m.observe() }
 func (m memoryStore) ReadIssue(n int) (target.Item, error) {
@@ -184,13 +185,8 @@ func (h *harness) run(t *testing.T) []string {
 			return problems
 		},
 		Store: func(workflow.Definition) loop.Store {
-			// scope key と観測は、その tick が読み直した workflow 定義の plan で答える
-			return memoryStore{scopeKey: func() string {
-				if scope := h.plans[tick-1].scope; scope != "" {
-					return scope
-				}
-				return startScope
-			}, observe: func() ([]target.Item, error) {
+			// 観測は、その tick が読み直した workflow 定義の plan で答える
+			return memoryStore{observe: func() ([]target.Item, error) {
 				plan := h.plans[tick-1]
 				h.reads++
 				if plan.stopDuring != nil {
@@ -232,9 +228,16 @@ func (h *harness) run(t *testing.T) []string {
 			return endedWorker{}
 		},
 		NewSessionID: func() (string, error) { return "session-1", nil },
-		ScopeKey:     startScope,
-		Log:          io.Discard,
-		Output:       loop.Appender{W: &h.stdout},
+		// scope key は、その tick が読み直した workflow 定義の plan で答える
+		ScopeKeyOf: func(workflow.Definition) string {
+			if scope := h.plans[tick-1].scope; scope != "" {
+				return scope
+			}
+			return startScope
+		},
+		ScopeKey: startScope,
+		Log:      io.Discard,
+		Output:   loop.Appender{W: &h.stdout},
 		Publish: func(s status.Snapshot) error {
 			h.published = append(h.published, s)
 			return nil
@@ -505,10 +508,11 @@ func TestLineThatCannotBeWrittenToTheLogIsReportedOnStdout(t *testing.T) {
 		Definition: definition(time.Minute, 0),
 		Precheck:   noProblems,
 		Store: func(workflow.Definition) loop.Store {
-			return memoryStore{scopeKey: func() string { return startScope }, observe: func() ([]target.Item, error) { return nil, nil }}.store()
+			return memoryStore{observe: func() ([]target.Item, error) { return nil, nil }}.store()
 		},
 		Workspaces:   func(workflow.Definition) loop.Workspaces { return noWorkspaces{} },
 		NewSessionID: func() (string, error) { return "", nil },
+		ScopeKeyOf:   sameScope,
 		ScopeKey:     startScope,
 		Log:          failingWriter{},
 		Output:       loop.Appender{W: &stdout},
