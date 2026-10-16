@@ -1,16 +1,11 @@
 package loop_test
 
 import (
-	"io"
-	"os"
-	"sync"
-	"syscall"
 	"testing"
 	"time"
 
 	"github.com/swat9013/claude-dispatcher/internal/loop"
 	"github.com/swat9013/claude-dispatcher/internal/precheck"
-	"github.com/swat9013/claude-dispatcher/internal/status"
 	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/trigger"
 	"github.com/swat9013/claude-dispatcher/internal/worker"
@@ -22,8 +17,7 @@ import (
 
 const wakeInterval = time.Minute
 
-// wakeLoop は 1 周期を wakeInterval とする loop。時計は loop の goroutine だけが進める (tick を始めるたびと、wake を
-// 置くたび)。
+// wakeLoop は 1 周期を wakeInterval とする loop。時計は tick を始めるたびに tick の時刻に合わせ、届けた wake の分だけ進む。
 type wakeLoop struct {
 	// def は tick (1 始まり) ごとの workflow 定義
 	def func(tick int) workflow.Definition
@@ -31,30 +25,24 @@ type wakeLoop struct {
 	// (tick は突き合わせの後に workflow 定義を読むので、tick n の突き合わせでは n−1)
 	open []target.Item
 	read func(loaded int, ref target.Ref) target.Item
-	// stoppable は Stop されるまで走り続ける worker の作業対象。ほかの worker は起動するとすぐに終わる
+	// stoppable は Stop されるまで走り続ける worker の作業対象。ほかの worker は起動するとすぐに失敗で終わる
 	stoppable target.Ref
 	// precheck は事前検査。nil なら、どの trigger も通す
 	precheck func(workflow.Definition) []precheck.Problem
 	// deliverWakes は wake を届けるか (届けなければ、再起動は tick と worker の終わりでだけ試みる)
 	deliverWakes bool
-	// period は n 回目 (1 始まり) の周期の明けを返す。nil を返せば、その周期で停止要求を送る
-	period func(n int, w *wakeRun) <-chan time.Time
+	// period は n 回目 (1 始まり) の周期の扱いを返す。wake は、起動した worker の event を loop が受け取り終えてから明ける
+	period func(n int, w *wakeRun) timing
 }
 
-// wakeRun は回している loop の観測。loop の goroutine だけが書き、Run から戻った後に読む。
+// wakeRun は回している loop の観測。loop の goroutine だけが書き、Run から戻った後に読む (rig は jobs を持つ)。
 type wakeRun struct {
+	*rig
 	tick int
-	jobs []worker.Job
 	// wakes は置いた wake の数
 	wakes int
 	// launchesAtTick は tick ごとの、その tick で workflow 定義を読んだ時点の起動の数 (tick の再起動はその後に試みる)
 	launchesAtTick map[int]int
-	// ended は、すぐに終わる worker の event を loop が受け取り終えるたびに 1 つ届く
-	ended chan struct{}
-	// woke は、届けた wake を loop が受け取るたびに 1 つ届く
-	woke chan struct{}
-	// stopped は、Stop した worker の終わりを loop が受け取り終えると閉じる
-	stopped chan struct{}
 }
 
 // wakeSpinLimit を超えて wake を置かれたら、それ以上は届けない (wake が回り続けるときに test を終わらせる)
@@ -62,108 +50,48 @@ const wakeSpinLimit = 1000
 
 func (s wakeLoop) run(t *testing.T) *wakeRun {
 	t.Helper()
-	var (
-		start      = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-		now        = start
-		w          = &wakeRun{launchesAtTick: map[int]int{}, ended: make(chan struct{}, 16), woke: make(chan struct{}, wakeSpinLimit+1), stopped: make(chan struct{})}
-		periods    int
-		signals    = make(chan os.Signal, 1)
-		neverFires = make(chan time.Time)
-	)
-	check := s.precheck
-	if check == nil {
-		check = noProblems
+	w := &wakeRun{rig: newRig(), launchesAtTick: map[int]int{}}
+	periods := 0
+	w.timer = func(d time.Duration) timing {
+		if d == wakeInterval {
+			periods++
+			p := s.period(periods, w)
+			p.keepClock = true
+			return p
+		}
+		w.wakes++
+		if !s.deliverWakes || w.wakes > wakeSpinLimit {
+			return timing{fate: neverFires}
+		}
+		return timing{fate: fires}
 	}
-	exit := loop.Run(loop.Options{
+	w.script = func(job worker.Job) workerScript {
+		if job.Item.Ref() == s.stoppable {
+			return workerScript{untilStopped: true}
+		}
+		return exits(1)
+	}
+	w.run(t, loop.Options{
 		Load: func() (workflow.Definition, error) {
 			w.tick++
 			w.launchesAtTick[w.tick] = len(w.jobs)
-			now = start.Add(time.Duration(w.tick-1) * wakeInterval)
+			w.setClock(time.Duration(w.tick-1) * wakeInterval)
 			return s.def(w.tick), nil
 		},
 		Definition: s.def(1),
-		Precheck:   check,
+		Precheck:   s.precheck,
 		Store: func(workflow.Definition) loop.Store {
 			return memoryStore{
 				observe: func() ([]target.Item, error) { return s.open, nil },
 				reread:  func(ref target.Ref) (target.Item, error) { return s.read(w.tick, ref), nil },
 			}.store()
 		},
-		Workspaces: func(workflow.Definition) loop.Workspaces { return noWorkspaces{} },
-		Launch: func(_ workflow.Definition, job worker.Job, events chan<- worker.Event) loop.Worker {
-			w.jobs = append(w.jobs, job)
-			ref := job.Item.Ref()
-			if ref == s.stoppable {
-				go func() { events <- worker.Started{Target: ref, PID: 1} }()
-				return &stoppableWorker{stop: func() {
-					go func() {
-						events <- worker.Ended{Target: ref, Result: worker.Result{Stopped: true}}
-						close(w.stopped)
-					}()
-				}}
-			}
-			go func() {
-				events <- worker.Started{Target: ref, PID: 1}
-				code := 1
-				events <- worker.Ended{Target: ref, Result: worker.Result{ExitCode: &code}}
-				w.ended <- struct{}{}
-			}()
-			return endedWorker{}
-		},
-		NewSessionID: func() (string, error) { return "session-1", nil },
-		ScopeKeyOf:   sameScope,
-		ScopeKey:     startScope,
-		Log:          io.Discard,
-		Output:       loop.Appender{W: io.Discard},
-		Publish:      func(status.Snapshot) error { return nil },
-		Signals:      signals,
-		Now:          func() time.Time { return now },
-		After: func(d time.Duration) <-chan time.Time {
-			if d == wakeInterval {
-				periods++
-				if ch := s.period(periods, w); ch != nil {
-					return ch
-				}
-				signals <- syscall.SIGINT
-				return neverFires
-			}
-			w.wakes++
-			if !s.deliverWakes || w.wakes > wakeSpinLimit {
-				return neverFires
-			}
-			now = now.Add(d)
-			ch, at := make(chan time.Time), now
-			go func() {
-				ch <- at
-				w.woke <- struct{}{}
-			}()
-			return ch
-		},
 	})
-	if exit != 0 {
-		t.Fatalf("exit = %d", exit)
-	}
 	return w
 }
 
-// stoppableWorker は Stop されるまで走り続ける worker。
-type stoppableWorker struct {
-	once sync.Once
-	stop func()
-}
-
-func (s *stoppableWorker) Stop()                     { s.once.Do(s.stop) }
-func (s *stoppableWorker) Activity() status.Activity { return status.Activity{} }
-
-// firesAfter は、ready から値が届いてから明ける周期。
-func firesAfter(ready <-chan struct{}) <-chan time.Time {
-	ch := make(chan time.Time, 1)
-	go func() {
-		<-ready
-		ch <- time.Time{}
-	}()
-	return ch
-}
+// afterAWake は、loop が wake を 1 つ受け取ってから明ける周期。
+var afterAWake = timing{fate: fires, until: func(r *rig) bool { return r.fired >= 1 }}
 
 func TestWaitingRetryOfACLThatCannotRestartOutsideATickWakesTheLoopOnlyOnceBeforeTheNextTick(t *testing.T) {
 	// CL は tick の中でだけ再起動を試みるので、backoff が明けても次の tick までは起動できない
@@ -177,13 +105,13 @@ func TestWaitingRetryOfACLThatCannotRestartOutsideATickWakesTheLoopOnlyOnceBefor
 		open:         []target.Item{cl},
 		read:         func(int, target.Ref) target.Item { return cl },
 		deliverWakes: true,
-		period: func(n int, w *wakeRun) <-chan time.Time {
+		period: func(n int, w *wakeRun) timing {
 			if n == 1 {
 				// 最初の worker の終わりで置かれた backoff の wake を loop が受け取ってから、周期を明ける
-				return firesAfter(w.woke)
+				return afterAWake
 			}
 			wakesBeforeSecondTick = w.wakes
-			return nil
+			return timing{fate: stopsTheLoop}
 		},
 	}
 
@@ -212,11 +140,11 @@ func TestWakeRestartsWithThePrecheckOfTheLastTick(t *testing.T) {
 			return []precheck.Problem{{Trigger: readyTrigger.Name, Error: "action の先頭の /implement が見つからない"}}
 		},
 		deliverWakes: true,
-		period: func(n int, w *wakeRun) <-chan time.Time {
+		period: func(n int, _ *wakeRun) timing {
 			if n == 1 {
-				return firesAfter(w.woke)
+				return afterAWake
 			}
-			return nil
+			return timing{fate: stopsTheLoop}
 		},
 	}
 
@@ -247,18 +175,12 @@ func TestWaitingRetryForASlotIsRestartedWhenAStoppedWorkerFreesTheSlot(t *testin
 			return readyIssue(ref.Number)
 		},
 		stoppable: running,
-		period: func(n int, w *wakeRun) <-chan time.Time {
-			switch n {
-			case 1:
-				return firesAfter(w.ended)
-			case 2:
-				ch := make(chan time.Time, 1)
-				ch <- time.Time{}
-				return ch
-			case 3:
-				return firesAfter(w.stopped)
+		// 周期 1 は issue#1 の終わりを、周期 3 は止めた issue#2 の終わりを loop が受け取ってから明ける
+		period: func(n int, _ *wakeRun) timing {
+			if n <= 3 {
+				return timing{fate: fires}
 			}
-			return nil
+			return timing{fate: stopsTheLoop}
 		},
 	}
 

@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/swat9013/claude-dispatcher/internal/status"
 	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/trigger"
 	"github.com/swat9013/claude-dispatcher/internal/worker"
@@ -66,12 +65,6 @@ var (
 	triggerRemoved = claimEvent{"triggerの削除", elapsed(hindranceTriggerRemoved)}
 	loopEnded      = claimEvent{"loopの終了", loopEnd}
 )
-
-// fakeWorker は止められたかだけを持つ worker。
-type fakeWorker struct{ stopped bool }
-
-func (w *fakeWorker) Stop()                     { w.stopped = true }
-func (w *fakeWorker) Activity() status.Activity { return status.Activity{} }
 
 func TestClaimTransitions(t *testing.T) {
 	const maxAttempts = 3
@@ -176,7 +169,7 @@ func TestClaimTransitions(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(phaseNames[tt.from]+" x "+tt.event.name, func(t *testing.T) {
 			ref := target.Ref{Kind: target.KindIssue, Number: 1}
-			w := &fakeWorker{}
+			w := &FakeWorker{}
 			c := &claim{phase: tt.from, attempt: tt.attempt, trigger: trigger.Trigger{Name: "t"}, stopReason: stoppedAtTerminal}
 			if tt.from == phaseRunning || tt.from == phaseStopping {
 				c.run = w

@@ -1,8 +1,6 @@
 package loop_test
 
 import (
-	"bytes"
-	"encoding/json"
 	"maps"
 	"strings"
 	"testing"
@@ -34,18 +32,8 @@ func endedThenReadAs(afterEnd target.Issue, failure string) oneTick {
 // 人が読む行を返す。
 func (o oneTick) endLine(t *testing.T) (map[string]any, string) {
 	t.Helper()
-	var log bytes.Buffer
-	_, out := o.runLogging(t, &log)
-	var ends []map[string]any
-	for line := range strings.Lines(log.String()) {
-		var fields map[string]any
-		if err := json.Unmarshal([]byte(line), &fields); err != nil {
-			t.Fatalf("log.jsonl の行 %q: %v", line, err)
-		}
-		if fields["event"] == "end" {
-			ends = append(ends, fields)
-		}
-	}
+	r := o.rig(t)
+	ends := r.events(t, "end")
 	if len(ends) != 1 {
 		t.Fatalf("end の行 = %v, want 1 行", ends)
 	}
@@ -55,7 +43,7 @@ func (o oneTick) endLine(t *testing.T) (map[string]any, string) {
 			got[key] = v
 		}
 	}
-	return got, out
+	return got, r.stdout.String()
 }
 
 func assertEnd(t *testing.T, got, want map[string]any) {

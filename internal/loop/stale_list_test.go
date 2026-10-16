@@ -1,18 +1,12 @@
 package loop_test
 
 import (
-	"bytes"
-	"encoding/json"
 	"errors"
-	"os"
 	"strings"
-	"sync"
-	"syscall"
 	"testing"
 	"time"
 
 	"github.com/swat9013/claude-dispatcher/internal/loop"
-	"github.com/swat9013/claude-dispatcher/internal/status"
 	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/trigger"
 	"github.com/swat9013/claude-dispatcher/internal/worker"
@@ -44,24 +38,28 @@ func (s staleTicks) run(t *testing.T) ([]worker.Job, []map[string]any) {
 	t.Helper()
 	const interval = time.Minute
 	def := workflow.Definition{Tracker: githubTracker, Interval: interval, MaxConcurrent: 1, MaxAttempts: s.maxAttempts, MaxRetryBackoff: 5 * time.Minute, Triggers: s.triggers}
-	var (
-		start      = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-		tick       int
-		jobs       []worker.Job
-		workers    sync.WaitGroup
-		periods    int
-		log        bytes.Buffer
-		stdout     bytes.Buffer
-		signals    = make(chan os.Signal, 1)
-		neverFires = make(chan time.Time)
-	)
-	exit := loop.Run(loop.Options{
+	r := newRig()
+	r.script = func(worker.Job) workerScript { return exits(1) }
+	tick, periods := 0, 0
+	// 周期は、起動した worker の終わりを loop が受け取ってから明ける。時計は workflow 定義を読むたびに周期だけ進むので、
+	// worker の終わりは必ずそれを起動した tick の時刻で受け取る
+	r.timer = func(d time.Duration) timing {
+		if d != interval {
+			return timing{fate: neverFires}
+		}
+		periods++
+		if periods >= s.ticks {
+			return timing{fate: stopsTheLoop}
+		}
+		return timing{fate: fires, keepClock: true}
+	}
+	r.run(t, loop.Options{
 		Load: func() (workflow.Definition, error) {
 			tick++
+			r.setClock(time.Duration(tick-1) * interval)
 			return def, nil
 		},
 		Definition: def,
-		Precheck:   noProblems,
 		Store: func(workflow.Definition) loop.Store {
 			return memoryStore{
 				observe: func() ([]target.Item, error) { return s.open(tick), nil },
@@ -73,58 +71,8 @@ func (s staleTicks) run(t *testing.T) ([]worker.Job, []map[string]any) {
 				},
 			}.store()
 		},
-		Workspaces: func(workflow.Definition) loop.Workspaces { return noWorkspaces{} },
-		Launch: func(_ workflow.Definition, job worker.Job, events chan<- worker.Event) loop.Worker {
-			jobs = append(jobs, job)
-			workers.Add(1)
-			go func() {
-				defer workers.Done()
-				events <- worker.Started{Target: job.Item.Ref(), PID: 1}
-				code := 1
-				events <- worker.Ended{Target: job.Item.Ref(), Result: worker.Result{ExitCode: &code}}
-			}()
-			return endedWorker{}
-		},
-		NewSessionID: func() (string, error) { return "session-1", nil },
-		ScopeKeyOf:   sameScope,
-		ScopeKey:     startScope,
-		Log:          &log,
-		Output:       loop.Appender{W: &stdout},
-		Publish:      func(status.Snapshot) error { return nil },
-		Signals:      signals,
-		// 時計は tick を始めるたびに周期だけ進む。loop の goroutine だけが読み書きするので、worker の終わりは必ず
-		// それを起動した tick の時刻で受け取る
-		Now: func() time.Time { return start.Add(time.Duration(max(tick-1, 0)) * interval) },
-		After: func(d time.Duration) <-chan time.Time {
-			if d != interval {
-				return neverFires
-			}
-			periods++
-			if periods >= s.ticks {
-				signals <- syscall.SIGINT
-				return neverFires
-			}
-			ch := make(chan time.Time, 1)
-			go func() {
-				// 起動した worker の終わりを loop が受け取ってから周期を明ける
-				workers.Wait()
-				ch <- time.Time{}
-			}()
-			return ch
-		},
 	})
-	if exit != 0 {
-		t.Fatalf("exit = %d", exit)
-	}
-	var lines []map[string]any
-	for line := range strings.Lines(log.String()) {
-		var fields map[string]any
-		if err := json.Unmarshal([]byte(line), &fields); err != nil {
-			t.Fatalf("log.jsonl の行 %q: %v", line, err)
-		}
-		lines = append(lines, fields)
-	}
-	return jobs, lines
+	return r.jobs, r.events(t, "")
 }
 
 // eventsNamed は log.jsonl の行のうち event が name のもの。
