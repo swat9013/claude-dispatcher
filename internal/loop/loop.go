@@ -30,9 +30,6 @@ type Store struct {
 	CLs provider.CLStore
 }
 
-// ScopeKey は issue 置き場を指す scope key。
-func (s Store) ScopeKey() string { return s.Issues.ScopeKey() }
-
 // Open は種類の open な作業対象を、その種類の置き場の部品で全件読む。
 func (s Store) Open(kind target.Kind) ([]target.Item, error) {
 	switch kind {
@@ -87,6 +84,8 @@ type Options struct {
 	Launch func(def workflow.Definition, job worker.Job, events chan<- worker.Event) Worker
 	// NewSessionID は worker に渡す session id を発行する
 	NewSessionID func() (string, error)
+	// ScopeKeyOf は workflow 定義の issue 置き場の scope key を、起動時と同じ経路 (provider が Place から返すもの。system.md §13) で返す
+	ScopeKeyOf func(workflow.Definition) string
 	// ScopeKey は起動時の scope key (lock を取った鍵)
 	ScopeKey string
 	// Log は log.jsonl (formats.md §4)、Output は人が読む行の出し先
@@ -297,8 +296,7 @@ func (l *loop) tick() {
 		l.tickFailed("workflow 定義の誤り: " + oneLine(err))
 		return
 	}
-	store := l.o.Store(def)
-	if key := store.ScopeKey(); key != l.o.ScopeKey {
+	if key := l.o.ScopeKeyOf(def); key != l.o.ScopeKey {
 		// 別の置き場を指す版は採らない。この tick は掃除も起動もせず、次の tick の突き合わせは採っていた版の置き場を読む
 		l.tickFailed(fmt.Sprintf("workflow 定義の scope key %s が起動時の %s と違う (loop を起動し直す)", key, l.o.ScopeKey))
 		return
@@ -309,6 +307,7 @@ func (l *loop) tick() {
 		return
 	}
 	l.def, l.blocked = def, l.o.Precheck(def)
+	store := l.o.Store(def)
 	open, err := OpenItems(store, def)
 	var nonFatal *target.NonFatal
 	switch {
