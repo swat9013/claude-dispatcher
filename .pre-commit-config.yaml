@@ -61,11 +61,11 @@ repos:
         language: unsupported
         pass_filenames: false
         always_run: true
-      # ADR の番号の一意。手元の branch の中の重なりは CL の作者が直せるので commit 時に撃つ。
+      # ADR の file 名の形と番号の一意。形の崩れと手元の branch の中の重なりは CL の作者が直せるので commit 時に撃つ。
       # CI の pre-commit job は SKIP で外す (merge の後の main 側の重なりで、無関係な PR の merge ref まで赤くするため)。
       # main 側の重なりは .github/workflows/adr-numbers.yml が拾って issue にする
       - id: repocheck-adr
-        name: repocheck (ADR の番号の一意)
+        name: repocheck (ADR の file 名の形と番号の一意)
         entry: go run ./scripts/repocheck adr
         language: unsupported
         pass_filenames: false
