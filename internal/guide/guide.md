@@ -76,6 +76,7 @@ workflow 定義に誤りがあれば、試運転・`loop` の起動・`doctor` �
 
 1. loop に停止要求を送る (端末なら Ctrl+C。SIGINT・SIGTERM・SIGHUP のどれでもよい)。新しい起動と再起動をやめ、走っている worker が終わるのを待って止まる。worker が走っていなければすぐ止まる
 2. 待てないときは、もう一度停止要求を送る。走っている worker を止めて止まる
+   - claude に SIGKILL を送れず止められなかった worker は、終わりを待たずに残したまま止まる。log.jsonl に `claude を止められない` と `claude を止められないまま止まる` の `error` の行が出て、claude の pid と workspace の path が載る。loop を起動し直す前に、その pid の claude を止め、workspace を片付ける (残したまま起動し直すと、次の loop がその workspace を消すか、同じ workspace で worker を起動しうる)
    - worker が途中まで書いた成果は workspace と remote branch に残る
    - 作業対象が trigger に当たったままなら、次に起動した loop が同じ workspace で worker を起動し直す。session は新しく、attempt も 1 から数え直す。前の成果を拾わせるなら、共通 prompt にそう書く
 3. 使うのをやめるなら、`paths --json` が返す `state_dir` と `workspace_root` を消す (workspace が worktree なら、消した後に clone で `git worktree prune` を撃つ)。tracker の label は残る
@@ -98,6 +99,7 @@ worker は action (と本文) の文面どおりに作業する。dispatcher が
   - worker 1 回分が `limits.run_timeout` を超える
   - action か本文の描画、`hooks.after_create`・`hooks.before_run` が失敗する
 - **作業対象が終端になったら、走っている worker を止めて workspace を消す**。trigger から外れただけでは、走っている worker は止めない
+  - 止めるときに SIGKILL を送れず claude が終わらなければ、worker は終わっていないものとして扱う。`hooks.after_run` を撃たず、workspace を消さず、終わりを確かめず、起動し直さない。loop の終了までそのまま持つ (上の「止める」)
 - 1 つの作業対象で同時に走る worker は 1 本。残りの trigger は、その worker が終わった後の tick で評価し直す
 - worker は repo を編集できるので、`WORKFLOW.md` を書き換えて、自分が次に起動される trigger を変えうる。dispatcher はこれを防がない
 
