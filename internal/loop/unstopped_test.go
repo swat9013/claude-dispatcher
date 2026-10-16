@@ -40,7 +40,7 @@ func TestAWorkerWhoseClaudeCannotBeStoppedIsNeitherVerifiedNorRestartedAndKeepsI
 	r := newRig()
 	periods := 0
 	r.timer = func(kind timerKind, _ time.Duration) timing {
-		if kind != period {
+		if kind != periodTimer {
 			return timing{fate: neverFires}
 		}
 		periods++
