@@ -42,8 +42,9 @@ const (
 // goVersionForm は期待値が取る版の形 (patch まで書いた版)
 var goVersionForm = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
 
-// adrNumberForm は ADR の file 名の先頭 4 桁の番号。この形でない file (README 等) は番号の検査から外す
-var adrNumberForm = regexp.MustCompile(`^([0-9]{4}).*\.md$`)
+// adrNumberForm は ADR の file 名の形: 先頭がちょうど 4 桁の番号で、拡張子が小文字の .md。
+// この形でない file は番号の検査から外し、ADR のつもりの名前 (isADRIntended) なら malformedADRNames が報告する
+var adrNumberForm = regexp.MustCompile(`^([0-9]{4})[^0-9].*\.md$`)
 
 func main() {
 	if len(os.Args) != 2 {
@@ -62,7 +63,7 @@ func main() {
 		var names []string
 		names, err = readADRNames()
 		if err == nil {
-			problems = duplicateADRNumbers(names)
+			problems = append(duplicateADRNumbers(names), malformedADRNames(names)...)
 		}
 	case "ruleset":
 		problems, err = runRuleset()
@@ -199,6 +200,25 @@ func duplicateADRNumbers(names []string) []string {
 		}
 	}
 	return problems
+}
+
+// malformedADRNames は、ADR のつもりの名前のうち adrNumberForm に合わないものを 1 件 1 行で返す。
+// 合わない名前は番号の検査から黙って外れるので、重なりも命名規則 (先頭 4 桁) の崩れも見逃される
+func malformedADRNames(names []string) []string {
+	var problems []string
+	for _, name := range names {
+		if isADRIntended(name) && !adrNumberForm.MatchString(name) {
+			problems = append(problems, fmt.Sprintf("%s の ADR の file 名 %s が形に合わない: 先頭をちょうど 4 桁の番号にし、拡張子を小文字の .md にする",
+				adrDir, name))
+		}
+	}
+	return problems
+}
+
+// isADRIntended は ADR のつもりの名前か: 大文字小文字を問わず .md で終わり、README.md でない。
+// .md で終わらない file (merge で残った .orig 等) は数えない。数えると commit 時の hook が CL と無関係に落ちる
+func isADRIntended(name string) bool {
+	return strings.HasSuffix(strings.ToLower(name), ".md") && name != "README.md"
 }
 
 // checkRuleset は ruleset の required status checks が check 名と一致するかを検査する。
