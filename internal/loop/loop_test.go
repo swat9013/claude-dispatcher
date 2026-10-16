@@ -29,7 +29,7 @@ const startScope = "scope-a"
 // tickPlan は 1 回の tick が読むもの。
 type tickPlan struct {
 	load func(maxConcurrent int) (workflow.Definition, error)
-	// scope はその版から組み立てた issue 置き場の scope key (空なら起動時と同じ)
+	// scope はその版の workflow 定義に ScopeKeyOf が返す scope key (空なら起動時と同じ)
 	scope string
 	// fail が nil でなければ、置き場の観測がこの失敗を返す
 	fail error
