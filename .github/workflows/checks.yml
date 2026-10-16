@@ -90,6 +90,8 @@ jobs:
           gh release download "v$version" -R plantuml/plantuml -p "$(basename "$zip")" -D "$RUNNER_TEMP"
           echo "$(tr -d '[:space:]' < scripts/plantuml.sha256)  $zip" | sha256sum -c
           unzip -q "$zip" -d "$RUNNER_TEMP/plantuml"
+          # 入れた binary の -version を log に残す (graphviz が無いと 0 以外で終わるので、exit code は見ない)
+          "$RUNNER_TEMP/plantuml/plantuml" -version || true
           echo "$RUNNER_TEMP/plantuml" >> "$GITHUB_PATH"
       # ADR の番号の一意 (repocheck-adr) は外す。並行する PR が同じ番号を取って merge されると、CL の変更と無関係に
       # 後の PR の merge ref が赤くなる。main 側の重なりは adr-numbers.yml が拾う (CONTRIBUTING.md の「gate」)

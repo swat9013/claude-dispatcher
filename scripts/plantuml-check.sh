@@ -17,17 +17,16 @@ if ! command -v plantuml >/dev/null; then
   echo "  $install" >&2
   exit 1
 fi
-# 1 行目は `PlantUML version <版> ...`
-# 版は stdout だけから取る (Java の wrapper は stderr に警告を出しうる)。stderr は失敗の案内にだけ使う
-errlog=$(mktemp)
-trap 'rm -f "$errlog"' EXIT
-if ! out=$(plantuml -version 2>"$errlog"); then
-  echo "plantuml -version が失敗した。入れ直す (CONTRIBUTING.md の「セットアップ」):" >&2
-  cat "$errlog" >&2
+# 版は `PlantUML version <版> ...` の行から取る。-version の exit code は見ない (graphviz の dot が無いと、
+# 版を出した上で 0 以外を返す。この gate は dot を使わない)。Java の wrapper の警告など、他の行は読み飛ばす
+out=$(plantuml -version 2>&1) || true
+have=$(awk '/^PlantUML version /{print $3; exit}' <<<"$out")
+if [ -z "$have" ]; then
+  echo "plantuml -version から版を読めない。入れ直す (CONTRIBUTING.md の「セットアップ」):" >&2
+  echo "$out" >&2
   echo "  $install" >&2
   exit 1
 fi
-have=$(awk 'NR==1{print $3}' <<<"$out")
 if [ "$have" != "$want" ]; then
   echo "手元の plantuml は '${have}' で、固定した版は ${want}。入れ直す (CONTRIBUTING.md の「セットアップ」):" >&2
   echo "  $install" >&2

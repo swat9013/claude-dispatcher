@@ -15,10 +15,21 @@ echo "$*" >> "$STUB_CALLS"
 if [ "$1" = "-version" ]; then
   [ "$STUB_VERSION" = broken ] && { echo "no java" >&2; exit 3; }
   echo "Picked up JAVA_TOOL_OPTIONS: x" >&2
-  echo "PlantUML version $STUB_VERSION / abc"; exit 0
+  echo "PlantUML version $STUB_VERSION / abc"
+  # dot が無いときの native binary と同じく、版を出した上で 0 以外を返す
+  [ -n "${NO_DOT:-}" ] && exit 1
+  exit 0
 fi
 [ -z "${FAIL_SYNTAX:-}" ]
 `
+
+func TestPlantumlCheck_versionが0以外で終わっても版を出していれば構文を確かめる(t *testing.T) {
+	t.Setenv("NO_DOT", "1")
+	code, out, called := run(t, "1.2026.8", false)
+	if code != 0 || !strings.Contains(called, "--check-syntax docs/design/a.puml") {
+		t.Fatalf("exit %d, out %q, calls %q", code, out, called)
+	}
+}
 
 func run(t *testing.T, stubVersion string, failSyntax bool) (int, string, string) {
 	t.Helper()
@@ -71,7 +82,7 @@ func TestPlantumlCheck_構文の誤りがあれば落とす(t *testing.T) {
 
 func TestPlantumlCheck_版を取れなければ理由と入れ方を出して落とす(t *testing.T) {
 	code, out, called := run(t, "broken", false)
-	if code != 1 || strings.Contains(called, "--check-syntax") || !strings.Contains(out, "no java") || !strings.Contains(out, "入れ直す") {
+	if code != 1 || strings.Contains(called, "--check-syntax") || !strings.Contains(out, "no java") || !strings.Contains(out, "読めない") {
 		t.Fatalf("exit %d, out %q, calls %q", code, out, called)
 	}
 }
