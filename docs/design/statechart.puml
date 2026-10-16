@@ -26,7 +26,10 @@ Running --> Stopping : 停止要求2回目
 Running --> [*] : loopの終了
 
 ' --- 止めている ---
-Stopping --> NoClaim : worker終了 / claim を解く
+Stopping --> NoClaim : worker終了 [止められて終わった] / claim を解く
+Stopping --> AwaitingVerification : worker終了 [止める前に終わっていた]
+Stopping --> AwaitingVerification : stall上限 [止める前に終わっていた]
+Stopping --> AwaitingVerification : 上限時間 [止める前に終わっていた]
 Stopping --> [*] : loopの終了
 
 ' --- 終わりを確かめ待ち ---
@@ -44,6 +47,7 @@ WaitingRetry --> WaitingRetry : 空きが無い
 WaitingRetry --> WaitingRetry : 読み直しの失敗
 WaitingRetry --> WaitingRetry : 当たるか未決
 WaitingRetry --> WaitingRetry : 曖昧なCL
+WaitingRetry --> WaitingRetry : branchの重なり
 WaitingRetry --> WaitingRetry : 先のtriggerに当たる
 WaitingRetry --> WaitingRetry : 事前検査に落ちた
 WaitingRetry --> WaitingRetry : workflow定義を採れない
@@ -72,6 +76,7 @@ Abandoned --> [*] : loopの終了
 ' uncovered: NoClaim x backoffの明け — backoff を待つのは再起動待ちだけ
 ' uncovered: NoClaim x 空きが無い — claim を立てずに起動を見送るだけ。空きは次の tick の評価で回す (§7 の tick の手順 5)
 ' uncovered: NoClaim x 曖昧なCL — 曖昧な CL は CL 側の trigger の対象から外すので、候補にならない (§6)
+' uncovered: NoClaim x branchの重なり — 重なる CL は起動しないので claim は立たない (§6)
 ' uncovered: NoClaim x 事前検査に落ちた — 落ちた trigger は評価から外すので、その trigger では候補にならない (§7 の tick の手順 2)
 ' uncovered: NoClaim x workflow定義を採れない — その tick は何も起動しないので、claim は立たない (読めない・文法に合わない: §7 の tick の手順 2。scope key が変わった: §9)
 ' uncovered: NoClaim x 停止要求1回目 — claim が無いので変わる記憶が無い。以後は起動しない (候補になる の条件)
@@ -87,14 +92,13 @@ Abandoned --> [*] : loopの終了
 ' uncovered: Running x backoffの明け — backoff を待つのは再起動待ちだけ
 ' uncovered: Running x 空きが無い — 空きを待つのは起動と再起動だけ。走っている worker は既に枠を使っている
 ' uncovered: Running x 曖昧なCL — 走っている worker は終端でだけ止める (ADR 0009)
+' uncovered: Running x branchの重なり — 走っている worker は終端でだけ止める (ADR 0009)
 ' uncovered: Running x 事前検査に落ちた — 事前検査は起動と再起動だけを止め、走っている worker は止めない
 ' uncovered: Running x workflow定義を採れない — 突き合わせは続け、走っている worker は止めない (§7 の tick の手順 2)
 ' uncovered: Running x 先のtriggerに当たる — 走っている worker は終端でだけ止める (ADR 0009)
 ' uncovered: Running x triggerの削除 — 走っている worker は終端でだけ止め、trigger を見ない (ADR 0009)
 ' 止めている
 ' uncovered: Stopping x 候補になる — claim されている作業対象は候補にならない (§4 の候補の定義)
-' uncovered: Stopping x stall上限 — loop が止めたことを優先し、stall では数えない
-' uncovered: Stopping x 上限時間 — loop が止めたことを優先し、上限時間では数えない
 ' uncovered: Stopping x 終端の観測 — 止めている worker の作業対象は読み直さず、worker が終わるのを待つ
 ' uncovered: Stopping x trigger外れの観測 — 止めている worker の作業対象は読み直さず、worker が終わるのを待つ
 ' uncovered: Stopping x 当たったままの観測 — 止めている worker の作業対象は読み直さず、worker が終わるのを待つ
@@ -103,12 +107,13 @@ Abandoned --> [*] : loopの終了
 ' uncovered: Stopping x backoffの明け — backoff を待つのは再起動待ちだけ
 ' uncovered: Stopping x 空きが無い — 空きを待つのは起動と再起動だけ
 ' uncovered: Stopping x 曖昧なCL — 止めている worker の作業対象は読み直さず、worker が終わるのを待つ
+' uncovered: Stopping x branchの重なり — 止めている worker の作業対象は読み直さず、worker が終わるのを待つ
 ' uncovered: Stopping x 事前検査に落ちた — 既に止めているので、起動を止める検査は関わらない
 ' uncovered: Stopping x workflow定義を採れない — 既に止めているので、起動を止める検査は関わらない
 ' uncovered: Stopping x 停止要求1回目 — 既に止めている
 ' uncovered: Stopping x 停止要求2回目 — 既に止めている
 ' uncovered: Stopping x 先のtriggerに当たる — 止めている worker の作業対象は読み直さず、worker が終わるのを待つ
-' uncovered: Stopping x triggerの削除 — 止めている worker は trigger を見ずに終わるのを待ち、終われば claim を解く
+' uncovered: Stopping x triggerの削除 — 止めている worker は trigger を見ずに終わるのを待つ。止められて終われば claim を解き、止める前に終わっていれば起動したときの trigger で終わりを確かめる
 ' 終わりを確かめ待ち
 ' uncovered: AwaitingVerification x 候補になる — claim されている作業対象は候補にならない (§4 の候補の定義)
 ' uncovered: AwaitingVerification x worker終了 — worker は既に終わっている
@@ -117,6 +122,7 @@ Abandoned --> [*] : loopの終了
 ' uncovered: AwaitingVerification x backoffの明け — backoff を待つのは再起動待ちだけ
 ' uncovered: AwaitingVerification x 空きが無い — 確かめは worker を起動しないので、空きを要さない
 ' uncovered: AwaitingVerification x 曖昧なCL — 確かめは作業対象 1 件の読み直しで決め、open な一覧でしか決まらない曖昧さを見ない
+' uncovered: AwaitingVerification x branchの重なり — 確かめは作業対象 1 件の読み直しで決め、起動を伴わない
 ' uncovered: AwaitingVerification x 事前検査に落ちた — 確かめは読み直しの結果で決まり、起動を伴わない
 ' uncovered: AwaitingVerification x workflow定義を採れない — 確かめ直しは workflow 定義の読み直しより先に撃つので、その結果に左右されない
 ' uncovered: AwaitingVerification x 停止要求1回目 — 段階は変わらない。停止要求の後は tick を撃たないので確かめ直さず、loopの終了 で消える
@@ -141,6 +147,7 @@ Abandoned --> [*] : loopの終了
 ' uncovered: Abandoned x backoffの明け — 打ち切りは再起動を予定しない
 ' uncovered: Abandoned x 空きが無い — 打ち切りは起動を待たない
 ' uncovered: Abandoned x 曖昧なCL — 曖昧になったことでは打ち切りを解かない。古い一覧で曖昧に見えただけで解けるため
+' uncovered: Abandoned x branchの重なり — 打ち切りを解く判定は trigger の述語で行い、branch を見ない
 ' uncovered: Abandoned x 事前検査に落ちた — 打ち切りを解く判定は trigger の述語で行い、事前検査の結果を見ない
 ' uncovered: Abandoned x workflow定義を採れない — その tick は打ち切りを解く判定を撃たず、打ち切りを保つ
 ' uncovered: Abandoned x 停止要求1回目 — 打ち切りは loopの終了 まで残る
