@@ -318,7 +318,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。claim の段階と打�
 - **別の端末からは `status` で見る**。loop が state dir に書き出す状態 file を読む
   - 状態 file は表示のためだけの痕跡で、loop は読み戻さない
 - **permission posture は workflow 定義の起動引数が決める**
-  - 雛形は `--permission-mode auto` を置く
+  - 雛形は `--permission-mode auto` を置き、worker が自分を起こし直す再入の tool (`ScheduleWakeup`・`CronCreate`・`CronList`・`CronDelete`) を `--disallowedTools` で塞ぐ
   - permission 層を外すかどうかは利用者が決める
 - **依存 CLI (置き場の CLI・claude・git) の path は CLI が自分でも解決する**。最小の PATH の shell (ssh 越しなど) から起動されても動くようにする
   - 解決するのは workflow 定義が撃つ CLI だけ。tracker の CLI は `tracker.kind` で決まる (`github` は gh、`gitlab` は glab、`jira` は acli)。`jira` では `cl.kind` の CLI (gh か glab) も撃つ。使わない置き場の CLI が無いことは、PATH を書き換える理由にしない
