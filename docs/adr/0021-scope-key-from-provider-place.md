@@ -15,7 +15,7 @@ scope key は lock の鍵と state dir の鍵に使う。どちらも tracker �
 
 ## Decision
 
-**scope key は、issue 置き場の役割を担う provider が、読んだ置き場 (Place) から返す。** issue 置き場の部品を組まずに得る。
+**scope key は、issue 置き場の役割を担う provider が、読んだ置き場 (Place) から返す。** issue 置き場の部品を組まずに得る。scope key が issue 置き場の識別子であることは変えない。
 
 - tracker ごとの粒度 (GitHub は owner と repo、GitLab は host と repo の path、Jira は site と project key) は provider の外に出さない (system.md §13)
 - ADR 0009 の残りの決定 (lock の鍵を scope key にすること、1 つの issue 置き場を 1 台から回すことを ADR 0011 が置き換えたことを含む) はそのまま保つ
