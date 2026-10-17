@@ -1,19 +1,14 @@
 package loop_test
 
 import (
-	"bytes"
-	"encoding/json"
 	"errors"
-	"io"
 	"maps"
-	"os"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/swat9013/claude-dispatcher/internal/loop"
-	"github.com/swat9013/claude-dispatcher/internal/status"
 	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/trigger"
 	"github.com/swat9013/claude-dispatcher/internal/worker"
@@ -54,25 +49,14 @@ func (b branchWorkspaces) Branch(ref target.Ref) (string, error) { return b[ref]
 // run は tick を 1 回だけ回し、起動した worker と人が読む行を返す。
 func (o oneTick) run(t *testing.T) ([]worker.Job, string) {
 	t.Helper()
-	return o.runLogging(t, io.Discard)
+	r := o.rig(t)
+	return r.jobs, r.stdout.String()
 }
 
 // recheckSkips は tick を 1 回だけ回し、log.jsonl に書いた recheck_skip の行を返す。
 func (o oneTick) recheckSkips(t *testing.T) []map[string]any {
 	t.Helper()
-	var log bytes.Buffer
-	o.runLogging(t, &log)
-	var skips []map[string]any
-	for line := range strings.Lines(log.String()) {
-		var fields map[string]any
-		if err := json.Unmarshal([]byte(line), &fields); err != nil {
-			t.Fatalf("log.jsonl の行 %q: %v", line, err)
-		}
-		if fields["event"] == "recheck_skip" {
-			skips = append(skips, fields)
-		}
-	}
-	return skips
+	return o.rig(t).logEvents(t, "recheck_skip")
 }
 
 // assertOneRecheckSkip は、recheck_skip の行が 1 行だけで、その target・trigger・reason の値が want と同じことを確かめる
@@ -84,19 +68,20 @@ func assertOneRecheckSkip(t *testing.T, skips []map[string]any, want map[string]
 	}
 }
 
-// runLogging は tick を 1 回だけ回し、log.jsonl の行を log に書く。
-func (o oneTick) runLogging(t *testing.T, log io.Writer) ([]worker.Job, string) {
+// rig は tick を 1 回だけ回した fixture を返す。
+func (o oneTick) rig(t *testing.T) *rig {
 	t.Helper()
 	def := workflow.Definition{Tracker: githubTracker, Interval: time.Minute, MaxConcurrent: max(o.maxConcurrent, 1), MaxAttempts: 1, MaxRetryBackoff: 5 * time.Minute, Triggers: o.triggers}
-	var stdout bytes.Buffer
-	var jobs []worker.Job
+	r := newRig()
+	r.script = func(worker.Job) workerScript {
+		s := exits(0)
+		s.result.Failure = o.failure
+		return s
+	}
 	// tick の後に受ける停止要求で、起動した worker の終わりを待って止まる
-	signals := make(chan os.Signal, 1)
-	signals <- syscall.SIGINT
-	exit := loop.Run(loop.Options{
-		Load:       func() (workflow.Definition, error) { return def, nil },
+	r.signals <- syscall.SIGINT
+	r.run(t, loop.Options{
 		Definition: def,
-		Precheck:   noProblems,
 		Store: func(workflow.Definition) loop.Store {
 			return memoryStore{
 				observe: func() ([]target.Item, error) { return o.open, nil },
@@ -104,29 +89,8 @@ func (o oneTick) runLogging(t *testing.T, log io.Writer) ([]worker.Job, string) 
 			}.store()
 		},
 		Workspaces: func(workflow.Definition) loop.Workspaces { return branchWorkspaces(o.branches) },
-		Launch: func(_ workflow.Definition, job worker.Job, events chan<- worker.Event) loop.Worker {
-			jobs = append(jobs, job)
-			go func() {
-				events <- worker.Started{Target: job.Item.Ref(), PID: 1}
-				code := 0
-				events <- worker.Ended{Target: job.Item.Ref(), Result: worker.Result{ExitCode: &code, Failure: o.failure}}
-			}()
-			return endedWorker{}
-		},
-		NewSessionID: func() (string, error) { return "session-1", nil },
-		ScopeKeyOf:   sameScope,
-		ScopeKey:     startScope,
-		Log:          log,
-		Output:       loop.Appender{W: &stdout},
-		Publish:      func(status.Snapshot) error { return nil },
-		Signals:      signals,
-		Now:          func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) },
-		After:        func(time.Duration) <-chan time.Time { return nil },
 	})
-	if exit != 0 {
-		t.Fatalf("exit = %d", exit)
-	}
-	return jobs, stdout.String()
+	return r
 }
 
 func closedWhenReadAgain() oneTick {

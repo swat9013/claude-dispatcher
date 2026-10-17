@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/swat9013/claude-dispatcher/internal/status"
 	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/trigger"
 	"github.com/swat9013/claude-dispatcher/internal/worker"
@@ -49,6 +48,9 @@ var (
 	stoppedEnd     = claimEvent{"worker終了 [止められて終わった]", ended(worker.Result{Stopped: true})}
 	stall          = claimEvent{"stall上限", ended(worker.Result{Failure: "stall"})}
 	timeLimit      = claimEvent{"上限時間", ended(worker.Result{Failure: "上限時間"})}
+	stallUnstopped = claimEvent{"stall上限 [SIGKILL を送れず claude が残る]", ended(worker.Result{Failure: "stall", Unstopped: true})}
+	timeUnstopped  = claimEvent{"上限時間 [SIGKILL を送れず claude が残る]", ended(worker.Result{Failure: "上限時間", Unstopped: true})}
+	unstoppedEnd   = claimEvent{"worker終了 [SIGKILL を送れず claude が残る]", ended(worker.Result{Stopped: true, Unstopped: true})}
 	terminal       = claimEvent{"終端の観測", seen(observation{observed: trigger.ObservedTerminal})}
 	leftTrigger    = claimEvent{"trigger外れの観測", seen(observation{observed: trigger.ObservedLeftTrigger})}
 	stillMatches   = claimEvent{"当たったままの観測", seen(observation{observed: trigger.ObservedStillMatches})}
@@ -67,12 +69,6 @@ var (
 	loopEnded      = claimEvent{"loopの終了", loopEnd}
 )
 
-// fakeWorker は止められたかだけを持つ worker。
-type fakeWorker struct{ stopped bool }
-
-func (w *fakeWorker) Stop()                     { w.stopped = true }
-func (w *fakeWorker) Activity() status.Activity { return status.Activity{} }
-
 func TestClaimTransitions(t *testing.T) {
 	const maxAttempts = 3
 	noIO := claimIO{}
@@ -87,6 +83,8 @@ func TestClaimTransitions(t *testing.T) {
 		{phaseRunning, 1, workerEnd, phaseAwaitingVerification, claimIO{readItem: true}},
 		{phaseRunning, 1, stall, phaseAwaitingVerification, claimIO{readItem: true}},
 		{phaseRunning, 1, timeLimit, phaseAwaitingVerification, claimIO{readItem: true}},
+		{phaseRunning, 1, stallUnstopped, phaseStopping, noIO},
+		{phaseRunning, 1, timeUnstopped, phaseStopping, noIO},
 		{phaseRunning, 1, terminal, phaseStopping, claimIO{stopWorker: true}},
 		{phaseRunning, 1, firstStop, phaseRunning, noIO},
 		{phaseRunning, 1, secondStop, phaseStopping, claimIO{stopWorker: true}},
@@ -107,6 +105,9 @@ func TestClaimTransitions(t *testing.T) {
 
 		// --- 止めている ---
 		{phaseStopping, 1, stoppedEnd, phaseStopping, claimIO{removeWorkspace: true, exit: release}},
+		{phaseStopping, 1, unstoppedEnd, phaseStopping, noIO},
+		{phaseStopping, 1, stallUnstopped, phaseStopping, noIO},
+		{phaseStopping, 1, timeUnstopped, phaseStopping, noIO},
 		{phaseStopping, 1, workerEnd, phaseAwaitingVerification, claimIO{readItem: true}},
 		{phaseStopping, 1, stall, phaseAwaitingVerification, claimIO{readItem: true}},
 		{phaseStopping, 1, timeLimit, phaseAwaitingVerification, claimIO{readItem: true}},
@@ -176,7 +177,7 @@ func TestClaimTransitions(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(phaseNames[tt.from]+" x "+tt.event.name, func(t *testing.T) {
 			ref := target.Ref{Kind: target.KindIssue, Number: 1}
-			w := &fakeWorker{}
+			w := &FakeWorker{}
 			c := &claim{phase: tt.from, attempt: tt.attempt, trigger: trigger.Trigger{Name: "t"}, stopReason: stoppedAtTerminal}
 			if tt.from == phaseRunning || tt.from == phaseStopping {
 				c.run = w
@@ -205,6 +206,26 @@ func TestLoopEndedLeavesAnErrorLine(t *testing.T) {
 		if lines := c.loopEnded().lines; len(lines) != 1 || lines[0].errorMessage == "" {
 			t.Errorf("%s の loop の終了の行 = %+v, want error の行 1 つ", phaseNames[p], lines)
 		}
+	}
+}
+
+func TestAnUnstoppedWorkerIsHeldUntilTheLoopEnds(t *testing.T) {
+	ref := target.Ref{Kind: target.KindIssue, Number: 1}
+	c := &claim{phase: phaseRunning, attempt: 1, trigger: trigger.Trigger{Name: "t"}, run: &FakeWorker{}, pid: 42}
+	env := claimEnv{now: time.Unix(0, 0), maxAttempts: 3, maxRetryBackoff: time.Minute, maxConcurrent: 1}
+
+	e := c.workerEnded(ref, worker.Result{Failure: "stall", Unstopped: true})
+
+	if len(e.lines) != 1 || e.lines[0].errorMessage == "" {
+		t.Fatalf("行 = %+v, want error の行 1 つ", e.lines)
+	}
+	for _, later := range []claimEvent{terminal, secondStop, backoffDone, stoppedEnd} {
+		if got := later.fire(c, ref, env); got.removeWorkspace || got.startWorker || got.readItem || got.exit != stay {
+			t.Errorf("%s の後の I/O = %+v, want 何もしない", later.name, got)
+		}
+	}
+	if lines := c.loopEnded().lines; len(lines) != 1 || lines[0].errorMessage == "" {
+		t.Errorf("loop の終了の行 = %+v, want error の行 1 つ", lines)
 	}
 }
 

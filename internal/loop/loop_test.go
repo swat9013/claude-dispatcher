@@ -1,13 +1,10 @@
 package loop_test
 
 import (
-	"bytes"
 	"errors"
-	"io"
 	"os"
 	"slices"
 	"strings"
-	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -24,8 +21,6 @@ import (
 
 // 周期を待つ振る舞い (tick ごとの読み直し・周期の選び方・停止)。周期を分の単位で選ぶ振る舞いは black-box テストが待てないので、ここで見る。
 
-const startScope = "scope-a"
-
 // tickPlan は 1 回の tick が読むもの。
 type tickPlan struct {
 	load func(maxConcurrent int) (workflow.Definition, error)
@@ -41,45 +36,8 @@ type tickPlan struct {
 	blocked []string
 }
 
-// memoryStore は in-memory の置き場。observe は作業対象の種類に依らず同じものを返す。
-type memoryStore struct {
-	observe func() ([]target.Item, error)
-	reread  func(ref target.Ref) (target.Item, error)
-}
-
-// sameScope は、どの版の workflow 定義にも起動時の scope key を返す。
-func sameScope(workflow.Definition) string { return startScope }
-
-func (m memoryStore) OpenIssues() ([]target.Item, error) { return m.observe() }
-func (m memoryStore) OpenCLs() ([]target.Item, error)    { return m.observe() }
-func (m memoryStore) ReadIssue(n int) (target.Item, error) {
-	return m.reread(target.Ref{Kind: target.KindIssue, Number: n})
-}
-func (m memoryStore) ReadCL(n int) (target.Item, error) {
-	return m.reread(target.Ref{Kind: target.KindCL, Number: n})
-}
-
-// store は m を issue 置き場と CL 置き場の両方の部品にした置き場。
-func (m memoryStore) store() loop.Store { return loop.Store{Issues: m, CLs: m} }
-
-// noWorkspaces は workspace を持たない掃除の口。
-type noWorkspaces struct{}
-
-func (noWorkspaces) Existing() ([]target.Ref, error)   { return nil, nil }
-func (noWorkspaces) Remove(target.Ref) error           { return nil }
-func (noWorkspaces) Branch(target.Ref) (string, error) { return "", nil }
-
-// noProblems は、どの trigger も事前検査に通す。
-func noProblems(workflow.Definition) []precheck.Problem { return nil }
-
-// endedWorker は起動するとすぐに正常に終わる worker。
-type endedWorker struct{}
-
-func (endedWorker) Stop() {}
-
-func (endedWorker) Activity() status.Activity { return status.Activity{} }
-
-// harness は plans を順に 1 tick ずつ回し、読み切ったところで stop の停止要求を送る。
+// harness は plans を順に 1 tick ずつ回し、読み切ったところで stop の停止要求を送る。timer (周期と再起動の予定) は、
+// 起動した worker の event を loop が処理し終えてから、予定の時刻の順に明け、時計をその時刻へ進める。
 type harness struct {
 	plans []tickPlan
 	// start は起動時の workflow 定義の版。nil なら definition
@@ -95,60 +53,15 @@ type harness struct {
 	// まだ起動していない作業対象の読み直しを数えない (近似。同じ作業対象を claim を解いてから起動し直す plan では、2 回目の
 	// 起動の直前の読み直しも数える)
 	rereadFailures int
-	// inflight は、起動した worker のうち event を loop が受け取り終えていない数。周期と再起動の予定はそれを待ってから進める
-	inflight int
-	settled  *sync.Cond
-	stopOnce sync.Once
-	// clock は loop の時計。周期と再起動の予定が届くたびに、待った分だけ進める
-	mu    sync.Mutex
-	clock time.Time
-	// 観測の結果
+	// 観測の結果 (rig は jobs・waits・stdout・published を持つ)
+	*rig
 	reads   int
 	rereads int
-	jobs    []worker.Job
-	waits   []time.Duration
-	stdout  bytes.Buffer
-	// published は書き出した状態 file の中身
-	published []status.Snapshot
 }
 
 func definition(interval time.Duration, maxConcurrent int) workflow.Definition {
 	return workflow.Definition{Tracker: githubTracker, Interval: interval, MaxConcurrent: maxConcurrent, MaxAttempts: 1, MaxRetryBackoff: 5 * time.Minute,
 		Triggers: []trigger.Trigger{{Name: "implement", On: target.KindIssue}}}
-}
-
-func (h *harness) now() time.Time {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.clock
-}
-
-// begin と done は起動した worker の event の受け渡しを数え、waitSettled は受け渡しが無くなるまで待つ。
-func (h *harness) begin() {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.inflight++
-}
-
-func (h *harness) done() {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.inflight--
-	h.settled.Broadcast()
-}
-
-func (h *harness) waitSettled() {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	for h.inflight > 0 {
-		h.settled.Wait()
-	}
-}
-
-func (h *harness) advance(d time.Duration) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.clock = h.clock.Add(d)
 }
 
 // withAttempts は harness の attempt の上限を定義に写す。
@@ -159,18 +72,20 @@ func (h *harness) withAttempts(def workflow.Definition) workflow.Definition {
 
 func (h *harness) run(t *testing.T) []string {
 	t.Helper()
-	if h.stop == nil {
-		h.stop = syscall.SIGINT
-	}
-	signals := make(chan os.Signal, 4)
-	h.clock = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	h.settled = sync.NewCond(&h.mu)
+	h.rig = newRig()
+	h.stopSignal = h.stop
 	tick := 0
+	h.timer = func(timerKind, time.Duration) timing {
+		if tick >= len(h.plans) {
+			return timing{fate: stopsTheLoop}
+		}
+		return timing{fate: fires}
+	}
 	start := definition(time.Minute, h.maxConcurrent)
 	if h.start != nil {
 		start, _ = h.start(h.maxConcurrent)
 	}
-	exit := loop.Run(loop.Options{
+	h.rig.run(t, loop.Options{
 		Load: func() (workflow.Definition, error) {
 			tick++
 			def, err := h.plans[tick-1].load(h.maxConcurrent)
@@ -190,7 +105,7 @@ func (h *harness) run(t *testing.T) []string {
 				plan := h.plans[tick-1]
 				h.reads++
 				if plan.stopDuring != nil {
-					signals <- plan.stopDuring
+					h.signals <- plan.stopDuring
 				}
 				if plan.fail != nil {
 					return nil, plan.fail
@@ -215,19 +130,6 @@ func (h *harness) run(t *testing.T) []string {
 				return target.Issue{Number: ref.Number}, nil
 			}}.store()
 		},
-		Workspaces: func(workflow.Definition) loop.Workspaces { return noWorkspaces{} },
-		Launch: func(_ workflow.Definition, job worker.Job, events chan<- worker.Event) loop.Worker {
-			h.jobs = append(h.jobs, job)
-			h.begin()
-			go func() {
-				defer h.done()
-				events <- worker.Started{Target: job.Item.Ref(), PID: 1}
-				code := 0
-				events <- worker.Ended{Target: job.Item.Ref(), Result: worker.Result{ExitCode: &code}}
-			}()
-			return endedWorker{}
-		},
-		NewSessionID: func() (string, error) { return "session-1", nil },
 		// scope key は、その tick が読み直した workflow 定義の plan で答える
 		ScopeKeyOf: func(workflow.Definition) string {
 			if scope := h.plans[tick-1].scope; scope != "" {
@@ -235,34 +137,7 @@ func (h *harness) run(t *testing.T) []string {
 			}
 			return startScope
 		},
-		ScopeKey: startScope,
-		Log:      io.Discard,
-		Output:   loop.Appender{W: &h.stdout},
-		Publish: func(s status.Snapshot) error {
-			h.published = append(h.published, s)
-			return nil
-		},
-		Signals: signals,
-		Now:     h.now,
-		After: func(d time.Duration) <-chan time.Time {
-			h.waits = append(h.waits, d)
-			ch := make(chan time.Time, 1)
-			last := tick >= len(h.plans)
-			go func() {
-				h.waitSettled()
-				if last {
-					h.stopOnce.Do(func() { signals <- h.stop })
-					return
-				}
-				h.advance(d)
-				ch <- time.Time{}
-			}()
-			return ch
-		},
 	})
-	if exit != 0 {
-		t.Fatalf("exit = %d", exit)
-	}
 	return strings.Split(strings.TrimSpace(h.stdout.String()), "\n")
 }
 
@@ -499,31 +374,13 @@ type failingWriter struct{}
 func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("disk full") }
 
 func TestLineThatCannotBeWrittenToTheLogIsReportedOnStdout(t *testing.T) {
-	var stdout bytes.Buffer
-	signals := make(chan os.Signal, 1)
-	signals <- syscall.SIGINT
+	r := newRig()
+	r.signals <- syscall.SIGINT
 
-	loop.Run(loop.Options{
-		Load:       func() (workflow.Definition, error) { return definition(time.Minute, 0), nil },
-		Definition: definition(time.Minute, 0),
-		Precheck:   noProblems,
-		Store: func(workflow.Definition) loop.Store {
-			return memoryStore{observe: func() ([]target.Item, error) { return nil, nil }}.store()
-		},
-		Workspaces:   func(workflow.Definition) loop.Workspaces { return noWorkspaces{} },
-		NewSessionID: func() (string, error) { return "", nil },
-		ScopeKeyOf:   sameScope,
-		ScopeKey:     startScope,
-		Log:          failingWriter{},
-		Output:       loop.Appender{W: &stdout},
-		Publish:      func(status.Snapshot) error { return nil },
-		Signals:      signals,
-		Now:          time.Now,
-		After:        func(time.Duration) <-chan time.Time { return nil },
-	})
+	r.run(t, loop.Options{Definition: definition(time.Minute, 0), Log: failingWriter{}})
 
-	if !strings.Contains(stdout.String(), "log.jsonl に tick の行を書けない: disk full") {
-		t.Fatalf("出力:\n%s", stdout.String())
+	if !strings.Contains(r.stdout.String(), "log.jsonl に tick の行を書けない: disk full") {
+		t.Fatalf("出力:\n%s", r.stdout.String())
 	}
 }
 
@@ -639,6 +496,3 @@ func TestTickLineNamesAMergeRequestWithItsGitLabReference(t *testing.T) {
 		}
 	}
 }
-
-// githubTracker は、テストの workflow 定義の tracker (作業対象を人が読む行に出す呼び方を決める)。
-var githubTracker = workflow.Tracker{Kind: provider.GitHub}

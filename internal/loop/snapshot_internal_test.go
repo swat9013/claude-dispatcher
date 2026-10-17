@@ -21,18 +21,12 @@ type lines []Line
 
 func (l *lines) Show(line Line) { *l = append(*l, line) }
 
-// activeWorker は活動を 1 つ持つ走っている worker。
-type activeWorker struct{ activity status.Activity }
-
-func (activeWorker) Stop()                       {}
-func (w activeWorker) Activity() status.Activity { return w.activity }
-
 func TestActivityIsShownAsAnActivityLine(t *testing.T) {
 	// 端末の画面は活動の行を種類で見分けてログから外す (formats.md §6)
 	now := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	var out lines
 	l := &loop{
-		claims: map[target.Ref]*claim{{Kind: target.KindIssue, Number: 42}: {run: activeWorker{status.Activity{At: now, Summary: "thinking"}}}},
+		claims: map[target.Ref]*claim{{Kind: target.KindIssue, Number: 42}: {run: &FakeWorker{Act: status.Activity{At: now, Summary: "thinking"}}}},
 		rec:    recorder{output: &out, now: func() time.Time { return now }},
 	}
 

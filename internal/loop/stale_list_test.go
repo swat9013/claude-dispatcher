@@ -1,18 +1,12 @@
 package loop_test
 
 import (
-	"bytes"
-	"encoding/json"
 	"errors"
-	"os"
 	"strings"
-	"sync"
-	"syscall"
 	"testing"
 	"time"
 
 	"github.com/swat9013/claude-dispatcher/internal/loop"
-	"github.com/swat9013/claude-dispatcher/internal/status"
 	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/trigger"
 	"github.com/swat9013/claude-dispatcher/internal/worker"
@@ -39,29 +33,33 @@ type staleTicks struct {
 	readFails int
 }
 
-// run は loop を ticks 回の tick まで回して止め、起動した worker と log.jsonl の行を返す。
-func (s staleTicks) run(t *testing.T) ([]worker.Job, []map[string]any) {
+// run は loop を ticks 回の tick まで回して止め、起動した worker と、回した fixture (log.jsonl の行を引く) を返す。
+func (s staleTicks) run(t *testing.T) ([]worker.Job, *rig) {
 	t.Helper()
 	const interval = time.Minute
 	def := workflow.Definition{Tracker: githubTracker, Interval: interval, MaxConcurrent: 1, MaxAttempts: s.maxAttempts, MaxRetryBackoff: 5 * time.Minute, Triggers: s.triggers}
-	var (
-		start      = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-		tick       int
-		jobs       []worker.Job
-		workers    sync.WaitGroup
-		periods    int
-		log        bytes.Buffer
-		stdout     bytes.Buffer
-		signals    = make(chan os.Signal, 1)
-		neverFires = make(chan time.Time)
-	)
-	exit := loop.Run(loop.Options{
+	r := newRig()
+	r.script = func(worker.Job) workerScript { return exits(1) }
+	tick, periods := 0, 0
+	// 周期は、起動した worker の終わりを loop が処理し終えてから明ける。時計は workflow 定義を読むたびに周期だけ進むので、
+	// worker の終わりは必ずそれを起動した tick の時刻で受け取る
+	r.timer = func(kind timerKind, _ time.Duration) timing {
+		if kind != periodTimer {
+			return timing{fate: neverFires}
+		}
+		periods++
+		if periods >= s.ticks {
+			return timing{fate: stopsTheLoop}
+		}
+		return timing{fate: fires, keepClock: true}
+	}
+	r.run(t, loop.Options{
 		Load: func() (workflow.Definition, error) {
 			tick++
+			r.setClock(time.Duration(tick-1) * interval)
 			return def, nil
 		},
 		Definition: def,
-		Precheck:   noProblems,
 		Store: func(workflow.Definition) loop.Store {
 			return memoryStore{
 				observe: func() ([]target.Item, error) { return s.open(tick), nil },
@@ -73,69 +71,8 @@ func (s staleTicks) run(t *testing.T) ([]worker.Job, []map[string]any) {
 				},
 			}.store()
 		},
-		Workspaces: func(workflow.Definition) loop.Workspaces { return noWorkspaces{} },
-		Launch: func(_ workflow.Definition, job worker.Job, events chan<- worker.Event) loop.Worker {
-			jobs = append(jobs, job)
-			workers.Add(1)
-			go func() {
-				defer workers.Done()
-				events <- worker.Started{Target: job.Item.Ref(), PID: 1}
-				code := 1
-				events <- worker.Ended{Target: job.Item.Ref(), Result: worker.Result{ExitCode: &code}}
-			}()
-			return endedWorker{}
-		},
-		NewSessionID: func() (string, error) { return "session-1", nil },
-		ScopeKeyOf:   sameScope,
-		ScopeKey:     startScope,
-		Log:          &log,
-		Output:       loop.Appender{W: &stdout},
-		Publish:      func(status.Snapshot) error { return nil },
-		Signals:      signals,
-		// 時計は tick を始めるたびに周期だけ進む。loop の goroutine だけが読み書きするので、worker の終わりは必ず
-		// それを起動した tick の時刻で受け取る
-		Now: func() time.Time { return start.Add(time.Duration(max(tick-1, 0)) * interval) },
-		After: func(d time.Duration) <-chan time.Time {
-			if d != interval {
-				return neverFires
-			}
-			periods++
-			if periods >= s.ticks {
-				signals <- syscall.SIGINT
-				return neverFires
-			}
-			ch := make(chan time.Time, 1)
-			go func() {
-				// 起動した worker の終わりを loop が受け取ってから周期を明ける
-				workers.Wait()
-				ch <- time.Time{}
-			}()
-			return ch
-		},
 	})
-	if exit != 0 {
-		t.Fatalf("exit = %d", exit)
-	}
-	var lines []map[string]any
-	for line := range strings.Lines(log.String()) {
-		var fields map[string]any
-		if err := json.Unmarshal([]byte(line), &fields); err != nil {
-			t.Fatalf("log.jsonl の行 %q: %v", line, err)
-		}
-		lines = append(lines, fields)
-	}
-	return jobs, lines
-}
-
-// eventsNamed は log.jsonl の行のうち event が name のもの。
-func eventsNamed(lines []map[string]any, name string) []map[string]any {
-	var found []map[string]any
-	for _, line := range lines {
-		if line["event"] == name {
-			found = append(found, line)
-		}
-	}
-	return found
+	return r.jobs, r
 }
 
 func closedIssue(number int) target.Issue {
@@ -176,9 +113,9 @@ func TestRetryOfAnIssueClosedDuringTheBackoffIsNotLaunchedWhileTheListIsStale(t 
 }
 
 func TestRetryOfAnIssueClosedDuringTheBackoffIsReleasedAsTerminal(t *testing.T) {
-	_, lines := closedDuringTheBackoffWhileTheListIsStale().run(t)
+	_, r := closedDuringTheBackoffWhileTheListIsStale().run(t)
 
-	releases := eventsNamed(lines, "release")
+	releases := r.logEvents(t, "release")
 	if len(releases) != 1 || releases[0]["target"] != "issue#1" || releases[0]["reason"] != "terminal" {
 		t.Fatalf("release の行 = %v, want issue#1 を terminal で 1 行", releases)
 	}
@@ -225,18 +162,18 @@ func abandonedThenListed(inSecondTick []target.Item, read target.Item) staleTick
 }
 
 func TestAbandonmentIsKeptWhenTheIssueDropsOutOfAStaleListButStillMatches(t *testing.T) {
-	jobs, lines := abandonedThenListed(nil, readyIssue(1)).run(t)
+	jobs, r := abandonedThenListed(nil, readyIssue(1)).run(t)
 
-	if len(jobs) != 1 || len(eventsNamed(lines, "unabandon")) != 0 {
-		t.Fatalf("起動した数 = %d, unabandon の行 = %v, want 打ち切ったまま (古い一覧から抜けただけで解いた)", len(jobs), eventsNamed(lines, "unabandon"))
+	if len(jobs) != 1 || len(r.logEvents(t, "unabandon")) != 0 {
+		t.Fatalf("起動した数 = %d, unabandon の行 = %v, want 打ち切ったまま (古い一覧から抜けただけで解いた)", len(jobs), r.logEvents(t, "unabandon"))
 	}
 }
 
 func TestAbandonmentIsKeptWhenAStaleListShowsTheIssueOutOfTheTriggerButItStillMatches(t *testing.T) {
-	jobs, lines := abandonedThenListed([]target.Item{unlabeledIssue(1)}, readyIssue(1)).run(t)
+	jobs, r := abandonedThenListed([]target.Item{unlabeledIssue(1)}, readyIssue(1)).run(t)
 
-	if len(jobs) != 1 || len(eventsNamed(lines, "unabandon")) != 0 {
-		t.Fatalf("起動した数 = %d, unabandon の行 = %v, want 打ち切ったまま (古い一覧で外れて見えただけで解いた)", len(jobs), eventsNamed(lines, "unabandon"))
+	if len(jobs) != 1 || len(r.logEvents(t, "unabandon")) != 0 {
+		t.Fatalf("起動した数 = %d, unabandon の行 = %v, want 打ち切ったまま (古い一覧で外れて見えただけで解いた)", len(jobs), r.logEvents(t, "unabandon"))
 	}
 }
 
@@ -249,17 +186,17 @@ func unreadableAfterDroppingOut() staleTicks {
 }
 
 func TestAbandonmentIsKeptWhenTheIssueThatDroppedOutOfTheListCannotBeReadAgain(t *testing.T) {
-	_, lines := unreadableAfterDroppingOut().run(t)
+	_, r := unreadableAfterDroppingOut().run(t)
 
-	if unabandons := eventsNamed(lines, "unabandon"); len(unabandons) != 0 {
+	if unabandons := r.logEvents(t, "unabandon"); len(unabandons) != 0 {
 		t.Fatalf("unabandon の行 = %v, want 無し (読み直せないのに打ち切りを解いた)", unabandons)
 	}
 }
 
 func TestAbandonedIssueThatCannotBeReadAgainLeavesAnErrorLine(t *testing.T) {
-	_, lines := unreadableAfterDroppingOut().run(t)
+	_, r := unreadableAfterDroppingOut().run(t)
 
-	errs := eventsNamed(lines, "error")
+	errs := r.logEvents(t, "error")
 	if len(errs) != 1 || errs[0]["target"] != "issue#1" || !strings.Contains(asText(errs[0]["error"]), "打ち切った作業対象を読み直せない") {
 		t.Fatalf("error の行 = %v, want issue#1 の「打ち切った作業対象を読み直せない」を 1 行", errs)
 	}
@@ -284,9 +221,9 @@ func TestAbandonmentOfACLIsKeptWhenAStaleListMakesItLookAmbiguous(t *testing.T) 
 		},
 		read: func(int) target.Item { return abandoned }}
 
-	_, lines := s.run(t)
+	_, r := s.run(t)
 
-	if abandons, unabandons := eventsNamed(lines, "abandon"), eventsNamed(lines, "unabandon"); len(abandons) != 1 || len(unabandons) != 0 {
+	if abandons, unabandons := r.logEvents(t, "abandon"), r.logEvents(t, "unabandon"); len(abandons) != 1 || len(unabandons) != 0 {
 		t.Fatalf("abandon の行 = %v, unabandon の行 = %v, want cl#7 を打ち切ったまま (古い一覧で曖昧に見えただけで解いた)", abandons, unabandons)
 	}
 }
@@ -311,25 +248,25 @@ func TestAbandonmentOfACLIsLiftedWhenItIsMergedEvenIfItsConflictIsUnknown(t *tes
 			return inConflict
 		}}
 
-	_, lines := s.run(t)
+	_, r := s.run(t)
 
-	if unabandons := eventsNamed(lines, "unabandon"); len(unabandons) != 1 || unabandons[0]["target"] != "cl#7" {
+	if unabandons := r.logEvents(t, "unabandon"); len(unabandons) != 1 || unabandons[0]["target"] != "cl#7" {
 		t.Fatalf("unabandon の行 = %v, want cl#7 を 1 行 (merge した CL の打ち切りを保った)", unabandons)
 	}
 }
 
 func TestAbandonmentIsLiftedWhenTheIssueReadAgainLeftTheTrigger(t *testing.T) {
-	_, lines := abandonedThenListed([]target.Item{unlabeledIssue(1)}, unlabeledIssue(1)).run(t)
+	_, r := abandonedThenListed([]target.Item{unlabeledIssue(1)}, unlabeledIssue(1)).run(t)
 
-	if unabandons := eventsNamed(lines, "unabandon"); len(unabandons) != 1 || unabandons[0]["target"] != "issue#1" {
+	if unabandons := r.logEvents(t, "unabandon"); len(unabandons) != 1 || unabandons[0]["target"] != "issue#1" {
 		t.Fatalf("unabandon の行 = %v, want issue#1 を 1 行", unabandons)
 	}
 }
 
 func TestAbandonmentIsLiftedWhenTheIssueReadAgainIsClosed(t *testing.T) {
-	_, lines := abandonedThenListed(nil, closedIssue(1)).run(t)
+	_, r := abandonedThenListed(nil, closedIssue(1)).run(t)
 
-	if unabandons := eventsNamed(lines, "unabandon"); len(unabandons) != 1 || unabandons[0]["target"] != "issue#1" {
+	if unabandons := r.logEvents(t, "unabandon"); len(unabandons) != 1 || unabandons[0]["target"] != "issue#1" {
 		t.Fatalf("unabandon の行 = %v, want issue#1 を 1 行", unabandons)
 	}
 }
