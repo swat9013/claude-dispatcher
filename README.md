@@ -1,47 +1,98 @@
 # claude-dispatcher
 
-issue tracker の issue と CL (pull request) を周期ごとに読み、project が宣言した trigger に当たったものへ Claude Code の worker を無人で起動する CLI。「`ready-for-agent` の issue を実装して CL を出す」「CL に conflict・未解決の review・CI の失敗が立ったら手直しする」といった流れを、repo に置く workflow 定義 (`WORKFLOW.md`) で決める。
+GitHub・GitLab・Jira の issue に label (Jira では status) で印を付けておくと、Claude Code が無人で実装して CL (GitHub の pull request・GitLab の merge request) を出す CLI。CL に立った conflict・review の指摘・CI の失敗の手直しも、同じ仕組みで任せられる。どの issue や CL に何をさせるかは、repo に置く workflow 定義 (`WORKFLOW.md`) に書く。
 
 ## 仕組み
 
-```
- 人 ── WORKFLOW.md を書く / label を付ける (triage) / merge
-                    │
- claude-dispatcher loop ─周期ごと─▶ issue と CL を読む ─▶ trigger を評価 ─▶ 当たったものへ worker を起動
- (端末で起動し Ctrl+C で止める)      (読むだけ)                                 workspace (worktree) で claude -p
-                                                                                 action の文面どおりに作業し、
-                                                                                 作業対象を trigger から外して終える
+```mermaid
+flowchart LR
+    human(["人"])
+    store[("GitHub・GitLab・Jira<br/>issue と CL")]
+    loop["claude-dispatcher loop"]
+    worker[["worker<br/>(claude -p)"]]
+    human -- "label を付ける・review・merge" --> store
+    store -- "周期ごとに読む (loop は書かない)" --> loop
+    loop -- "trigger に当たったら起動" --> worker
+    worker -- "作業して CL を開き、label を外す" --> store
 ```
 
-- **状態は tracker と CL host に置く**。CLI は tracker にも CL host にも書かない。label を付け替える・CL を開く・人へ返すのは worker (action の文面) と人
-- **trigger** は、作業対象 (issue か CL) の述語と action (worker に渡す prompt) の組。宣言順に評価し、最初に当たった 1 つで起動する
-- **完了は「worker が終わった後に、作業対象が trigger から外れていること」**。外れないまま終わった worker は失敗として数え、backoff して同じ session を続けさせる。上限の回数で打ち切る
-- **定期起動は cron ではなく、端末で撃つ `loop` が持つ**。止めるのも撃ち直すのも人が行う
+人が issue に label を付ける (Jira では status を移す) と、loop (端末で動かし続ける claude-dispatcher の process) が周期ごとに issue と CL を読み、workflow 定義の trigger に当たったものへ worker (loop が無人で起動する Claude Code) を起動する。worker は指示どおりに作業し、CL を開いて label を外す。loop 自身は issue にも CL にも何も書かない。
+
+- **trigger** は、「どんな issue や CL に反応するか」(`when`) と、そのとき worker に渡す指示 (**action**) の組。workflow 定義に上から並べ、最初に当たった 1 つで worker を起動する
+- **loop は止めるまで端末で動き続ける**。cron などには登録しない。止めるのも起動し直すのも人が行う
+
+## 例: 1 件の issue が merge されるまで
+
+```mermaid
+sequenceDiagram
+    actor human as 人
+    participant gh as GitHub
+    participant lp as loop
+    participant impl as worker (implement)
+    participant fix as worker (fix-ci)
+    human->>gh: issue に ready-for-agent を付ける
+    lp->>gh: 読む
+    Note over lp: implement に当たる
+    lp->>impl: 起動
+    impl->>gh: CL を開き、issue から ready-for-agent を外す
+    Note over lp: issue が implement から外れたので完了
+    Note over gh: CL の CI が落ちる
+    lp->>gh: 読む
+    Note over lp: fix-ci に当たる
+    lp->>fix: 起動
+    fix->>gh: 直して push する
+    Note over lp: CI の失敗が消え、fix-ci から外れたので完了
+    human->>gh: review して merge する
+```
+
+`setup` が書く雛形には、issue を実装する `implement` と、CL の conflict・review・CI を手直しする trigger が入っている。worker は作業を終えたら、自分を起動した trigger から issue や CL を外す (label を外すなど)。外れないまま worker が終わると、loop は間を置いて同じ worker にやり直させ、決まった回数で諦めて `status` の `要対処` に出す。決まりの詳細は `claude-dispatcher guide` の「action が守る約束」。
 
 ## 前提
 
 - macOS か Linux
 - [Claude Code](https://docs.claude.com/en/docs/claude-code) と、その認証
-- tracker の CLI と、その認証。tracker が GitHub なら [gh](https://cli.github.com/) (`gh auth login` か `tracker.token`)、GitLab なら [glab](https://gitlab.com/gitlab-org/cli) (`glab auth login` か `tracker.token`)、Jira Cloud なら [acli](https://developer.atlassian.com/cloud/acli/) (`acli jira auth login`)。GitLab は issue 置き場と merge request の置き場が同じ project の構成を扱う。対象の GitLab は、GitLab が security 修正を出している版 ([maintenance policy](https://docs.gitlab.com/policy/maintenance/) の、最新の minor から 3 つ)
-- Jira は Jira Cloud の 1 つの project を issue 置き場にする (Data Center / Server は扱わない)。CL 置き場は workflow 定義の `cl:` で GitHub か GitLab を宣言し、その CLI (gh か glab) とその認証も用意する。loop は `cl:` の CL 置き場の CL に CL 側の trigger を当て、worker もその CLI で CL を開く
-  - 1 つの Jira project は 1 本の loop と 1 つの実装 repo で回す。component や JQL で 1 つの project を複数の repo に分けて回すことはできない (同じ project の 2 本目の loop は起動時に止まる)
-  - acli の active な account の site を、workflow 定義の `tracker.host` にしておく。acli は呼び出しごとに site を選べないので、loop は起動時に site が違えば止まる (`acli jira auth switch --site <site>` で切り替える)
-  - acli は macOS では資格情報を keychain に置く。ssh 越しの shell では keychain が unlock されておらず、acli が認証を読めないことがある。そのときは `security unlock-keychain` を撃ってから loop を起動するか、API token で `acli jira auth login` をし直す
-- git (workspace を worktree で作る hooks と、CL 側の trigger で使う)
-- action の先頭に書く skill と command (`/swat-skills:playbook-implementation` など) を、worker が呼べる場所 (plugin・repo の `.claude/`・`~/.claude/`) に入れておく。特定の plugin には依存しない。呼べない名前は起動の前の事前検査で名指しされる
+- git
+- issue を置くサービスの CLI と、その認証 (下の表)
+- action の先頭に書く skill と command (`/swat-skills:playbook-implementation` など) を、worker が呼べる場所 (plugin・repo の `.claude/`・`~/.claude/`) に入れておく。特定の plugin には依存しない。呼べない名前は、起動の前の検査で名指しされる
+
+| issue を置くサービス | CLI | 認証 |
+|---|---|---|
+| GitHub | [gh](https://cli.github.com/) | `gh auth login` か、workflow 定義の `tracker.token` |
+| GitLab | [glab](https://gitlab.com/gitlab-org/cli) | `glab auth login` か、workflow 定義の `tracker.token` |
+| Jira Cloud | [acli](https://developer.atlassian.com/cloud/acli/)。加えて、CL を置く GitHub か GitLab の CLI | `acli jira auth login` |
+
+GitLab は、issue と merge request を同じ project に置く構成を扱う。対象の GitLab は、GitLab が security 修正を出している版 ([maintenance policy](https://docs.gitlab.com/policy/maintenance/) の、最新の minor から 3 つ)。
+
+<details>
+<summary>Jira Cloud を使うときの注意</summary>
+
+- Jira Cloud の 1 つの project に issue を置く (Data Center / Server は扱わない)。CL を置く場所は workflow 定義の `cl:` で GitHub か GitLab を宣言し、その CLI (gh か glab) とその認証も用意する。worker もその CLI で CL を開く
+- 1 つの Jira project は、1 本の loop と 1 つの repo で回す。component や JQL で 1 つの project を複数の repo に分けて回すことはできない (同じ project の 2 本目の loop は起動時に止まる)
+- acli で今使っている account の site を、workflow 定義の `tracker.host` にしておく。acli は呼び出しごとに site を選べないので、loop は起動時に site が違えば止まる (`acli jira auth switch --site <site>` で切り替える)
+- acli は macOS では資格情報を keychain に置く。ssh 越しの shell では keychain が unlock されておらず、acli が認証を読めないことがある。そのときは `security unlock-keychain` を実行してから loop を起動するか、API token で `acli jira auth login` をし直す
+
+</details>
 
 ## install
 
-Homebrew・`go install`・GitHub Releases のどれかで `claude-dispatcher` を PATH の通った場所に置く。
+Homebrew か `go install` で入れる。どちらも使えなければ GitHub Releases の binary を置く。
 
-**Homebrew** (macOS / Linux): tap `swat9013/tap` の cask で入れる。tap 名付きの完全修飾名 (`swat9013/tap/claude-dispatcher`) で撃つと、Homebrew の tap trust (第三者 tap の中身を読む前に求める明示の信頼) がこの cask にだけ与えられる。
+**Homebrew** (macOS / Linux):
 
 ```sh
 brew install --cask swat9013/tap/claude-dispatcher
 brew upgrade --cask swat9013/tap/claude-dispatcher   # 新しい版が出たとき
 ```
 
-binary は署名していないので、macOS では cask が install 時に quarantine (Gatekeeper の検査対象にする拡張属性) を外す。走っている `loop` は起動した時点の binary で回り続けるので、`brew upgrade` の後は撃ち直す。
+動いている `loop` は起動した時点の binary で回り続けるので、`brew upgrade` の後は起動し直す。
+
+<details>
+<summary>Homebrew の補足</summary>
+
+- tap 名付きの名前 (`swat9013/tap/claude-dispatcher`) で入れると、Homebrew の tap trust (第三者の tap の中身を読む前に求める明示の信頼) がこの cask にだけ与えられる
+- binary は署名していないので、macOS では cask が install 時に quarantine (Gatekeeper の検査対象にする拡張属性) を外す
+
+</details>
 
 **`go install`** (Go は [go.mod](go.mod) の `go` 行の版以上):
 
@@ -49,7 +100,10 @@ binary は署名していないので、macOS では cask が install 時に qua
 go install github.com/swat9013/claude-dispatcher/cmd/claude-dispatcher@latest
 ```
 
-**GitHub Releases の binary**: [Releases](https://github.com/swat9013/claude-dispatcher/releases) の OS と CPU に合う `claude-dispatcher_<version>_<darwin|linux>_<amd64|arm64>.tar.gz` を `checksums.txt` と一緒に取り、確かめてから展開する。下は macOS (Apple silicon) の例で、置き場の `~/.local/bin` は PATH に入れておく。
+<details>
+<summary>GitHub Releases の binary を置く</summary>
+
+[Releases](https://github.com/swat9013/claude-dispatcher/releases) から、OS と CPU に合う `claude-dispatcher_<version>_<darwin|linux>_<amd64|arm64>.tar.gz` を `checksums.txt` と一緒に取り、確かめてから展開する。下は macOS (Apple silicon) の例で、置き場の `~/.local/bin` は PATH に入れておく。
 
 ```sh
 gh release download -R swat9013/claude-dispatcher -p '*_darwin_arm64.tar.gz' -p checksums.txt
@@ -60,28 +114,30 @@ mkdir -p ~/.local/bin && install -m 755 claude-dispatcher ~/.local/bin/
 
 binary は署名していない。macOS でブラウザから取った archive は Gatekeeper に起動を止められるので、`gh release download` か `curl -LO` で取る (ブラウザで取ったなら `xattr -d com.apple.quarantine ~/.local/bin/claude-dispatcher`)。
 
+</details>
+
 入れた版は `claude-dispatcher --version` で確かめる。不具合を報告するときは、この出力を添える。
 
 ## 導入
 
-実装 repo の clone を cwd にして、次の順に撃つ。各手順で何が起き、何を確かめるかは `claude-dispatcher guide` の「導入の流れ」。
+実装する repo の clone に移り、次の順に実行する。各手順で何が起き、何を確かめるかは `claude-dispatcher guide` の「導入の流れ」。
 
-1. **雛形を置く**: `setup` が cwd に `WORKFLOW.md` の雛形を書く
+1. **雛形を置く**: `setup` が `WORKFLOW.md` の雛形を書く
 
    ```sh
    cd ~/src/widgets
    claude-dispatcher setup
-   claude-dispatcher setup --kind jira --host acme.atlassian.net --repo WIDGETS   # Jira の issue 置き場
+   claude-dispatcher setup --kind jira --host acme.atlassian.net --repo WIDGETS   # issue を Jira に置くとき
    ```
 
-2. **自分の project に合わせて書く**: trigger・action・hooks・並列上限を直し、repo に commit する。書き方は `claude-dispatcher guide` の「workflow 定義の書き方」と「action が守る約束」(利用者のセッションに読ませてもよい)、この repo 自身の例は [`WORKFLOW.md`](WORKFLOW.md)
-3. **試運転**: 何も起動せず、起動するはずの作業対象と trigger を示す
+2. **自分の project に合わせて書く**: trigger・action・hooks・並列の上限を直し、repo に commit する。書き方は `claude-dispatcher guide` の「workflow 定義の書き方」と「action が守る約束」(Claude Code に読ませて手伝わせてもよい)。この repo 自身の例は [`WORKFLOW.md`](WORKFLOW.md)
+3. **試運転**: 何も起動せずに、worker を起動するはずの issue や CL と trigger を示す
 
    ```sh
    claude-dispatcher loop --dry-run
    ```
 
-4. **導入を確かめる**: workflow 定義・issue 置き場・依存 CLI・事前検査を確かめ、settings に要りそうな entry を示す
+4. **導入を確かめる**: workflow 定義・issue の読み取り・要る CLI・起動の前の検査を確かめ、Claude Code の settings に要りそうな entry を示す
 
    ```sh
    claude-dispatcher doctor
@@ -89,7 +145,7 @@ binary は署名していない。macOS でブラウザから取った archive �
 
 ## 回す
 
-実装 repo の clone で `loop` を撃つ。起動時の検査、`WORKFLOW.md` の変更の効き方、撃ち直しが要るときは `claude-dispatcher guide` の「回す・見る・止める」の「回す」。issue 置き場か CL 置き場を変えたときは同じ案内の「workflow 定義の書き方」、loop を起動した環境から gh や glab の認証を取れない (ssh 越しの session など) ときは「項目」の `tracker.token`。
+実装する repo の clone で `loop` を実行する。起動時の検査、`WORKFLOW.md` を直したときの効き方、起動し直しが要るときは `claude-dispatcher guide` の「回す・見る・止める」の「回す」。issue や CL を置く場所を変えたときは同じ案内の「workflow 定義の書き方」、loop を起動した環境から gh や glab の認証を取れない (ssh 越しの session など) ときは「項目」の `tracker.token`。
 
 ```sh
 cd ~/src/widgets
@@ -98,7 +154,7 @@ claude-dispatcher loop
 
 ## 動いているかを見る
 
-loop を撃った端末の画面か、別の端末の `status` で見る。log と worker の stream の置き場は `paths --json` で引く。画面と `status` の読み方、打ち切られた作業対象の解き方は `claude-dispatcher guide` の「回す・見る・止める」の「見る」。
+loop を起動した端末の画面か、別の端末の `status` で見る。log と worker の出力の置き場は `paths --json` で引く。画面と `status` の読み方、やり直しの上限に達して止まった issue や CL (`status` の `要対処`) の戻し方は `claude-dispatcher guide` の「回す・見る・止める」の「見る」。
 
 ```sh
 claude-dispatcher status
@@ -107,11 +163,11 @@ claude-dispatcher paths --json
 
 ## 止める
 
-loop の端末で Ctrl+C を押す。待てないときはもう一度押す。それぞれで worker と成果がどうなるか、使うのをやめるときに消すものは `claude-dispatcher guide` の「回す・見る・止める」の「止める」。
+loop の端末で Ctrl+C を押す。待てないときはもう一度押す。それぞれで worker と作業の途中の成果がどうなるか、使うのをやめるときに消すものは `claude-dispatcher guide` の「回す・見る・止める」の「止める」。
 
 ## 開発に加わる
 
-開発中の版の動かし方・gate・commit と PR の規約は [`CONTRIBUTING.md`](CONTRIBUTING.md)。
+開発中の版の動かし方・品質チェック・commit と PR の規約は [`CONTRIBUTING.md`](CONTRIBUTING.md)。
 
 ## License
 

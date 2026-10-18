@@ -39,7 +39,9 @@ claude-dispatcher-dev loop
 ## 文書の読み手
 
 - README.md は claude-dispatcher の利用者 (導入して loop を回す人) に向けて書く。開発者と agent に向けた手順 (開発中の版の動かし方など) はこの file に、設計の資料は `docs/` と `CONTEXT.md` に置き、README からは開発に加わる人への入口として、この file を 1 回だけ指す。利用者が読まない資料が混ざると、利用者に要る手順が埋もれる
-- README は、利用者が撃つ手順の名前とコマンド例を持ち、条件や例外は「`claude-dispatcher guide` の「回す・見る・止める」」のように案内の節名で指す。案内は binary と同じ版の中身を出し、利用者のセッションにも届くので、細部はそちらに置く。案内が何の正本かは [docs/design/README.md](docs/design/README.md) の「設計を先に直す」の表に従う
+- README は、利用者が撃つ手順の名前とコマンド例を持ち、条件や例外は「`claude-dispatcher guide` の「回す・見る・止める」」のように案内の節名で指す。案内は binary と同じ版の中身を出し、利用者のセッションにも届くので、細部はそちらに置く。案内が何の正本かは [docs/design/README.md](docs/design/README.md) の「設計を先に直す」の表に従う。README の `claude-dispatcher guide` を含む行の「」は、どれも案内の節名として test が機械で読み、guide.md に在るかを検査する (読み方は internal/guide/readme_test.go の guideRefs)
+- README でそのまま使う用語集 ([CONTEXT.md](CONTEXT.md)) の語は loop・worker・trigger・action・workflow 定義 (`WORKFLOW.md`)・CL だけにし、初出で一言の説明を添える。ほかの語 (tick・claim・attempt・workspace など) は平易な言い換えで書き、正確な決まりが要るところは `claude-dispatcher guide` の節名で指す。言い換えには、用語集が `_Avoid_` に挙げた語を使わない。ほかの語でも、loop の画面や `status` に出る語をそのまま引くときは、その語を code span (`` `要対処` ``) で囲んで使う。利用者は用語集を読まずに README を読むので、定義の無い語が増えるほど導入の手順にたどり着く前に読むのをやめる。ただし project・完了・当たる・外れる の 4 語は、日常の意味で読んでも文が誤りにならない使い方なら、初出の説明なしで使ってよい (日常の意味のまま読んでも手順を追えるため)
+- README の図は mermaid で書く。表示先によっては mermaid が描かれず code block のまま出るので、図の直後に同じ内容を短い文でも書き、文だけで追えるようにする。設計 doc の図は plantuml の正本と gate に従う ([docs/design/README.md](docs/design/README.md))
 
 ## branch・worktree 運用
 
