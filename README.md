@@ -16,9 +16,10 @@ flowchart LR
     worker -- "作業して CL を開き、label を外す" --> store
 ```
 
-人が issue に label を付ける (Jira では status を移す) と、loop (端末で動かし続ける claude-dispatcher の process) が周期ごとに issue と CL を読み、workflow 定義の trigger に当たったものへ worker (loop が無人で起動する Claude Code) を起動する。worker は指示どおりに作業し、CL を開いて label を外す。loop 自身は issue にも CL にも何も書かない。
+人が issue に label を付ける (Jira では status を移す) と、loop (端末で動かし続ける claude-dispatcher の process) が周期ごとに issue と CL を読み、workflow 定義の trigger に当たったものへ worker (loop が無人で起動する Claude Code) を起動する。worker は action のとおりに作業して CL を開き、label を外す。人はその CL を review して merge する。loop 自身は issue にも CL にも何も書かない。
 
-- **trigger** は、「どんな issue や CL に反応するか」(`when`) と、そのとき worker に渡す指示 (**action**) の組。workflow 定義に上から並べ、最初に当たった 1 つで worker を起動する
+- **trigger** は、「どんな issue や CL に反応するか」(`when`) と、そのとき worker に渡す prompt (**action**) の組。workflow 定義に上から並べ、最初に当たった 1 つで worker を起動する
+- **worker は作業を終えたら、自分を起動した trigger から issue や CL を外す** (label を外すなど)。外れないまま worker が終わると、loop は間を置いて同じ worker にやり直させ、やり直しの上限に達したら止めて `status` の `要対処` に出す。決まりの詳細は `claude-dispatcher guide` の「action が守る約束」
 - **loop は止めるまで端末で動き続ける**。cron などには登録しない。止めるのも起動し直すのも人が行う
 
 ## 例: 1 件の issue が merge されるまで
@@ -35,17 +36,19 @@ sequenceDiagram
     Note over lp: implement に当たる
     lp->>impl: 起動
     impl->>gh: CL を開き、issue から ready-for-agent を外す
-    Note over lp: issue が implement から外れたので完了
+    Note over lp: issue が implement から外れ、implement の仕事は完了
     Note over gh: CL の CI が落ちる
     lp->>gh: 読む
     Note over lp: fix-ci に当たる
     lp->>fix: 起動
     fix->>gh: 直して push する
-    Note over lp: CI の失敗が消え、fix-ci から外れたので完了
+    Note over lp: CI の失敗が消え、fix-ci の仕事は完了
     human->>gh: review して merge する
 ```
 
-`setup` が書く雛形には、issue を実装する `implement` と、CL の conflict・review・CI を手直しする trigger が入っている。worker は作業を終えたら、自分を起動した trigger から issue や CL を外す (label を外すなど)。外れないまま worker が終わると、loop は間を置いて同じ worker にやり直させ、決まった回数で諦めて `status` の `要対処` に出す。決まりの詳細は `claude-dispatcher guide` の「action が守る約束」。
+人が issue に `ready-for-agent` を付けると、loop は issue が `implement` に当たったのを読んで worker を起動する。worker は CL を開き、issue から `ready-for-agent` を外して仕事を終える。CL の CI が落ちると今度は `fix-ci` に当たり、別の worker が直して push する。最後に人が review して merge する。
+
+`setup` が書く雛形には、issue を実装する `implement` と、CL の conflict・review・CI を手直しする trigger が入っている。
 
 ## 前提
 
@@ -59,7 +62,7 @@ sequenceDiagram
 |---|---|---|
 | GitHub | [gh](https://cli.github.com/) | `gh auth login` か、workflow 定義の `tracker.token` |
 | GitLab | [glab](https://gitlab.com/gitlab-org/cli) | `glab auth login` か、workflow 定義の `tracker.token` |
-| Jira Cloud | [acli](https://developer.atlassian.com/cloud/acli/)。加えて、CL を置く GitHub か GitLab の CLI | `acli jira auth login` |
+| Jira Cloud | [acli](https://developer.atlassian.com/cloud/acli/) (CL 側の CLI は下の Jira の注意) | `acli jira auth login` |
 
 GitLab は、issue と merge request を同じ project に置く構成を扱う。対象の GitLab は、GitLab が security 修正を出している版 ([maintenance policy](https://docs.gitlab.com/policy/maintenance/) の、最新の minor から 3 つ)。
 
@@ -75,7 +78,7 @@ GitLab は、issue と merge request を同じ project に置く構成を扱う�
 
 ## install
 
-Homebrew か `go install` で入れる。どちらも使えなければ GitHub Releases の binary を置く。
+Homebrew・`go install`・GitHub Releases の binary のどれかで入れる。
 
 **Homebrew** (macOS / Linux):
 
