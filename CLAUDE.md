@@ -17,7 +17,7 @@ issue は GitHub Issues (`swat9013/claude-dispatcher`) に置き、`gh` CLI で�
 
 ### Triage labels
 
-既定の 5 role をそのままの綴りで使う (`needs-triage` / `needs-info` / `ready-for-agent` / `ready-for-human` / `wontfix`)。加えて、深掘り待ちに `need-grilling` を使う。See `docs/agents/triage-labels.md`.
+role と label の対応の正本は `docs/agents/triage-labels.md`。label を付ける・外す前に読む。
 
 ### Domain docs
 
