@@ -69,3 +69,26 @@ func TestCheckStatechart_初期状態から届かない状態は落とす(t *tes
 		t.Fatalf("exit %d: %s", code, out)
 	}
 }
+
+func TestCheckStatechart_色や線種を付けた矢印も遷移として数える(t *testing.T) {
+	code, out := run(t, header+"Idle -[#red,dashed]-> Busy : retry\n' uncovered: Idle x finish — 走っていない\n' uncovered: Busy x start — 走っている\n@enduml\n")
+	if code != 1 || !strings.Contains(out, "(Busy x retry)") {
+		t.Fatalf("exit %d: %s", code, out)
+	}
+}
+
+func TestCheckStatechart_図に描かれない行の遷移は数えない(t *testing.T) {
+	cases := map[string]string{
+		"block comment": "/'\nBusy --> Idle : start\n'/\n@enduml\n",
+		"複数行 note":      "note left of Busy\nBusy --> Idle : start\nend note\n@enduml\n",
+		"@enduml の後":    "@enduml\nBusy --> Idle : start\n",
+	}
+	for name, tail := range cases {
+		t.Run(name, func(t *testing.T) {
+			code, out := run(t, header+"' uncovered: Idle x finish — 走っていない\n"+tail)
+			if code != 1 || !strings.Contains(out, "(Busy x start)") {
+				t.Fatalf("exit %d: %s", code, out)
+			}
+		})
+	}
+}
