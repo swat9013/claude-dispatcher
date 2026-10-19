@@ -1,4 +1,4 @@
-# main の docs/adr の ADR の番号の重なりと file 名の形の崩れを検査し、見つかったら triage 待ちの issue を 1 件起こす。
+# main の docs/adr の ADR の番号の重なりを検査し、見つかったら triage 待ちの issue を 1 件起こす。
 # 並行する PR が同じ番号を取ると、各 PR の CI は単独で通って両方が merge される。重なりは CL の変更と無関係に
 # PR の merge ref を赤くするので、PR では撃たない。方針は CONTRIBUTING.md の「gate」
 name: adr-numbers
@@ -27,7 +27,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      # exit 1 は重なりか形の崩れの検出、それ以外の非 0 は検査そのものの失敗。go run は子の非 0 をすべて 1 に潰すので、
+      # exit 1 は重なりの検出、それ以外の非 0 は検査そのものの失敗。go run は子の非 0 をすべて 1 に潰すので、
       # build してから binary を撃つ (build の失敗は step の失敗にする)
       - run: go build -o "$RUNNER_TEMP/repocheck" ./scripts/repocheck
       - name: 検査
@@ -38,21 +38,21 @@ jobs:
           cat report.txt
           echo "code=$code" >> "$GITHUB_OUTPUT"
           if [ "$code" -ne 0 ] && [ "$code" -ne 1 ]; then
-            echo "::error::ADR の番号と file 名の検査に失敗した (exit $code)"
+            echo "::error::ADR の番号の検査に失敗した (exit $code)"
             exit "$code"
           fi
-      - name: 重なりと形の崩れを issue にする
+      - name: 重なりを issue にする
         if: steps.check.outputs.code == '1'
         env:
           GH_TOKEN: ${{ github.token }}
-          TITLE: main の ADR の番号が重なっているか file 名の形が崩れている
+          TITLE: main の ADR の番号が重なっている
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           {
-            echo "main の docs/adr で ADR の番号が重なっているか、file 名の形が崩れている。直し方は下の検査の出力に従う (参照している文書の名前も直す)。run: $RUN_URL"
+            echo "main の docs/adr で ADR の番号が重なっている。直し方は下の検査の出力に従う (参照している文書の名前も直す)。run: $RUN_URL"
             echo
             echo "手元での再現: \`go run ./scripts/repocheck adr\`"
           } > prelude.md
           scripts/open-triage-issue.sh "$TITLE" prelude.md report.txt
-          echo "::error::main の ADR の番号が重なっているか file 名の形が崩れている"
+          echo "::error::main の ADR の番号が重なっている"
           exit 1

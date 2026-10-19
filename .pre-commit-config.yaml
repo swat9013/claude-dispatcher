@@ -61,15 +61,23 @@ repos:
         language: unsupported
         pass_filenames: false
         always_run: true
-      # ADR の file 名の形と番号の一意。形の崩れと手元の branch の中の重なりは CL の作者が直せるので commit 時に撃つ。
+      # ADR の番号の一意。手元の branch の中の重なりは CL の作者が直せるので commit 時に撃つ。
       # CI の pre-commit job は SKIP で外す (merge の後の main 側の重なりで、無関係な PR の merge ref まで赤くするため)。
       # main 側の重なりは .github/workflows/adr-numbers.yml が拾って issue にする
       - id: repocheck-adr
-        name: repocheck (ADR の file 名の形と番号の一意)
+        name: repocheck (ADR の番号の一意)
         entry: go run ./scripts/repocheck adr
         language: unsupported
         pass_filenames: false
         always_run: true
+      # ADR の file 名の形。名前は CL の中だけで決まり作者が直せるので、CI の pre-commit job でも撃つ (repocheck-adr と hook を分ける理由)。
+      # 渡すのは git に載った file だけ (commit 時は staged の file、--all-files は tracked の file) なので、git に載っていない lock file では落ちない
+      - id: repocheck-adr-names
+        name: repocheck (ADR の file 名の形)
+        entry: go run ./scripts/repocheck adr-names
+        language: unsupported
+        pass_filenames: true
+        files: ^docs/adr/[^/]+$
       # docs/design の図。描画の版は scripts/plantuml.version に固定する。svg の一致の比べ方とその理由は CONTRIBUTING.md の「gate」。
       # plantuml と python3 を撃つ 2 つは、図と無関係な commit を前提 tool の有無で止めないよう、読む file と自身の script に絞る。
       # repocheck-diagrams は network も外部 tool も使わないので、隣の repocheck と同じく毎回撃つ
