@@ -121,22 +121,41 @@ type once struct {
 // await は単発起動の worker の終わりを待ち、exit code を返す (formats.md §11)。停止要求は 1 回目で worker の終わりを待ち、
 // 2 回目で worker を止める。
 func (o once) await(sessionID string, run *worker.Run, events <-chan worker.Event, signals <-chan os.Signal) int {
-	stops, started, unstopped := 0, false, false
+	stops, started := 0, false
+	// exited は止められない claude の終わりで閉じる。nil なら止められない claude はいない
+	var exited <-chan struct{}
+	// unstoppedAlive は、止められない claude がまだ終わっていないか (loop の claudeAlive と同じ。system.md §7)
+	unstoppedAlive := func() bool {
+		if exited == nil {
+			return false
+		}
+		select {
+		case <-exited:
+			return false
+		default:
+			return true
+		}
+	}
+	unstoppedEnd := func() int {
+		fmt.Fprintf(o.stdout, "終了: %s 未完了 (claude を止められない)\n", o.ref)
+		return exitNotCompleted
+	}
 	for {
 		select {
 		case sig := <-signals:
 			stops++
-			// 止められない claude は終わりを待たない (loop の停止と同じ。system.md §7)
-			if stops == 1 && !unstopped {
+			switch {
+			case unstoppedAlive():
+				// 止められない claude の終わりは待たない
+				fmt.Fprintf(o.stderr, "停止要求 %s: 止められない claude を残して終える\n", loop.SignalName(sig))
+				return unstoppedEnd()
+			case stops == 1 && started:
 				fmt.Fprintf(o.stderr, "停止要求 %s: worker の終了を待つ\n", loop.SignalName(sig))
 				continue
 			}
+			// 2 回目か、claude を起動する前 (hooks の間) の停止要求は worker を止める
 			fmt.Fprintf(o.stderr, "停止要求 %s: worker を止める\n", loop.SignalName(sig))
 			run.Stop()
-			if unstopped {
-				fmt.Fprintf(o.stdout, "終了: %s 未完了 (claude を止められない)\n", o.ref)
-				return exitNotCompleted
-			}
 		case ev := <-events:
 			switch ev := ev.(type) {
 			case worker.Started:
@@ -144,12 +163,20 @@ func (o once) await(sessionID string, run *worker.Run, events <-chan worker.Even
 				fmt.Fprintf(o.stdout, "起動: %s (%s, session %s, workspace %s, pid %d)\n", o.ref, o.trigger.Name, sessionID, ev.Workspace, ev.PID)
 			case worker.Unstopped:
 				fmt.Fprintln(o.stderr, printable.Line("claude を止められない: "+ev.StopError))
-				unstopped = true
-				if stops >= 1 {
-					fmt.Fprintf(o.stdout, "終了: %s 未完了 (claude を止められない)\n", o.ref)
-					return exitNotCompleted
+				exited = ev.Exited
+				if stops >= 1 && unstoppedAlive() {
+					return unstoppedEnd()
 				}
 			case worker.Ended:
+				// 同じ周回に届いた停止要求を数えてから決める
+				for drained := false; !drained; {
+					select {
+					case <-signals:
+						stops++
+					default:
+						drained = true
+					}
+				}
 				return o.ended(ev.Result, started, stops >= 2)
 			}
 		}

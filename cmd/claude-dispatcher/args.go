@@ -10,7 +10,7 @@ import (
 )
 
 // 引数の宣言の表。subcommand ごとの flag と位置引数、command の代わりに書く flag をここに書き、parser (parse と run の
-// 振り分け) と usage の Usage 節の 2 行目からと Options 節 (usageForms・options) が同じ表を読む。command の代わりの flag
+// 振り分け) と usage の Usage 節の command の代わりの形 (usageForms) と Options 節 (usageForms・options) が同じ表を読む。command の代わりの flag
 // ごとの処理は run が helpFlag・versionFlag を名指しで持つ。flag の一覧と規則の正本は
 // formats.md §10 (と §6・§7) で、この表はそれに合わせる側。setup の --kind が受ける種類と案内の綴りは provider の表も持つ。
 
@@ -234,7 +234,7 @@ func positiveInt(name string) func(string) error {
 	}
 }
 
-// usageForms は usage の Usage 節の 2 行目からの、command の代わりに flag を書く形。1 行目と桁を揃える字下げで始める。
+// usageForms は usage の Usage 節の 3 行目からの (2 行目は main.go が手で書く run の形)、command の代わりに flag を書く形。1 行目と桁を揃える字下げで始める。
 func usageForms() string {
 	var b strings.Builder
 	for _, g := range globalFlags {
