@@ -127,6 +127,10 @@ _Avoid_: done, success
 attempt が上限に達した作業対象を、loop がどの trigger でもそれ以上起動しないこと。打ち切ったときの trigger から作業対象が一度外れたのを観測すると解ける。
 _Avoid_: give up, dead letter
 
+**orphan**:
+起動した loop が止まった後も、まだ生きている worker の claude。止められないまま loop が止まったときと、loop が落ちたときに残る。どの loop の claim にも無いが、その作業対象の workspace と session を使い続けうる。
+_Avoid_: zombie (終わったが回収されていない process の意味に定着), 残留 claude・取り残された claude (作語), stray (意味が広く、親を失ったことを呼び出さない)
+
 ## マシンを跨いだ分担
 
 **調停 remote**:
