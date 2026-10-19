@@ -146,7 +146,7 @@ func TestNeedsAttentionGathersWhatAPersonMustFix(t *testing.T) {
 		Abandoned: []status.Abandoned{{Target: "issue#43", Trigger: "implement"}},
 		Ambiguous: []status.Ambiguous{{Head: "worktree-issue-7", Targets: []string{"cl#52", "cl#53"}}},
 		Blocked:   []status.Blocked{{Trigger: "fix-ci", Error: "action の先頭の /fix が見つからない"}},
-		Orphans:   []status.Orphan{{Target: "issue#45"}},
+		Orphans:   []status.Orphan{{Target: "issue#45", Log: "workers/issue-45.log"}},
 	}
 
 	got := status.Render(s, status.LoopAlive, base, time.UTC, pipe)
@@ -156,7 +156,7 @@ func TestNeedsAttentionGathersWhatAPersonMustFix(t *testing.T) {
 		"打ち切り issue#43 (implement): label を外して trigger から外し、1 周期待ってから付け直すと解ける",
 		"曖昧な CL worktree-issue-7: cl#52, cl#53",
 		"起動しない trigger fix-ci: action の先頭の /fix が見つからない",
-		"orphan issue#45: 前の loop の claude がまだ動いている。終わるのを待つか、log.jsonl のこの作業対象の直近の start の行 (止められなかったなら claude を止められない の行) の pid を止める",
+		"orphan issue#45: 前の loop の claude がまだ動いている。終わるのを待つか、worker log (state_dir の workers/issue-45.log) を開いている process (lsof で探す。claude の pid は log.jsonl のこの作業対象の直近の start の行にある) を止める",
 	}, "\n") + "\n"
 	if !strings.HasSuffix(got, "workers 0 "+strings.Repeat("─", 50)+"\n\n"+want) {
 		t.Fatalf("描画:\n%s\nwant 要対処:\n%s", got, want)

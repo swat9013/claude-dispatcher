@@ -161,19 +161,33 @@ type notices struct {
 
 func (r Runner) attempt(job Job, run *Run, n notices) Result {
 	ref := job.Item.Ref()
+	// stdout (stream-json) の worker log は hooks を撃つ前に開いて lock を取る。claude はこの fd を stdout として受け継ぐので、
+	// loop が止まった後も claude (と fd を受け継いだ子孫) が生きている間は lock が外れない。次の loop は Orphaned でそれを
+	// 確かめる (system.md §7 の orphan)。取れなければ、別の process がまだその workspace を使いうるので hooks も撃たない
+	stream, err := openStream(LogFile(r.StateDir, ref))
+	if err != nil {
+		return Result{Failure: fmt.Sprintf("worker log を開けない: %v", err)}
+	}
+	defer stream.Close()
+	if err := syscall.Flock(int(stream.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return Result{Failure: "worker log の lock を別の process が持っている (前の claude か、その fd を受け継いだ process が生きている)"}
+		}
+		return Result{Failure: fmt.Sprintf("worker log の lock を取れない: %v", err)}
+	}
 	path, err := r.Workspaces.Prepare(ref)
 	if err != nil {
 		return Result{Failure: err.Error()}
 	}
-	result := r.launch(job, run, path, n)
+	result := r.launch(job, run, path, stream, n)
 	if err := r.Workspaces.AfterRun(ref); err != nil {
 		result.AfterRunError = err.Error()
 	}
 	return result
 }
 
-// launch は描画して claude を起動し、終わるか止められるまで待つ。
-func (r Runner) launch(job Job, run *Run, workspacePath string, n notices) Result {
+// launch は描画して claude を起動し、終わるか止められるまで待つ。stream は lock を取った worker log。
+func (r Runner) launch(job Job, run *Run, workspacePath string, stream *os.File, n notices) Result {
 	if run.stopped() {
 		return Result{Stopped: true}
 	}
@@ -189,19 +203,7 @@ func (r Runner) launch(job Job, run *Run, workspacePath string, n notices) Resul
 	}
 	// stdout (stream-json) と stderr を別の file に追記する。stall は stdout に progress が書かれなくなったことで見る。
 	// claude に file をそのまま渡すので、loop が死んでも claude の出力は途切れない
-	stream, err := openStream(LogFile(r.StateDir, job.Item.Ref()))
-	if err != nil {
-		return Result{Failure: fmt.Sprintf("worker log を開けない: %v", err)}
-	}
-	defer stream.Close()
-	// claude はこの fd を stdout として受け継ぐので、loop が止まった後も claude (と fd を受け継いだ子孫) が生きている間は
-	// lock が外れない。次の loop は Orphaned でそれを確かめる (system.md §7 の orphan)。取れなければ、前の loop の claude が
-	// まだ worker log を持っている
-	if err := syscall.Flock(int(stream.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		return Result{Failure: fmt.Sprintf("worker log の lock を取れない (前の loop の claude が生きているかもしれない): %v", err)}
-	}
-	name := filepath.Join(r.StateDir, "workers", job.Item.Ref().FileName())
-	stderr, err := openAppend(name + ".stderr.log")
+	stderr, err := openAppend(workerFile(r.StateDir, job.Item.Ref()) + ".stderr.log")
 	if err != nil {
 		return Result{Failure: fmt.Sprintf("worker log を開けない: %v", err)}
 	}
@@ -346,8 +348,11 @@ func writeFile(file, content string) error {
 }
 
 // LogFile は作業対象の worker log (claude の stdout) の path (formats.md §1)。
-func LogFile(stateDir string, ref target.Ref) string {
-	return filepath.Join(stateDir, "workers", ref.FileName()+".log")
+func LogFile(stateDir string, ref target.Ref) string { return workerFile(stateDir, ref) + ".log" }
+
+// workerFile は作業対象の worker log の置き場の、拡張子の前までの path (stdout と stderr で共有する)。
+func workerFile(stateDir string, ref target.Ref) string {
+	return filepath.Join(stateDir, "workers", ref.FileName())
 }
 
 // Orphaned は、作業対象の worker log の flock を、前の loop が起動した claude (orphan) がまだ持っているかを返す

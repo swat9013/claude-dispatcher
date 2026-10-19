@@ -73,7 +73,7 @@ func TestIssueWithALiveOrphanIsNotLaunchedUntilTheOrphanEnds(t *testing.T) {
 		t.Errorf("orphan の行 = %v, orphan_end の行 = %v, want issue#1 で 1 行ずつ", found, ended)
 	}
 	ticks := r.logEvents(t, "tick")
-	if len(ticks) < 3 || ticks[0]["orphans"] != float64(1) || ticks[2]["orphans"] != float64(0) {
+	if len(ticks) < 3 || ticks[0]["orphans"] != float64(1) || ticks[1]["orphans"] != float64(1) || ticks[2]["orphans"] != float64(0) {
 		t.Errorf("tick の行 = %v, want orphans が 1・1・0", ticks)
 	}
 	if got := r.published[1].Orphans; len(got) != 1 || got[0].Target != "issue#1" {
@@ -123,7 +123,7 @@ func TestLiveOrphanTakesASlotOfTheConcurrencyLimit(t *testing.T) {
 		Definition: orphanDefinition(),
 		Store:      func(workflow.Definition) loop.Store { return open.store() },
 		Workspaces: func(workflow.Definition) loop.Workspaces { return &removals{} },
-		Orphaned:   func(target.Ref) (bool, error) { return true, nil },
+		Orphaned:   func(ref target.Ref) (bool, error) { return ref.Number == 1, nil },
 	})
 
 	if len(r.jobs) != 1 || r.jobs[0].Item.Ref().Number != 2 {
