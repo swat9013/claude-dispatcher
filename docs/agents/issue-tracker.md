@@ -41,15 +41,9 @@ GitHub shares one number space across issues and PRs, so a bare `#42` may be eit
 - 起票するのは、担当範囲の外で見つけた欠陥・レビューの指摘のうち直さなかった Act on と Consider・`[上限超過]` を付けた Noted (区分の語はレビューの出力のもの)。それ以外の Noted (`[既存]` を含む) は起票しない — レビューの出力に記録が残る
 - 判定条件が同じで対象だけ違う指摘は 1 件に束ね、対象を本文の checklist に並べる
 - 起票の前に、同じ指摘の issue を、open なものと、`docs/agents/triage-labels.md` の表で `wontfix` の役を持つ label で close したものから、題名と変更対象の file path の 2 通りで探す。当たった issue は本文を読み、判定条件と対象が同じかで同じ指摘かを決める。同じ指摘の issue があれば起票せず、open なら発端の issue と CL の番号があればコメントで足す
-- 起票した issue は、発端の issue (作業が担当している issue) の子にする。親子は tracker の親子の機能で付け、本書に「follow-up issue の深さ」節があれば、その測り方が辿れる形にする (測り方が `github-sub-issue` なら sub-issue にし、本文の行で代えない)。issue を介さず人が始めた作業なら親を付けない — 人が起点の作業は agent の起票の連鎖ではない
 - 本文に `## 範囲` の節を置き、変更してよい file と「範囲外で見つけた欠陥・指摘は `docs/agents/issue-tracker.md`「follow-up issue の起票」に従って扱う」を書く
-- 付ける label は triage 待ち (`docs/agents/triage-labels.md` の表で `needs-triage` の役を持つ label) だけにする。着手可は triage が付ける。本書に「follow-up issue の深さ」節があれば、triage はそこで連鎖の深さを測ってから付ける
-
-## follow-up issue の深さ
-
-- 測り方: github-sub-issue
-- 上限: 2
-- 計画的な分解の親の label: tracking
+- `## 範囲` の節の直前に、発端の issue (作業が担当している issue) を指す独立した 1 行 `発端: #<番号>` を置く。follow-up issue がどの作業から起票されたかを後から辿るための行で、着手可の判定には使わない。issue を介さず人が始めた作業には指す issue が無いので、行を置かない
+- 付ける label は triage 待ち (`docs/agents/triage-labels.md` の表で `needs-triage` の役を持つ label) だけにする。着手可は triage が付ける
 
 ## When a skill says "publish to the issue tracker"
 
