@@ -198,6 +198,8 @@ type loop struct {
 	// orphans は直近に確かめられた tick で生きていた orphan の作業対象。tick ごとに確かめ直して置き換える。前の tick との
 	// 違いで、見つけた行と終わった行を 1 回ずつ書く
 	orphans map[target.Ref]bool
+	// orphansUnknown は、直近の tick で orphan を確かめられなかったか。次に確かめられる tick まで、tick の外の再起動もしない
+	orphansUnknown bool
 	// board は状態 file にだけ使う状態。loop の判断には使わない
 	board board
 }
@@ -301,6 +303,10 @@ func (l *loop) running() int {
 	return n
 }
 
+// slotsInUse は再起動の空きの判定に使う、並列の枠を使っているものの数: 走っている worker と生きている orphan (claude が
+// 走り続けうる)。候補の起動は、tick の初めの走っている数に、再起動待ち・今の orphan・起動した数を足して比べる。
+func (l *loop) slotsInUse() int { return l.running() + len(l.orphans) }
+
 // holdsWorker は claim が worker (止めている途中と、止められない worker を含む) を持つ段階か。
 func (c *claim) holdsWorker() bool { return c.phase == phaseRunning || c.phase == phaseStopping }
 
@@ -340,22 +346,25 @@ func (l *loop) tick() {
 	triggers := l.evaluable(def)
 	candidates, ambiguous := trigger.Evaluate(triggers, open)
 	v := &view{open: open, ambiguous: trigger.AmbiguousRefs(ambiguous), branches: l.claimedBranches()}
+	// 打ち切りを解く確かめは orphan と関わらないので、orphan を確かめられない tick でも済ませる
+	l.clearAbandoned(store, def, v)
 	ws := l.o.Workspaces(l.def)
-	unclaimed, err := l.observeOrphans(ws)
+	unclaimed, checked, err := l.observeOrphans(ws)
+	l.orphansUnknown = err != nil
 	if err != nil {
 		// どの workspace の claude が生きているかを決められないので、掃除も起動 (再起動を含む) もしない
 		l.tickFailed(oneLine(err))
 		return
 	}
 	l.sweep(store, ws, open, unclaimed)
-	l.clearAbandoned(store, def, v)
 	l.retry(store, v)
 	// 起動を始める前の数を tick の行にも載せる。起動した worker は走っている worker に加わるので、launched の数を足して判定する。
 	// orphan も claude が走り続けうるので並列の枠を使う
 	running, waitingRetry, orphans := l.running(), l.waitingRetry(), len(l.orphans)
 	var launched []string
 	for _, c := range candidates {
-		if running+waitingRetry+orphans+len(launched) >= def.MaxConcurrent {
+		// orphan は起動の直前の確かめでも増えるので、今の数で比べる
+		if running+waitingRetry+len(l.orphans)+len(launched) >= def.MaxConcurrent {
 			break
 		}
 		ref := c.Item.Ref()
@@ -371,6 +380,11 @@ func (l *loop) tick() {
 		// claim している作業対象の branch に、CL の worker を重ねない。一覧の CL で外せるものは読み直さずに外し、読み直した
 		// CL でも確かめ直す
 		if cl, isCL := c.Item.(target.CL); isCL && v.branchHeld(cl, target.Ref{}) {
+			continue
+		}
+		// claim の無い workspace の一覧に無かった候補 (別の clone・workspace.root の変更・人が消した workspace) も、
+		// 起動の前に orphan を確かめる。置き場を読み直す前に確かめ、orphan の候補に読み直しを払わない
+		if !checked[ref] && l.blockedByOrphan(ref) {
 			continue
 		}
 		item, ok := l.recheckCandidate(store, triggers, c)
@@ -426,8 +440,16 @@ func (l *loop) claimedBranches() func() (map[string][]target.Ref, bool) {
 			return owners, ok
 		}
 		owners, ok = map[string][]target.Ref{}, true
+		// orphan の claude もその workspace の branch で作業を続けうるので、claim と同じく数える
+		holders := map[target.Ref]Workspaces{}
 		for ref, c := range l.claims {
-			branch, err := l.o.Workspaces(l.definitionOf(c)).Branch(ref)
+			holders[ref] = l.o.Workspaces(l.definitionOf(c))
+		}
+		for ref := range l.orphans {
+			holders[ref] = l.o.Workspaces(l.def)
+		}
+		for ref, ws := range holders {
+			branch, err := ws.Branch(ref)
 			if err != nil {
 				l.rec.error(ref, "この tick は CL の worker を起動しない: "+oneLine(err))
 				ok = false
@@ -546,32 +568,49 @@ func (l *loop) recheck(store Store) {
 	}
 }
 
-// observeOrphans は claim の無い workspace ごとに orphan が生きているかを確かめ、l.orphans を置き換えて、claim の無い
-// workspace の作業対象を返す。見つけた orphan と、前の tick まで生きていて終わった orphan を 1 行ずつ書く。workspace の一覧を
-// 読めないか、どれか 1 つでも確かめられなければ error を返し、l.orphans を前の tick のまま残す (formats.md §6 の orphan)。
-func (l *loop) observeOrphans(ws Workspaces) ([]target.Ref, error) {
+// observeOrphans は、claim の無い workspace と前の tick まで生きていた orphan の作業対象ごとに orphan が生きているかを
+// 確かめ、l.orphans を置き換える。claim の無い workspace の作業対象 (unclaimed) と、確かめた作業対象 (checked) を返す。
+// 見つけた orphan と、前の tick まで生きていて終わった orphan を 1 行ずつ書く。workspace の一覧を読めないか、どれか 1 つでも
+// 確かめられなければ error を返し、l.orphans を前の tick のまま残す (formats.md §6 の orphan)。前の tick の orphan も
+// 確かめ直すのは、workspace の一覧から消えても (workspace.root を変えた・人が消した) claude が生きていれば終わったと
+// 書かないため。
+func (l *loop) observeOrphans(ws Workspaces) (unclaimed []target.Ref, checked map[target.Ref]bool, err error) {
 	refs, err := ws.Existing()
 	if err != nil {
-		return nil, fmt.Errorf("orphan を確かめられない (workspace の一覧を読めない): %w", err)
+		return nil, nil, fmt.Errorf("orphan を確かめられない (workspace の一覧を読めない): %w", err)
 	}
-	var unclaimed []target.Ref
+	checked = map[target.Ref]bool{}
 	alive := map[target.Ref]bool{}
-	for _, ref := range refs {
-		if _, claimed := l.claims[ref]; claimed {
-			continue
+	probe := func(ref target.Ref) error {
+		if _, claimed := l.claims[ref]; claimed || checked[ref] {
+			return nil
 		}
-		unclaimed = append(unclaimed, ref)
+		checked[ref] = true
 		held, err := l.o.Orphaned(ref)
 		if err != nil {
-			return nil, fmt.Errorf("%s の orphan を確かめられない: %w", ref, err)
+			return fmt.Errorf("%s の orphan を確かめられない: %w", ref, err)
 		}
 		if held {
 			alive[ref] = true
 		}
+		return nil
+	}
+	for _, ref := range refs {
+		if _, claimed := l.claims[ref]; !claimed {
+			unclaimed = append(unclaimed, ref)
+		}
+		if err := probe(ref); err != nil {
+			return nil, nil, err
+		}
+	}
+	for _, ref := range sortedRefs(l.orphans) {
+		if err := probe(ref); err != nil {
+			return nil, nil, err
+		}
 	}
 	for _, ref := range sortedRefs(alive) {
 		if !l.orphans[ref] {
-			l.rec.event("orphan", map[string]any{"target": ref.String()}, LineNote, "orphan", " %s: 前の loop の claude がまだ動いている", ref)
+			l.logOrphan(ref)
 		}
 	}
 	for _, ref := range sortedRefs(l.orphans) {
@@ -580,7 +619,30 @@ func (l *loop) observeOrphans(ws Workspaces) ([]target.Ref, error) {
 		}
 	}
 	l.orphans = alive
-	return unclaimed, nil
+	return unclaimed, checked, nil
+}
+
+// blockedByOrphan は、tick の初めに確かめなかった作業対象の orphan を確かめ、生きているか確かめられなければ true を返す。生きて
+// いれば l.orphans に足して見つけた行を書き、確かめられなければ error の行を残す (次の tick で試み直す)。
+func (l *loop) blockedByOrphan(ref target.Ref) bool {
+	held, err := l.o.Orphaned(ref)
+	if err != nil {
+		l.rec.error(ref, "起動しようとした作業対象の orphan を確かめられない (次の tick で試み直す): "+oneLine(err))
+		return true
+	}
+	if held {
+		if l.orphans == nil {
+			l.orphans = map[target.Ref]bool{}
+		}
+		l.orphans[ref] = true
+		l.logOrphan(ref)
+	}
+	return held
+}
+
+// logOrphan は orphan を見つけた行を書く。
+func (l *loop) logOrphan(ref target.Ref) {
+	l.rec.event("orphan", map[string]any{"target": ref.String()}, LineNote, "orphan", " %s: 前の loop の claude がまだ動いている", ref)
 }
 
 // sweep は、claim の無い workspace (unclaimed) のうち、orphan が生きておらず作業対象が終端になったものを消す。open な一覧に

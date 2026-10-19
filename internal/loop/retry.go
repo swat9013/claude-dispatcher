@@ -54,11 +54,16 @@ func (l *loop) arm() {
 func (l *loop) retry(store Store, v *view) {
 	now := l.o.Now()
 	l.retriedAt = now
+	if l.orphansUnknown {
+		// どの workspace の claude が生きているかを決められない間は再起動しない (formats.md §6 の orphan)。見渡した時刻は
+		// 進めるので、明けた予定で wake を置き直し続けない
+		return
+	}
 	for ref, c := range l.claims {
 		if c.phase != phaseWaitingRetry || now.Before(c.retryAt) {
 			continue
 		}
-		if l.running() >= l.def.MaxConcurrent {
+		if l.slotsInUse() >= l.def.MaxConcurrent {
 			l.apply(ref, c, c.backoffElapsed(ref, hindranceNoSlot, nil, l.env()))
 			continue
 		}
