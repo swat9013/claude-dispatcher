@@ -49,8 +49,8 @@ var goVersionForm = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
 var adrNameForm = regexp.MustCompile(`^([0-9]{4})[^0-9].*\.md$`)
 
 func main() {
-	// adr-names だけが file 名を引数に取る (0 個でもよい)
-	if len(os.Args) < 2 || (os.Args[1] != "adr-names" && len(os.Args) != 2) {
+	// adr-names だけが file 名を 1 つ以上取る。0 個で黙って通ると、手で再現したつもりで何も検査しない
+	if len(os.Args) < 2 || (os.Args[1] == "adr-names") != (len(os.Args) > 2) {
 		fatal(errors.New("使い方: repocheck files | repocheck adr | repocheck adr-names <file>... | repocheck diagrams | repocheck ruleset < rules.json"))
 	}
 	var problems []string
