@@ -28,7 +28,6 @@ The skills speak in terms of five canonical triage roles. This file maps those r
 | 計画的な分解の親 | `tracking` | 子 issue の追跡用で、直接は実装しない issue |
 
 - 子 issue がすべて close されたら close する。着手可にも triage 待ちにもしない
-- `docs/agents/issue-tracker.md` の「follow-up issue の深さ」は、この label を持つ親から子への辺を深さに数えない
 
 When a skill mentions a role (e.g. "apply the AFK-ready triage label"), use the corresponding label string from this table.
 
