@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/swat9013/claude-dispatcher/internal/loop"
+	"github.com/swat9013/claude-dispatcher/internal/status"
 	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/trigger"
 	"github.com/swat9013/claude-dispatcher/internal/worker"
@@ -105,6 +106,18 @@ func TestAWorkerWhoseClaudeCannotBeStoppedIsNeitherVerifiedNorRestartedAndKeepsI
 		if !strings.Contains(joined, want) {
 			t.Errorf("error の行 = %q, want %q を含む", joined, want)
 		}
+	}
+	// 状態 file では普通に止めている worker と見分けられ、pid と workspace が載る (formats.md §7.1)
+	var unstopped *status.Worker
+	for _, s := range r.published {
+		for _, w := range s.Workers {
+			if w.Phase == status.Unstopped {
+				unstopped = &w
+			}
+		}
+	}
+	if unstopped == nil || unstopped.PID != 1 {
+		t.Errorf("状態 file の止められない worker = %+v, want 段階 unstopped・pid 1", unstopped)
 	}
 }
 

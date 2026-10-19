@@ -66,8 +66,10 @@ const (
 type Phase string
 
 const (
-	Running      Phase = "running"
-	Stopping     Phase = "stopping"
+	Running  Phase = "running"
+	Stopping Phase = "stopping"
+	// Unstopped は SIGKILL を送れず claude が終わっていない。claude が終わるまで終わりを待たない
+	Unstopped    Phase = "unstopped"
 	Verifying    Phase = "verifying"
 	WaitingRetry Phase = "waiting_retry"
 )
@@ -79,6 +81,9 @@ type Worker struct {
 	Attempt   int    `json:"attempt"`
 	SessionID string `json:"session_id"`
 	Phase     Phase  `json:"phase"`
+	// PID と Workspace は Unstopped の claim の claude の pid と workspace の path (人が止めるため)。ほかの段階では空
+	PID       int    `json:"pid,omitempty"`
+	Workspace string `json:"workspace,omitempty"`
 	// StartedAt は今の attempt の worker を起動した時刻。起動の前は nil
 	StartedAt *time.Time `json:"started_at"`
 	// RetryAt は再起動待ちの backoff が明ける時刻
@@ -143,7 +148,7 @@ func Read(dir string) (s Snapshot, ok bool, err error) {
 }
 
 // phaseTones は workers の表の段階の欄の色
-var phaseTones = map[Phase]Tone{Running: Cyan, WaitingRetry: Yellow, Verifying: Gray}
+var phaseTones = map[Phase]Tone{Running: Cyan, WaitingRetry: Yellow, Unstopped: Red, Verifying: Gray}
 
 // Liveness は loop が生きているか。
 type Liveness bool
@@ -241,7 +246,7 @@ func workers(ws []Worker, now time.Time, loc *time.Location, d Display) string {
 		switch {
 		case w.Phase == WaitingRetry && w.RetryAt != nil:
 			when = clock(*w.RetryAt, loc) + " に再起動"
-		case (w.Phase == Running || w.Phase == Stopping) && w.StartedAt != nil:
+		case (w.Phase == Running || w.Phase == Stopping || w.Phase == Unstopped) && w.StartedAt != nil:
 			when = elapsed(now.Sub(*w.StartedAt))
 		}
 		activity := ""
@@ -289,7 +294,7 @@ func elapsed(d time.Duration) string {
 	return fmt.Sprintf("%ds", s)
 }
 
-// needsAttention は要対処の行: 打ち切り・曖昧な CL・起動しない trigger・orphan。
+// needsAttention は要対処の行: 打ち切り・曖昧な CL・起動しない trigger・止められない worker・orphan。
 func needsAttention(s Snapshot) [][]Span {
 	var lines [][]Span
 	for _, a := range s.Abandoned {
@@ -300,6 +305,11 @@ func needsAttention(s Snapshot) [][]Span {
 	}
 	for _, b := range s.Blocked {
 		lines = append(lines, []Span{{Red, "起動しない trigger"}, {Plain, fmt.Sprintf(" %s: %s", b.Trigger, b.Error)}})
+	}
+	for _, w := range s.Workers {
+		if w.Phase == Unstopped {
+			lines = append(lines, []Span{{Red, "止められない"}, {Plain, fmt.Sprintf(" %s: claude (pid %d) が終わっていない。workspace %s。その pid の claude を止めると、loop が後始末して解ける", w.Target, w.PID, w.Workspace)}})
+		}
 	}
 	for _, o := range s.Orphans {
 		lines = append(lines, []Span{{Yellow, "orphan"}, {Plain, fmt.Sprintf(" %s: 前の loop の claude がまだ動いている。終わるのを待つか、log.jsonl のこの作業対象の直近の start の行 (止められなかったなら claude を止められない の行) の pid を止める", o.Target)}})
