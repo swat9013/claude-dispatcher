@@ -520,7 +520,7 @@ loop の今の状態を、表示のためだけに書き出す (system.md §9)�
   "abandoned": [{"target": "issue#43", "trigger": "implement"}],
   "ambiguous": [{"head": "worktree-issue-7", "targets": ["cl#52", "cl#53"]}],
   "blocked": [{"trigger": "fix-ci", "error": "action の先頭の /fix が見つからない (plugin・repo の .claude・~/.claude の skill と command)"}],
-  "orphans": [{"target": "issue#45"}]
+  "orphans": [{"target": "issue#45", "log": "workers/issue-45.log"}]
 }
 ```
 
@@ -537,7 +537,7 @@ loop の今の状態を、表示のためだけに書き出す (system.md §9)�
 | `abandoned` | 打ち切った作業対象と、打ち切ったときの trigger |
 | `ambiguous` | 直近の tick の曖昧な CL (§2.4) |
 | `blocked` | 直近の tick で事前検査 (§2.9) に落ちて、起動しない trigger |
-| `orphans` | 直近に確かめられた tick で生きていた orphan (§6) の作業対象。この key を足す前の版が書いた状態 file には無い |
+| `orphans` | 直近に確かめられた tick で生きていた orphan (§6) の作業対象 (`target`) と、lock を持たれている worker log の state dir からの相対 path (`log`)。この key を足す前の版が書いた状態 file には無い |
 
 ### 7.2 `status`
 
