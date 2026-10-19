@@ -13,6 +13,7 @@ import (
 	"github.com/swat9013/claude-dispatcher/internal/trigger"
 	"github.com/swat9013/claude-dispatcher/internal/worker"
 	"github.com/swat9013/claude-dispatcher/internal/workflow"
+	"github.com/swat9013/claude-dispatcher/internal/workspace"
 )
 
 // runOnce は単発起動 `run <trigger> <作業対象> [<workflow の path>]` を撃つ (formats.md §11)。loop を立てず、claim も
@@ -38,15 +39,6 @@ func runOnce(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, guidePointer)
 		return exitUsage
 	}
-	t, ok := namedTrigger(def, triggerName)
-	if !ok {
-		fmt.Fprintf(stderr, "trigger %s が workflow 定義に無い\n", triggerName)
-		return exitUsage
-	}
-	if t.On != ref.Kind {
-		fmt.Fprintf(stderr, "trigger %s は on: %s なので、%s を起動できない\n", t.Name, t.On, ref)
-		return exitUsage
-	}
 	e := definitionEnvironment(def)
 	// 起動前の検査は loop の起動時と同じ (system.md §7 の単発起動)
 	if problems := e.precheck(def); len(problems) > 0 {
@@ -58,12 +50,23 @@ func runOnce(args []string, stdout, stderr io.Writer) int {
 	if code := e.confirmLaunchable(def, stderr); code != 0 {
 		return code
 	}
+	t, ok := namedTrigger(def, triggerName)
+	if !ok {
+		fmt.Fprintf(stderr, "trigger %s が workflow 定義に無い\n", triggerName)
+		return exitUsage
+	}
+	if t.On != ref.Kind {
+		fmt.Fprintf(stderr, "trigger %s は on: %s なので、%s を起動できない\n", t.Name, t.On, ref)
+		return exitUsage
+	}
 	scopeKey, dir := e.stateDir(def)
 	lock, code := lockState(dir, scopeKey, stderr)
 	if code != 0 {
 		return code
 	}
 	defer lock.Close()
+	// 停止要求は lock を取った直後から受ける。起動の前に受けたら起動しない
+	signals := stopRequests()
 
 	orphaned, err := worker.Orphaned(dir, ref)
 	if err != nil {
@@ -89,71 +92,102 @@ func runOnce(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return exitFailed
 	}
+	select {
+	case sig := <-signals:
+		fmt.Fprintf(stderr, "停止要求 %v: 起動しない\n", sig)
+		return exitNotLaunched
+	default:
+	}
 	surviveClosedStdout()
 	events := make(chan worker.Event, 4)
-	run := worker.Runner{Workspaces: e.workspaces(def, &sync.Mutex{}), Definition: def, StateDir: dir}.
+	ws := e.workspaces(def, &sync.Mutex{})
+	run := worker.Runner{Workspaces: ws, Definition: def, StateDir: dir}.
 		Start(worker.Job{Item: item, Trigger: t, Attempt: 1, SessionID: sessionID, Prompt: def.Prompt}, events)
-	return awaitOnce(store, t, ref, sessionID, run, events, stopRequests(), stdout, stderr)
+	o := once{store: store, workspaces: ws, trigger: t, ref: ref, stdout: stdout, stderr: stderr}
+	return o.await(sessionID, run, events, signals)
 }
 
-// awaitOnce は単発起動の worker の終わりを待ち、作業対象を読み直して exit code を返す (formats.md §11)。停止要求は
-// 1 回目で worker の終わりを待ち、2 回目で worker を止める。
-func awaitOnce(store loop.Store, t trigger.Trigger, ref target.Ref, sessionID string, run *worker.Run,
-	events <-chan worker.Event, signals <-chan os.Signal, stdout, stderr io.Writer) int {
-	stops, unstopped := 0, false
+// once は単発起動の 1 回分の、終わりを待って確かめるのに使うもの。
+type once struct {
+	store      loop.Store
+	workspaces workspace.Manager
+	trigger    trigger.Trigger
+	ref        target.Ref
+	stdout     io.Writer
+	stderr     io.Writer
+}
+
+// await は単発起動の worker の終わりを待ち、exit code を返す (formats.md §11)。停止要求は 1 回目で worker の終わりを待ち、
+// 2 回目で worker を止める。
+func (o once) await(sessionID string, run *worker.Run, events <-chan worker.Event, signals <-chan os.Signal) int {
+	stops, started, unstopped := 0, false, false
 	for {
 		select {
 		case sig := <-signals:
 			stops++
 			if stops == 1 {
-				fmt.Fprintf(stderr, "停止要求 %v: worker の終了を待つ\n", sig)
+				fmt.Fprintf(o.stderr, "停止要求 %v: worker の終了を待つ\n", sig)
 				continue
 			}
-			fmt.Fprintf(stderr, "停止要求 %v: worker を止める\n", sig)
+			fmt.Fprintf(o.stderr, "停止要求 %v: worker を止める\n", sig)
 			run.Stop()
 			if unstopped {
+				fmt.Fprintf(o.stdout, "終了: %s 未完了 (claude を止められない)\n", o.ref)
 				return exitNotCompleted
 			}
 		case ev := <-events:
 			switch ev := ev.(type) {
 			case worker.Started:
-				fmt.Fprintf(stdout, "起動: %s (%s, session %s, workspace %s, pid %d)\n", ref, t.Name, sessionID, ev.Workspace, ev.PID)
+				started = true
+				fmt.Fprintf(o.stdout, "起動: %s (%s, session %s, workspace %s, pid %d)\n", o.ref, o.trigger.Name, sessionID, ev.Workspace, ev.PID)
 			case worker.Unstopped:
-				fmt.Fprintln(stderr, printable.Line("claude を止められない: "+ev.StopError))
+				fmt.Fprintln(o.stderr, printable.Line("claude を止められない: "+ev.StopError))
 				unstopped = true
 				if stops >= 2 {
+					fmt.Fprintf(o.stdout, "終了: %s 未完了 (claude を止められない)\n", o.ref)
 					return exitNotCompleted
 				}
 			case worker.Ended:
-				return endedOnce(store, t, ref, ev.Result, stdout, stderr)
+				return o.ended(ev.Result, started, stops >= 2)
 			}
 		}
 	}
 }
 
-// endedOnce は終わった worker の作業対象を読み直し、完了したかを exit code で返す。
-func endedOnce(store loop.Store, t trigger.Trigger, ref target.Ref, result worker.Result, stdout, stderr io.Writer) int {
+// ended は終わった worker の作業対象を読み直し、完了したかを exit code で返す。claude を起動できなかった (Started が
+// 届かなかった) なら起動しなかったとし、2 回目の停止要求の後なら読み直さずに完了しなかったとする。
+func (o once) ended(result worker.Result, started, stopped bool) int {
 	for _, message := range []string{result.Failure, result.AfterRunError, result.StopError, result.ResultSummaryError} {
 		if message != "" {
-			fmt.Fprintln(stderr, printable.Line(message))
+			fmt.Fprintln(o.stderr, printable.Line(message))
 		}
 	}
-	if result.Stopped {
-		fmt.Fprintf(stdout, "終了: %s 未完了 (停止要求)\n", ref)
+	switch {
+	case stopped || result.Stopped:
+		fmt.Fprintf(o.stdout, "終了: %s 未完了 (停止要求)\n", o.ref)
 		return exitNotCompleted
+	case !started:
+		fmt.Fprintf(o.stdout, "終了: %s 起動できなかった\n", o.ref)
+		return exitNotLaunched
 	}
-	item, err := store.Read(ref)
+	item, err := o.store.Read(o.ref)
 	if err != nil {
-		fmt.Fprintf(stderr, "終わった worker の作業対象 %s を読み直せない: %v\n", ref, err)
+		fmt.Fprintf(o.stderr, "終わった worker の作業対象 %s を読み直せない: %v\n", o.ref, err)
 		return exitFailed
 	}
-	observed := t.Observe(item)
+	observed := o.trigger.Observe(item)
 	switch observed {
 	case trigger.ObservedLeftTrigger, trigger.ObservedTerminal:
-		fmt.Fprintf(stdout, "終了: %s 完了 (%s)\n", ref, observationText(observed))
+		// workspace は loop と同じく、終端なら before_remove を撃って消す
+		if observed == trigger.ObservedTerminal {
+			if err := o.workspaces.Remove(o.ref); err != nil {
+				fmt.Fprintln(o.stderr, printable.Line(err.Error()))
+			}
+		}
+		fmt.Fprintf(o.stdout, "終了: %s 完了 (%s)\n", o.ref, observationText(observed))
 		return 0
 	}
-	fmt.Fprintf(stdout, "終了: %s 未完了 (%s)\n", ref, observationText(observed))
+	fmt.Fprintf(o.stdout, "終了: %s 未完了 (%s)\n", o.ref, observationText(observed))
 	return exitNotCompleted
 }
 

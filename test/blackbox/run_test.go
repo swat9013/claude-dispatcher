@@ -1,7 +1,10 @@
 package blackbox_test
 
 import (
+	"os"
+	"regexp"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/swat9013/claude-dispatcher/test/blackbox/stubwire"
@@ -108,5 +111,56 @@ func TestRunDoesNotLaunchIntoTheWorkspaceOfALiveOrphan(t *testing.T) {
 	assertExit(t, r, 5)
 	if calls := s.calls("claude"); len(calls) != 1 {
 		t.Fatalf("claude の呼び出し = %d 回, want 1 (orphan の分だけ)", len(calls))
+	}
+}
+
+func TestRunRemovesTheWorkspaceWithBeforeRemoveWhenTheWorkerClosesTheTarget(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflowWithCommands(s.workerWorkflow(""))
+	s.setIssues(readyIssue(42))
+	closed := readyIssue(42)
+	closed.closed = true
+	s.onClaude(stubwire.Rule{Writes: []stubwire.FileWrite{s.ghResponses(closed)}})
+
+	r := s.run("run", "implement", "issue#42")
+
+	assertExit(t, r, 0)
+	if _, err := os.Stat(s.mark("before_remove-42")); err != nil {
+		t.Fatalf("before_remove が撃たれない: %v", err)
+	}
+	if _, err := os.Stat(s.workspace(42)); !os.IsNotExist(err) {
+		t.Fatalf("終端の workspace が残っている: %v", err)
+	}
+}
+
+func TestRunExitsFiveWhenAHookFailsBeforeClaudeIsLaunched(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflowWithCommands(strings.Replace(s.workerWorkflow(""), "before_run: pwd >", "before_run: exit 1; pwd >", 1))
+	s.setIssues(readyIssue(42))
+
+	r := s.run("run", "implement", "issue#42")
+
+	assertExit(t, r, 5)
+	if calls := s.calls("claude"); len(calls) != 0 {
+		t.Fatalf("claude の呼び出し = %d 回, want 0", len(calls))
+	}
+}
+
+func TestRunStopsTheWorkerOnTheSecondStopRequestAndExitsSix(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflowWithCommands(s.workerWorkflow(""))
+	s.setIssues(readyIssue(42))
+	s.onClaude(stubwire.Rule{ReleaseFile: s.releaseFile()})
+	t.Cleanup(s.release)
+	p := s.startBackground(nil, "run", "implement", "issue#42")
+	p.waitForOutput(regexp.MustCompile(`^起動: issue#42 `))
+
+	p.signal(syscall.SIGINT)
+	p.signal(syscall.SIGTERM)
+
+	r := p.wait()
+	assertExit(t, r, 6)
+	if !strings.Contains(r.stdout, "終了: issue#42 未完了 (停止要求)") {
+		t.Fatalf("stdout = %q", r.stdout)
 	}
 }

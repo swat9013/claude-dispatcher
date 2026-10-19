@@ -47,7 +47,8 @@ const (
 
 // usage の形式は formats.md §10。Usage 節の command の代わりに flag を書く形と Options 節は引数の宣言 (args.go) から生成し、
 // Commands と Arguments は手で書く
-var usage = "Usage: claude-dispatcher <command> [options] [WORKFLOW]\n" + usageForms() + `
+var usage = "Usage: claude-dispatcher <command> [options] [WORKFLOW]\n" +
+	"       claude-dispatcher run TRIGGER TARGET [WORKFLOW]\n" + usageForms() + `
 Commands:
   loop      前面で tick を回し続け、止めるまで戻らない (Ctrl+C で止める)
   status    loop の今の状態を描く。何も書かず、tracker の CLI も撃たない
