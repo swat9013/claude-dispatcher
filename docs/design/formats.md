@@ -550,16 +550,17 @@ claude-dispatcher status [<workflow の path>]
 ● loop 稼働中  github.com/acme/widgets · v0.3.0
 次の tick 00:10:00 · 直近の tick 00:05:00 ok · 候補 1
 
-workers 2 ────────────────────────────────────────────
+workers 3 ────────────────────────────────────────────
 作業対象  trigger    attempt  段階           経過               活動
 issue#42  implement  1        running        5m10s              Bash go test ./...
 issue#44  implement  2        waiting_retry  00:06:40 に再起動
+issue#46  implement  1        unstopped      12m03s
 
 要対処 5 ─────────────────────────────────────────────
 打ち切り issue#43 (implement): label を外して trigger から外し、1 周期待ってから付け直すと解ける
 曖昧な CL worktree-issue-7: cl#52, cl#53
 起動しない trigger fix-ci: action の先頭の /fix が見つからない (plugin・repo の .claude・~/.claude の skill と command)
-止められない issue#46: claude (pid 4242) が終わっていない。workspace /path/to/workspaces/issue-46。その pid の claude を止めると、loop が後始末して解ける
+止められない issue#46: claude (pid 4242) が終わっていない。workspace /path/to/workspaces/issue-46。その pid の claude を止めると、loop が後始末して解ける (loop が先に止まれば、次の loop が orphan として扱う)
 orphan issue#45: 前の loop の claude がまだ動いている。終わるのを待つか、log.jsonl のこの作業対象の直近の start の行 (止められなかったなら claude を止められない の行) の pid を止める
 ```
 
