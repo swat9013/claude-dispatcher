@@ -84,22 +84,27 @@ type claimEnv struct {
 	maxConcurrent   int
 }
 
-// workerEnded は worker の終わりを受ける。stall 上限・上限時間で止まった worker も、ここで worker の終わりとして受ける
-// (理由は result の Failure が持つ)。SIGKILL を送れず claude が終わっていなければ (result.Unstopped)、止めている段階の
-// まま loop の終了まで持つ。止めている worker が止められて終われば claim を解き、それ以外は終わりを確かめ待ちへ進めて
-// 作業対象を読み直させる。
-func (c *claim) workerEnded(ref target.Ref, result worker.Result) effect {
+// workerUnstopped は、止めるときに SIGKILL を送れず claude が終わっていないことの知らせを受ける。claude がまだ workspace と
+// session を使いうるので、確かめも再起動も workspace の削除もせず、claude が終わって worker の終わりが届くまで止めている段階で
+// 持つ (system.md §7 の tick の手順 1)。
+func (c *claim) workerUnstopped(stopError string) effect {
 	if (c.phase != phaseRunning && c.phase != phaseStopping) || c.unstopped {
-		// 走っていない claim に終わる worker は無い (起きれば loop の誤り)。止められない worker の終わりは 1 回しか届かない
+		// 止められない知らせは、走っている worker から 1 回しか届かない (起きれば loop の誤り)
+		return effect{lines: []logLine{errorLine("走っていない claim の worker の止められない知らせを受けた")}}
+	}
+	c.phase, c.unstopped = phaseStopping, true
+	return effect{lines: []logLine{errorLine(fmt.Sprintf("claude を止められない (pid %d, workspace %s): 終わるまで workspace を残し、終わりを確かめず再起動もしない: %s", c.pid, c.workspace, strings.ReplaceAll(stopError, "\n", " / ")))}}
+}
+
+// workerEnded は worker の終わりを受ける。stall 上限・上限時間で止まった worker も、ここで worker の終わりとして受ける
+// (理由は result の Failure が持つ)。止められなかった claude が後で終わったときも、ここで受ける。止めている worker が
+// 止められて終われば claim を解き、それ以外は終わりを確かめ待ちへ進めて作業対象を読み直させる。
+func (c *claim) workerEnded(ref target.Ref, result worker.Result) effect {
+	if c.phase != phaseRunning && c.phase != phaseStopping {
+		// 走っていない claim に終わる worker は無い (起きれば loop の誤り)
 		return effect{lines: []logLine{errorLine("走っていない claim の worker の終わりを受けた")}}
 	}
-	c.run = nil
-	if result.Unstopped {
-		// claude がまだ workspace と session を使いうるので、確かめも再起動も workspace の削除もせず、loop の終了まで持つ
-		// (system.md §7 の tick の手順 1)
-		c.phase, c.unstopped = phaseStopping, true
-		return effect{lines: []logLine{errorLine(fmt.Sprintf("claude を止められない (pid %d, workspace %s): workspace を残し、終わりを確かめず再起動もしない: %s", c.pid, c.workspace, strings.ReplaceAll(result.StopError, "\n", " / ")))}}
-	}
+	c.run, c.unstopped = nil, false
 	if c.phase == phaseStopping && result.Stopped {
 		return effect{
 			removeWorkspace: c.stopReason == stoppedAtTerminal,

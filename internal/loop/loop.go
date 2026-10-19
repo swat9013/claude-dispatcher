@@ -168,8 +168,8 @@ type claim struct {
 	// pid と workspace は今の attempt で起動した claude の pid と workspace の path (止められない claude を人が探すため)
 	pid       int
 	workspace string
-	// unstopped は、SIGKILL を送れず claude が終わっていない worker を持つこと。段階は phaseStopping のまま loop の終了まで
-	// 残し、loop の停止はこの worker を待たない (system.md §7)
+	// unstopped は、SIGKILL を送れず claude が終わっていない worker を持つこと。段階は phaseStopping のまま worker の終わりが
+	// 届くまで残し、loop の停止はこの worker を待たない (system.md §7)
 	unstopped bool
 }
 
@@ -271,7 +271,7 @@ func (l *loop) exit() int {
 	return 0
 }
 
-// awaited は loop の停止が終わりを待つ worker の数。止められない worker は終わりが届かないので数えない。
+// awaited は loop の停止が終わりを待つ worker の数。止められない worker は claude がいつ終わるか分からないので数えない。
 func (l *loop) awaited() int {
 	n := 0
 	for _, c := range l.claims {
@@ -633,7 +633,7 @@ func (l *loop) definitionOf(c *claim) workflow.Definition {
 	return def
 }
 
-// handle は worker の起動か終わりを受ける。
+// handle は worker の起動・止められない知らせ・終わりを受ける。
 func (l *loop) handle(ev worker.Event) {
 	switch ev := ev.(type) {
 	case worker.Started:
@@ -649,6 +649,12 @@ func (l *loop) handle(ev worker.Event) {
 			"target": name, "trigger": c.trigger.Name, "attempt": c.attempt,
 			"session_id": c.sessionID, "workspace": ev.Workspace, "pid": ev.PID,
 		}, LineStart, "起動", " %s (%s, attempt %d, session %s)", name, c.trigger.Name, c.attempt, c.sessionID)
+	case worker.Unstopped:
+		c, ok := l.claimOf(ev.Target)
+		if !ok {
+			return
+		}
+		l.apply(ev.Target, c, c.workerUnstopped(ev.StopError))
 	case worker.Ended:
 		c, ok := l.claimOf(ev.Target)
 		if !ok {
@@ -656,8 +662,8 @@ func (l *loop) handle(ev worker.Event) {
 		}
 		result := ev.Result
 		stopError := result.StopError
-		if result.Unstopped {
-			// 止められない worker の行 (claim.workerEnded) が理由を併せて書く
+		if c.unstopped {
+			// 止められない知らせの行 (claim.workerUnstopped) が理由を既に書いた
 			stopError = ""
 		}
 		for _, message := range []string{result.AfterRunError, stopError, result.ResultSummaryError} {

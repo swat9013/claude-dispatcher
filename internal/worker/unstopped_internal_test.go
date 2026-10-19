@@ -13,7 +13,7 @@ import (
 
 // SIGKILL を送れず claude が終わっていない worker の終わり方 (system.md §7 の tick の手順 1)。
 
-func TestStoppingAClaudeThatCannotBeKilledReturnsAnUnstoppedResult(t *testing.T) {
+func TestAClaudeThatCannotBeKilledIsReportedUnstoppedAndEndsOnceWhenItExits(t *testing.T) {
 	cmd := exec.Command("sleep", "30")
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
@@ -32,10 +32,18 @@ func TestStoppingAClaudeThatCannotBeKilledReturnsAnUnstoppedResult(t *testing.T)
 	defer stream.Close()
 	run := &Run{stop: make(chan struct{})}
 	run.Stop()
+	var reported []string
 
-	result := Runner{}.wait(cmd, run, newStreamWatch(stream, 0, time.Now(), t.TempDir(), limits{}))
+	// 止められないと知らせた後に、claude が自分で死ぬ (SIGKILL が遅れて届いた形)
+	result := Runner{}.wait(cmd, run, newStreamWatch(stream, 0, time.Now(), t.TempDir(), limits{}), func(stopError string) {
+		reported = append(reported, stopError)
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	})
 
-	if !result.Unstopped || !result.Stopped || result.StopError == "" || result.ExitCode != nil {
-		t.Errorf("result = %+v, want Unstopped・Stopped・StopError あり・ExitCode なし", result)
+	if len(reported) != 1 || reported[0] == "" {
+		t.Errorf("止められない知らせ = %q, want 理由付きで 1 回", reported)
+	}
+	if !result.Stopped || result.StopError == "" {
+		t.Errorf("result = %+v, want claude が終わった後の Stopped・StopError あり", result)
 	}
 }

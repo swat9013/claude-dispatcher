@@ -35,7 +35,7 @@ type Job struct {
 	Prompt string
 }
 
-// Event は worker の起動 (Started) か終わり (Ended)。
+// Event は worker の起動 (Started)・止められないことの知らせ (Unstopped)・終わり (Ended)。
 type Event interface{ isEvent() }
 
 // Started は claude を起動したこと。
@@ -51,8 +51,17 @@ type Ended struct {
 	Result Result
 }
 
-func (Started) isEvent() {}
-func (Ended) isEvent()   {}
+// Unstopped は止めるときに SIGKILL を送れず、claude がまだ終わっていないこと (system.md §7)。worker は終わっておらず、
+// claude が終わったときに Ended を送る。
+type Unstopped struct {
+	Target target.Ref
+	// StopError は process group へ signal を送れなかった理由
+	StopError string
+}
+
+func (Started) isEvent()   {}
+func (Unstopped) isEvent() {}
+func (Ended) isEvent()     {}
 
 // Result は worker 1 回分の終わり方。
 type Result struct {
@@ -66,9 +75,6 @@ type Result struct {
 	AfterRunError string
 	// StopError は止めるときに process group へ signal を送れなかった理由
 	StopError string
-	// Unstopped は止めるときに SIGKILL を送れず、claude がまだ終わっていないこと (system.md §7)。true なら after_run を撃たず、
-	// ResultSummary も読まない。loop はこの worker を終わったものとして扱わない
-	Unstopped bool
 	// ResultSummary は attempt の最後の stream-json の result の行の要約。claude を起動しなかった・result の行が無い・worker log を
 	// 最後まで読めなかったなら nil。項目の型が違えば、その項目を除いた要約
 	ResultSummary *ResultSummary
@@ -125,30 +131,36 @@ func (r *Run) stopped() bool {
 	}
 }
 
-// Start は job の worker を別の goroutine で進め、起動と終わりを events に送る。終わりは必ず 1 回送る。
+// Start は job の worker を別の goroutine で進め、起動・止められないこと・終わりを events に送る。終わりは必ず 1 回送る
+// (止められなければ、claude が終わったときに送る)。
 func (r Runner) Start(job Job, events chan<- Event) *Run {
 	run := &Run{stop: make(chan struct{})}
 	ref := job.Item.Ref()
 	go func() {
-		result := r.attempt(job, run, func(pid int, workspace string) {
-			events <- Started{Target: ref, PID: pid, Workspace: workspace}
+		result := r.attempt(job, run, notices{
+			started: func(pid int, workspace string) {
+				events <- Started{Target: ref, PID: pid, Workspace: workspace}
+			},
+			unstopped: func(stopError string) { events <- Unstopped{Target: ref, StopError: stopError} },
 		})
 		events <- Ended{Target: ref, Result: result}
 	}()
 	return run
 }
 
-func (r Runner) attempt(job Job, run *Run, started func(pid int, workspace string)) Result {
+// notices は worker が終わりの前に loop へ送る知らせ。
+type notices struct {
+	started   func(pid int, workspace string)
+	unstopped func(stopError string)
+}
+
+func (r Runner) attempt(job Job, run *Run, n notices) Result {
 	ref := job.Item.Ref()
 	path, err := r.Workspaces.Prepare(ref)
 	if err != nil {
 		return Result{Failure: err.Error()}
 	}
-	result := r.launch(job, run, path, started)
-	if result.Unstopped {
-		// claude がまだ workspace を使いうるので、後始末をしない
-		return result
-	}
+	result := r.launch(job, run, path, n)
 	if err := r.Workspaces.AfterRun(ref); err != nil {
 		result.AfterRunError = err.Error()
 	}
@@ -156,7 +168,7 @@ func (r Runner) attempt(job Job, run *Run, started func(pid int, workspace strin
 }
 
 // launch は描画して claude を起動し、終わるか止められるまで待つ。
-func (r Runner) launch(job Job, run *Run, workspacePath string, started func(pid int, workspace string)) Result {
+func (r Runner) launch(job Job, run *Run, workspacePath string, n notices) Result {
 	if run.stopped() {
 		return Result{Stopped: true}
 	}
@@ -199,14 +211,10 @@ func (r Runner) launch(job Job, run *Run, workspacePath string, started func(pid
 	if err := cmd.Start(); err != nil {
 		return Result{Failure: fmt.Sprintf("%s を起動できない: %v", claude.Command, err)}
 	}
-	started(cmd.Process.Pid, workspacePath)
+	n.started(cmd.Process.Pid, workspacePath)
 	watch := newStreamWatch(stream, before.Size(), time.Now(), workspacePath,
 		limits{stall: r.Definition.StallTimeout, run: r.Definition.RunTimeout})
-	result := r.wait(cmd, run, watch)
-	if result.Unstopped {
-		// claude がまだ result の行を書きうる
-		return result
-	}
+	result := r.wait(cmd, run, watch, n.unstopped)
 	// claude の process が終わった後に読むので、claude が書く result の行はそろっている
 	result.ResultSummary, err = watch.lastResult()
 	if err != nil {
@@ -241,8 +249,9 @@ func (r Runner) render(job Job, workspacePath string) (action, promptFile string
 	return action, promptFile, nil
 }
 
-// wait は起動した claude が終わるか、止められるか、stall か上限時間で止めるまで待つ。
-func (r Runner) wait(cmd *exec.Cmd, run *Run, w *streamWatch) Result {
+// wait は起動した claude が終わるか、止められるか、stall か上限時間で止めるまで待つ。止めようとして SIGKILL を送れず
+// claude が終わっていなければ、unstopped で知らせてから claude が終わるまで待つ。
+func (r Runner) wait(cmd *exec.Cmd, run *Run, w *streamWatch, unstopped func(stopError string)) Result {
 	group := proc.Watch(cmd)
 	ticker := time.NewTicker(watchInterval)
 	result, ended := watch(group.Done(), run, w, ticker.C)
@@ -264,9 +273,11 @@ func (r Runner) wait(cmd *exec.Cmd, run *Run, w *streamWatch) Result {
 	case <-group.Done():
 		return r.exited(cmd, stopError(result, err))
 	default:
-		// SIGKILL を送れず claude はまだ終わっていない。終わり方は無いので、止めた理由のまま返す
-		result.Unstopped = true
-		return stopError(result, err)
+		// SIGKILL を送れず claude はまだ終わっていない。Group.Done は claude が終われば閉じるので、知らせてから待ち続ける
+		result = stopError(result, err)
+		unstopped(result.StopError)
+		<-group.Done()
+		return r.exited(cmd, result)
 	}
 }
 
