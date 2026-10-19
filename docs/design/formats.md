@@ -183,9 +183,9 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 - `target` は、issue なら `issue#<番号>`、CL なら `cl#<番号>`
 - `tick` の行の起動の判定に使った値は、§6 の tick の手順 7 (候補の起動) の判定のもの
   - `running`・`waiting_retry`: その tick で候補の起動を始める前の、走っている worker と再起動待ちの claim の数 (手順 7 が `limits.max_concurrent` から引く数)
-  - `orphans`: その tick で生きていると見た (確かめられなかったものを含む) orphan の数。これも手順 7 が引く
+  - `orphans`: その tick で生きていると見た orphan の数。これも手順 7 が引く。orphan を確かめられない tick は `result` が `error` で、この key を載せない
   - `max_concurrent`: `loop` に `--max-concurrent` (§6) を渡したならその値、渡さなければその tick で読み直した workflow 定義の `limits.max_concurrent`
-  - 手順 7 は、`running`・`waiting_retry`・その tick で起動した数 (`launched` の数) の和が `max_concurrent` に達したところで候補の起動をやめる
+  - 手順 7 は、`running`・`waiting_retry`・`orphans`・その tick で起動した数 (`launched` の数) の和が `max_concurrent` に達したところで候補の起動をやめる
 - `wait_slot` の行の `max_concurrent` は、空きの判定に使った値。`--max-concurrent` を渡したならその値、渡さなければ loop が直近に読めた版の workflow 定義の `limits.max_concurrent` (`wait_slot` は tick の外でも書かれ、読み直しに落ちた tick は前の版を使い続ける)
 - `outcome`
 
@@ -484,9 +484,11 @@ claude が後で終われば、停止要求の後でも worker の終了を待�
 
 - loop は claude を起動する前に、`workers/<作業対象>.log` を開いた fd に `LOCK_EX` の flock を掛け、その fd を claude の stdout に渡す。claude (と fd を受け継いだ子孫) が生きている間、lock は外れない
 - tick の手順 4 で、claim の無い workspace ごとに、その作業対象の `workers/<作業対象>.log` を開いて `LOCK_SH|LOCK_NB` を試す。取れない (`EWOULDBLOCK`) なら orphan が生きている。file が無いか、取れればすぐ外して、orphan はいない
-- orphan が生きている作業対象は、その tick では workspace を掃除せず、候補にしない。並列の枠を 1 つ数える。`after_run` は撃たない
+- orphan が生きている作業対象は、その tick では workspace を掃除せず、候補にしない。その workspace の branch (手順 7 と同じ読み方) を head に持つ同じ repo の CL も起動しない。並列の枠を 1 つ数える (手順 7 の候補の起動と、再起動の空きの判定の両方)。`after_run` は撃たない
+- 手順 7 で起動しようとする候補は、claim の無い workspace の一覧に無くても、起動の直前に同じ確かめをする。生きていれば起動せず、確かめられなければ `error` の行を残して起動しない (次の tick で試み直す)
+- worker は `after_create`・`before_run` を撃つ前に `LOCK_EX|LOCK_NB` を取る。取れなければ hooks を撃たずに、その attempt を失敗にする (`failure` は、`EWOULDBLOCK` なら `worker log の lock を別の process が持っている (前の claude か、その fd を受け継いだ process が生きている)`、それ以外なら `worker log の lock を取れない: <理由>`)
 - 見つけた tick に `orphan` の行 (§4) を書き、人が読む行に `orphan <作業対象>: 前の loop の claude がまだ動いている` を出す。前の tick まで生きていた orphan が終わっていれば、`orphan_end` の行を書き、人が読む行に `orphan <作業対象> が終わった` を出す。終わった作業対象は、同じ tick から普通の掃除と候補の扱いに戻る
-- 確かめられない (`EWOULDBLOCK` 以外の失敗) か、claim の無い workspace の一覧を読めなければ、どの workspace の claude が生きているかを決められないので、その tick を error で終える (`tick` の行の `result` が `error`、`error` に理由)。掃除も起動 (再起動を含む) もしない。`要対処` の orphan は前の tick で見たもののまま残す
+- 確かめられない (`EWOULDBLOCK` 以外の失敗) か、claim の無い workspace の一覧を読めなければ、どの workspace の claude が生きているかを決められないので、その tick を error で終える (`tick` の行の `result` が `error`、`error` に理由)。掃除も起動 (再起動を含む。tick の外の再起動も、次に確かめられる tick まで試みない) もしない。打ち切りを解く手順 5 は、orphan を確かめる前に済ませる。`要対処` の orphan は前の tick で見たもののまま残す
 
 exit: 0 = 停止要求で止まった / 1・2・3 = 起動時の検査 (上表)。
 
@@ -558,7 +560,7 @@ issue#44  implement  2        waiting_retry  00:06:40 に再起動
 打ち切り issue#43 (implement): label を外して trigger から外し、1 周期待ってから付け直すと解ける
 曖昧な CL worktree-issue-7: cl#52, cl#53
 起動しない trigger fix-ci: action の先頭の /fix が見つからない (plugin・repo の .claude・~/.claude の skill と command)
-orphan issue#45: 前の loop の claude がまだ動いている。終わるのを待つか、log.jsonl のこの作業対象の直近の start の行 (止められなかったなら claude を止められない の行) の pid を止める
+orphan issue#45: 前の loop の claude がまだ動いている。終わるのを待つか、worker log (state_dir の workers/issue-45.log) を開いている process (lsof で探す。claude の pid は log.jsonl のこの作業対象の直近の start の行にある) を止める
 ```
 
 - 見出しは 2 行。1 行目は loop の状態と scope key と版: loop が生きていれば `● loop 稼働中` (停止要求の後は `● loop 停止待ち`)、`alive.lock` を取れれば `○ loop なし`。版は scope key に続けて ` · <version>` (状態 file の `version`) を出す。commit は出さない (状態 file と log.jsonl で読める)。`○ loop なし` のとき (状態 file の版は止まった loop のもの) と、状態 file に `version` が無いとき (版を足す前の版が書いた状態 file) は出さない
