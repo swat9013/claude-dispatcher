@@ -108,6 +108,10 @@ _Avoid_: anomaly, error
 loop が 1 つの作業対象について子 process として起動する、使い切りの LLM セッション。action を実行し、作業対象を trigger から外して終わる。
 _Avoid_: agent, runner
 
+**単発起動**:
+loop を立てずに、人が指名した 1 つの trigger と 1 つの作業対象で worker を 1 回だけ起動し、完了したかを確かめて終わる CLI の実行。作業対象がその trigger に当たっているときだけ起動し、retry も打ち切りもしない。
+_Avoid_: 試運転 (起動せずに候補を示すだけの `--dry-run`), tick (loop の 1 周期分の仕事), dispatch (loop が行う起動全般を指す)
+
 **claim**:
 loop が作業対象に worker を起動中または再起動待ちであることを記憶に持つこと。tracker には書かず、loop が止まれば消える。
 _Avoid_: wip, lock, assignee
