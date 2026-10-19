@@ -352,7 +352,7 @@ claude-dispatcher loop [--max-concurrent <N>] [<workflow の path>]
    - action は `--` の後ろに置く (`-` で始まる action を option と読ませない)
    - stream に progress (下の「progress」) が `limits.stall_timeout` のあいだ書かれないか、起動からの経過が `limits.run_timeout` を超えたら、process group を止めて失敗とする (止め方は 2 回目の停止要求と同じ)。止める判断と停止要求が重なったら、停止要求で止めたことにする
 
-4. 終わったら (止めたときを含む)、worker log からその attempt の最後の `result` を読んで `end` の行に要約を載せ (§4)、`after_run` を撃ち、作業対象を読み直す (SIGKILL を送れず claude が終わっていなければ、どれもしない。下の「止められない worker」)。終端か、起動した trigger から外れていれば `completed` として claim を解き、当たったままなら `failed` として再起動 (上) に回す
+4. 終わったら (止めたときを含む)、worker log からその attempt の最後の `result` を読んで `end` の行に要約を載せ (§4)、`after_run` を撃ち、作業対象を読み直す (SIGKILL を送れず claude が終わっていなければ、claude が終わるまでどれもしない。下の「止められない worker」)。終端か、起動した trigger から外れていれば `completed` として claim を解き、当たったままなら `failed` として再起動 (上) に回す
    - 当たるかをまだ決められなければ (conflict を計算中の CL)、完了とも失敗とも数えない。log.jsonl に `verify_wait` の行 (§4) を書き、人が読む行に `確かめ待ち` を出して、claim を持ったまま次の tick で確かめ直す
    - workspace を消すときは、worker を最初に起動したときの `workspace.root` と、消す時点の workflow 定義の hooks を使う
 
@@ -468,12 +468,14 @@ issue#42  implement  1        running  5m10s  Edit internal/status/status.go
 | 1 回目 | 新しい tick と起動 (再起動を含む) をやめ、走っている worker の終了を待って (終わり方の処理を済ませて) 止まる。待つ間も周期ごとに突き合わせ (tick の手順 1) だけを撃ち、終端になった作業対象の worker は止める。走っていなければ直ちに止まる。再起動待ちの claim は error の行を残して捨てる |
 | 2 回目 | 走っている worker の process group に SIGTERM を送り、5s で終わらなければ SIGKILL を送る。worker が終わったら group に残った process も SIGKILL で止め、`after_run` を撃ち、`stopped` の `end` 行を書いて止まる。SIGKILL を送れず claude が終わっていない worker は待たない (下の「止められない worker」) |
 
-**止められない worker**: 止めるとき (stall・上限時間・終端・2 回目の停止要求) に SIGKILL を送れず、claude が終わっていなければ (system.md §7)、次のとおりにする。
+**止められない worker**: 止めるとき (stall・上限時間・終端・2 回目の停止要求) に SIGKILL を送れず、claude が終わっていなければ (system.md §7)、claude が終わるまで次のとおりにする。
 
 - `after_run` を撃たず、worker log の `result` も読まない。`end` の行は書かない (worker は終わっていない)
-- signal を送れなかった理由を別の行に分けず、`error` の行 `claude を止められない (pid <pid>, workspace <path>): workspace を残し、終わりを確かめず再起動もしない: <signal を送れなかった理由>` を 1 行書く
-- claim は段階 `stopping` のまま loop の終了まで残る (状態 file と `status` にも `stopping` で出る)。同じ作業対象は起動せず、workspace は掃除せず、並列の枠を 1 つ使い続ける
-- 停止要求の後もその worker の終了は待たない。loop の終了で `error` の行 `claude を止められないまま止まる (pid <pid>, workspace <path>)` を書く
+- signal を送れなかった理由を別の行に分けず、`error` の行 `claude を止められない (pid <pid>, workspace <path>): 終わるまで workspace を残し、終わりを確かめず再起動もしない: <signal を送れなかった理由>` を 1 行書く
+- claim は段階 `stopping` のまま残る (状態 file と `status` にも `stopping` で出る)。同じ作業対象は起動せず、workspace は掃除せず、並列の枠を 1 つ使い続ける
+- 停止要求の後もその worker の終了は待たない。loop の終了までに claude が終わらなければ、`error` の行 `claude を止められないまま止まる (pid <pid>, workspace <path>)` を書く
+
+claude が後で終われば、止めた worker が終わったときと同じく、`after_run` を撃ち、`result` を読み、止められて終わったなら `stopped` の `end` 行を書いて claim を解き、stall・上限時間で止めようとしたなら終わりを確かめる (上の worker の 1 回分の手順 4)。その後の loop の終了では、上の `claude を止められないまま止まる` の行を書かない。
 
 exit: 0 = 停止要求で止まった / 1・2・3 = 起動時の検査 (上表)。
 
