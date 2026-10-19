@@ -266,6 +266,15 @@ SPEC §7・§8・§16 の状態機械を土台にする。claim の段階と打�
   - 遅い `after_create` は、同じ loop の他の workspace の用意と削除を待たせる。workspace の削除は loop 自身が撃つので、その間は loop も待つ (停止要求・worker の終わりの処理・tick が遅れる。最長で待つ hook の数 × `hooks.timeout`)。これは受け入れる
   - `before_run` と `after_run` は直列にしない。workspace の中の処理が主で長く走りうるので、直列にすると起動が詰まる。作業対象を跨いで並列に走りうるので、clone を触るなら hook の中で排他する
 
+**単発起動** (ADR 0022)。loop を立てずに、人が指名した 1 つの trigger と 1 つの作業対象で worker を 1 回だけ起動し、完了したかを返して終わる。workflow 定義に書いた trigger と action を、実際の作業対象 1 件で確かめるために置く。
+
+- 起動前の検査は loop の起動時と同じ (workflow 定義の検査・事前検査・依存 CLI・置き場の確認)。加えて、指名した trigger が workflow 定義に無い・作業対象の種類が trigger の `on` と合わないときは起動しない
+- 同じ scope key の lock を loop と共有する。同じ scope key の loop が立っていれば起動時に止まり、単発起動の間は loop も起動できない (project 1 ─ 0..1 loop を保つ)
+- 指名した作業対象が指名した trigger に当たっているときだけ起動する。完了は「worker が終わった後に trigger から外れていること」なので、当たっていない作業対象では完了を判定できない。宣言順で先の trigger に当たるかは見ない (人が trigger を指名している)
+- orphan (上の「orphan」) が生きている作業対象では起動しない
+- claim も打ち切りも持たない。attempt は 1 回だけで、retry も打ち切りもしない。終わった後に作業対象を 1 回読み直し、外れていれば完了。当たったまま・当たるかをまだ決められないときは完了しなかったと返す (次の tick が無いので確かめ直さない)
+- worker の 1 回分 (workspace・hooks・上限時間・stall) と停止要求 (1 回目は worker の終わりを待ち、2 回目は止める) は loop と同じ規則にする。workspace は終端でも消さず、後の loop の掃除に任せる。単発起動で作った workspace を後の loop がそのまま使える
+
 ## 8. workflow 定義
 
 実装 repo の中に置く (SPEC §5)。path は loop の引数で渡せ、省けば loop を起動した cwd の `WORKFLOW.md` を読む。項目の書式は案内 ([`internal/guide/guide.md`](../../internal/guide/guide.md)) が正本 (ADR 0012)。本節は項目の構成と検査の姿勢を持つ。
@@ -390,10 +399,10 @@ CLI の中で、呼び出し側から中身を隠す部品と、差し替えの�
 
 | 部品 | 呼び出し側 | 呼び出し側から隠すもの | adapter |
 |---|---|---|---|
-| issue 置き場の部品 | tick / 試運転 / `setup` / `doctor` | tracker の呼び方・応答の綴り・失敗の見分け方 | gh / glab / acli / テストの in-memory |
-| CL 置き場の部品 | tick / 試運転 / `doctor` | CL host の呼び方・応答から CL の状態の語彙への写し方・失敗の見分け方 | gh / glab / テストの in-memory |
-| 起動部 | tick | セッションの起動の形 (argv・process group・stream の読み方・停止・回収) | `claude -p` / テストの fake |
-| hooks の実行 | tick | shell の撃ち方・timeout | (seam を置かない。テストは一時 dir で本物を撃つ) |
+| issue 置き場の部品 | tick / 試運転 / 単発起動 (`run`) / `setup` / `doctor` | tracker の呼び方・応答の綴り・失敗の見分け方 | gh / glab / acli / テストの in-memory |
+| CL 置き場の部品 | tick / 試運転 / 単発起動 (`run`) / `doctor` | CL host の呼び方・応答から CL の状態の語彙への写し方・失敗の見分け方 | gh / glab / テストの in-memory |
+| 起動部 | tick / 単発起動 (`run`) | セッションの起動の形 (argv・process group・stream の読み方・停止・回収) | `claude -p` / テストの fake |
+| hooks の実行 | tick / 単発起動 (`run`) | shell の撃ち方・timeout | (seam を置かない。テストは一時 dir で本物を撃つ) |
 
 - **issue 置き場の部品と CL 置き場の部品は、workflow 定義から組み立てて、正規化した作業対象と分類済みの失敗を返す** (ADR 0008)
   - 正規化は SPEC §4.1.1 の Issue を土台にする。CL は、CL の状態の語彙と絞り込みに要る field を持つ
