@@ -57,11 +57,12 @@ claude-dispatcher-dev loop
 
 ## gate (品質チェック)
 
-検査の置き場は次の点で決めている。
+検査の置き場と書き方は次の点で決めている。
 
 - **CI に置く検査は、同じものを手元 (pre-commit) でも撃てるようにする**。dispatcher は CL の CI が落ちると `fix-ci` の trigger で worker を起動し、worker は手元で再現できない失敗を推測で直さず人へ返す ([WORKFLOW.md](WORKFLOW.md) の共通 prompt)。CI にしか無い検査が落ちると、worker は毎回人へ返すことになる
-- **PR の gate に載せるかは、赤くなった原因をその CL の中で直せるかで決める**。直せる検査は PR の gate に載せる。commit 時の hook だけに置くと、`pre-commit install` していない clone からの崩れが PR の CI を通って merge される。CL の変更と無関係に赤くなりうる検査 (例えば、network 上の脆弱性 DB を引く govulncheck、並行する PR の merge で main 側に重なりうる ADR の番号の一意) は PR の gate に載せず、「定期」の workflow で撃って検出を `needs-triage` の issue にする。PR の gate に載せると、新しい脆弱性の公開や番号の重なった merge のたびに、開いている worker の CL に一斉に `fix-ci` の trigger が当たる
+- **CL の変更と無関係に赤くなりうる検査は PR の gate に載せず、「定期」で撃つ。それ以外は PR の gate に載せる**。無関係に赤くなりうる検査 (例えば、network 上の脆弱性 DB を引く govulncheck、並行する PR の merge で main 側に重なりうる ADR の番号の一意) を PR の gate に載せると、新しい脆弱性の公開や番号の重なった merge のたびに、開いている worker の CL に一斉に `fix-ci` の trigger が当たる。下の「定期」の workflow は検出を `needs-triage` の issue にする。それ以外の検査を commit 時の hook だけに置くと、`pre-commit install` していない clone からの崩れが PR の CI を通って merge される
 - **PR の gate に載せる検査と載せない検査は、別の hook に分ける**。CI の `pre-commit` job が gate から外すのは hook 単位 (`SKIP`) なので、同じ hook に入れると載せる検査まで gate から外れる (ADR の file 名の形の検査と番号の一意の検査がこれに当たる)
+- **directory を読んで file を列挙する検査は、`.` で始まる名前を検査の対象から外す**。editor の lock file (Emacs の `.#x`) や AppleDouble (`._x`) は tracked でない副産物で、対象にすると commit 時の hook が CL と無関係に落ちる
 - **gate で撃つ検査の script とその test は repo の中に置く**。repo の外 (plugin 等) の script は vendor してから gate に入れ、版の固定は vendor した commit で表す
 - **shell script の test は Go の test から bash を撃つ形で置き** (`go test ./...` に載せる)、別の test 基盤を足さない
 - **gate の前提 tool (plantuml 等) を足すときは**、「セットアップ」と CI の両方に入れ方を書く
