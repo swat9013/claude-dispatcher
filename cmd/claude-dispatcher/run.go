@@ -94,7 +94,7 @@ func runOnce(args []string, stdout, stderr io.Writer) int {
 	}
 	select {
 	case sig := <-signals:
-		fmt.Fprintf(stderr, "停止要求 %v: 起動しない\n", sig)
+		fmt.Fprintf(stderr, "停止要求 %s: 起動しない\n", loop.SignalName(sig))
 		return exitNotLaunched
 	default:
 	}
@@ -125,11 +125,12 @@ func (o once) await(sessionID string, run *worker.Run, events <-chan worker.Even
 		select {
 		case sig := <-signals:
 			stops++
-			if stops == 1 {
-				fmt.Fprintf(o.stderr, "停止要求 %v: worker の終了を待つ\n", sig)
+			// 止められない claude は終わりを待たない (loop の停止と同じ。system.md §7)
+			if stops == 1 && !unstopped {
+				fmt.Fprintf(o.stderr, "停止要求 %s: worker の終了を待つ\n", loop.SignalName(sig))
 				continue
 			}
-			fmt.Fprintf(o.stderr, "停止要求 %v: worker を止める\n", sig)
+			fmt.Fprintf(o.stderr, "停止要求 %s: worker を止める\n", loop.SignalName(sig))
 			run.Stop()
 			if unstopped {
 				fmt.Fprintf(o.stdout, "終了: %s 未完了 (claude を止められない)\n", o.ref)
@@ -143,7 +144,7 @@ func (o once) await(sessionID string, run *worker.Run, events <-chan worker.Even
 			case worker.Unstopped:
 				fmt.Fprintln(o.stderr, printable.Line("claude を止められない: "+ev.StopError))
 				unstopped = true
-				if stops >= 2 {
+				if stops >= 1 {
 					fmt.Fprintf(o.stdout, "終了: %s 未完了 (claude を止められない)\n", o.ref)
 					return exitNotCompleted
 				}
