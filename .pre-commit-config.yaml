@@ -78,7 +78,8 @@ repos:
         language: unsupported
         pass_filenames: true
         files: ^docs/adr/[^/]+$
-        # 既定の types: [file] は symlink を渡さないので、symlink の ADR も形を検査するよう足す
+        # 既定の types: [file] は symlink を渡さない (types と types_or は AND で効く)。types を空にして symlink の ADR も渡す
+        types: []
         types_or: [file, symlink]
       # docs/design の図。描画の版は scripts/plantuml.version に固定する。svg の一致の比べ方とその理由は CONTRIBUTING.md の「gate」。
       # plantuml と python3 を撃つ 2 つは、図と無関係な commit を前提 tool の有無で止めないよう、読む file と自身の script に絞る。
