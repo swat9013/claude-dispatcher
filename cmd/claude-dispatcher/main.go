@@ -46,7 +46,7 @@ const (
 )
 
 // usage の形式は formats.md §10。Usage 節の command の代わりに flag を書く形と Options 節は引数の宣言 (args.go) から生成し、
-// Commands と Arguments は手で書く
+// Usage 節の run の形・Commands・Arguments は手で書く
 var usage = "Usage: claude-dispatcher <command> [options] [WORKFLOW]\n" +
 	"       claude-dispatcher run TRIGGER TARGET [WORKFLOW]\n" + usageForms() + `
 Commands:

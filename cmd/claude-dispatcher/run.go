@@ -103,7 +103,7 @@ func runOnce(args []string, stdout, stderr io.Writer) int {
 	ws := e.workspaces(def, &sync.Mutex{})
 	run := worker.Runner{Workspaces: ws, Definition: def, StateDir: dir}.
 		Start(worker.Job{Item: item, Trigger: t, Attempt: 1, SessionID: sessionID, Prompt: def.Prompt}, events)
-	o := once{store: store, workspaces: ws, trigger: t, ref: ref, stdout: stdout, stderr: stderr}
+	o := once{store: store, workspaces: ws, stateDir: dir, trigger: t, ref: ref, stdout: stdout, stderr: stderr}
 	return o.await(sessionID, run, events, signals)
 }
 
@@ -111,6 +111,7 @@ func runOnce(args []string, stdout, stderr io.Writer) int {
 type once struct {
 	store      loop.Store
 	workspaces workspace.Manager
+	stateDir   string
 	trigger    trigger.Trigger
 	ref        target.Ref
 	stdout     io.Writer
@@ -164,12 +165,12 @@ func (o once) ended(result worker.Result, started, stopped bool) int {
 		}
 	}
 	switch {
-	case stopped || result.Stopped:
-		fmt.Fprintf(o.stdout, "終了: %s 未完了 (停止要求)\n", o.ref)
-		return exitNotCompleted
 	case !started:
 		fmt.Fprintf(o.stdout, "終了: %s 起動できなかった\n", o.ref)
 		return exitNotLaunched
+	case stopped || result.Stopped:
+		fmt.Fprintf(o.stdout, "終了: %s 未完了 (停止要求)\n", o.ref)
+		return exitNotCompleted
 	}
 	item, err := o.store.Read(o.ref)
 	if err != nil {
@@ -181,7 +182,10 @@ func (o once) ended(result worker.Result, started, stopped bool) int {
 	case trigger.ObservedLeftTrigger, trigger.ObservedTerminal:
 		// workspace は loop と同じく、終端なら before_remove を撃って消す
 		if observed == trigger.ObservedTerminal {
-			if err := o.workspaces.Remove(o.ref); err != nil {
+			// fd を受け継いだ claude の子孫が残っていれば、loop の掃除と同じく消さない (system.md §7 の orphan)
+			if orphaned, err := worker.Orphaned(o.stateDir, o.ref); err != nil || orphaned {
+				fmt.Fprintf(o.stderr, "%s の workspace は claude の子孫が使っているかもしれないので消さない\n", o.ref)
+			} else if err := o.workspaces.Remove(o.ref); err != nil {
 				fmt.Fprintln(o.stderr, printable.Line(err.Error()))
 			}
 		}
