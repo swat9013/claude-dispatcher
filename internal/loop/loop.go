@@ -168,9 +168,10 @@ type claim struct {
 	// pid と workspace は今の attempt で起動した claude の pid と workspace の path (止められない claude を人が探すため)
 	pid       int
 	workspace string
-	// unstopped は、SIGKILL を送れず claude が終わっていない worker を持つこと。段階は phaseStopping のまま loop の終了まで
-	// 残し、loop の停止はこの worker を待たない (system.md §7)
-	unstopped bool
+	// exited は、SIGKILL を送れず claude が終わっていなかった worker の知らせ (worker.Unstopped) が渡した、claude が終わると
+	// 閉じる channel。知らせを受けてから worker の終わりが届くまで nil でない。その間、段階は phaseStopping のまま残し、loop の
+	// 停止は claude が終わるまでこの worker を待たない (system.md §7)
+	exited <-chan struct{}
 }
 
 type loop struct {
@@ -271,11 +272,12 @@ func (l *loop) exit() int {
 	return 0
 }
 
-// awaited は loop の停止が終わりを待つ worker の数。止められない worker は終わりが届かないので数えない。
+// awaited は loop の停止が終わりを待つ worker の数。止められない worker は、claude がいつ終わるか分からないので、claude が
+// 終わるまで数えない。
 func (l *loop) awaited() int {
 	n := 0
 	for _, c := range l.claims {
-		if c.holdsWorker() && !c.unstopped {
+		if c.holdsWorker() && !c.claudeAlive() {
 			n++
 		}
 	}
@@ -633,7 +635,7 @@ func (l *loop) definitionOf(c *claim) workflow.Definition {
 	return def
 }
 
-// handle は worker の起動か終わりを受ける。
+// handle は worker の起動・止められない知らせ・終わりを受ける。
 func (l *loop) handle(ev worker.Event) {
 	switch ev := ev.(type) {
 	case worker.Started:
@@ -649,18 +651,19 @@ func (l *loop) handle(ev worker.Event) {
 			"target": name, "trigger": c.trigger.Name, "attempt": c.attempt,
 			"session_id": c.sessionID, "workspace": ev.Workspace, "pid": ev.PID,
 		}, LineStart, "起動", " %s (%s, attempt %d, session %s)", name, c.trigger.Name, c.attempt, c.sessionID)
+	case worker.Unstopped:
+		c, ok := l.claimOf(ev.Target)
+		if !ok {
+			return
+		}
+		l.apply(ev.Target, c, c.workerUnstopped(ev.StopError, ev.Exited))
 	case worker.Ended:
 		c, ok := l.claimOf(ev.Target)
 		if !ok {
 			return
 		}
 		result := ev.Result
-		stopError := result.StopError
-		if result.Unstopped {
-			// 止められない worker の行 (claim.workerEnded) が理由を併せて書く
-			stopError = ""
-		}
-		for _, message := range []string{result.AfterRunError, stopError, result.ResultSummaryError} {
+		for _, message := range []string{result.AfterRunError, result.StopError, result.ResultSummaryError} {
 			if message != "" {
 				l.rec.error(ev.Target, message)
 			}

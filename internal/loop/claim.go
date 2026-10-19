@@ -11,7 +11,7 @@ import (
 )
 
 // claim の遷移 (docs/design/statechart.puml の claim の 4 つの段階 Running・Stopping・AwaitingVerification・WaitingRetry)。
-// 入口は出来事をまとめた 5 つ (workerEnded・observed・stopRequested・backoffElapsed・loopEnded)。入口は claim の段階を
+// 入口は出来事をまとめた 6 つ (workerUnstopped・workerEnded・observed・stopRequested・backoffElapsed・loopEnded)。入口は claim の段階を
 // 進め、書くログの行と loop がする I/O を effect で返す。I/O の実行と、claim の記録 (l.claims) からの削除は loop の apply
 // がする。打ち切った作業対象が解けるか (stillAbandoned) は claim の外に残す (打ち切った作業対象は claim を持たない)。
 
@@ -84,22 +84,30 @@ type claimEnv struct {
 	maxConcurrent   int
 }
 
+// workerUnstopped は、止めるときに SIGKILL を送れず claude が終わっていないことの知らせを受ける。claude がまだ workspace と
+// session を使いうるので、確かめも再起動も workspace の削除もせず、claude が終わって worker の終わりが届くまで止めている段階で
+// 持つ (system.md §7 の tick の手順 1)。
+func (c *claim) workerUnstopped(stopError string, exited <-chan struct{}) effect {
+	// どちらも起きれば loop の誤り
+	if c.phase != phaseRunning && c.phase != phaseStopping {
+		return effect{lines: []logLine{errorLine("走っていない claim の worker の止められない知らせを受けた")}}
+	}
+	if c.exited != nil {
+		return effect{lines: []logLine{errorLine("同じ worker の止められない知らせを 2 回受けた")}}
+	}
+	c.phase, c.exited = phaseStopping, exited
+	return effect{lines: []logLine{errorLine(fmt.Sprintf("claude を止められない (pid %d, workspace %s): 終わるまで workspace を残し、終わりを確かめず再起動もしない: %s", c.pid, c.workspace, strings.ReplaceAll(stopError, "\n", " / ")))}}
+}
+
 // workerEnded は worker の終わりを受ける。stall 上限・上限時間で止まった worker も、ここで worker の終わりとして受ける
-// (理由は result の Failure が持つ)。SIGKILL を送れず claude が終わっていなければ (result.Unstopped)、止めている段階の
-// まま loop の終了まで持つ。止めている worker が止められて終われば claim を解き、それ以外は終わりを確かめ待ちへ進めて
-// 作業対象を読み直させる。
+// (理由は result の Failure が持つ)。止められなかった claude が後で終わったときも、ここで受ける。止めている worker が
+// 止められて終われば claim を解き、それ以外は終わりを確かめ待ちへ進めて作業対象を読み直させる。
 func (c *claim) workerEnded(ref target.Ref, result worker.Result) effect {
-	if (c.phase != phaseRunning && c.phase != phaseStopping) || c.unstopped {
-		// 走っていない claim に終わる worker は無い (起きれば loop の誤り)。止められない worker の終わりは 1 回しか届かない
+	if c.phase != phaseRunning && c.phase != phaseStopping {
+		// 走っていない claim に終わる worker は無い (起きれば loop の誤り)
 		return effect{lines: []logLine{errorLine("走っていない claim の worker の終わりを受けた")}}
 	}
-	c.run = nil
-	if result.Unstopped {
-		// claude がまだ workspace と session を使いうるので、確かめも再起動も workspace の削除もせず、loop の終了まで持つ
-		// (system.md §7 の tick の手順 1)
-		c.phase, c.unstopped = phaseStopping, true
-		return effect{lines: []logLine{errorLine(fmt.Sprintf("claude を止められない (pid %d, workspace %s): workspace を残し、終わりを確かめず再起動もしない: %s", c.pid, c.workspace, strings.ReplaceAll(result.StopError, "\n", " / ")))}}
-	}
+	c.run, c.exited = nil, nil
 	if c.phase == phaseStopping && result.Stopped {
 		return effect{
 			removeWorkspace: c.stopReason == stoppedAtTerminal,
@@ -274,13 +282,31 @@ func newClaim(item target.Item, t trigger.Trigger, sessionID, workspaceRoot stri
 
 // loopEnded は loop の終了を受ける。claim を持ったまま止まることを error の行に残す。
 func (c *claim) loopEnded() effect {
-	if c.unstopped {
+	if c.claudeAlive() {
 		return effect{lines: []logLine{errorLine(fmt.Sprintf("claude を止められないまま止まる (pid %d, workspace %s)", c.pid, c.workspace))}}
+	}
+	if c.exited != nil {
+		// 停止を決めた後に claude が終わった。worker の後始末は loop の終了で途切れうる
+		return effect{lines: []logLine{errorLine(fmt.Sprintf("止められなかった claude は終わったが、after_run を待たずに止まる (workspace %s)", c.workspace))}}
 	}
 	if c.phase == phaseWaitingRetry {
 		return effect{lines: []logLine{errorLine(fmt.Sprintf("再起動を待ったまま止まる (%s, attempt %d まで)", c.trigger.Name, c.attempt))}}
 	}
 	return effect{lines: []logLine{errorLine(fmt.Sprintf("終わり方を確かめられないまま止まる (%s)", c.trigger.Name))}}
+}
+
+// claudeAlive は、止められなかった claude がまだ終わっていないか。終わっていれば、worker は after_run を撃ってから終わりを
+// 送るので、loop の停止はその終わりを待てる。
+func (c *claim) claudeAlive() bool {
+	if c.exited == nil {
+		return false
+	}
+	select {
+	case <-c.exited:
+		return false
+	default:
+		return true
+	}
 }
 
 func errorLine(message string) logLine { return logLine{errorMessage: message} }

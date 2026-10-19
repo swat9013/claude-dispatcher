@@ -190,5 +190,5 @@ Cockburn『ユースケース実践ガイド』(Writing Effective Use Cases) の
   - 1b1. 1 回目の停止要求と同じく step 2 へ進む。画面は見えないので、止まったことは別の端末の `status` で確かめる
 - **3a.** 運用者が worker の終わりを待てず、もう一度停止を求めた
   - 3a1. loop は走っている worker の process group を止め、hooks を撃ち、止めた作業対象を log に残して step 4 へ進む
-  - 3a2. SIGKILL を送れず claude が終わらない worker は、hooks を撃たず、終わりも待たない。loop は claude の pid と workspace を error として log に残して step 4 へ進む。運用者は残った claude を止め、workspace を片付けてから loop を起動し直す (system.md §7)
+  - 3a2. SIGKILL を送れず claude が終わらない worker は、claude が終わるまで hooks を撃たず、終わりも待たない。loop が止まるまでに claude が終われば、3a1 と同じく hooks を撃って log に残す。終わらなければ、loop は claude の pid と workspace を error として log に残して step 4 へ進む。運用者は残った claude を止め、workspace を片付けてから loop を起動し直す (system.md §7)
   - 3a3. 止められた worker が途中まで書いた成果は、workspace と remote branch に残る。次に起動した loop は、trigger に当たったままなら同じ workspace で続きから始める

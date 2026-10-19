@@ -96,6 +96,10 @@ type workerScript struct {
 	// result は起動の直後に送る終わり。untilStopped なら送らず、Stop されてから Stopped の終わりを送る
 	result       worker.Result
 	untilStopped bool
+	// unstopped は起動の直後に送る「止められない」知らせの理由。"" なら送らない
+	unstopped string
+	// neverEnds なら終わりを送らない (止められない claude が loop の終了まで終わらない)
+	neverEnds bool
 }
 
 // exits は起動するとすぐに exit code で終わる worker。
@@ -218,7 +222,18 @@ func (r *rig) launch(_ workflow.Definition, job worker.Job, events chan<- worker
 		r.send(events, worker.Started{Target: ref, PID: 1})
 		return &loop.FakeWorker{OnStop: func() { r.send(events, worker.Ended{Target: ref, Result: worker.Result{Stopped: true}}) }}
 	}
-	r.send(events, worker.Started{Target: ref, PID: 1}, worker.Ended{Target: ref, Result: s.result})
+	r.send(events, worker.Started{Target: ref, PID: 1})
+	if s.unstopped != "" {
+		// 終わる worker の claude は、終わりより先に終わっている
+		exited := make(chan struct{})
+		if !s.neverEnds {
+			close(exited)
+		}
+		r.send(events, worker.Unstopped{Target: ref, StopError: s.unstopped, Exited: exited})
+	}
+	if !s.neverEnds {
+		r.send(events, worker.Ended{Target: ref, Result: s.result})
+	}
 	return &loop.FakeWorker{}
 }
 

@@ -1,6 +1,7 @@
 package loop_test
 
 import (
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -35,7 +36,7 @@ func (w *removals) Remove(ref target.Ref) error {
 func (*removals) Branch(target.Ref) (string, error) { return "", nil }
 
 func TestAWorkerWhoseClaudeCannotBeStoppedIsNeitherVerifiedNorRestartedAndKeepsItsWorkspace(t *testing.T) {
-	// tick 1 で起動した worker が stall で止められずに返る。tick 2 で作業対象は終端になるが、claim は止めている段階のまま
+	// tick 1 で起動した worker が stall で止められないと知らせ、loop の終了まで終わらない。tick 2 で作業対象は終端になるが、claim は止めている段階のまま
 	// 持ち、workspace を消さない。停止要求はその worker を待たずに loop を止める
 	r := newRig()
 	periods := 0
@@ -50,7 +51,7 @@ func TestAWorkerWhoseClaudeCannotBeStoppedIsNeitherVerifiedNorRestartedAndKeepsI
 		return timing{fate: stopsTheLoop}
 	}
 	r.script = func(worker.Job) workerScript {
-		return workerScript{result: worker.Result{Failure: "stall", StopError: "子を止められない: EPERM\nEPERM", Unstopped: true}}
+		return workerScript{unstopped: "子を止められない: EPERM\nEPERM", neverEnds: true}
 	}
 	reads := 0
 	ws := &removals{}
@@ -103,6 +104,86 @@ func TestAWorkerWhoseClaudeCannotBeStoppedIsNeitherVerifiedNorRestartedAndKeepsI
 	for _, want := range []string{"claude を止められない (pid 1, workspace ", "子を止められない: EPERM / EPERM", "claude を止められないまま止まる (pid 1"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("error の行 = %q, want %q を含む", joined, want)
+		}
+	}
+}
+
+func TestAnUnstoppedWorkerWhoseClaudeLaterExitsIsVerifiedAndNotReportedAtLoopEnd(t *testing.T) {
+	// stall で止められないと知らせた worker の claude が後で終わる。loop は終わりを受けて作業対象を確かめ、
+	// loop の終了の行にその pid を残っているとは書かない
+	r := newRig()
+	r.timer = func(kind timerKind, _ time.Duration) timing {
+		if kind != periodTimer {
+			return timing{fate: neverFires}
+		}
+		return timing{fate: stopsTheLoop}
+	}
+	r.script = func(worker.Job) workerScript {
+		return workerScript{unstopped: "子を止められない: EPERM", result: worker.Result{Failure: "stall"}}
+	}
+	reads := 0
+	def := workflow.Definition{Tracker: githubTracker, Interval: time.Minute, MaxConcurrent: 1, MaxAttempts: 3, MaxRetryBackoff: 5 * time.Minute, Triggers: []trigger.Trigger{readyTrigger}}
+
+	r.run(t, loop.Options{
+		Definition: def,
+		Store: func(workflow.Definition) loop.Store {
+			return memoryStore{
+				observe: func() ([]target.Item, error) { return []target.Item{readyIssue(1)}, nil },
+				reread: func(target.Ref) (target.Item, error) {
+					reads++
+					if reads == 1 {
+						return readyIssue(1), nil
+					}
+					closed := readyIssue(1)
+					closed.Closed = true
+					return closed, nil
+				},
+			}.store()
+		},
+		Workspaces: func(workflow.Definition) loop.Workspaces { return &removals{} },
+	})
+
+	if reads != 2 {
+		t.Errorf("作業対象の読み直し = %d, want 2 (起動の直前と、終わりの確かめ)", reads)
+	}
+	if got := r.logEvents(t, "end"); len(got) != 1 || got[0]["outcome"] != "completed" {
+		t.Errorf("end の行 = %v, want completed の 1 行", got)
+	}
+	for _, e := range r.logEvents(t, "error") {
+		if strings.Contains(e["error"].(string), "止められないまま止まる") {
+			t.Errorf("error の行 = %q, want 終わった claude を残っているとは書かない", e["error"])
+		}
+	}
+}
+
+func TestTheStopWaitsForAnUnstoppedWorkerWhoseClaudeHasExited(t *testing.T) {
+	// 停止要求が、止められないと知らせた worker の claude が終わった後、worker の終わりより前に届く。loop は worker の
+	// 終わり (after_run の後) を待ってから止まり、終わった claude を残っているとは書かない
+	r := newRig()
+	r.signals = make(chan os.Signal, 1)
+	r.signals <- os.Interrupt
+	r.script = func(worker.Job) workerScript {
+		return workerScript{unstopped: "子を止められない: EPERM", result: worker.Result{Failure: "stall"}}
+	}
+	def := workflow.Definition{Tracker: githubTracker, Interval: time.Minute, MaxConcurrent: 1, MaxAttempts: 3, MaxRetryBackoff: 5 * time.Minute, Triggers: []trigger.Trigger{readyTrigger}}
+
+	r.run(t, loop.Options{
+		Definition: def,
+		Store: func(workflow.Definition) loop.Store {
+			return memoryStore{
+				observe: func() ([]target.Item, error) { return []target.Item{readyIssue(1)}, nil },
+				reread:  func(target.Ref) (target.Item, error) { return readyIssue(1), nil },
+			}.store()
+		},
+		Workspaces: func(workflow.Definition) loop.Workspaces { return &removals{} },
+	})
+
+	if got := r.logEvents(t, "end"); len(got) != 1 {
+		t.Errorf("end の行 = %v, want 1 行 (worker の終わりを待って止まる)", got)
+	}
+	for _, e := range r.logEvents(t, "error") {
+		if strings.Contains(e["error"].(string), "止められないまま止まる") {
+			t.Errorf("error の行 = %q, want 終わった claude を残っているとは書かない", e["error"])
 		}
 	}
 }
