@@ -49,7 +49,7 @@ workflow 定義に誤りがあれば、試運転・`loop` の起動・`doctor` �
 - 起動時に workflow 定義の検査と事前検査を通す。落ちれば誤りを名指しして起動しない
 - tick ごとに workflow 定義を読み直す。読み直した定義が検査に落ちた tick と、事前検査に落ちた trigger は、何も起動しない
 - `claude-dispatcher loop --max-concurrent <N>` で、その loop だけ並列上限を `limits.max_concurrent` から変えられる (1 以上の整数)。渡した値は loop を止めるまで変わらず、`WORKFLOW.md` の `limits.max_concurrent` を直しても効かない。変えるなら loop を撃ち直す
-- 同じ issue 置き場の loop は、同じマシンで 1 本しか起動できない (2 本目は exit 3 で止まる)。マシンを跨いだ排他は持たないので、1 つの issue 置き場は 1 台から回す
+- 同じ issue 置き場の loop は、同じマシンで 1 本しか起動できない (2 本目と、`run` が走っている間の loop は exit 3 で止まる)。マシンを跨いだ排他は持たないので、1 つの issue 置き場は 1 台から回す
 - loop は自分では起き直さない。端末を閉じた・マシンを再起動した・binary を入れ替えた (走っている loop は起動した時点の binary で回り続ける) ときは、同じコマンドを撃ち直す
 
 ### 見る

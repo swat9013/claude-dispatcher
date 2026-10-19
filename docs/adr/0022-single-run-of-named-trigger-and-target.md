@@ -34,6 +34,7 @@ ADR 0009 は、ADR 0006 が残していた単発の `tick` を撤去した。tic
 - 利用者が script に書く CLI の契約が 1 つ増える。後から外すと、その script が止まる
 - loop が立っている間は、同じ scope key の単発起動はできない。loop を止めてから使う
 - 起動の規則を変えるときは、loop と単発起動の両方に効くかを確かめる
+- 単発起動は log.jsonl にも状態 file にも書かない。結果は人がその場で exit code と stdout で読むもので、事後に追えるのは worker log だけになる。log.jsonl の行は claim の段階と tick を前提にした形 (formats.md §4) なので、claim を持たない単発起動の行を混ぜない
 
 ## Alternatives considered
 
