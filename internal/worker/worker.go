@@ -16,6 +16,7 @@ import (
 	"github.com/swat9013/claude-dispatcher/internal/deps"
 	"github.com/swat9013/claude-dispatcher/internal/proc"
 	"github.com/swat9013/claude-dispatcher/internal/render"
+	"github.com/swat9013/claude-dispatcher/internal/state"
 	"github.com/swat9013/claude-dispatcher/internal/status"
 	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/trigger"
@@ -188,12 +189,18 @@ func (r Runner) launch(job Job, run *Run, workspacePath string, n notices) Resul
 	}
 	// stdout (stream-json) と stderr を別の file に追記する。stall は stdout に progress が書かれなくなったことで見る。
 	// claude に file をそのまま渡すので、loop が死んでも claude の出力は途切れない
-	name := filepath.Join(r.StateDir, "workers", job.Item.Ref().FileName())
-	stream, err := openStream(name + ".log")
+	stream, err := openStream(LogFile(r.StateDir, job.Item.Ref()))
 	if err != nil {
 		return Result{Failure: fmt.Sprintf("worker log を開けない: %v", err)}
 	}
 	defer stream.Close()
+	// claude はこの fd を stdout として受け継ぐので、loop が止まった後も claude (と fd を受け継いだ子孫) が生きている間は
+	// lock が外れない。次の loop は Orphaned でそれを確かめる (system.md §7 の orphan)。取れなければ、前の loop の claude が
+	// まだ worker log を持っている
+	if err := syscall.Flock(int(stream.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		return Result{Failure: fmt.Sprintf("worker log の lock を取れない (前の loop の claude が生きているかもしれない): %v", err)}
+	}
+	name := filepath.Join(r.StateDir, "workers", job.Item.Ref().FileName())
 	stderr, err := openAppend(name + ".stderr.log")
 	if err != nil {
 		return Result{Failure: fmt.Sprintf("worker log を開けない: %v", err)}
@@ -336,6 +343,17 @@ func writeFile(file, content string) error {
 		return err
 	}
 	return os.WriteFile(file, []byte(content), 0o644)
+}
+
+// LogFile は作業対象の worker log (claude の stdout) の path (formats.md §1)。
+func LogFile(stateDir string, ref target.Ref) string {
+	return filepath.Join(stateDir, "workers", ref.FileName()+".log")
+}
+
+// Orphaned は、作業対象の worker log の flock を、前の loop が起動した claude (orphan) がまだ持っているかを返す
+// (system.md §7 の orphan)。claim している作業対象には使わない (loop 自身の worker の lock も持っているものと見える)。
+func Orphaned(stateDir string, ref target.Ref) (bool, error) {
+	return state.Locked(LogFile(stateDir, ref))
 }
 
 // openStream は stream の worker log を追記で開く。claude が書き、監視と要約が同じ fd で読むので、読み書きで開く

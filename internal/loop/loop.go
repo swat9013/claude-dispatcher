@@ -84,6 +84,9 @@ type Options struct {
 	Launch func(def workflow.Definition, job worker.Job, events chan<- worker.Event) Worker
 	// NewSessionID は worker に渡す session id を発行する
 	NewSessionID func() (string, error)
+	// Orphaned は、claim の無い作業対象の worker log を、前の loop が起動した claude (orphan) がまだ持っているかを返す
+	// (system.md §7 の orphan)。本番は worker log の flock を試し、テストは fake
+	Orphaned func(ref target.Ref) (bool, error)
 	// ScopeKeyOf は workflow 定義の issue 置き場の scope key を、起動時と同じ経路 (provider が Place から返すもの。system.md §13) で返す
 	ScopeKeyOf func(workflow.Definition) string
 	// ScopeKey は起動時の scope key (lock を取った鍵)
@@ -192,6 +195,9 @@ type loop struct {
 	retriedAt time.Time
 	// blocked は、採っている workflow 定義で事前検査に落ちた trigger。起動も再起動もしない
 	blocked []precheck.Problem
+	// orphans は直近に確かめられた tick で生きていた orphan の作業対象。tick ごとに確かめ直して置き換える。前の tick との
+	// 違いで、見つけた行と終わった行を 1 回ずつ書く
+	orphans map[target.Ref]bool
 	// board は状態 file にだけ使う状態。loop の判断には使わない
 	board board
 }
@@ -334,14 +340,22 @@ func (l *loop) tick() {
 	triggers := l.evaluable(def)
 	candidates, ambiguous := trigger.Evaluate(triggers, open)
 	v := &view{open: open, ambiguous: trigger.AmbiguousRefs(ambiguous), branches: l.claimedBranches()}
-	l.sweep(store, open)
+	ws := l.o.Workspaces(l.def)
+	unclaimed, err := l.observeOrphans(ws)
+	if err != nil {
+		// どの workspace の claude が生きているかを決められないので、掃除も起動 (再起動を含む) もしない
+		l.tickFailed(oneLine(err))
+		return
+	}
+	l.sweep(store, ws, open, unclaimed)
 	l.clearAbandoned(store, def, v)
 	l.retry(store, v)
-	// 起動を始める前の数を tick の行にも載せる。起動した worker は走っている worker に加わるので、launched の数を足して判定する
-	running, waitingRetry := l.running(), l.waitingRetry()
+	// 起動を始める前の数を tick の行にも載せる。起動した worker は走っている worker に加わるので、launched の数を足して判定する。
+	// orphan も claude が走り続けうるので並列の枠を使う
+	running, waitingRetry, orphans := l.running(), l.waitingRetry(), len(l.orphans)
 	var launched []string
 	for _, c := range candidates {
-		if running+waitingRetry+len(launched) >= def.MaxConcurrent {
+		if running+waitingRetry+orphans+len(launched) >= def.MaxConcurrent {
 			break
 		}
 		ref := c.Item.Ref()
@@ -349,6 +363,9 @@ func (l *loop) tick() {
 			continue
 		}
 		if _, abandoned := l.abandoned[ref]; abandoned {
+			continue
+		}
+		if l.orphans[ref] {
 			continue
 		}
 		// claim している作業対象の branch に、CL の worker を重ねない。一覧の CL で外せるものは読み直さずに外し、読み直した
@@ -371,7 +388,7 @@ func (l *loop) tick() {
 	l.board.lastTick = &status.Tick{At: l.o.Now(), Result: status.TickOK, Candidates: len(candidates)}
 	l.board.ambiguous = ambiguous
 	l.rec.event("tick", map[string]any{"result": status.TickOK, "candidates": len(candidates), "launched": nonNil(launched), "ambiguous": ambiguousFields(ambiguous), "blocked": blockedFields(l.blocked),
-		"running": running, "waiting_retry": waitingRetry, "max_concurrent": def.MaxConcurrent},
+		"running": running, "waiting_retry": waitingRetry, "orphans": orphans, "max_concurrent": def.MaxConcurrent},
 		LineTickOK, "tick ok", " · %s%s%s", Summary(candidates, def), ambiguousSummary(ambiguous), blockedSummary(l.blocked))
 }
 
@@ -529,21 +546,53 @@ func (l *loop) recheck(store Store) {
 	}
 }
 
-// sweep は、claim の無い workspace のうち作業対象が終端になったものを消す。open な一覧に無いものだけを読み直す。
-// loop の起動の直後の tick が起動時の掃除を兼ね、以後の tick が claim を解いた後に終端になったものと、消し損ねたものを拾う。
-func (l *loop) sweep(store Store, open []target.Item) {
-	ws := l.o.Workspaces(l.def)
+// observeOrphans は claim の無い workspace ごとに orphan が生きているかを確かめ、l.orphans を置き換えて、claim の無い
+// workspace の作業対象を返す。見つけた orphan と、前の tick まで生きていて終わった orphan を 1 行ずつ書く。workspace の一覧を
+// 読めないか、どれか 1 つでも確かめられなければ error を返し、l.orphans を前の tick のまま残す (formats.md §6 の orphan)。
+func (l *loop) observeOrphans(ws Workspaces) ([]target.Ref, error) {
 	refs, err := ws.Existing()
 	if err != nil {
-		l.rec.error(target.Ref{}, oneLine(err))
-		return
+		return nil, fmt.Errorf("orphan を確かめられない (workspace の一覧を読めない): %w", err)
 	}
+	var unclaimed []target.Ref
+	alive := map[target.Ref]bool{}
+	for _, ref := range refs {
+		if _, claimed := l.claims[ref]; claimed {
+			continue
+		}
+		unclaimed = append(unclaimed, ref)
+		held, err := l.o.Orphaned(ref)
+		if err != nil {
+			return nil, fmt.Errorf("%s の orphan を確かめられない: %w", ref, err)
+		}
+		if held {
+			alive[ref] = true
+		}
+	}
+	for _, ref := range sortedRefs(alive) {
+		if !l.orphans[ref] {
+			l.rec.event("orphan", map[string]any{"target": ref.String()}, LineNote, "orphan", " %s: 前の loop の claude がまだ動いている", ref)
+		}
+	}
+	for _, ref := range sortedRefs(l.orphans) {
+		if !alive[ref] {
+			l.rec.event("orphan_end", map[string]any{"target": ref.String()}, LineNote, "orphan", " %s が終わった", ref)
+		}
+	}
+	l.orphans = alive
+	return unclaimed, nil
+}
+
+// sweep は、claim の無い workspace (unclaimed) のうち、orphan が生きておらず作業対象が終端になったものを消す。open な一覧に
+// 無いものだけを読み直す。loop の起動の直後の tick が起動時の掃除を兼ね、以後の tick が claim を解いた後に終端になったものと、
+// 消し損ねたものと、orphan が終わったものを拾う。
+func (l *loop) sweep(store Store, ws Workspaces, open []target.Item, unclaimed []target.Ref) {
 	isOpen := map[target.Ref]bool{}
 	for _, i := range open {
 		isOpen[i.Ref()] = true
 	}
-	for _, ref := range refs {
-		if _, claimed := l.claims[ref]; claimed || isOpen[ref] {
+	for _, ref := range unclaimed {
+		if isOpen[ref] || l.orphans[ref] {
 			continue
 		}
 		item, err := store.Read(ref)

@@ -50,7 +50,10 @@ func (l *loop) snapshot() status.Snapshot {
 	s := status.Snapshot{
 		Scope: l.o.ScopeKey, Workflow: l.o.Workflow, StartedAt: l.board.startedAt, Version: l.o.Build.Version, Commit: l.o.Build.Commit, UpdatedAt: l.o.Now(),
 		Stopping: l.stop.requested(), LastTick: l.board.lastTick,
-		Workers: []status.Worker{}, Abandoned: []status.Abandoned{}, Ambiguous: []status.Ambiguous{}, Blocked: []status.Blocked{},
+		Workers: []status.Worker{}, Abandoned: []status.Abandoned{}, Ambiguous: []status.Ambiguous{}, Blocked: []status.Blocked{}, Orphans: []status.Orphan{},
+	}
+	for _, ref := range sortedRefs(l.orphans) {
+		s.Orphans = append(s.Orphans, status.Orphan{Target: ref.String()})
 	}
 	if !l.stop.requested() && !l.board.nextTickAt.IsZero() {
 		next := l.board.nextTickAt
