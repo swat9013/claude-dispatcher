@@ -819,7 +819,7 @@ claude-dispatcher run <trigger> <作業対象> [<workflow の path>]
 - claude を起動する前に失敗したら (hooks・描画・claude の起動)、読み直さずに exit 5
 - workspace は loop と同じく、読み直した作業対象が終端なら `before_remove` を撃って消す。それ以外は残し、後の単発起動や loop が同じ workspace を使う。消せなければ stderr に出し、exit code は変えない
 
-**停止**: SIGINT / SIGTERM / SIGHUP を同じに扱い、lock を取った後から受ける。worker を起動する前に受けたら起動せずに exit 5。起動した後は、1 回目は worker の終わりを待つ。2 回目は worker の process group を止め (止め方は §6 と同じ)、worker が終われば (止める前に自分で終わったときも) 読み直さずに exit 6 で終わる。SIGKILL を送れず claude が終わらなければ、claude を残したまま exit 6 で終わる。残った claude は orphan になる。
+**停止**: SIGINT / SIGTERM / SIGHUP を同じに扱い、lock を取った後から受ける。worker を起動する前に受けたら起動せずに exit 5。起動した後は、1 回目は worker の終わりを待つ。2 回目は worker の process group を止め (止め方は §6 と同じ)、worker が終われば (止める前に自分で終わったときも) 読み直さずに exit 6 で終わる。SIGKILL を送れず claude が終わらなければ (stall・上限時間で止めようとしたときを含む)、停止要求を 1 回受けた時点で claude を残したまま exit 6 で終わる (loop と同じく、止められない claude の終わりは待たない)。残った claude は orphan になる。
 
 **出力**: stdout に人の読む行を 1 件ずつ書く。log.jsonl と状態 file (§7.1) には書かない。worker log (§1) は loop と同じ path に追記する。
 
