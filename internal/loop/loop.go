@@ -303,6 +303,10 @@ func (l *loop) running() int {
 	return n
 }
 
+// slotsInUse は再起動の空きの判定に使う、並列の枠を使っているものの数: 走っている worker と生きている orphan (claude が
+// 走り続けうる)。候補の起動は、tick の初めの走っている数に、再起動待ち・今の orphan・起動した数を足して比べる。
+func (l *loop) slotsInUse() int { return l.running() + len(l.orphans) }
+
 // holdsWorker は claim が worker (止めている途中と、止められない worker を含む) を持つ段階か。
 func (c *claim) holdsWorker() bool { return c.phase == phaseRunning || c.phase == phaseStopping }
 
@@ -359,7 +363,8 @@ func (l *loop) tick() {
 	running, waitingRetry, orphans := l.running(), l.waitingRetry(), len(l.orphans)
 	var launched []string
 	for _, c := range candidates {
-		if running+waitingRetry+orphans+len(launched) >= def.MaxConcurrent {
+		// orphan は起動の直前の確かめでも増えるので、今の数で比べる
+		if running+waitingRetry+len(l.orphans)+len(launched) >= def.MaxConcurrent {
 			break
 		}
 		ref := c.Item.Ref()
@@ -377,16 +382,16 @@ func (l *loop) tick() {
 		if cl, isCL := c.Item.(target.CL); isCL && v.branchHeld(cl, target.Ref{}) {
 			continue
 		}
+		// claim の無い workspace の一覧に無かった候補 (別の clone・workspace.root の変更・人が消した workspace) も、
+		// 起動の前に orphan を確かめる。置き場を読み直す前に確かめ、orphan の候補に読み直しを払わない
+		if !checked[ref] && l.blockedByOrphan(ref) {
+			continue
+		}
 		item, ok := l.recheckCandidate(store, triggers, c)
 		if !ok {
 			continue
 		}
 		if cl, isCL := item.(target.CL); isCL && v.branchHeld(cl, target.Ref{}) {
-			continue
-		}
-		// claim の無い workspace の一覧に無かった候補 (別の clone・workspace.root の変更・人が消した workspace) も、
-		// 起動の直前に orphan を確かめる
-		if !checked[ref] && l.orphanAt(ref) {
 			continue
 		}
 		c.Item = item
@@ -617,9 +622,9 @@ func (l *loop) observeOrphans(ws Workspaces) (unclaimed []target.Ref, checked ma
 	return unclaimed, checked, nil
 }
 
-// orphanAt は、tick の初めに確かめなかった作業対象の orphan を確かめ、生きているか確かめられなければ true を返す。生きて
+// blockedByOrphan は、tick の初めに確かめなかった作業対象の orphan を確かめ、生きているか確かめられなければ true を返す。生きて
 // いれば l.orphans に足して見つけた行を書き、確かめられなければ error の行を残す (次の tick で試み直す)。
-func (l *loop) orphanAt(ref target.Ref) bool {
+func (l *loop) blockedByOrphan(ref target.Ref) bool {
 	held, err := l.o.Orphaned(ref)
 	if err != nil {
 		l.rec.error(ref, "起動しようとした作業対象の orphan を確かめられない (次の tick で試み直す): "+oneLine(err))

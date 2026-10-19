@@ -8,6 +8,7 @@ import (
 	"github.com/swat9013/claude-dispatcher/internal/status"
 	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/trigger"
+	"github.com/swat9013/claude-dispatcher/internal/worker"
 )
 
 // board は状態 file にだけ使う状態: loop を始めた時刻・次の tick の予定・直近の tick と、その tick の曖昧な CL。
@@ -53,7 +54,7 @@ func (l *loop) snapshot() status.Snapshot {
 		Workers: []status.Worker{}, Abandoned: []status.Abandoned{}, Ambiguous: []status.Ambiguous{}, Blocked: []status.Blocked{}, Orphans: []status.Orphan{},
 	}
 	for _, ref := range sortedRefs(l.orphans) {
-		s.Orphans = append(s.Orphans, status.Orphan{Target: ref.String(), Log: "workers/" + ref.FileName() + ".log"})
+		s.Orphans = append(s.Orphans, status.Orphan{Target: ref.String(), Log: worker.LogFile("", ref)})
 	}
 	if !l.stop.requested() && !l.board.nextTickAt.IsZero() {
 		next := l.board.nextTickAt

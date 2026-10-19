@@ -52,17 +52,18 @@ func (l *loop) arm() {
 // いれば、起動せずに claim を解く (release の行を残す)。宣言順で先の trigger に当たるようになったかは確かめない (再起動
 // は同じ trigger で続ける。system.md §7)。CL の再起動は、曖昧さと branch を確かめられる tick の中でだけ試みる。
 func (l *loop) retry(store Store, v *view) {
-	if l.orphansUnknown {
-		// どの workspace の claude が生きているかを決められない間は再起動しない (formats.md §6 の orphan)
-		return
-	}
 	now := l.o.Now()
 	l.retriedAt = now
+	if l.orphansUnknown {
+		// どの workspace の claude が生きているかを決められない間は再起動しない (formats.md §6 の orphan)。見渡した時刻は
+		// 進めるので、明けた予定で wake を置き直し続けない
+		return
+	}
 	for ref, c := range l.claims {
 		if c.phase != phaseWaitingRetry || now.Before(c.retryAt) {
 			continue
 		}
-		if l.running()+len(l.orphans) >= l.def.MaxConcurrent {
+		if l.slotsInUse() >= l.def.MaxConcurrent {
 			l.apply(ref, c, c.backoffElapsed(ref, hindranceNoSlot, nil, l.env()))
 			continue
 		}
