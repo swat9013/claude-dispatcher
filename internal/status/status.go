@@ -308,7 +308,7 @@ func needsAttention(s Snapshot) [][]Span {
 	}
 	for _, w := range s.Workers {
 		if w.Phase == Unstopped {
-			lines = append(lines, []Span{{Red, "止められない"}, {Plain, fmt.Sprintf(" %s: claude (pid %d) が終わっていない。workspace %s。その pid の claude を止めると、loop が後始末して解ける (loop が先に止まれば、次の loop が orphan として扱う)", w.Target, w.PID, w.Workspace)}})
+			lines = append(lines, []Span{{Red, "止められない"}, {Plain, fmt.Sprintf(" %s: claude (pid %d) が終わっていない。workspace %s。その pid の claude を止めると、loop が後始末して解ける (loop が先に止まれば、workspace.root を変えない限り、次の loop が orphan として扱う)", w.Target, w.PID, w.Workspace)}})
 		}
 	}
 	for _, o := range s.Orphans {

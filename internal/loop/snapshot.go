@@ -66,8 +66,8 @@ func (l *loop) snapshot() status.Snapshot {
 			Phase: phases[c.phase], StartedAt: c.startedAt, Activity: c.activity,
 		}
 		if c.claudeAlive() {
-			// 止められない worker は、普通に止めている worker と見分けて人が止められるよう pid と workspace を出す。claude が
-			// 終われば after_run の間も普通の stopping に戻す (人が止めたかを読めるように)
+			// 止められない worker は、普通に止めている worker と見分けて人が止められるよう pid と workspace を出す。出すのは
+			// claude が生きている間だけで、claude が終われば after_run の間は stopping で出す (終わった pid を止めさせない)
 			w.Phase, w.PID, w.Workspace = status.Unstopped, c.pid, c.workspace
 		}
 		if c.phase == phaseWaitingRetry {
