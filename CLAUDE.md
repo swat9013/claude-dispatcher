@@ -2,7 +2,7 @@
 
 ファイル変更・branch 作成・commit・PR 作成のいずれかに入る前に `CONTRIBUTING.md` を読み、「文書の読み手」「branch・worktree 運用」「gate」「commit・PR 規約」の各節に従う。
 
-CLI のコードを変える前に `docs/design/README.md` の「設計を先に直す」を読み、そこが挙げる変更なら実装より先に `docs/design/` の正本を直す。
+CLI のコード、または `docs/design/` の正本を変える前に `docs/design/README.md` の「設計を先に直す」を読み、そこが挙げる変更なら実装より先に `docs/design/` の正本を直す。
 
 ## Worktree 方式
 
