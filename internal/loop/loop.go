@@ -168,10 +168,9 @@ type claim struct {
 	// pid と workspace は今の attempt で起動した claude の pid と workspace の path (止められない claude を人が探すため)
 	pid       int
 	workspace string
-	// unstopped は、SIGKILL を送れず claude が終わっていない worker を持つこと。段階は phaseStopping のまま worker の終わりが
-	// 届くまで残し、loop の停止は claude が終わるまでこの worker を待たない (system.md §7)
-	unstopped bool
-	// exited は止められなかった claude が終わると閉じる (worker.Unstopped)。unstopped でなければ nil
+	// exited は、SIGKILL を送れず claude が終わっていなかった worker の知らせ (worker.Unstopped) が渡した、claude が終わると
+	// 閉じる channel。知らせを受けてから worker の終わりが届くまで nil でない。その間、段階は phaseStopping のまま残し、loop の
+	// 停止は claude が終わるまでこの worker を待たない (system.md §7)
 	exited <-chan struct{}
 }
 

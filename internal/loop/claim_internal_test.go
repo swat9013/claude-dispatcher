@@ -209,52 +209,59 @@ func TestLoopEndedLeavesAnErrorLine(t *testing.T) {
 	}
 }
 
-func TestAnUnstoppedWorkerIsHeldAndReportedAtLoopEndWhileItsClaudeLives(t *testing.T) {
+func unstoppedClaim(exited <-chan struct{}) *claim {
+	c := &claim{phase: phaseRunning, attempt: 1, trigger: trigger.Trigger{Name: "t"}, run: &FakeWorker{}, pid: 42, workspace: "/w"}
+	c.workerUnstopped("EPERM", exited)
+	return c
+}
+
+func TestAnUnstoppedWorkerIsHeldWhileItsClaudeLives(t *testing.T) {
 	ref := target.Ref{Kind: target.KindIssue, Number: 1}
-	c := &claim{phase: phaseRunning, attempt: 1, trigger: trigger.Trigger{Name: "t"}, run: &FakeWorker{}, pid: 42}
 	env := claimEnv{now: time.Unix(0, 0), maxAttempts: 3, maxRetryBackoff: time.Minute, maxConcurrent: 1}
+	c := unstoppedClaim(make(chan struct{}))
 
-	e := c.workerUnstopped("EPERM", make(chan struct{}))
-
-	if len(e.lines) != 1 || e.lines[0].errorMessage == "" {
-		t.Fatalf("行 = %+v, want error の行 1 つ", e.lines)
-	}
 	for _, later := range []claimEvent{terminal, secondStop, backoffDone, unstoppable} {
 		if got := later.fire(c, ref, env); got.removeWorkspace || got.startWorker || got.readItem || got.exit != stay {
 			t.Errorf("%s の後の I/O = %+v, want 何もしない", later.name, got)
 		}
 	}
-	if lines := c.loopEnded().lines; len(lines) != 1 || !strings.Contains(lines[0].errorMessage, "止められないまま止まる (pid 42") {
+}
+
+func TestTheLoopEndReportsAnUnstoppedClaudeThatStillLives(t *testing.T) {
+	c := unstoppedClaim(make(chan struct{}))
+
+	lines := c.loopEnded().lines
+
+	if len(lines) != 1 || !strings.Contains(lines[0].errorMessage, "止められないまま止まる (pid 42") {
 		t.Errorf("loop の終了の行 = %+v, want 止められないまま止まる", lines)
 	}
 }
 
-func TestAnUnstoppedWorkerWhoseClaudeExitedIsNotReportedAsRemaining(t *testing.T) {
-	c := &claim{phase: phaseRunning, attempt: 1, trigger: trigger.Trigger{Name: "t"}, run: &FakeWorker{}, pid: 42}
-	exited := make(chan struct{})
-	c.workerUnstopped("EPERM", exited)
-
+func TestTheLoopEndDoesNotReportAnExitedClaudeAsRemaining(t *testing.T) {
 	// claude は死んだが、worker が after_run を撃っていて終わりはまだ届かない
+	exited := make(chan struct{})
+	c := unstoppedClaim(exited)
 	close(exited)
 
-	if c.claudeAlive() {
-		t.Error("claudeAlive = true, want false (loop の停止が worker の終わりを待てるように)")
-	}
-	if lines := c.loopEnded().lines; len(lines) == 1 && strings.Contains(lines[0].errorMessage, "止められない") {
-		t.Errorf("loop の終了の行 = %+v, want 止められないと書かない", lines)
+	lines := c.loopEnded().lines
+
+	if len(lines) != 1 || strings.Contains(lines[0].errorMessage, "pid") || !strings.Contains(lines[0].errorMessage, "after_run を待たずに止まる (workspace /w)") {
+		t.Errorf("loop の終了の行 = %+v, want pid を書かず、after_run を待たずに止まると書く", lines)
 	}
 }
 
 func TestAnUnstoppedWorkerWhoseClaudeLaterEndsIsVerifiedLikeAStallStop(t *testing.T) {
 	ref := target.Ref{Kind: target.KindIssue, Number: 1}
-	c := &claim{phase: phaseRunning, attempt: 1, trigger: trigger.Trigger{Name: "t"}, run: &FakeWorker{}, pid: 42}
 	env := claimEnv{now: time.Unix(0, 0), maxAttempts: 3, maxRetryBackoff: time.Minute, maxConcurrent: 1}
-	c.workerUnstopped("EPERM", make(chan struct{}))
+	c := unstoppedClaim(make(chan struct{}))
 
 	got := stall.fire(c, ref, env)
 
-	if !got.readItem || c.phase != phaseAwaitingVerification || c.unstopped {
-		t.Errorf("I/O = %+v・段階 = %s・unstopped = %v, want 終わりを確かめ待ちで読み直す", got, phaseNames[c.phase], c.unstopped)
+	if !got.readItem || c.phase != phaseAwaitingVerification {
+		t.Errorf("I/O = %+v・段階 = %s, want 終わりを確かめ待ちで読み直す", got, phaseNames[c.phase])
+	}
+	if lines := c.loopEnded().lines; len(lines) == 1 && strings.Contains(lines[0].errorMessage, "止められな") {
+		t.Errorf("loop の終了の行 = %+v, want 止められない claude に触れない", lines)
 	}
 }
 

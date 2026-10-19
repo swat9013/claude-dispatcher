@@ -92,10 +92,10 @@ func (c *claim) workerUnstopped(stopError string, exited <-chan struct{}) effect
 	if c.phase != phaseRunning && c.phase != phaseStopping {
 		return effect{lines: []logLine{errorLine("走っていない claim の worker の止められない知らせを受けた")}}
 	}
-	if c.unstopped {
+	if c.exited != nil {
 		return effect{lines: []logLine{errorLine("同じ worker の止められない知らせを 2 回受けた")}}
 	}
-	c.phase, c.unstopped, c.exited = phaseStopping, true, exited
+	c.phase, c.exited = phaseStopping, exited
 	return effect{lines: []logLine{errorLine(fmt.Sprintf("claude を止められない (pid %d, workspace %s): 終わるまで workspace を残し、終わりを確かめず再起動もしない: %s", c.pid, c.workspace, strings.ReplaceAll(stopError, "\n", " / ")))}}
 }
 
@@ -107,7 +107,7 @@ func (c *claim) workerEnded(ref target.Ref, result worker.Result) effect {
 		// 走っていない claim に終わる worker は無い (起きれば loop の誤り)
 		return effect{lines: []logLine{errorLine("走っていない claim の worker の終わりを受けた")}}
 	}
-	c.run, c.unstopped, c.exited = nil, false, nil
+	c.run, c.exited = nil, nil
 	if c.phase == phaseStopping && result.Stopped {
 		return effect{
 			removeWorkspace: c.stopReason == stoppedAtTerminal,
@@ -285,6 +285,10 @@ func (c *claim) loopEnded() effect {
 	if c.claudeAlive() {
 		return effect{lines: []logLine{errorLine(fmt.Sprintf("claude を止められないまま止まる (pid %d, workspace %s)", c.pid, c.workspace))}}
 	}
+	if c.exited != nil {
+		// 停止を決めた後に claude が終わった。worker の後始末は loop の終了で途切れうる
+		return effect{lines: []logLine{errorLine(fmt.Sprintf("止められなかった claude は終わったが、after_run を待たずに止まる (workspace %s)", c.workspace))}}
+	}
 	if c.phase == phaseWaitingRetry {
 		return effect{lines: []logLine{errorLine(fmt.Sprintf("再起動を待ったまま止まる (%s, attempt %d まで)", c.trigger.Name, c.attempt))}}
 	}
@@ -294,7 +298,7 @@ func (c *claim) loopEnded() effect {
 // claudeAlive は、止められなかった claude がまだ終わっていないか。終わっていれば、worker は after_run を撃ってから終わりを
 // 送るので、loop の停止はその終わりを待てる。
 func (c *claim) claudeAlive() bool {
-	if !c.unstopped {
+	if c.exited == nil {
 		return false
 	}
 	select {

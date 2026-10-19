@@ -119,7 +119,7 @@ func TestAnUnstoppedWorkerWhoseClaudeLaterExitsIsVerifiedAndNotReportedAtLoopEnd
 		return timing{fate: stopsTheLoop}
 	}
 	r.script = func(worker.Job) workerScript {
-		return workerScript{unstopped: "子を止められない: EPERM", result: worker.Result{Failure: "stall", StopError: "子を止められない: EPERM"}}
+		return workerScript{unstopped: "子を止められない: EPERM", result: worker.Result{Failure: "stall"}}
 	}
 	reads := 0
 	def := workflow.Definition{Tracker: githubTracker, Interval: time.Minute, MaxConcurrent: 1, MaxAttempts: 3, MaxRetryBackoff: 5 * time.Minute, Triggers: []trigger.Trigger{readyTrigger}}
