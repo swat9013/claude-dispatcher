@@ -92,3 +92,20 @@ func TestCheckStatechart_図に描かれない行の遷移は数えない(t *tes
 		})
 	}
 }
+
+func TestCheckStatechart_拒否する図の形を落とす(t *testing.T) {
+	cases := map[string]struct{ puml, want string }{
+		"自分以外へ出ていく遷移の無い状態":    {"@startuml\n[*] --> Idle\nIdle --> Busy\n@enduml\n", "dead end"},
+		"final state へ届かない状態": {"@startuml\n[*] --> Idle\nIdle --> Done : stop\nDone --> [*]\nIdle --> Busy : go\nBusy --> Spin\nSpin --> Busy\n@enduml\n", "no termination"},
+		"guard で分かれない遷移先":     {"@startuml\n[*] --> Idle\nIdle --> Busy\nIdle --> Done\nBusy --> Idle\nDone --> Idle\n@enduml\n", "nondeterministic"},
+		"対応記法で読めない矢印":         {header + "Busy <-- Idle : back\n@enduml\n", "unsupported arrow"},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			code, out := run(t, c.puml)
+			if code != 1 || !strings.Contains(out, c.want) {
+				t.Fatalf("exit %d: %s", code, out)
+			}
+		})
+	}
+}
