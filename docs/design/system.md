@@ -192,8 +192,8 @@ SPEC §7・§8・§16 の状態機械を土台にする。claim の段階と打�
    - 止めた worker が止められて終われば claim を解く。止める前に worker が終わっていた (stall・上限時間で止まったか、自分で終わった) ときは、止めなかった worker と同じく終わりを確かめる (worker の 1 回分の手順 5)
    - worker を止めようとして SIGKILL を送れず、claude がまだ終わっていなければ、worker は終わりの代わりに「止められない」ことを loop へ知らせ、claude が終わるのを待ち続ける。loop はその間、worker は終わっていないものとして扱う。`after_run` を撃たず、終わりを確かめず、再起動もせず、workspace も消さない。claude がその workspace と session を使い続けうるので、後始末と次の attempt が claude と重ならないようにする
    - その claim は「止めている」段階のまま持ち続ける。claim を持つので、同じ作業対象は候補にならず、workspace は掃除されない。並列の枠も 1 つ使い続ける (claude が走り続けうるため)
-   - claude が後で終われば、worker はそのとき終わりを 1 回だけ送る (`after_run` を撃ち、終わり方を返す)。loop はそれを止めている worker の終わりとして受け、上と同じく、止められて終わったなら claim を解き、止める前に終わっていた (stall・上限時間で止めようとした) なら終わりを確かめる。worker の終わりは、止められないときも含めて 1 回しか届かない
-   - loop の停止はその worker の終わりを待たない (claude がいつ終わるか分からず、待つと止まれなくなる)。loop の終了までに終わらなければ、claude を残したまま止まることを error として log に残す。残った claude を止めて workspace を片付けるのは人の作業とする
+   - claude が後で終われば、worker はそのとき終わりを 1 回だけ送る (`after_run` を撃ち、終わり方を返す)。loop はそれを止めている worker の終わりとして受ける。worker の終わりは、止められないときも含めて 1 回しか届かない
+   - loop の停止は、claude が終わるまではその worker の終わりを待たない (claude がいつ終わるか分からず、待つと止まれなくなる)。claude が終わった後は、ほかの worker と同じく終わり (`after_run` の後) を待つ。worker は claude が終わったことを、終わりとは別に loop が読める形で渡す (pid を見に行くと、再利用された pid を claude と取り違える)。loop の終了までに claude が終わらなければ、claude を残したまま止まることを error として log に残す。残った claude を止めて workspace を片付けるのは人の作業とする
 2. **workflow 定義の読み直しと事前検査** (§8)
    - 読めない・文法に合わないときは、この tick は何も起動しない。突き合わせは続ける
    - action の template の先頭の `/名前` が見つからない trigger だけは、その trigger を評価から外し、再起動もしない。他の trigger は評価する

@@ -45,11 +45,13 @@ func elapsed(h hindrance) func(*claim, target.Ref, claimEnv) effect {
 func loopEnd(c *claim, _ target.Ref, _ claimEnv) effect { return c.loopEnded() }
 
 var (
-	workerEnd      = claimEvent{"worker終了", ended(worker.Result{})}
-	stoppedEnd     = claimEvent{"worker終了 [止められて終わった]", ended(worker.Result{Stopped: true})}
-	stall          = claimEvent{"stall上限", ended(worker.Result{Failure: "stall"})}
-	timeLimit      = claimEvent{"上限時間", ended(worker.Result{Failure: "上限時間"})}
-	unstoppable    = claimEvent{"止められない", func(c *claim, _ target.Ref, _ claimEnv) effect { return c.workerUnstopped("EPERM") }}
+	workerEnd   = claimEvent{"worker終了", ended(worker.Result{})}
+	stoppedEnd  = claimEvent{"worker終了 [止められて終わった]", ended(worker.Result{Stopped: true})}
+	stall       = claimEvent{"stall上限", ended(worker.Result{Failure: "stall"})}
+	timeLimit   = claimEvent{"上限時間", ended(worker.Result{Failure: "上限時間"})}
+	unstoppable = claimEvent{"止められない", func(c *claim, _ target.Ref, _ claimEnv) effect {
+		return c.workerUnstopped("EPERM", make(chan struct{}))
+	}}
 	terminal       = claimEvent{"終端の観測", seen(observation{observed: trigger.ObservedTerminal})}
 	leftTrigger    = claimEvent{"trigger外れの観測", seen(observation{observed: trigger.ObservedLeftTrigger})}
 	stillMatches   = claimEvent{"当たったままの観測", seen(observation{observed: trigger.ObservedStillMatches})}
@@ -207,12 +209,12 @@ func TestLoopEndedLeavesAnErrorLine(t *testing.T) {
 	}
 }
 
-func TestAnUnstoppedWorkerIsHeldUntilItsClaudeEnds(t *testing.T) {
+func TestAnUnstoppedWorkerIsHeldAndReportedAtLoopEndWhileItsClaudeLives(t *testing.T) {
 	ref := target.Ref{Kind: target.KindIssue, Number: 1}
 	c := &claim{phase: phaseRunning, attempt: 1, trigger: trigger.Trigger{Name: "t"}, run: &FakeWorker{}, pid: 42}
 	env := claimEnv{now: time.Unix(0, 0), maxAttempts: 3, maxRetryBackoff: time.Minute, maxConcurrent: 1}
 
-	e := c.workerUnstopped("EPERM")
+	e := c.workerUnstopped("EPERM", make(chan struct{}))
 
 	if len(e.lines) != 1 || e.lines[0].errorMessage == "" {
 		t.Fatalf("行 = %+v, want error の行 1 つ", e.lines)
@@ -223,15 +225,36 @@ func TestAnUnstoppedWorkerIsHeldUntilItsClaudeEnds(t *testing.T) {
 		}
 	}
 	if lines := c.loopEnded().lines; len(lines) != 1 || !strings.Contains(lines[0].errorMessage, "止められないまま止まる (pid 42") {
-		t.Errorf("claude が終わる前の loop の終了の行 = %+v, want 止められないまま止まる", lines)
+		t.Errorf("loop の終了の行 = %+v, want 止められないまま止まる", lines)
 	}
+}
 
-	// stall で止めようとした claude が後で終われば、止める前に終わっていた worker と同じく終わりを確かめる
-	if got := stall.fire(c, ref, env); !got.readItem || c.phase != phaseAwaitingVerification {
-		t.Errorf("claude が終わった後の I/O = %+v・段階 = %s, want 終わりを確かめ待ちで読み直す", got, phaseNames[c.phase])
+func TestAnUnstoppedWorkerWhoseClaudeExitedIsNotReportedAsRemaining(t *testing.T) {
+	c := &claim{phase: phaseRunning, attempt: 1, trigger: trigger.Trigger{Name: "t"}, run: &FakeWorker{}, pid: 42}
+	exited := make(chan struct{})
+	c.workerUnstopped("EPERM", exited)
+
+	// claude は死んだが、worker が after_run を撃っていて終わりはまだ届かない
+	close(exited)
+
+	if c.claudeAlive() {
+		t.Error("claudeAlive = true, want false (loop の停止が worker の終わりを待てるように)")
 	}
 	if lines := c.loopEnded().lines; len(lines) == 1 && strings.Contains(lines[0].errorMessage, "止められない") {
-		t.Errorf("claude が終わった後の loop の終了の行 = %+v, want 止められないと書かない", lines)
+		t.Errorf("loop の終了の行 = %+v, want 止められないと書かない", lines)
+	}
+}
+
+func TestAnUnstoppedWorkerWhoseClaudeLaterEndsIsVerifiedLikeAStallStop(t *testing.T) {
+	ref := target.Ref{Kind: target.KindIssue, Number: 1}
+	c := &claim{phase: phaseRunning, attempt: 1, trigger: trigger.Trigger{Name: "t"}, run: &FakeWorker{}, pid: 42}
+	env := claimEnv{now: time.Unix(0, 0), maxAttempts: 3, maxRetryBackoff: time.Minute, maxConcurrent: 1}
+	c.workerUnstopped("EPERM", make(chan struct{}))
+
+	got := stall.fire(c, ref, env)
+
+	if !got.readItem || c.phase != phaseAwaitingVerification || c.unstopped {
+		t.Errorf("I/O = %+v・段階 = %s・unstopped = %v, want 終わりを確かめ待ちで読み直す", got, phaseNames[c.phase], c.unstopped)
 	}
 }
 

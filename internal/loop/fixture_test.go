@@ -224,7 +224,12 @@ func (r *rig) launch(_ workflow.Definition, job worker.Job, events chan<- worker
 	}
 	r.send(events, worker.Started{Target: ref, PID: 1})
 	if s.unstopped != "" {
-		r.send(events, worker.Unstopped{Target: ref, StopError: s.unstopped})
+		// 終わる worker の claude は、終わりより先に終わっている
+		exited := make(chan struct{})
+		if !s.neverEnds {
+			close(exited)
+		}
+		r.send(events, worker.Unstopped{Target: ref, StopError: s.unstopped, Exited: exited})
 	}
 	if !s.neverEnds {
 		r.send(events, worker.Ended{Target: ref, Result: s.result})

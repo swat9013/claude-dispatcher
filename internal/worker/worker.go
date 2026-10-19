@@ -57,6 +57,8 @@ type Unstopped struct {
 	Target target.Ref
 	// StopError は process group へ signal を送れなかった理由
 	StopError string
+	// Exited は claude が終わると閉じる。閉じた後も、worker は after_run を撃ってから Ended を送る
+	Exited <-chan struct{}
 }
 
 func (Started) isEvent()   {}
@@ -141,7 +143,9 @@ func (r Runner) Start(job Job, events chan<- Event) *Run {
 			started: func(pid int, workspace string) {
 				events <- Started{Target: ref, PID: pid, Workspace: workspace}
 			},
-			unstopped: func(stopError string) { events <- Unstopped{Target: ref, StopError: stopError} },
+			unstopped: func(stopError string, exited <-chan struct{}) {
+				events <- Unstopped{Target: ref, StopError: stopError, Exited: exited}
+			},
 		})
 		events <- Ended{Target: ref, Result: result}
 	}()
@@ -151,7 +155,7 @@ func (r Runner) Start(job Job, events chan<- Event) *Run {
 // notices は worker が終わりの前に loop へ送る知らせ。
 type notices struct {
 	started   func(pid int, workspace string)
-	unstopped func(stopError string)
+	unstopped func(stopError string, exited <-chan struct{})
 }
 
 func (r Runner) attempt(job Job, run *Run, n notices) Result {
@@ -251,7 +255,7 @@ func (r Runner) render(job Job, workspacePath string) (action, promptFile string
 
 // wait は起動した claude が終わるか、止められるか、stall か上限時間で止めるまで待つ。止めようとして SIGKILL を送れず
 // claude が終わっていなければ、unstopped で知らせてから claude が終わるまで待つ。
-func (r Runner) wait(cmd *exec.Cmd, run *Run, w *streamWatch, unstopped func(stopError string)) Result {
+func (r Runner) wait(cmd *exec.Cmd, run *Run, w *streamWatch, unstopped func(stopError string, exited <-chan struct{})) Result {
 	group := proc.Watch(cmd)
 	ticker := time.NewTicker(watchInterval)
 	result, ended := watch(group.Done(), run, w, ticker.C)
@@ -274,10 +278,11 @@ func (r Runner) wait(cmd *exec.Cmd, run *Run, w *streamWatch, unstopped func(sto
 		return r.exited(cmd, stopError(result, err))
 	default:
 		// SIGKILL を送れず claude はまだ終わっていない。Group.Done は claude が終われば閉じるので、知らせてから待ち続ける
-		result = stopError(result, err)
-		unstopped(result.StopError)
+		unstopped(stopError(Result{}, err).StopError, group.Done())
 		<-group.Done()
-		return r.exited(cmd, result)
+		// 送れなかった理由は知らせが運んだので、終わりには claude が終わった後に孫を止められなかった理由だけを載せる
+		_, err = group.Stop(stopGrace)
+		return r.exited(cmd, stopError(result, err))
 	}
 }
 

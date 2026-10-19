@@ -169,8 +169,10 @@ type claim struct {
 	pid       int
 	workspace string
 	// unstopped は、SIGKILL を送れず claude が終わっていない worker を持つこと。段階は phaseStopping のまま worker の終わりが
-	// 届くまで残し、loop の停止はこの worker を待たない (system.md §7)
+	// 届くまで残し、loop の停止は claude が終わるまでこの worker を待たない (system.md §7)
 	unstopped bool
+	// exited は止められなかった claude が終わると閉じる (worker.Unstopped)。unstopped でなければ nil
+	exited <-chan struct{}
 }
 
 type loop struct {
@@ -271,11 +273,12 @@ func (l *loop) exit() int {
 	return 0
 }
 
-// awaited は loop の停止が終わりを待つ worker の数。止められない worker は claude がいつ終わるか分からないので数えない。
+// awaited は loop の停止が終わりを待つ worker の数。止められない worker は、claude がいつ終わるか分からないので、claude が
+// 終わるまで数えない。
 func (l *loop) awaited() int {
 	n := 0
 	for _, c := range l.claims {
-		if c.holdsWorker() && !c.unstopped {
+		if c.holdsWorker() && !c.claudeAlive() {
 			n++
 		}
 	}
@@ -654,19 +657,14 @@ func (l *loop) handle(ev worker.Event) {
 		if !ok {
 			return
 		}
-		l.apply(ev.Target, c, c.workerUnstopped(ev.StopError))
+		l.apply(ev.Target, c, c.workerUnstopped(ev.StopError, ev.Exited))
 	case worker.Ended:
 		c, ok := l.claimOf(ev.Target)
 		if !ok {
 			return
 		}
 		result := ev.Result
-		stopError := result.StopError
-		if c.unstopped {
-			// 止められない知らせの行 (claim.workerUnstopped) が理由を既に書いた
-			stopError = ""
-		}
-		for _, message := range []string{result.AfterRunError, stopError, result.ResultSummaryError} {
+		for _, message := range []string{result.AfterRunError, result.StopError, result.ResultSummaryError} {
 			if message != "" {
 				l.rec.error(ev.Target, message)
 			}

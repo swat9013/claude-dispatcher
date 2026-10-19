@@ -76,7 +76,7 @@ workflow 定義に誤りがあれば、試運転・`loop` の起動・`doctor` �
 
 1. loop に停止要求を送る (端末なら Ctrl+C。SIGINT・SIGTERM・SIGHUP のどれでもよい)。新しい起動と再起動をやめ、走っている worker が終わるのを待って止まる。worker が走っていなければすぐ止まる
 2. 待てないときは、もう一度停止要求を送る。走っている worker を止めて止まる
-   - claude に SIGKILL を送れず止められなかった worker は、終わりを待たない。log.jsonl に `claude を止められない` の `error` の行が出て、claude の pid と workspace の path が載る。loop が止まるまでに claude が終われば、止めた worker と同じく後始末をして止まる。終わらなければ `claude を止められないまま止まる` の `error` の行も出る。その行が出たら、loop を起動し直す前に、その pid の claude を止め、workspace を片付ける (残したまま起動し直すと、次の loop がその workspace を消すか、同じ workspace で worker を起動しうる)
+   - claude に SIGKILL を送れず止められなかった worker は、claude が終わるまでは終わりを待たない。log.jsonl に `claude を止められない` の `error` の行が出て、claude の pid と workspace の path が載る。loop が止まるまでに claude が終われば、止めた worker と同じく後始末をして止まる。終わらなければ `claude を止められないまま止まる` の `error` の行も出る。その行が出たら、loop を起動し直す前に、その pid の claude を止め、workspace を片付ける (残したまま起動し直すと、次の loop がその workspace を消すか、同じ workspace で worker を起動しうる)
    - worker が途中まで書いた成果は workspace と remote branch に残る
    - 作業対象が trigger に当たったままなら、次に起動した loop が同じ workspace で worker を起動し直す。session は新しく、attempt も 1 から数え直す。前の成果を拾わせるなら、共通 prompt にそう書く
 3. 使うのをやめるなら、`paths --json` が返す `state_dir` と `workspace_root` を消す (workspace が worktree なら、消した後に clone で `git worktree prune` を撃つ)。tracker の label は残る
