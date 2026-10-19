@@ -475,7 +475,7 @@ issue#42  implement  1        running  5m10s  Edit internal/status/status.go
 
 - `after_run` を撃たず、worker log の `result` も読まない。`end` の行は書かない (worker は終わっていない)
 - signal を送れなかった理由を別の行に分けず、`error` の行 `claude を止められない (pid <pid>, workspace <path>): 終わるまで workspace を残し、終わりを確かめず再起動もしない: <signal を送れなかった理由>` を 1 行書く
-- claim は段階 `stopping` のまま残る (状態 file と `status` にも `stopping` で出る)。同じ作業対象は起動せず、workspace は掃除せず、並列の枠を 1 つ使い続ける
+- claim は段階 `stopping` のまま残る (状態 file と `status` には、claude が終わるまで段階 `unstopped` で出し、pid と workspace を載せて要対処に並べる。§7)。同じ作業対象は起動せず、workspace は掃除せず、並列の枠を 1 つ使い続ける
 - 停止要求の後も、claude が終わるまではその worker の終了を待たない。loop の終了までに claude が終わらなければ、`error` の行 `claude を止められないまま止まる (pid <pid>, workspace <path>)` を書く
 
 claude が後で終われば、停止要求の後でも worker の終了を待ち、止めた worker が終わったときと同じく、`after_run` を撃ち、`result` を読み、止められて終わったなら `stopped` の `end` 行を書いて claim を解き、stall・上限時間で止めようとしたなら終わりを確かめる (上の worker の 1 回分の手順 4)。その後の loop の終了では、上の `claude を止められないまま止まる` の行を書かない。停止を決めた後、worker の終わりが届く前に claude が終わったときは、pid を書かずに `error` の行 `止められなかった claude は終わったが、after_run を待たずに止まる (workspace <path>)` を書く。
