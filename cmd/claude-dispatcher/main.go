@@ -141,7 +141,7 @@ func commandEnvironment(commands ...string) environment {
 	return environment{env: deps.WithEnv(os.Environ(), map[string]string{"PATH": path})}
 }
 
-// definitionEnvironment は、workflow 定義で loop・試運転・doctor が撃ちうる依存 CLI (places.Commands) を PATH で解決
+// definitionEnvironment は、workflow 定義で loop・試運転・単発起動・doctor が撃ちうる依存 CLI (places.Commands) を PATH で解決
 // できるようにした環境。
 func definitionEnvironment(def workflow.Definition) environment {
 	return commandEnvironment(places.Commands(def)...)

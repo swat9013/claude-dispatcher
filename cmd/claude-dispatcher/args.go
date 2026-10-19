@@ -143,7 +143,8 @@ func (a parsedArgs) has(name string) bool {
 // 値付き flag は `--name value` と `--name=value` を読み、値が無い (直後が `-` で始まるときを含む)・空・2 回書いたら誤り。
 // 位置引数と flag は混ざってよい。
 func (c commandSpec) parse(argv []string) (parsedArgs, error) {
-	if c.arguments == undeclaredArguments || c.arguments == noArguments && len(c.flags) > 0 {
+	if c.arguments == undeclaredArguments || c.arguments == noArguments && len(c.flags) > 0 ||
+		c.arguments != workflowArgument && len(c.operands) > 0 {
 		panic(fmt.Sprintf("subcommand %s の引数の受け方の宣言が誤り", c.name))
 	}
 	a := parsedArgs{spec: c, values: map[string]string{}, set: map[string]bool{}}
