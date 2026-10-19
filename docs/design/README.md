@@ -60,6 +60,8 @@ entity に付けた印は、その entity の正本がどこにあるかを表�
    1. loop A に claim (`issue#44`, 走っている) と打ち切り (`issue#45`) がある。2 回の停止要求で worker を止め、loop A が止まる。claim と打ち切りは loop の記憶なので消える。workspace `issue-44` は disk に残る
    2. 同じ scope key で loop B を起動する。loop A がまだ動いていれば、scope key の lock で loop B は起動時に止まる (project 1 ─ 0..1 loop)
    3. loop B は起動時に終端の作業対象の workspace を掃除する。`issue#44` は open なので残す。`issue#44` が `implement` に当たったままなら、新しい claim (attempt 1) が立ち、同じ workspace の path で起動する。`issue#45` の打ち切りは消えているので、当たっていれば再び候補になる
+   4. 別の場合: loop A が `issue#46` の worker の claude を止められないまま止まった (か、loop A が落ちた)。claim は loop A の記憶と一緒に消えるが、claude (orphan) は workspace `issue-46` を使い続ける。loop B の tick は、claim の無い workspace `issue-46` の orphan が生きているのを見て、`issue#46` が終端でも workspace を消さず、trigger に当たっていても claim を立てない。orphan は claim でも打ち切りでもないので、作業対象 1 ─ 0..1 claim の多重度は崩れない
+   5. orphan が終わる。次の tick から `issue#46` は普通の掃除と候補の扱いに戻り、終端なら workspace を消し、当たっていれば claim (attempt 1) が立つ
 
 3 シナリオとも、図の多重度 (作業対象 1 ─ 0..1 claim / 0..1 打ち切り / 0..1 workspace) と集約の境界 (loop の記憶は loop と共に消え、workspace は残る) のまま表せる。起動は claim (loop 集約) と workspace を続けて作るが、両者をまたぐ不変条件は無い (シナリオ 3 のとおり、claim の無い workspace は普通に在る)。そのため、2 つを別々の集約のままにしておける。
 

@@ -103,7 +103,7 @@ end note
 
 note top of Loop
   同じ scope key の loop は、マシンの中で 1 本 (scope key の lock)。
-  候補 = いずれかの trigger に当たり ∧ claim されておらず ∧ 打ち切られていない作業対象。
+  候補 = いずれかの trigger に当たり ∧ claim されておらず ∧ 打ち切られておらず ∧ orphan が生きていない作業対象。
   snapshot (1 tick で読んだ作業対象の正規化像) は tick を跨いで持ち越さない
 end note
 
@@ -116,6 +116,7 @@ end note
 note bottom of Workspace
   終端の作業対象の workspace は残さない
   (終端を観測したら消し、loop の起動時にも掃除する)。
+  ただし orphan (前の loop が残した claude) が生きている間は残す。
   attempt と loop の再起動を跨いで残る
 end note
 @enduml

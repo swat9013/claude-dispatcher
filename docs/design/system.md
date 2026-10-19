@@ -67,7 +67,7 @@ issue や CL を起点に無人で作業を回す機構は、次の 4 つの失�
 
 - **機械は tracker と CL host に書かない**。silent な機械遷移は起きない
 - **loop の memory に持つのは claim と retry だけ**
-  - どちらも loop の process と寿命を共にする。loop が止まれば worker も止まる
+  - どちらも loop の process と寿命を共にする。loop が止まっても、走っていた claude は止まらずに orphan として残りうる (§7)
   - 起動し直した loop は外部 store を読み直すので、drift は tick を跨いで残らない
 - **起動は trigger の宣言で決定的に決める**。判断する役を別に置かないので、往復は生まれない
 - **判断が要ること (見送る・人へ返す) は action が行う**。判断の根拠は成果物 (CL 説明文・コメント) に残す
@@ -83,8 +83,9 @@ dispatcher は、状態の意味を定めない。issue の label が何を表�
 | claim (起動中・再起動待ち) | loop の memory | loop | loop の process |
 | attempt・打ち切り | loop の memory | loop | loop の process |
 | workspace | workflow 定義が決める root の下の作業場所 (既定は clone 配下) | loop (hooks) | 作業対象が終端になるまで |
+| orphan の生死 | worker log に掛けた flock | kernel (claude が持つ fd) | claude の process |
 
-- **候補 = いずれかの trigger に当たり ∧ claim されておらず ∧ 打ち切られていない作業対象**
+- **候補 = いずれかの trigger に当たり ∧ claim されておらず ∧ 打ち切られておらず ∧ orphan が生きていない作業対象**
 - **完了 = worker が終わった後に、作業対象が起動した trigger から外れていること**
   - 外すのは action の責務 (SPEC の handoff state と同じ)
   - 例: 実装の action は、CL を開いたら着手可の label を外す
@@ -193,13 +194,19 @@ SPEC §7・§8・§16 の状態機械を土台にする。claim の段階と打�
    - worker を止めようとして SIGKILL を送れず、claude がまだ終わっていなければ、worker は終わりの代わりに「止められない」ことを loop へ知らせ、claude が終わるのを待ち続ける。loop はその間、worker は終わっていないものとして扱う。`after_run` を撃たず、終わりを確かめず、再起動もせず、workspace も消さない。claude がその workspace と session を使い続けうるので、後始末と次の attempt が claude と重ならないようにする
    - その claim は「止めている」段階のまま持ち続ける。claim を持つので、同じ作業対象は候補にならず、workspace は掃除されない。並列の枠も 1 つ使い続ける (claude が走り続けうるため)
    - claude が後で終われば、worker はそのとき終わりを 1 回だけ送る (`after_run` を撃ち、終わり方を返す)。loop はそれを止めている worker の終わりとして受ける。worker の終わりは、止められないときも含めて 1 回しか届かない
-   - loop の停止は、claude が終わるまではその worker の終わりを待たない (claude がいつ終わるか分からず、待つと止まれなくなる)。claude が終わった後は、ほかの worker と同じく終わり (`after_run` の後) を待つ。worker は claude が終わったことを、終わりとは別に loop が読める形で渡す (pid を見に行くと、再利用された pid を claude と取り違える)。loop の終了までに claude が終わらなければ、claude を残したまま止まることを error として log に残す。残った claude を止めて workspace を片付けるのは人の作業とする
+   - loop の停止は、claude が終わるまではその worker の終わりを待たない (claude がいつ終わるか分からず、待つと止まれなくなる)。claude が終わった後は、ほかの worker と同じく終わり (`after_run` の後) を待つ。worker は claude が終わったことを、終わりとは別に loop が読める形で渡す (pid を見に行くと、再利用された pid を claude と取り違える)。loop の終了までに claude が終わらなければ、claude を残したまま止まることを error として log に残す。残った claude は orphan になる (下の「orphan」)。loop は起動し直してよい
+   - **orphan**: どの claim にも無い workspace について、前の loop が起動した claude (orphan) が生きているかを tick ごとに確かめる。止められないまま loop が止まった場合と、loop が落ちた場合 (claude は process group を分けて起動し、stdout を file で渡すので、loop と一緒には止まらない) の両方に当たる
+     - process の生死は pid でなく、その process が受け継いだ fd の flock で確かめる (pid を見に行くと、再利用された pid を claude と取り違える)。loop は claude の stdout (worker log) の fd に排他の flock を掛けてから起動し、claude はその fd を受け継ぐ。共有の flock を待たずに取れなければ orphan が生きている。印の file は workspace に置かない (hooks が作る worktree の中では untracked な file になる)
+     - claude の子孫がその fd を受け継げば、子孫が終わるまで生きているとみなす (子孫もその workspace を使い続けうる)。fd を受け継がずに残った子孫は扱わない
+     - orphan が生きている間は、その workspace を掃除せず、その作業対象を候補にしない。並列の枠を 1 つ数える (止めている claim と同じ理由。ADR 0019)。`要対処` に出し、見つけたときと終わったのを見たときに log へ 1 行ずつ書く。orphan の分の `after_run` は撃たない
+     - 確かめられない (排他されている以外の失敗) ときは orphan とみなし、その tick は掃除も起動もしない。error を log に残す。claim の無い workspace の一覧を読めないときも同じ
+     - orphan が終われば、その作業対象は普通の掃除と候補の扱いに戻る
 2. **workflow 定義の読み直しと事前検査** (§8)
    - 読めない・文法に合わないときは、この tick は何も起動しない。突き合わせは続ける
    - action の template の先頭の `/名前` が見つからない trigger だけは、その trigger を評価から外し、再起動もしない。他の trigger は評価する
 3. **snapshot を作る**: open な issue と open な CL を読み、正規化する
 4. **trigger を評価し、候補を並べる** (§6)
-5. **空いている分だけ起動する**。並列上限から、走っている worker と再起動待ちの数を引いた分 (事前検査に落ちた trigger の再起動待ちは数えない)
+5. **空いている分だけ起動する**。並列上限から、走っている worker と再起動待ちと生きている orphan の数を引いた分 (事前検査に落ちた trigger の再起動待ちは数えない)
    - 起動の直前に、候補を 1 件ずつ外部 store で読み直す。終端になっているか、起動しようとした trigger から外れていれば起動しない。open な一覧の検索は書き込みの直後に古い結果を返しうる (Jira の JQL 検索など) ので、完了した直後の作業対象を起動し直さないようにする
    - 読み直せなかった候補 (error として log に残す) と、trigger に当たるかをまだ決められない候補も、その tick では起動しない。次の tick で候補になれば試み直す
    - 読み直すと宣言順で先の trigger に当たるようになっていれば、その tick では起動しない。次の tick の評価が先の trigger で拾う
@@ -246,6 +253,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。claim の段階と打�
 - SPEC §9 の安全条件に従う: 作業対象ごとに決まった path に置き、root の外へ出ない
 - **作業対象が終端になったら、`before_remove` を撃ってから消す**
   - loop の起動時にも、終端になった作業対象の workspace を掃除する
+  - orphan が生きている workspace は、終端でも消さない (§7 の「orphan」)
   - `after_run` と `before_remove` の失敗は error として log に残し、処理は続ける (SPEC §5.3.4)
   - workspace を消せなかったときは error として log に残し、次の tick で消し直す
 - **作り方は hooks に任せる**
@@ -314,12 +322,12 @@ SPEC §7・§8・§16 の状態機械を土台にする。claim の段階と打�
     - 新しい起動と再起動待ちをやめる
     - 走っている worker の終了を待って止まる
   - 2 回目: 走っている worker の process group を止め、`after_run` を撃ってから止まる
-  - worker は loop の子なので、loop が死ねば worker も止まる。止まった worker の作業対象は、trigger に当たったままなら、次に起動した loop が再び拾う
+  - loop が死んでも claude は止まらず、orphan として残る (§7)。次に起動した loop は、orphan が終わるまでその workspace を残して起動せず、終われば、trigger に当たったままの作業対象を再び拾う
 - **loop の画面が第一の観測点**
   - 見出し・`workers`・`要対処`・`ログ` のセクションに分けて描き直す
   - 見出しは loop の状態 (稼働中・停止待ち) と scope key と loop の binary の版、次の tick の時刻、直近の tick の結果と error
   - `workers` は claim の表 (作業対象・trigger・attempt・段階・経過・stream の最新の活動)。最新の活動は表の列で見るので、`ログ` には活動の行を出さない
-  - `要対処` は人の手当てを待つもの (打ち切り・曖昧な CL・起動しない trigger)。無ければ出さない
+  - `要対処` は人の手当てを待つもの (打ち切り・曖昧な CL・起動しない trigger・orphan)。無ければ出さない
   - stdout が端末のときだけ色を付ける。`status` も同じ描画を使う
 - **別の端末からは `status` で見る**。loop が state dir に書き出す状態 file を読む
   - 状態 file は表示のためだけの痕跡で、loop は読み戻さない

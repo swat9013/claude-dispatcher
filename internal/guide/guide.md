@@ -58,7 +58,7 @@ workflow 定義に誤りがあれば、試運転・`loop` の起動・`doctor` �
   - 色は stdout が端末のときだけ付く。環境変数 `NO_COLOR` を設定すれば付かない (`status` も同じ)
 - 別の端末からは `claude-dispatcher status` で見る。loop が書き出す状態 file を描くだけで、何も書かず、tracker の CLI も撃たない
   - 見出しの 1 行目は loop が生きているか (`loop 稼働中` / `loop 停止待ち` / `loop なし`)、2 行目は次の tick と直近の tick の結果
-  - `workers` に走っている worker と再起動待ちを (段階・経過・最新の活動を含む)、`要対処` に打ち切り・曖昧な CL・事前検査に落ちた trigger を解き方とともに並べる
+  - `workers` に走っている worker と再起動待ちを (段階・経過・最新の活動を含む)、`要対処` に打ち切り・曖昧な CL・事前検査に落ちた trigger・orphan (前の loop が止まった後も動いている claude。終わるまでその作業対象では起動しない) を解き方とともに並べる
 - 置き場は `claude-dispatcher paths --json` で引く。何も書かず、tracker の CLI も撃たない
 
 | key | 中身 |
@@ -76,7 +76,7 @@ workflow 定義に誤りがあれば、試運転・`loop` の起動・`doctor` �
 
 1. loop に停止要求を送る (端末なら Ctrl+C。SIGINT・SIGTERM・SIGHUP のどれでもよい)。新しい起動と再起動をやめ、走っている worker が終わるのを待って止まる。worker が走っていなければすぐ止まる
 2. 待てないときは、もう一度停止要求を送る。走っている worker を止めて止まる
-   - claude に SIGKILL を送れず止められなかった worker は、claude が終わるまでは終わりを待たない。log.jsonl に `claude を止められない` の `error` の行が出て、claude の pid と workspace の path が載る。loop が止まるまでに claude が終われば、止めた worker と同じく後始末をして止まる。終わらなければ `claude を止められないまま止まる` の `error` の行も出る (止まる間際に claude が終わったときは、pid の無い `after_run を待たずに止まる` の行が出る。その workspace は片付ける)。`止められないまま止まる` の行が出たら、loop を起動し直す前に、その pid の claude を止め、workspace を片付ける (残したまま起動し直すと、次の loop がその workspace を消すか、同じ workspace で worker を起動しうる)
+   - claude に SIGKILL を送れず止められなかった worker は、claude が終わるまでは終わりを待たない。log.jsonl に `claude を止められない` の `error` の行が出て、claude の pid と workspace の path が載る。loop が止まるまでに claude が終われば、止めた worker と同じく後始末をして止まる。終わらなければ `claude を止められないまま止まる` の `error` の行も出る (止まる間際に claude が終わったときは、pid の無い `after_run を待たずに止まる` の行が出る。その workspace は片付ける)。`止められないまま止まる` の行が出ても、loop は起動し直してよい。残った claude (orphan) が終わるまで、次の loop はその workspace を消さず、その作業対象で worker を起動しない。急ぐならその pid の claude を止める。loop が落ちて claude が残ったときも同じ
    - worker が途中まで書いた成果は workspace と remote branch に残る
    - 作業対象が trigger に当たったままなら、次に起動した loop が同じ workspace で worker を起動し直す。session は新しく、attempt も 1 から数え直す。前の成果を拾わせるなら、共通 prompt にそう書く
 3. 使うのをやめるなら、`paths --json` が返す `state_dir` と `workspace_root` を消す (workspace が worktree なら、消した後に clone で `git worktree prune` を撃つ)。tracker の label は残る
@@ -100,6 +100,7 @@ worker は action (と本文) の文面どおりに作業する。dispatcher が
   - action か本文の描画、`hooks.after_create`・`hooks.before_run` が失敗する
 - **作業対象が終端になったら、走っている worker を止めて workspace を消す**。trigger から外れただけでは、走っている worker は止めない
   - 止めるときに SIGKILL を送れず claude が終わらなければ、claude が終わるまで worker は終わっていないものとして扱う。`hooks.after_run` を撃たず、workspace を消さず、終わりを確かめず、起動し直さない。claude が後で終われば、止めた worker と同じく後始末へ進む (上の「止める」)
+- **loop が止まった後も claude が動いていれば (orphan)、起動し直した loop はその claude が終わるまで、その workspace を消さず、その作業対象で worker を起動しない**。その分の `hooks.after_run` は撃たない。claude が終われば、普通の掃除と起動に戻る
 - 1 つの作業対象で同時に走る worker は 1 本。残りの trigger は、その worker が終わった後の tick で評価し直す
 - worker は repo を編集できるので、`WORKFLOW.md` を書き換えて、自分が次に起動される trigger を変えうる。dispatcher はこれを防がない
 
