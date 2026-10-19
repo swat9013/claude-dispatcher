@@ -44,6 +44,8 @@ type Snapshot struct {
 // Orphan は claim の無い workspace で生きている、前の loop の claude の作業対象。
 type Orphan struct {
 	Target string `json:"target"`
+	// Log は lock を持たれている worker log の、state dir からの相対 path
+	Log string `json:"log"`
 }
 
 // Tick は直近の tick。
@@ -302,7 +304,7 @@ func needsAttention(s Snapshot) [][]Span {
 		lines = append(lines, []Span{{Red, "起動しない trigger"}, {Plain, fmt.Sprintf(" %s: %s", b.Trigger, b.Error)}})
 	}
 	for _, o := range s.Orphans {
-		lines = append(lines, []Span{{Yellow, "orphan"}, {Plain, fmt.Sprintf(" %s: 前の loop の claude がまだ動いている。終わるのを待つか、log.jsonl のこの作業対象の直近の start の行 (止められなかったなら claude を止められない の行) の pid を止める", o.Target)}})
+		lines = append(lines, []Span{{Yellow, "orphan"}, {Plain, fmt.Sprintf(" %s: 前の loop の claude がまだ動いている。終わるのを待つか、worker log (state_dir の %s) を開いている process (lsof で探す。claude の pid は log.jsonl のこの作業対象の直近の start の行にある) を止める", o.Target, o.Log)}})
 	}
 	return lines
 }

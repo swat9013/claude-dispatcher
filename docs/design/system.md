@@ -194,12 +194,14 @@ SPEC §7・§8・§16 の状態機械を土台にする。claim の段階と打�
    - worker を止めようとして SIGKILL を送れず、claude がまだ終わっていなければ、worker は終わりの代わりに「止められない」ことを loop へ知らせ、claude が終わるのを待ち続ける。loop はその間、worker は終わっていないものとして扱う。`after_run` を撃たず、終わりを確かめず、再起動もせず、workspace も消さない。claude がその workspace と session を使い続けうるので、後始末と次の attempt が claude と重ならないようにする
    - その claim は「止めている」段階のまま持ち続ける。claim を持つので、同じ作業対象は候補にならず、workspace は掃除されない。並列の枠も 1 つ使い続ける (claude が走り続けうるため)
    - claude が後で終われば、worker はそのとき終わりを 1 回だけ送る (`after_run` を撃ち、終わり方を返す)。loop はそれを止めている worker の終わりとして受ける。worker の終わりは、止められないときも含めて 1 回しか届かない
-   - loop の停止は、claude が終わるまではその worker の終わりを待たない (claude がいつ終わるか分からず、待つと止まれなくなる)。claude が終わった後は、ほかの worker と同じく終わり (`after_run` の後) を待つ。worker は claude が終わったことを、終わりとは別に loop が読める形で渡す (pid を見に行くと、再利用された pid を claude と取り違える)。loop の終了までに claude が終わらなければ、claude を残したまま止まることを error として log に残す。残った claude は orphan になる (下の「orphan」)。loop は起動し直してよい
+   - loop の停止は、claude が終わるまではその worker の終わりを待たない (claude がいつ終わるか分からず、待つと止まれなくなる)。claude が終わった後は、ほかの worker と同じく終わり (`after_run` の後) を待つ。worker は claude が終わったことを、終わりとは別に loop が読める形で渡す (pid を見に行くと、再利用された pid を claude と取り違える)。loop の終了までに claude が終わらなければ、claude を残したまま止まることを error として log に残す。残った claude は orphan になる (下の「orphan」)。loop は起動し直してよい。orphan が終わるまで、次の loop はその workspace を残し、その作業対象で起動しない。急ぐなら、人が log の pid の claude (と worker log を受け継いだ子孫) を止める
    - **orphan**: どの claim にも無い workspace について、前の loop が起動した claude (orphan) が生きているかを tick ごとに確かめる。止められないまま loop が止まった場合と、loop が落ちた場合 (claude は process group を分けて起動し、stdout を file で渡すので、loop と一緒には止まらない) の両方に当たる
      - process の生死は pid でなく、その process が受け継いだ fd の flock で確かめる (pid を見に行くと、再利用された pid を claude と取り違える)。loop は claude の stdout (worker log) の fd に排他の flock を掛けてから起動し、claude はその fd を受け継ぐ。共有の flock を待たずに取れなければ orphan が生きている。印の file は workspace に置かない (hooks が作る worktree の中では untracked な file になる)
      - claude の子孫がその fd を受け継げば、子孫が終わるまで生きているとみなす (子孫もその workspace を使い続けうる)。fd を受け継がずに残った子孫は扱わない
-     - orphan が生きている間は、その workspace を掃除せず、その作業対象を候補にしない。並列の枠を 1 つ数える (止めている claim と同じ理由。ADR 0019)。`要対処` に出し、見つけたときと終わったのを見たときに log へ 1 行ずつ書く。orphan の分の `after_run` は撃たない
-     - 確かめられない (排他されている以外の失敗) ときは orphan とみなし、その tick は掃除も起動もしない。error を log に残す。claim の無い workspace の一覧を読めないときも同じ
+     - orphan が生きている間は、その workspace を掃除せず、その作業対象を候補にしない。その workspace で checkout されている branch を head に持つ CL にも CL 側の trigger を当てない (claim している作業対象の branch と同じ理由。§6)。並列の枠を 1 つ数える。候補の起動でも再起動でも数える (止めている claim と同じく、claude が走り続けうるため)。claim の無い workspace の一覧に無い作業対象 (別の clone から起動した・`workspace.root` を変えた・人が workspace を消した) でも、起動の直前に候補の worker log を確かめ直し、orphan が生きていれば起動しない (その tick の並列の枠にも数える)。この確かめに失敗したときは、その候補だけを起動せず、次の tick で試み直す (tick の初めの確かめと違い、tick は止めない)。`要対処` に出し、見つけたときと終わったのを見たときに log へ 1 行ずつ書く。orphan の分の `after_run` は撃たない
+     - 確かめられない (排他されている以外の失敗) ときは orphan とみなし、その tick は掃除も起動 (再起動を含む) もしない。error を log に残す。claim の無い workspace の一覧を読めないときも同じ。打ち切りを解く確かめは続ける (orphan と関わらない)
+     - worker は起動の前、hooks を撃つ前に worker log の lock を取る。取れなければ (検出を漏れた orphan や、前の attempt の claude の fd を受け継いで残った子孫が持っている) hooks を撃たずに attempt の失敗にする
+     - 急ぐなら、人が lock を持つ process (worker log を開いている process) を止める
      - orphan が終われば、その作業対象は普通の掃除と候補の扱いに戻る
 2. **workflow 定義の読み直しと事前検査** (§8)
    - 読めない・文法に合わないときは、この tick は何も起動しない。突き合わせは続ける
