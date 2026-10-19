@@ -273,7 +273,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。claim の段階と打�
 - 指名した作業対象が指名した trigger に当たっているときだけ起動する。完了は「worker が終わった後に trigger から外れていること」なので、当たっていない作業対象では完了を判定できない。宣言順で先の trigger に当たるかは見ない (人が trigger を指名している)
 - orphan (上の「orphan」) が生きている作業対象では起動しない
 - claim も打ち切りも持たない。attempt は 1 回だけで、retry も打ち切りもしない。終わった後に作業対象を 1 回読み直し、外れていれば完了。当たったまま・当たるかをまだ決められないときは完了しなかったと返す (次の tick が無いので確かめ直さない)
-- worker の 1 回分 (workspace・hooks・上限時間・stall) と停止要求 (1 回目は worker の終わりを待ち、2 回目は止める) は loop と同じ規則にする。workspace は終端でも消さず、後の loop の掃除に任せる。単発起動で作った workspace を後の loop がそのまま使える
+- worker の 1 回分 (workspace・hooks・上限時間・stall) と停止要求 (1 回目は worker の終わりを待ち、2 回目は止める) は loop と同じ規則にする。workspace も loop と同じく、終わった後に終端なら消す。それ以外は残し、単発起動で作った workspace を後の loop がそのまま使える
 
 ## 8. workflow 定義
 

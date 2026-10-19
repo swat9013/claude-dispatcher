@@ -222,4 +222,4 @@ Cockburn『ユースケース実践ガイド』(Writing Effective Use Cases) の
 - **5a.** 運用者が停止を求めた
   - 5a1. 1 回目は worker の終わりを待って step 5 を続ける。2 回目は worker を止め、完了しなかったとして終わる
 - **6a.** 作業対象が trigger に当たったまま (worker の失敗を含む)
-  - 6a1. dispatcher は完了しなかったことを示して終わる。運用者は worker log を読んで action を直し、step 1 へ戻る。workspace は残るので、続きの単発起動や loop が同じ workspace を使う
+  - 6a1. dispatcher は完了しなかったことを示して終わる。運用者は worker log を読んで action を直し、step 1 へ戻る。作業対象が終端でなければ workspace は残るので、続きの単発起動や loop が同じ workspace を使う

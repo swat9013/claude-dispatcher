@@ -139,7 +139,7 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 | 2 | 引数の誤り / workflow 定義の誤り (§2.8) / issue 置き場か `cl:` の CL 置き場が見えない (綴りの誤りか、権限が無い) / `jira` の起動時の確認 (§6) で、acli の認証の site が `tracker.host` と違うか読めない・status 名か issue type 名が実在しない |
 | 3 | 同じ scope key の loop か単発起動が走っている (§6・§11) |
 | 4 | 置き場の CLI (issue 置き場か CL 置き場の CLI。`github` なら gh、`gitlab` なら glab、`jira` なら acli) の認証が通らない |
-| 5 | 単発起動 (§11) が worker を起動しなかった: 指名した作業対象が指名した trigger に当たっていない・終端・当たるかをまだ決められない・orphan が生きている |
+| 5 | 単発起動 (§11) が worker を起動しなかった: 指名した作業対象が指名した trigger に当たっていない・終端・当たるかをまだ決められない・orphan が生きている・起動の前に停止要求を受けた・claude を起動する前に失敗した (hooks・描画・claude の起動) |
 | 6 | 単発起動 (§11) が worker を起動したが完了しなかった: 終わった後も trigger に当たったまま・当たるかをまだ決められない・2 回目の停止要求で止めた・claude を止められない |
 
 - 観測の失敗は、issue 置き場の部品が 認証 / 見えない / 読み切れない / rate limit に分けて返す (system.md §13)
@@ -776,7 +776,7 @@ claude-dispatcher help
 使い方の一覧を stdout に出す。引数が無いときは同じ一覧だけを、引数の誤りのときは誤りの行の後ろに同じ一覧を、stderr に出す。
 
 - 節を `Usage:` → `Commands:` → `Options:` → `Arguments:` の順に並べ、節の間を空行で区切る。主流の CLI help と同じ節の並び (見出しの綴りは tool ごとに違う) にし、一覧として流し読みできるようにする
-- `Usage:` は撃ち方の形を 1 つにつき 1 行で並べる: command を取る形 (`<command> [options] [WORKFLOW]`)・`-h | --help | help`・`--version`。2 行目からは `claude-dispatcher` の桁を 1 行目に揃える
+- `Usage:` は撃ち方の形を 1 つにつき 1 行で並べる: command を取る形 (`<command> [options] [WORKFLOW]`)・単発起動 (`run TRIGGER TARGET [WORKFLOW]`)・`-h | --help | help`・`--version`。2 行目からは `claude-dispatcher` の桁を 1 行目に揃える
 - `Commands:` は subcommand 1 つにつき 1 行で、名前と 1 行の説明を桁を揃えて並べる。行は 2 桁の字下げで始める
 - `Options:` は受けるすべての flag (`-h, --help`・`--version` を含む) を 1 つにつき 1 行で並べる。subcommand に限る flag は、説明の頭に `(<subcommand>)` を書く。command の代わりにだけ書ける flag (`-h, --help`・`--version`) は、説明の頭に `(command の代わり)` を書く
 - `Arguments:` は位置引数を並べる。workflow 定義の path は `WORKFLOW` と書き、省いたときの既定 (cwd の `WORKFLOW.md`) を説明に書く。`run` (§11) の位置引数 `TRIGGER`・`TARGET` も並べ、説明の頭に `(run)` を書く
@@ -796,28 +796,30 @@ claude-dispatcher run <trigger> <作業対象> [<workflow の path>]
 - `<trigger>` は workflow 定義の trigger の名前。`<作業対象>` は log.jsonl (§4) の `target` と同じ綴り (`issue#42` / `cl#57`)。番号は 1 以上の 10 進数
 - flag は受けない。位置引数が 2 つに足りない・4 つ以上は引数の誤り (exit 2)
 
-**起動前の検査** (落ちたら stderr に理由を出して終わる): §6 の起動時の検査と同じものを同じ順・同じ exit code で通し、続けて次を確かめる。
+**起動前の検査** (落ちたら stderr に理由を出して終わる): 作業対象の綴りを引数として先に読み、§6 の起動時の検査のうち lock の前までを同じ順・同じ exit code で通し、続けて次を確かめる。
 
 | 検査 | exit |
 |---|---|
-| 作業対象の綴りが `issue#<番号>` / `cl#<番号>` の形 | 2 |
+| 作業対象の綴りが `issue#<番号>` / `cl#<番号>` の形 (引数として、workflow 定義を読む前に確かめる) | 2 |
 | `<trigger>` の名前の trigger が workflow 定義にある | 2 |
 | 作業対象の種類が、その trigger の `on` と同じ | 2 |
+| 同じ scope key の loop か単発起動が走っていない (`loop.lock` を取れる) | 3 |
 | 作業対象の worker log の orphan が生きていない (§6 の「orphan」。確かめられなければ exit 1) | 5 |
 | 作業対象を置き場から読める | §3 |
 | 読んだ作業対象が終端でなく、その trigger に当たっている (当たるかをまだ決められないときを含めず) | 5 |
 
 - 事前検査は §6 と同じく、指名していない trigger が落ちても失敗させる
 - 当たっているかは指名した trigger の述語だけで決める。宣言順で先の trigger に当たっていても起動する (loop の読み直しの `earlier_trigger` は当てない)
-- lock は §6 と同じ `loop.lock` と `alive.lock` を、単発起動の終わりまで持つ。同じ scope key の loop か単発起動が走っていれば exit 3
+- lock は §6 と同じ `loop.lock` と `alive.lock` を、単発起動の終わりまで持つ
 
 **worker の 1 回分**: §6 の「worker の 1 回分」と同じ (workspace の用意と hooks・描画・`claude -p` の起動・`limits.stall_timeout`・`limits.run_timeout`・`after_run`)。attempt は 1 で、session id は新しく発行する (`--session-id`)。retry も打ち切りもしない。
 
 - 終わった後に作業対象を 1 回読み直し、指名した trigger から外れていれば (終端を含む) 完了とする。worker 自身が失敗していても、外れていれば完了 (§4 の `completed` と同じ)
 - 読み直せなければ exit 1。当たったままか、当たるかをまだ決められなければ exit 6
-- workspace は消さない。終端でも残し、後の loop の起動時の掃除に任せる
+- claude を起動する前に失敗したら (hooks・描画・claude の起動)、読み直さずに exit 5
+- workspace は loop と同じく、読み直した作業対象が終端なら `before_remove` を撃って消す。それ以外は残し、後の単発起動や loop が同じ workspace を使う。消せなければ stderr に出し、exit code は変えない
 
-**停止**: SIGINT / SIGTERM / SIGHUP を同じに扱う。1 回目は worker の終わりを待つ。2 回目は worker の process group を止め (止め方は §6 と同じ)、読み直さずに exit 6 で終わる。SIGKILL を送れず claude が終わらなければ、claude を残したまま exit 6 で終わる。残った claude は orphan になる。
+**停止**: SIGINT / SIGTERM / SIGHUP を同じに扱い、lock を取った後から受ける。worker を起動する前に受けたら起動せずに exit 5。起動した後は、1 回目は worker の終わりを待つ。2 回目は worker の process group を止め (止め方は §6 と同じ)、worker が終われば (止める前に自分で終わったときも) 読み直さずに exit 6 で終わる。SIGKILL を送れず claude が終わらなければ、claude を残したまま exit 6 で終わる。残った claude は orphan になる。
 
 **出力**: stdout に人の読む行を 1 件ずつ書く。log.jsonl と状態 file (§7.1) には書かない。worker log (§1) は loop と同じ path に追記する。
 
