@@ -1,0 +1,183 @@
+package main
+
+import (
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"sync"
+
+	"github.com/swat9013/claude-dispatcher/internal/loop"
+	"github.com/swat9013/claude-dispatcher/internal/printable"
+	"github.com/swat9013/claude-dispatcher/internal/target"
+	"github.com/swat9013/claude-dispatcher/internal/trigger"
+	"github.com/swat9013/claude-dispatcher/internal/worker"
+	"github.com/swat9013/claude-dispatcher/internal/workflow"
+)
+
+// runOnce は単発起動 `run <trigger> <作業対象> [<workflow の path>]` を撃つ (formats.md §11)。loop を立てず、claim も
+// 打ち切りも持たない。
+func runOnce(args []string, stdout, stderr io.Writer) int {
+	a, err := commandSpecOf("run").parse(args)
+	if err != nil {
+		return usageError(stderr, "%v", err)
+	}
+	triggerName, spelled := a.operands[0], a.operands[1]
+	ref, ok := target.ParseRef(spelled)
+	if !ok {
+		return usageError(stderr, "作業対象は issue#<番号> か cl#<番号> と書く: %s", spelled)
+	}
+	abs, err := filepath.Abs(a.workflowPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "workflow 定義の path を解決できない (%s): %v\n", a.workflowPath, err)
+		return exitFailed
+	}
+	def, err := workflow.Load(abs, unresolvedEnvironment().getenv)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		fmt.Fprintln(stderr, guidePointer)
+		return exitUsage
+	}
+	t, ok := namedTrigger(def, triggerName)
+	if !ok {
+		fmt.Fprintf(stderr, "trigger %s が workflow 定義に無い\n", triggerName)
+		return exitUsage
+	}
+	if t.On != ref.Kind {
+		fmt.Fprintf(stderr, "trigger %s は on: %s なので、%s を起動できない\n", t.Name, t.On, ref)
+		return exitUsage
+	}
+	e := definitionEnvironment(def)
+	// 起動前の検査は loop の起動時と同じ (system.md §7 の単発起動)
+	if problems := e.precheck(def); len(problems) > 0 {
+		for _, p := range problems {
+			fmt.Fprintln(stderr, p)
+		}
+		return exitUsage
+	}
+	if code := e.confirmLaunchable(def, stderr); code != 0 {
+		return code
+	}
+	scopeKey, dir := e.stateDir(def)
+	lock, code := lockState(dir, scopeKey, stderr)
+	if code != 0 {
+		return code
+	}
+	defer lock.Close()
+
+	orphaned, err := worker.Orphaned(dir, ref)
+	if err != nil {
+		fmt.Fprintf(stderr, "%s の orphan を確かめられない: %v\n", ref, err)
+		return exitFailed
+	}
+	if orphaned {
+		fmt.Fprintf(stderr, "%s は前の loop の claude (orphan) がまだ動いているので起動しない\n", ref)
+		return exitNotLaunched
+	}
+	store := e.places(def).Store()
+	item, err := store.Read(ref)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return failureExit(err)
+	}
+	if observed := t.Observe(item); observed != trigger.ObservedStillMatches {
+		fmt.Fprintf(stderr, "%s は %s に当たっていないので起動しない (%s)\n", ref, t.Name, observationText(observed))
+		return exitNotLaunched
+	}
+	sessionID, err := worker.NewSessionID()
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return exitFailed
+	}
+	surviveClosedStdout()
+	events := make(chan worker.Event, 4)
+	run := worker.Runner{Workspaces: e.workspaces(def, &sync.Mutex{}), Definition: def, StateDir: dir}.
+		Start(worker.Job{Item: item, Trigger: t, Attempt: 1, SessionID: sessionID, Prompt: def.Prompt}, events)
+	return awaitOnce(store, t, ref, sessionID, run, events, stopRequests(), stdout, stderr)
+}
+
+// awaitOnce は単発起動の worker の終わりを待ち、作業対象を読み直して exit code を返す (formats.md §11)。停止要求は
+// 1 回目で worker の終わりを待ち、2 回目で worker を止める。
+func awaitOnce(store loop.Store, t trigger.Trigger, ref target.Ref, sessionID string, run *worker.Run,
+	events <-chan worker.Event, signals <-chan os.Signal, stdout, stderr io.Writer) int {
+	stops, unstopped := 0, false
+	for {
+		select {
+		case sig := <-signals:
+			stops++
+			if stops == 1 {
+				fmt.Fprintf(stderr, "停止要求 %v: worker の終了を待つ\n", sig)
+				continue
+			}
+			fmt.Fprintf(stderr, "停止要求 %v: worker を止める\n", sig)
+			run.Stop()
+			if unstopped {
+				return exitNotCompleted
+			}
+		case ev := <-events:
+			switch ev := ev.(type) {
+			case worker.Started:
+				fmt.Fprintf(stdout, "起動: %s (%s, session %s, workspace %s, pid %d)\n", ref, t.Name, sessionID, ev.Workspace, ev.PID)
+			case worker.Unstopped:
+				fmt.Fprintln(stderr, printable.Line("claude を止められない: "+ev.StopError))
+				unstopped = true
+				if stops >= 2 {
+					return exitNotCompleted
+				}
+			case worker.Ended:
+				return endedOnce(store, t, ref, ev.Result, stdout, stderr)
+			}
+		}
+	}
+}
+
+// endedOnce は終わった worker の作業対象を読み直し、完了したかを exit code で返す。
+func endedOnce(store loop.Store, t trigger.Trigger, ref target.Ref, result worker.Result, stdout, stderr io.Writer) int {
+	for _, message := range []string{result.Failure, result.AfterRunError, result.StopError, result.ResultSummaryError} {
+		if message != "" {
+			fmt.Fprintln(stderr, printable.Line(message))
+		}
+	}
+	if result.Stopped {
+		fmt.Fprintf(stdout, "終了: %s 未完了 (停止要求)\n", ref)
+		return exitNotCompleted
+	}
+	item, err := store.Read(ref)
+	if err != nil {
+		fmt.Fprintf(stderr, "終わった worker の作業対象 %s を読み直せない: %v\n", ref, err)
+		return exitFailed
+	}
+	observed := t.Observe(item)
+	switch observed {
+	case trigger.ObservedLeftTrigger, trigger.ObservedTerminal:
+		fmt.Fprintf(stdout, "終了: %s 完了 (%s)\n", ref, observationText(observed))
+		return 0
+	}
+	fmt.Fprintf(stdout, "終了: %s 未完了 (%s)\n", ref, observationText(observed))
+	return exitNotCompleted
+}
+
+// namedTrigger は workflow 定義の trigger を名前で引く。
+func namedTrigger(def workflow.Definition, name string) (trigger.Trigger, bool) {
+	for _, t := range def.Triggers {
+		if t.Name == name {
+			return t, true
+		}
+	}
+	return trigger.Trigger{}, false
+}
+
+// observationText は観測の画面の文 (formats.md §4 の reason の画面の文と同じ綴り)。
+func observationText(o trigger.Observation) string {
+	switch o {
+	case trigger.ObservedStillMatches:
+		return "trigger に当たったまま"
+	case trigger.ObservedTerminal:
+		return "終端"
+	case trigger.ObservedLeftTrigger:
+		return "trigger から外れた"
+	case trigger.ObservedUndecided:
+		return "当たるかをまだ決められない"
+	}
+	panic(fmt.Sprintf("trigger.Observation の値 %d を写せない", o))
+}

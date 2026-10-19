@@ -34,6 +34,8 @@ type commandSpec struct {
 	flags []flagSpec
 	// arguments は flag 以外の引数の受け方
 	arguments arguments
+	// operands は WORKFLOW の前に必ず書く位置引数の usage 上の綴り (run の TRIGGER・TARGET)。workflowArgument に限る
+	operands []string
 	// required は必ず付ける flag の名前
 	required []string
 	// check は値付き flag を読んだ後、他の引数を読む前の、値付き flag の組み合わせの検査。nil なら検査しない
@@ -69,6 +71,7 @@ var commandSpecs = []commandSpec{
 		{name: "--repo", value: "<key>", help: "Jira の project key", field: provider.RepoField},
 	}},
 	{name: "doctor", arguments: workflowArgument},
+	{name: "run", arguments: workflowArgument, operands: []string{"TRIGGER", "TARGET"}},
 	{name: "guide", arguments: noArguments},
 }
 
@@ -114,6 +117,8 @@ type parsedArgs struct {
 	spec   commandSpec
 	values map[string]string
 	set    map[string]bool
+	// operands は spec.operands の位置引数の値。spec.operands と同じ並び
+	operands []string
 	// workflowPath は WORKFLOW。省けば defaultWorkflowFile
 	workflowPath string
 }
@@ -187,11 +192,16 @@ func (c commandSpec) parse(argv []string) (parsedArgs, error) {
 			a.set[f.name] = true
 		case strings.HasPrefix(arg, "-"):
 			return a, fmt.Errorf("未知の flag: %s", arg)
+		case len(a.operands) < len(c.operands):
+			a.operands = append(a.operands, arg)
 		case a.workflowPath == "":
 			a.workflowPath = arg
 		default:
 			return a, fmt.Errorf("引数が多い: %s", arg)
 		}
+	}
+	if len(a.operands) < len(c.operands) {
+		return a, fmt.Errorf("%s が要る", c.operands[len(a.operands)])
 	}
 	for _, name := range c.required {
 		if !a.set[name] {

@@ -111,6 +111,15 @@ func ParseFileName(name string) (Ref, bool) {
 	return Ref{}, false
 }
 
+// ParseRef は String の綴り (`issue#42`) の s から作業対象を読む。その綴りでないか、番号が 1 以上でなければ false。
+func ParseRef(s string) (Ref, bool) {
+	ref, ok := ParseFileName(strings.Replace(s, "#", "-", 1))
+	if !ok || ref.Number < 1 || ref.String() != s {
+		return Ref{}, false
+	}
+	return ref, true
+}
+
 // Item は正規化した作業対象 1 件 (Issue か CL)。
 type Item interface {
 	Ref() Ref

@@ -39,6 +39,10 @@ const (
 	exitUsage       = 2
 	exitLoopRunning = 3
 	exitAuth        = 4
+	// exitNotLaunched は単発起動が worker を起動しなかったこと
+	exitNotLaunched = 5
+	// exitNotCompleted は単発起動が worker を起動したが完了しなかったこと
+	exitNotCompleted = 6
 )
 
 // usage の形式は formats.md §10。Usage 節の command の代わりに flag を書く形と Options 節は引数の宣言 (args.go) から生成し、
@@ -50,12 +54,15 @@ Commands:
   paths     state dir・log・状態 file・workspace の置き場を出す
   setup     cwd に WORKFLOW.md の雛形を書く。既にある file は上書きしない
   doctor    workflow 定義・issue 置き場・依存 CLI・事前検査を確かめる
+  run       TRIGGER と TARGET を指名して worker を 1 回だけ起動し、完了したかを exit code で返す
   guide     導入の流れ・回し方・WORKFLOW.md の書き方の案内を出す
 
 Options:
 ` + options() + `
 Arguments:
   WORKFLOW   workflow 定義の path。省くと cwd の WORKFLOW.md (guide では受けない)
+  TRIGGER    (run) workflow 定義の trigger の名前
+  TARGET     (run) 作業対象。issue#<番号> か cl#<番号>
 
 ` + "`WORKFLOW.md` の書き方と導入の流れは `claude-dispatcher guide` を参照\n"
 
@@ -96,6 +103,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runDoctor(args[1:], stdout, stderr)
 	case "guide":
 		return runGuide(args[1:], stdout, stderr)
+	case "run":
+		return runOnce(args[1:], stdout, stderr)
 	}
 	return usageError(stderr, "未知の subcommand: %s", args[0])
 }
@@ -252,26 +261,13 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 		return dryRunOnce(e, def, stdout, stderr)
 	}
 
-	// 起動時は人が画面の前にいるので、tick で落ちる前に依存 CLI を解決できることを確かめる (system.md §8)
-	for _, name := range places.RequiredCommands(def) {
-		if _, err := deps.Lookup(name, e.env); err != nil {
-			fmt.Fprintln(stderr, err)
-			return exitFailed
-		}
-	}
-	if err := e.places(def).Confirm(); err != nil {
-		fmt.Fprintln(stderr, err)
-		return failureExit(err)
+	if code := e.confirmLaunchable(def, stderr); code != 0 {
+		return code
 	}
 	scopeKey, dir := e.stateDir(def)
-	lock, err := state.Lock(dir, scopeKey)
-	if errors.Is(err, state.ErrAlreadyRunning) {
-		fmt.Fprintln(stderr, err)
-		return exitLoopRunning
-	}
-	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return exitFailed
+	lock, code := lockState(dir, scopeKey, stderr)
+	if code != 0 {
+		return code
 	}
 	defer lock.Close()
 	logFile, err := os.OpenFile(filepath.Join(dir, state.LogFile), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
@@ -317,6 +313,37 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 		After:        time.After,
 		Refresh:      time.Tick(time.Second),
 	})
+}
+
+// confirmLaunchable は起動時の検査のうち、依存 CLI の解決と置き場の確認を通す (formats.md §6)。loop と単発起動が使う。
+// 落ちたら stderr に理由を出して exit code を返す。
+func (e environment) confirmLaunchable(def workflow.Definition, stderr io.Writer) int {
+	// 起動時は人が画面の前にいるので、起動した後に落ちる前に依存 CLI を解決できることを確かめる (system.md §8)
+	for _, name := range places.RequiredCommands(def) {
+		if _, err := deps.Lookup(name, e.env); err != nil {
+			fmt.Fprintln(stderr, err)
+			return exitFailed
+		}
+	}
+	if err := e.places(def).Confirm(); err != nil {
+		fmt.Fprintln(stderr, err)
+		return failureExit(err)
+	}
+	return 0
+}
+
+// lockState は state dir を作って scope key の lock を取る (formats.md §6)。loop と単発起動が同じ lock を取り合う。
+func lockState(dir, scopeKey string, stderr io.Writer) (*state.Held, int) {
+	lock, err := state.Lock(dir, scopeKey)
+	if errors.Is(err, state.ErrAlreadyRunning) {
+		fmt.Fprintln(stderr, err)
+		return nil, exitLoopRunning
+	}
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return nil, exitFailed
+	}
+	return lock, 0
 }
 
 // workspaces は workflow 定義の workspace の置き場と hooks。hooks と worker には loop の環境に tracker.token を置いた環境を
