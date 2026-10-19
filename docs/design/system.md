@@ -327,7 +327,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。claim の段階と打�
   - 見出し・`workers`・`要対処`・`ログ` のセクションに分けて描き直す
   - 見出しは loop の状態 (稼働中・停止待ち) と scope key と loop の binary の版、次の tick の時刻、直近の tick の結果と error
   - `workers` は claim の表 (作業対象・trigger・attempt・段階・経過・stream の最新の活動)。最新の活動は表の列で見るので、`ログ` には活動の行を出さない
-  - `要対処` は人の手当てを待つもの (打ち切り・曖昧な CL・起動しない trigger・orphan)。無ければ出さない
+  - `要対処` は人の手当てを待つもの (打ち切り・曖昧な CL・起動しない trigger・止められない worker (SIGKILL を送れず claude が終わっていない claim。段階は unstopped)・orphan)。無ければ出さない
   - stdout が端末のときだけ色を付ける。`status` も同じ描画を使う
 - **別の端末からは `status` で見る**。loop が state dir に書き出す状態 file を読む
   - 状態 file は表示のためだけの痕跡で、loop は読み戻さない
