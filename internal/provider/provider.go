@@ -165,8 +165,8 @@ type TrackerRole struct {
 	Prefix string
 	// IssueKey は key で指す種類の、番号の issue の key
 	IssueKey func(place Place, number int) string
-	// declared は宣言。tracker.token を支えるかだけは Supports に書かず TokenVariable から導く (Declarations)。支えない種類
-	// の理由は Declines に書く
+	// declared は宣言。tracker.token と cl: を支えるかは Supports に書かず、tracker.token は TokenVariable から、cl: は CL
+	// 置き場の役割 (Provider.CLHost) を持たないかから導く (Provider.TrackerDeclarations)。支えない種類の理由は Declines に書く
 	declared Declarations
 	// TokenVariable は tracker.token を渡す環境変数の名前 (役割を担う CLI が読むもの)。"" でない種類だけが tracker.token を
 	// 支える
@@ -175,12 +175,18 @@ type TrackerRole struct {
 	Settings []string
 }
 
-// Declarations は issue 置き場の役割の宣言。tracker.token は、渡す環境変数を持つ種類なら支える宣言に足す。
-func (r TrackerRole) Declarations() Declarations {
-	if r.TokenVariable == "" {
-		return r.declared
+// TrackerDeclarations は issue 置き場の役割の宣言。tracker.token は渡す環境変数を持つ種類なら、cl: は CL 置き場の役割を持たない
+// 種類なら、支える宣言に足す。
+func (p Provider) TrackerDeclarations() Declarations {
+	d := p.Tracker.declared
+	supports := slices.Clone(d.Supports)
+	if p.Tracker.TokenVariable != "" {
+		supports = append(supports, Token)
 	}
-	return Declarations{Supports: append(slices.Clone(r.declared.Supports), Token), Declines: r.declared.Declines}
+	if p.CLHost == nil {
+		supports = append(supports, CLPlace)
+	}
+	return Declarations{Supports: supports, Declines: d.Declines}
 }
 
 // CLHostRole は CL 置き場の役割の宣言。

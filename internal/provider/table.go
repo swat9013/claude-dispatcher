@@ -128,7 +128,7 @@ var providers = []Provider{
 		scopeKey: func(p Place) string { return jira.ScopeKey(p.value.(jira.Project)) },
 		Tracker: TrackerRole{
 			declared: Declarations{
-				Supports: []Feature{CLPlace, Blocked, Status, Type},
+				Supports: []Feature{Blocked, Status, Type},
 				Declines: map[Feature]string{
 					Token:     "acli は acli jira auth login の認証を使う",
 					Author:    "worker を誰の書き込みで起動してよいかの線を、Jira の権限に引けない",
