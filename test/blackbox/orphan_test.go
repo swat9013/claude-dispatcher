@@ -19,6 +19,8 @@ func (s *sandbox) crashWithAnOrphan() {
 	s.onClaude(stubwire.Rule{ReleaseFile: s.releaseFile()})
 	crashed := s.startLoop()
 	s.waitEvents("start", 1)
+	// start の行は stub が呼び出しを記録するより先に書かれうるので、記録を待ってから落とす (#369)
+	waitFor(s.t, func() bool { return len(s.calls("claude")) == 1 }, "claude の stub が起動しない")
 	crashed.signal(syscall.SIGKILL)
 	crashed.wait()
 	// 後片付けで stub を終わらせる (TempDir の削除と並んで書かないよう、test の最後に release する)
