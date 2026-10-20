@@ -19,6 +19,7 @@ The skills speak in terms of five canonical triage roles. This file maps those r
 | 深掘り待ち | `need-grilling`      | 着手可にする前に、深掘りの対話 (grilling) で決めることが残っている issue |
 
 - triage で、選択肢を 2〜4 個に絞れない論点を抱えた issue に付ける。triage は済んでいるので `needs-triage` は外す
+- 決める論点が無く、人手の作業 (別 repo の修正・人の資格情報が要る操作など) を待つだけの issue には付けず、`ready-for-human` を付ける
 - 深掘りの対話は、user が任意のセッションで grill 系の skill を呼んで行う。論点が固まったら、決定を issue に記録し、`need-grilling` を外して着手可 label を付ける (付ける前に `ready-for-agent-review` を通す)
 
 ## 計画的な分解の親 (この repo で足した role)
