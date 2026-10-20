@@ -271,7 +271,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。claim の段階と打�
 **単発起動** (ADR 0022)。loop を立てずに、人が指名した 1 つの trigger と 1 つの作業対象で worker を 1 回だけ起動し、完了したかを返して終わる。workflow 定義に書いた trigger と action を、実際の作業対象 1 件で確かめるために置く。
 
 - 起動前の検査は loop の起動時と同じ (workflow 定義の検査・事前検査・依存 CLI・置き場の確認)。加えて、指名した trigger が workflow 定義に無い・作業対象の種類が trigger の `on` と合わないときは起動しない
-- 同じ scope key の lock を loop と共有する。同じ scope key の loop が立っていれば起動時に止まり、単発起動の間は loop も起動できない (project 1 ─ 0..1 loop を保つ)
+- 同じ scope key の lock を loop と共有する。同じ scope key の loop が立っていれば起動時に止まり、単発起動の間は loop も起動できない (project 1 ─ 0..1 loop を保つ)。共有するのは排他の lock だけで、loop の生死を `status` に見せる lock は取らない — 単発起動は loop ではないので、その間 `status` は loop なしと描く
 - 指名した作業対象が指名した trigger に当たっているときだけ起動する。完了は「worker が終わった後に trigger から外れていること」なので、当たっていない作業対象では完了を判定できない。宣言順で先の trigger に当たるかは見ない (人が trigger を指名している)
 - orphan (上の「orphan」) が生きている作業対象では起動しない
 - claim も打ち切りも持たない。attempt は 1 回だけで、retry も打ち切りもしない。終わった後に作業対象を 1 回読み直し、外れていれば完了。当たったまま・当たるかをまだ決められないときは完了しなかったと返す (次の tick が無いので確かめ直さない)
