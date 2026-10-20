@@ -179,6 +179,9 @@ func (r *rig) run(t *testing.T, o loop.Options) {
 	if o.NewSessionID == nil {
 		o.NewSessionID = func() (string, error) { return "session-1", nil }
 	}
+	if o.Orphaned == nil {
+		o.Orphaned = func(target.Ref) (bool, error) { return false, nil }
+	}
 	if o.ScopeKeyOf == nil {
 		o.ScopeKeyOf = sameScope
 	}

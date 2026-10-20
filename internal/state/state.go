@@ -90,12 +90,23 @@ func Lock(dir, scopeKey string) (*Held, error) {
 // Alive は、dir の loop が生きているか (alive.lock を誰かが持っているか) を返す。lock file を作らず、持っていなければ
 // 直ちに外す。
 func Alive(dir string) (bool, error) {
-	lock, err := os.Open(filepath.Join(dir, aliveFile))
+	held, err := Locked(filepath.Join(dir, aliveFile))
+	if err != nil {
+		return false, fmt.Errorf("loop の生死を確かめられない: %w", err)
+	}
+	return held, nil
+}
+
+// Locked は、file の flock を誰かが排他で持っているかを返す。共有の lock を待たずに試し、取れればすぐ外す。file が無ければ
+// 誰も持っていない。lock file を作らない。process の生死を、その process が受け継いだ fd の flock で確かめるのに使う
+// (pid は再利用されるので見ない。system.md §7)。
+func Locked(file string) (bool, error) {
+	lock, err := os.Open(file)
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("loop の生死の lock file を開けない: %w", err)
+		return false, fmt.Errorf("lock file を開けない: %w", err)
 	}
 	defer lock.Close()
 	err = syscall.Flock(int(lock.Fd()), syscall.LOCK_SH|syscall.LOCK_NB)
@@ -103,7 +114,7 @@ func Alive(dir string) (bool, error) {
 	case errors.Is(err, syscall.EWOULDBLOCK):
 		return true, nil
 	case err != nil:
-		return false, fmt.Errorf("loop の生死を確かめられない: %w", err)
+		return false, fmt.Errorf("flock を試せない (%s): %w", file, err)
 	}
 	return false, syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
 }

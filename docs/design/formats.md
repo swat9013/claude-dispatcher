@@ -20,7 +20,7 @@ macOS でも XDG に揃える (`~/Library` は使わない)。scope key ごと�
   log.jsonl                           tick と worker の起動・終わり方の行 (§4)
   status.json                         loop の今の状態 (状態 file、§7)。loop が書き換え、status が読む
   prompts/<作業対象>.md               描画した共通 prompt。worker に --append-system-prompt-file で渡す
-  workers/<作業対象>.log              worker の stdout (stream-json)。attempt を跨いで追記する
+  workers/<作業対象>.log              worker の stdout (stream-json)。attempt を跨いで追記する。claude の生死を見せる flock の対象 (§6 の「orphan」)
   workers/<作業対象>.stderr.log       worker の stderr。attempt を跨いで追記する
 ```
 
@@ -166,7 +166,7 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 | `event` | いつ | ほかの key |
 |---|---|---|
 | `loop_start` | loop を起動した (起動時の検査に通り、最初の tick の前。1 回の起動につき 1 行) | `version`・`commit` (loop を書いた binary の版と commit。値は `--version` (§8) と同じ) |
-| `tick` | tick の終わり | `result` (`ok` / `error`)・`candidates` (候補の数)・`launched` (起動した作業対象の列)・`ambiguous` (曖昧な CL。`{"head": <head branch>, "targets": [<作業対象>…]}` の列)・`blocked` (事前検査 (§2.9) に落ちて起動しない trigger。`{"trigger": <名前>, "error": <理由>}` の列)・`running`・`waiting_retry`・`max_concurrent` (起動の判定に使った値。`result` が `ok` のとき)・`error` (`result` が `error` のとき) |
+| `tick` | tick の終わり | `result` (`ok` / `error`)・`candidates` (候補の数)・`launched` (起動した作業対象の列)・`ambiguous` (曖昧な CL。`{"head": <head branch>, "targets": [<作業対象>…]}` の列)・`blocked` (事前検査 (§2.9) に落ちて起動しない trigger。`{"trigger": <名前>, "error": <理由>}` の列)・`running`・`waiting_retry`・`orphans`・`max_concurrent` (起動の判定に使った値。`result` が `ok` のとき)・`error` (`result` が `error` のとき) |
 | `start` | worker を起動した | `target`・`trigger`・`attempt`・`session_id`・`workspace`・`pid` |
 | `end` | worker 1 回分の終わり方を決めた | `target`・`trigger`・`attempt`・`session_id`・`outcome`・`reason`・`failure` (worker 自身が失敗したときだけ。下の `outcome` の表)・`exit_code` (process が自分で終わったときだけ。signal で止まったら載せない)・`is_error`・`num_turns`・`permission_denial_count` (attempt の最後の `result` の要約。下の箇条) |
 | `retry` | `failed` の後、次の attempt を予定した | `target`・`trigger`・`attempt`・`next_attempt`・`session_id`・`backoff` (秒。小数を含む) |
@@ -176,13 +176,16 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 | `recheck_skip` | 起動しようとした候補を起動の直前に読み直し (§6 の tick の手順 7)、`reason` のどれかに当たって起動しなかった (tick ごとに、候補 1 件につき 1 行。同じ候補が次の tick でも当たれば、また 1 行書く。読み直せなかった候補は `error` の行で残し、この行は書かない) | `target`・`trigger`・`reason` (`undecided` / `terminal` / `left_trigger` / `earlier_trigger`) |
 | `verify_wait` | worker が終わった後の確かめ (§6 の「worker の 1 回分」の手順 4) で、作業対象が trigger に当たるかをまだ決められず、claim を持ったまま次の tick で確かめ直す (確かめ直すたびに 1 行。失敗ではないので `error` の行は書かない。読み直せなかったときは `error` の行で残し、この行は書かない) | `target`・`trigger`・`attempt`・`session_id`・`reason` (`undecided`) |
 | `unabandon` | 打ち切りを解いた (打ち切ったときの trigger から外れたのを観測した) | `target`・`trigger` |
+| `orphan` | claim の無い workspace に、生きている orphan を見つけた (§6 の「orphan」。見つけた tick に 1 行。生きている間は書き直さない) | `target` |
+| `orphan_end` | 前の tick まで生きていた orphan が終わったのを見た (1 行) | `target` |
 | `error` | 処理は続けるが、運用者が知るべき失敗 | `target` (あれば)・`error` |
 
 - `target` は、issue なら `issue#<番号>`、CL なら `cl#<番号>`
 - `tick` の行の起動の判定に使った値は、§6 の tick の手順 7 (候補の起動) の判定のもの
   - `running`・`waiting_retry`: その tick で候補の起動を始める前の、走っている worker と再起動待ちの claim の数 (手順 7 が `limits.max_concurrent` から引く数)
+  - `orphans`: その tick で生きていると見た orphan の数。これも手順 7 が引く。orphan を確かめられない tick は `result` が `error` で、この key を載せない
   - `max_concurrent`: `loop` に `--max-concurrent` (§6) を渡したならその値、渡さなければその tick で読み直した workflow 定義の `limits.max_concurrent`
-  - 手順 7 は、`running`・`waiting_retry`・その tick で起動した数 (`launched` の数) の和が `max_concurrent` に達したところで候補の起動をやめる
+  - 手順 7 は、`running`・`waiting_retry`・`orphans`・その tick で起動した数 (`launched` の数) の和が `max_concurrent` に達したところで候補の起動をやめる
 - `wait_slot` の行の `max_concurrent` は、空きの判定に使った値。`--max-concurrent` を渡したならその値、渡さなければ loop が直近に読めた版の workflow 定義の `limits.max_concurrent` (`wait_slot` は tick の外でも書かれ、読み直しに落ちた tick は前の版を使い続ける)
 - `outcome`
 
@@ -295,13 +298,13 @@ claude-dispatcher loop [--max-concurrent <N>] [<workflow の path>]
 1. 突き合わせ: 走っている worker の作業対象を読み直し、終端 (issue の close、CL の merge か close) になっていれば worker を止め、`after_run` と `before_remove` を撃って workspace を消す。trigger から外れただけでは止めない
 2. 終わった worker のうち、作業対象を読み直せなかったものを読み直す
 3. workflow 定義を読み直し、事前検査 (§2.9) を通して snapshot を作る。事前検査に落ちた trigger は、手順 6 で再起動せず、手順 7 の評価から外す
-4. 掃除: workspace root の下の `issue-<番号>` と `cl-<番号>` のうち、claim が無く open な一覧にも無いものを読み直し、終端になっていれば `before_remove` を撃って消す。起動の直後の tick が起動時の掃除を兼ね、以後の tick が、claim を解いた後に終端になったものと消し損ねたものを拾う
+4. 掃除: workspace root の下の `issue-<番号>` と `cl-<番号>` のうち claim が無いものの orphan を確かめ (下の「orphan」)、orphan が生きておらず open な一覧にも無いものを読み直し、終端になっていれば `before_remove` を撃って消す。起動の直後の tick が起動時の掃除を兼ね、以後の tick が、claim を解いた後に終端になったものと消し損ねたものを拾う
 5. 打ち切りを解く: 打ち切った作業対象のうち、終端になったか、打ち切ったときの trigger の述語に当たらなくなったもの (その trigger が workflow 定義から消えたものを含む) の打ち切りを解く。conflict を計算中の CL は、外れたとは数えない
    - 曖昧な CL になったことでは解かない。曖昧さは open な一覧でしか決まらず、古い一覧で曖昧に見えただけで解けてしまうため (曖昧な間はどの trigger でも起動しないので、保っても起動は遅れない)。曖昧な間も、ほかの作業対象と同じ規則で外れたかを確かめる
    - snapshot に無いか、snapshot で当たらなくなって見えるものは、置き場から 1 件読み直して確かめてから解く (open な一覧の検索は、書き込みの直後に古い結果を返しうるため)。読み直しても当たったままなら解かない。読み直せなければ error の行を残して解かず、次の tick で確かめ直す
    - snapshot で当たったままのものは読み直さない
 6. 再起動: backoff の明けた再起動待ちの claim を、次の「再起動」の規則で起動する
-7. trigger を評価し (§2.4)、候補のうち claim も打ち切りもされていないものを、`limits.max_concurrent` から走っている worker と再起動待ちの claim を引いた数だけ起動する (確かめ待ちの claim と、事前検査に落ちた trigger の再起動待ちの claim は数えない)
+7. trigger を評価し (§2.4)、候補のうち claim も打ち切りもされておらず orphan も生きていないものを、`limits.max_concurrent` から走っている worker と再起動待ちの claim と生きている orphan を引いた数だけ起動する (確かめ待ちの claim と、事前検査に落ちた trigger の再起動待ちの claim は数えない)
    - 起動の直前に、候補を 1 件ずつ読み直す (open な一覧の検索は、書き込みの直後に古い結果を返しうるため)。tracker の種類を問わず読み直す。次のときはその tick では起動せず、起動しなかった分の空きを次の候補に回す。次の tick で候補になれば試み直す
      - 当たるかをまだ決められない (conflict を計算中の CL。§2.3)・終端になっている・起動しようとした trigger から外れている・宣言順で先の trigger に当たるようになっている。log.jsonl に `recheck_skip` の行 (§4) を書き、人が読む行に `読み直しで起動せず` を出す
      - 読み直せない。error の行を残す
@@ -472,10 +475,20 @@ issue#42  implement  1        running  5m10s  Edit internal/status/status.go
 
 - `after_run` を撃たず、worker log の `result` も読まない。`end` の行は書かない (worker は終わっていない)
 - signal を送れなかった理由を別の行に分けず、`error` の行 `claude を止められない (pid <pid>, workspace <path>): 終わるまで workspace を残し、終わりを確かめず再起動もしない: <signal を送れなかった理由>` を 1 行書く
-- claim は段階 `stopping` のまま残る (状態 file と `status` にも `stopping` で出る)。同じ作業対象は起動せず、workspace は掃除せず、並列の枠を 1 つ使い続ける
+- claim は段階 `stopping` のまま残る (状態 file と `status` には、claude が終わるまで段階 `unstopped` で出し、pid と workspace を載せて要対処に並べる。§7)。同じ作業対象は起動せず、workspace は掃除せず、並列の枠を 1 つ使い続ける
 - 停止要求の後も、claude が終わるまではその worker の終了を待たない。loop の終了までに claude が終わらなければ、`error` の行 `claude を止められないまま止まる (pid <pid>, workspace <path>)` を書く
 
 claude が後で終われば、停止要求の後でも worker の終了を待ち、止めた worker が終わったときと同じく、`after_run` を撃ち、`result` を読み、止められて終わったなら `stopped` の `end` 行を書いて claim を解き、stall・上限時間で止めようとしたなら終わりを確かめる (上の worker の 1 回分の手順 4)。その後の loop の終了では、上の `claude を止められないまま止まる` の行を書かない。停止を決めた後、worker の終わりが届く前に claude が終わったときは、pid を書かずに `error` の行 `止められなかった claude は終わったが、after_run を待たずに止まる (workspace <path>)` を書く。
+
+**orphan**: 前の loop が起動した claude が、その loop の止まった後も生きているもの (system.md §7)。止められないまま止まった loop と、落ちた loop が残す。
+
+- loop は claude を起動する前に、`workers/<作業対象>.log` を開いた fd に `LOCK_EX` の flock を掛け、その fd を claude の stdout に渡す。claude (と fd を受け継いだ子孫) が生きている間、lock は外れない
+- tick の手順 4 で、claim の無い workspace ごとに、その作業対象の `workers/<作業対象>.log` を開いて `LOCK_SH|LOCK_NB` を試す。取れない (`EWOULDBLOCK`) なら orphan が生きている。file が無いか、取れればすぐ外して、orphan はいない
+- orphan が生きている作業対象は、その tick では workspace を掃除せず、候補にしない。その workspace の branch (手順 7 と同じ読み方) を head に持つ同じ repo の CL も起動しない。並列の枠を 1 つ数える (手順 7 の候補の起動と、再起動の空きの判定の両方)。`after_run` は撃たない
+- 手順 7 で起動しようとする候補は、claim の無い workspace の一覧に無くても、起動の直前に同じ確かめをする。生きていれば起動せず、確かめられなければ `error` の行を残して起動しない (次の tick で試み直す)
+- worker は `after_create`・`before_run` を撃つ前に `LOCK_EX|LOCK_NB` を取る。取れなければ hooks を撃たずに、その attempt を失敗にする (`failure` は、`EWOULDBLOCK` なら `worker log の lock を別の process が持っている (前の claude か、その fd を受け継いだ process が生きている)`、それ以外なら `worker log の lock を取れない: <理由>`)
+- 見つけた tick に `orphan` の行 (§4) を書き、人が読む行に `orphan <作業対象>: 前の loop の claude がまだ動いている` を出す。前の tick まで生きていた orphan が終わっていれば、`orphan_end` の行を書き、人が読む行に `orphan <作業対象> が終わった` を出す。終わった作業対象は、同じ tick から普通の掃除と候補の扱いに戻る
+- 確かめられない (`EWOULDBLOCK` 以外の失敗) か、claim の無い workspace の一覧を読めなければ、どの workspace の claude が生きているかを決められないので、その tick を error で終える (`tick` の行の `result` が `error`、`error` に理由)。掃除も起動 (再起動を含む。tick の外の再起動も、次に確かめられる tick まで試みない) もしない。打ち切りを解く手順 5 は、orphan を確かめる前に済ませる。`要対処` の orphan は前の tick で見たもののまま残す
 
 exit: 0 = 停止要求で止まった / 1・2・3 = 起動時の検査 (上表)。
 
@@ -506,7 +519,8 @@ loop の今の状態を、表示のためだけに書き出す (system.md §9)�
   ],
   "abandoned": [{"target": "issue#43", "trigger": "implement"}],
   "ambiguous": [{"head": "worktree-issue-7", "targets": ["cl#52", "cl#53"]}],
-  "blocked": [{"trigger": "fix-ci", "error": "action の先頭の /fix が見つからない (plugin・repo の .claude・~/.claude の skill と command)"}]
+  "blocked": [{"trigger": "fix-ci", "error": "action の先頭の /fix が見つからない (plugin・repo の .claude・~/.claude の skill と command)"}],
+  "orphans": [{"target": "issue#45", "log": "workers/issue-45.log"}]
 }
 ```
 
@@ -523,6 +537,7 @@ loop の今の状態を、表示のためだけに書き出す (system.md §9)�
 | `abandoned` | 打ち切った作業対象と、打ち切ったときの trigger |
 | `ambiguous` | 直近の tick の曖昧な CL (§2.4) |
 | `blocked` | 直近の tick で事前検査 (§2.9) に落ちて、起動しない trigger |
+| `orphans` | 直近に確かめられた tick で生きていた orphan (§6) の作業対象 (`target`) と、lock を持たれている worker log の state dir からの相対 path (`log`)。この key を足す前の版が書いた状態 file には無い |
 
 ### 7.2 `status`
 
@@ -541,10 +556,11 @@ workers 2 ───────────────────────�
 issue#42  implement  1        running        5m10s              Bash go test ./...
 issue#44  implement  2        waiting_retry  00:06:40 に再起動
 
-要対処 3 ─────────────────────────────────────────────
+要対処 4 ─────────────────────────────────────────────
 打ち切り issue#43 (implement): label を外して trigger から外し、1 周期待ってから付け直すと解ける
 曖昧な CL worktree-issue-7: cl#52, cl#53
 起動しない trigger fix-ci: action の先頭の /fix が見つからない (plugin・repo の .claude・~/.claude の skill と command)
+orphan issue#45: 前の loop の claude がまだ動いている。終わるのを待つか、claude の pid (log.jsonl のこの作業対象の直近の start の行) を止める。止めても残れば、worker log (state_dir の workers/issue-45.log) を開いている process を lsof で探して止める
 ```
 
 - 見出しは 2 行。1 行目は loop の状態と scope key と版: loop が生きていれば `● loop 稼働中` (停止要求の後は `● loop 停止待ち`)、`alive.lock` を取れれば `○ loop なし`。版は scope key に続けて ` · <version>` (状態 file の `version`) を出す。commit は出さない (状態 file と log.jsonl で読める)。`○ loop なし` のとき (状態 file の版は止まった loop のもの) と、状態 file に `version` が無いとき (版を足す前の版が書いた状態 file) は出さない
@@ -558,7 +574,7 @@ issue#44  implement  2        waiting_retry  00:06:40 に再起動
   - 段階は `workers[].phase` (§7.1) の値のまま
   - 経過は、段階が `running` か `stopping` の claim の、今の attempt の起動からの時間 (`45s`・`5m10s`・`1h02m05s`)。`waiting_retry` の claim は `<時刻> に再起動`。停止要求の後に失敗した claim は再起動を予定しないので空
   - 活動は §6 の要約
-- `要対処 <n>`: 打ち切り・曖昧な CL・起動しない trigger を 1 件 1 行で並べる。1 件も無ければセクションごと出さない
+- `要対処 <n>`: 打ち切り・曖昧な CL・起動しない trigger・orphan を 1 件 1 行で並べる。1 件も無ければセクションごと出さない
 - 時刻は端末の local time の `HH:MM:SS`
 - stdout が端末でなくても、描き方は同じ人が読む形 (列は空白揃え)。機械が読むなら状態 file (§7.1) を読む
 
@@ -569,7 +585,7 @@ issue#44  implement  2        waiting_retry  00:06:40 に再起動
   - 見出しの `● loop 稼働中` は緑、`● loop 停止待ち` は黄、`○ loop なし` は灰。scope key は太字。直近の tick の `ok` は緑、`error: <理由>` は赤。欄の名前 (`次の tick` など) は灰
   - セクション名は太字 (`要対処` は黄)、罫線は薄く、列見出しは灰
   - 段階は `running` が水色、`waiting_retry` が黄、`verifying` が灰
-  - `要対処` の行の頭の語は、`打ち切り` と `起動しない trigger` が赤、`曖昧な CL` が黄
+  - `要対処` の行の頭の語は、`打ち切り` と `起動しない trigger` が赤、`曖昧な CL` と `orphan` が黄
 - stdout が端末なら、長い行を端末の幅で切り、`…` を付ける。幅は全角の文字と絵文字を 2 桁、結合文字・異体字セレクタなど幅を持たない文字を 0 桁、それ以外 (曖昧幅の `●` `─` `…` `·` を含む) を 1 桁と数える。制御文字 (改行・タブなど) は空白にして 1 行に収める。罫線は端末の幅まで引く
 - stdout が端末でないか、端末の幅を取れなければ、行を切らず、罫線はセクションの 1 行目が 60 桁になるまで引く
 

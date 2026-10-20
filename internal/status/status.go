@@ -36,6 +36,16 @@ type Snapshot struct {
 	Ambiguous  []Ambiguous `json:"ambiguous"`
 	// Blocked は事前検査 (formats.md §2.9) に落ちて起動しない trigger
 	Blocked []Blocked `json:"blocked"`
+	// Orphans は直近に確かめられた tick で生きていた orphan (前の loop が起動した claude。system.md §7)。key を足す前の版が
+	// 書いた状態 file を読むと nil
+	Orphans []Orphan `json:"orphans"`
+}
+
+// Orphan は claim の無い workspace で生きている、前の loop の claude の作業対象。
+type Orphan struct {
+	Target string `json:"target"`
+	// Log は lock を持たれている worker log の、state dir からの相対 path
+	Log string `json:"log"`
 }
 
 // Tick は直近の tick。
@@ -281,7 +291,7 @@ func elapsed(d time.Duration) string {
 	return fmt.Sprintf("%ds", s)
 }
 
-// needsAttention は要対処の行: 打ち切り・曖昧な CL・起動しない trigger。
+// needsAttention は要対処の行: 打ち切り・曖昧な CL・起動しない trigger・orphan。
 func needsAttention(s Snapshot) [][]Span {
 	var lines [][]Span
 	for _, a := range s.Abandoned {
@@ -292,6 +302,9 @@ func needsAttention(s Snapshot) [][]Span {
 	}
 	for _, b := range s.Blocked {
 		lines = append(lines, []Span{{Red, "起動しない trigger"}, {Plain, fmt.Sprintf(" %s: %s", b.Trigger, b.Error)}})
+	}
+	for _, o := range s.Orphans {
+		lines = append(lines, []Span{{Yellow, "orphan"}, {Plain, fmt.Sprintf(" %s: 前の loop の claude がまだ動いている。終わるのを待つか、claude の pid (log.jsonl のこの作業対象の直近の start の行) を止める。止めても残れば、worker log (state_dir の %s) を開いている process を lsof で探して止める", o.Target, o.Log)}})
 	}
 	return lines
 }

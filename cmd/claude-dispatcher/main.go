@@ -304,6 +304,7 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 			return worker.Runner{Workspaces: e.workspaces(def, hookLock), Definition: def, StateDir: dir}.Start(job, events)
 		},
 		NewSessionID: worker.NewSessionID,
+		Orphaned:     func(ref target.Ref) (bool, error) { return worker.Orphaned(dir, ref) },
 		Publish:      publish,
 		Workflow:     abs,
 		Build:        version.Current(),
