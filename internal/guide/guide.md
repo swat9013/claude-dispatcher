@@ -58,7 +58,7 @@ workflow 定義に誤りがあれば、試運転・`loop` の起動・`doctor` �
   - 色は stdout が端末のときだけ付く。環境変数 `NO_COLOR` を設定すれば付かない (`status` も同じ)
 - 別の端末からは `claude-dispatcher status` で見る。loop が書き出す状態 file を描くだけで、何も書かず、tracker の CLI も撃たない
   - 見出しの 1 行目は loop が生きているか (`loop 稼働中` / `loop 停止待ち` / `loop なし`)、2 行目は次の tick と直近の tick の結果
-  - `workers` に走っている worker と再起動待ちを (段階・経過・最新の活動を含む)、`要対処` に打ち切り・曖昧な CL・事前検査に落ちた trigger・orphan (前の loop が止まった後も動いている claude。終わるまでその作業対象では起動しない) を解き方とともに並べる
+  - `workers` に走っている worker と再起動待ちを (段階・経過・最新の活動を含む)、`要対処` に打ち切り・曖昧な CL・事前検査に落ちた trigger・止められない worker (SIGKILL を送れず claude が終わっていない。段階は `unstopped` で、pid と workspace の path を出す)・orphan (前の loop が止まった後も動いている claude。終わるまでその作業対象では起動しない) を解き方とともに並べる
 - 置き場は `claude-dispatcher paths --json` で引く。何も書かず、tracker の CLI も撃たない
 
 | key | 中身 |

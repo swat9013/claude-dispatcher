@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/swat9013/claude-dispatcher/internal/loop"
+	"github.com/swat9013/claude-dispatcher/internal/status"
 	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/trigger"
 	"github.com/swat9013/claude-dispatcher/internal/worker"
@@ -106,6 +107,18 @@ func TestAWorkerWhoseClaudeCannotBeStoppedIsNeitherVerifiedNorRestartedAndKeepsI
 			t.Errorf("error の行 = %q, want %q を含む", joined, want)
 		}
 	}
+	// 状態 file では普通に止めている worker と見分けられ、pid と workspace が載る (formats.md §7.1)
+	var unstopped *status.Worker
+	for _, s := range r.published {
+		for _, w := range s.Workers {
+			if w.Phase == status.Unstopped {
+				unstopped = &w
+			}
+		}
+	}
+	if unstopped == nil || unstopped.PID != 1 {
+		t.Errorf("状態 file の止められない worker = %+v, want 段階 unstopped・pid 1", unstopped)
+	}
 }
 
 func TestAnUnstoppedWorkerWhoseClaudeLaterExitsIsVerifiedAndNotReportedAtLoopEnd(t *testing.T) {
@@ -143,6 +156,14 @@ func TestAnUnstoppedWorkerWhoseClaudeLaterExitsIsVerifiedAndNotReportedAtLoopEnd
 		Workspaces: func(workflow.Definition) loop.Workspaces { return &removals{} },
 	})
 
+	// claude が終わった後は、after_run の間も止められない worker として出さない (終わった pid を止めさせない)
+	for _, s := range r.published {
+		for _, w := range s.Workers {
+			if w.Phase == status.Unstopped || w.PID != 0 {
+				t.Errorf("claude が終わった後の状態 file の worker = %+v, want unstopped でなく pid なし", w)
+			}
+		}
+	}
 	if reads != 2 {
 		t.Errorf("作業対象の読み直し = %d, want 2 (起動の直前と、終わりの確かめ)", reads)
 	}

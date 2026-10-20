@@ -530,7 +530,8 @@ loop の今の状態を、表示のためだけに書き出す (system.md §9)�
 | `stopping` | 停止要求を受けて、worker の終了を待っている |
 | `next_tick_at` | 次の tick の予定。停止要求の後は `null` |
 | `last_tick` | 直近の tick。`result` が `error` なら `error` に理由 (事前検査の失敗 — workflow 定義の誤り・scope key の食い違い・観測の失敗 — を含む)。まだ tick が無ければ `null` |
-| `workers[].phase` | `running` (走っている) / `stopping` (止めている) / `verifying` (終わり方を確かめ待ち) / `waiting_retry` (再起動待ち) |
+| `workers[].phase` | `running` (走っている) / `stopping` (止めている) / `unstopped` (SIGKILL を送れず claude が終わっていない。claude が終わるまで終わりを待たず、確かめも再起動も workspace の削除もしない) / `verifying` (終わり方を確かめ待ち) / `waiting_retry` (再起動待ち) |
+| `workers[].pid`・`workers[].workspace` | `unstopped` の claim の claude の pid と workspace の path。ほかの段階では無い |
 | `workers[].started_at` | 今の attempt の worker を起動した時刻。起動の前 (再起動待ち) は `null` |
 | `workers[].retry_at` | `waiting_retry` の backoff が明ける時刻。停止要求の後に失敗した claim は再起動を予定しないので、無い |
 | `workers[].activity` | 活動 (§6 の画面)。まだ無ければ `null` |
@@ -551,15 +552,17 @@ claude-dispatcher status [<workflow の path>]
 ● loop 稼働中  github.com/acme/widgets · v0.3.0
 次の tick 00:10:00 · 直近の tick 00:05:00 ok · 候補 1
 
-workers 2 ────────────────────────────────────────────
+workers 3 ────────────────────────────────────────────
 作業対象  trigger    attempt  段階           経過               活動
 issue#42  implement  1        running        5m10s              Bash go test ./...
 issue#44  implement  2        waiting_retry  00:06:40 に再起動
+issue#46  implement  1        unstopped      12m03s
 
-要対処 4 ─────────────────────────────────────────────
+要対処 5 ─────────────────────────────────────────────
 打ち切り issue#43 (implement): label を外して trigger から外し、1 周期待ってから付け直すと解ける
 曖昧な CL worktree-issue-7: cl#52, cl#53
 起動しない trigger fix-ci: action の先頭の /fix が見つからない (plugin・repo の .claude・~/.claude の skill と command)
+止められない issue#46: claude (pid 4242) が終わっていない。workspace /path/to/workspaces/issue-46。その pid の claude を止めると、loop が後始末して解ける (loop が先に止まれば、次の loop が orphan として扱う)
 orphan issue#45: 前の loop の claude がまだ動いている。終わるのを待つか、claude の pid (log.jsonl のこの作業対象の直近の start の行) を止める。止めても残れば、worker log (state_dir の workers/issue-45.log) を開いている process を lsof で探して止める
 ```
 
@@ -572,9 +575,9 @@ orphan issue#45: 前の loop の claude がまだ動いている。終わるの�
   - 列は空白で揃える (列の間は 2 桁)
   - attempt は番号。再起動待ちの行は失敗した attempt の番号 (ログの行の `再起動を予定` は次の attempt の番号を出す)
   - 段階は `workers[].phase` (§7.1) の値のまま
-  - 経過は、段階が `running` か `stopping` の claim の、今の attempt の起動からの時間 (`45s`・`5m10s`・`1h02m05s`)。`waiting_retry` の claim は `<時刻> に再起動`。停止要求の後に失敗した claim は再起動を予定しないので空
+  - 経過は、段階が `running`・`stopping`・`unstopped` の claim の、今の attempt の起動からの時間 (`45s`・`5m10s`・`1h02m05s`)。`waiting_retry` の claim は `<時刻> に再起動`。停止要求の後に失敗した claim は再起動を予定しないので空
   - 活動は §6 の要約
-- `要対処 <n>`: 打ち切り・曖昧な CL・起動しない trigger・orphan を 1 件 1 行で並べる。1 件も無ければセクションごと出さない
+- `要対処 <n>`: 打ち切り・曖昧な CL・起動しない trigger・止められない worker (段階が `unstopped` の claim)・orphan を 1 件 1 行で並べる。1 件も無ければセクションごと出さない
 - 時刻は端末の local time の `HH:MM:SS`
 - stdout が端末でなくても、描き方は同じ人が読む形 (列は空白揃え)。機械が読むなら状態 file (§7.1) を読む
 
@@ -584,8 +587,8 @@ orphan issue#45: 前の loop の claude がまだ動いている。終わるの�
 - 色を付けるところ:
   - 見出しの `● loop 稼働中` は緑、`● loop 停止待ち` は黄、`○ loop なし` は灰。scope key は太字。直近の tick の `ok` は緑、`error: <理由>` は赤。欄の名前 (`次の tick` など) は灰
   - セクション名は太字 (`要対処` は黄)、罫線は薄く、列見出しは灰
-  - 段階は `running` が水色、`waiting_retry` が黄、`verifying` が灰
-  - `要対処` の行の頭の語は、`打ち切り` と `起動しない trigger` が赤、`曖昧な CL` と `orphan` が黄
+  - 段階は `running` が水色、`waiting_retry` が黄、`unstopped` が赤、`verifying` が灰
+  - `要対処` の行の頭の語は、`打ち切り`・`起動しない trigger`・`止められない` が赤、`曖昧な CL` と `orphan` が黄
 - stdout が端末なら、長い行を端末の幅で切り、`…` を付ける。幅は全角の文字と絵文字を 2 桁、結合文字・異体字セレクタなど幅を持たない文字を 0 桁、それ以外 (曖昧幅の `●` `─` `…` `·` を含む) を 1 桁と数える。制御文字 (改行・タブなど) は空白にして 1 行に収める。罫線は端末の幅まで引く
 - stdout が端末でないか、端末の幅を取れなければ、行を切らず、罫線はセクションの 1 行目が 60 桁になるまで引く
 
