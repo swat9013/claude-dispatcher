@@ -161,7 +161,7 @@ func TestNeedsAttentionGathersWhatAPersonMustFix(t *testing.T) {
 		"曖昧な CL worktree-issue-7: cl#52, cl#53",
 		"起動しない trigger fix-ci: action の先頭の /fix が見つからない",
 		"止められない issue#46: claude (pid 4242) が終わっていない。workspace /w/issue-46。その pid の claude を止めると、loop が後始末して解ける (loop が先に止まれば、次の loop が orphan として扱う)",
-		"orphan issue#45: 前の loop の claude がまだ動いている。終わるのを待つか、worker log (state_dir の workers/issue-45.log) を開いている process (lsof で探す。claude の pid は log.jsonl のこの作業対象の直近の start の行にある) を止める",
+		"orphan issue#45: 前の loop の claude がまだ動いている。終わるのを待つか、claude の pid (log.jsonl のこの作業対象の直近の start の行) を止める。止めても残れば、worker log (state_dir の workers/issue-45.log) を開いている process を lsof で探して止める",
 	}, "\n") + "\n"
 	if !strings.HasSuffix(got, "\n\n"+want) {
 		t.Fatalf("描画:\n%s\nwant 要対処:\n%s", got, want)
