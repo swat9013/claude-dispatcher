@@ -146,6 +146,44 @@ func TestRunExitsFiveWhenAHookFailsBeforeClaudeIsLaunched(t *testing.T) {
 	}
 }
 
+// 単発起動は loop.lock だけを取り alive.lock を取らないので、止まった loop の状態 file を今の状態として描かない (#364)。
+func TestStatusDuringARunAfterTheLoopStoppedShowsNoLoop(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflowWithCommands(s.workerWorkflow(""))
+	s.setIssues()
+	loop := s.startLoop()
+	s.waitEvents("tick", 1)
+	loop.signal(syscall.SIGINT)
+	loop.wait()
+	s.setIssues(readyIssue(42))
+	s.onClaude(stubwire.Rule{ReleaseFile: s.releaseFile()})
+	t.Cleanup(s.release)
+	p := s.startBackground(nil, "run", "implement", "issue#42")
+	p.waitForOutput(regexp.MustCompile(`^起動: issue#42 `))
+	t.Cleanup(func() { p.signal(syscall.SIGINT); p.signal(syscall.SIGTERM); p.wait() })
+
+	r := s.run("status")
+
+	assertExit(t, r, 0)
+	if !strings.HasPrefix(r.stdout, "○ loop なし  github.com/acme/widgets\n") {
+		t.Fatalf("単発起動の間の status:\n%s", r.stdout)
+	}
+}
+
+func TestLoopAndRunStopAtStartupWhileARunOfTheSameScopeIsRunning(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflowWithCommands(s.workerWorkflow(""))
+	s.setIssues(readyIssue(42), readyIssue(43))
+	s.onClaude(stubwire.Rule{ReleaseFile: s.releaseFile()})
+	t.Cleanup(s.release)
+	p := s.startBackground(nil, "run", "implement", "issue#42")
+	p.waitForOutput(regexp.MustCompile(`^起動: issue#42 `))
+	t.Cleanup(func() { p.signal(syscall.SIGINT); p.signal(syscall.SIGTERM); p.wait() })
+
+	assertExit(t, s.run("loop"), 3)
+	assertExit(t, s.run("run", "implement", "issue#43"), 3)
+}
+
 func TestRunStopsTheWorkerOnTheSecondStopRequestAndExitsSix(t *testing.T) {
 	s := newSandbox(t)
 	s.writeWorkflowWithCommands(s.workerWorkflow(""))

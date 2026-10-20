@@ -9,6 +9,7 @@ import (
 
 	"github.com/swat9013/claude-dispatcher/internal/loop"
 	"github.com/swat9013/claude-dispatcher/internal/printable"
+	"github.com/swat9013/claude-dispatcher/internal/state"
 	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/trigger"
 	"github.com/swat9013/claude-dispatcher/internal/worker"
@@ -60,7 +61,7 @@ func runOnce(args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 	scopeKey, dir := e.stateDir(def)
-	lock, code := lockState(dir, scopeKey, stderr)
+	lock, code := lockState(state.LockRun, dir, scopeKey, stderr)
 	if code != 0 {
 		return code
 	}

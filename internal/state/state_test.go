@@ -1,6 +1,7 @@
 package state_test
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -44,5 +45,94 @@ func TestLockedIsFalseForAMissingFileAndDoesNotCreateIt(t *testing.T) {
 	}
 	if _, err := os.Stat(file); !os.IsNotExist(err) {
 		t.Fatalf("Locked が file を作った: %v", err)
+	}
+}
+
+// 単発起動は loop.lock だけを取るので、止まった loop の後に撃った単発起動の間も status は loop なしと描く (formats.md §11)。
+func TestLockRunDoesNotMakeTheLoopAlive(t *testing.T) {
+	dir := t.TempDir()
+	loop, err := state.Lock(dir, "scope")
+	if err != nil {
+		t.Fatal(err)
+	}
+	loop.Close() // loop を止める
+
+	run, err := state.LockRun(dir, "scope")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer run.Close()
+	alive, err := state.Alive(dir)
+	if err != nil || alive {
+		t.Fatalf("単発起動の間の Alive = %v, %v, want false (○ loop なし)", alive, err)
+	}
+}
+
+// 単発起動が loop.lock を持つ間は、同じ scope key の loop と単発起動が起動時に止まる (exit 3 の元)。
+func TestLockStopsWhileARunHoldsTheScope(t *testing.T) {
+	dir := t.TempDir()
+	run, err := state.LockRun(dir, "scope")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer run.Close()
+
+	if _, err := state.Lock(dir, "scope"); !errors.Is(err, state.ErrAlreadyRunning) {
+		t.Fatalf("単発起動の間の Lock = %v, want ErrAlreadyRunning", err)
+	}
+}
+
+func TestLockRunStopsWhileARunHoldsTheScope(t *testing.T) {
+	dir := t.TempDir()
+	run, err := state.LockRun(dir, "scope")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer run.Close()
+
+	if _, err := state.LockRun(dir, "scope"); !errors.Is(err, state.ErrAlreadyRunning) {
+		t.Fatalf("単発起動の間の LockRun = %v, want ErrAlreadyRunning", err)
+	}
+}
+
+func TestLockRunSucceedsAfterTheRunReleased(t *testing.T) {
+	dir := t.TempDir()
+	run, err := state.LockRun(dir, "scope")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run.Close()
+
+	again, err := state.LockRun(dir, "scope")
+	if err != nil {
+		t.Fatalf("外れた後の LockRun = %v", err)
+	}
+	again.Close()
+}
+
+func TestLockRunStopsWhileALoopHoldsTheScope(t *testing.T) {
+	dir := t.TempDir()
+	loop, err := state.Lock(dir, "scope")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer loop.Close()
+
+	if _, err := state.LockRun(dir, "scope"); !errors.Is(err, state.ErrAlreadyRunning) {
+		t.Fatalf("loop の間の LockRun = %v, want ErrAlreadyRunning", err)
+	}
+}
+
+func TestLockMakesTheLoopAlive(t *testing.T) {
+	dir := t.TempDir()
+	loop, err := state.Lock(dir, "scope")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer loop.Close()
+
+	alive, err := state.Alive(dir)
+	if err != nil || !alive {
+		t.Fatalf("loop の間の Alive = %v, %v, want true", alive, err)
 	}
 }

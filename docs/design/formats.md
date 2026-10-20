@@ -15,7 +15,7 @@ macOS でも XDG に揃える (`~/Library` は使わない)。scope key ごと�
 
 ```
 <state root>/<scope dir>/
-  loop.lock                           loop の生存期間の flock の対象。2 本目の loop を止める (§6)
+  loop.lock                           loop と単発起動の生存期間の flock の対象。同じ scope key の 2 本目を止める (§6、§11)
   alive.lock                          loop の生死を status に見せる flock の対象 (§6、§7.2)
   log.jsonl                           tick と worker の起動・終わり方の行 (§4)
   status.json                         loop の今の状態 (状態 file、§7)。loop が書き換え、status が読む
@@ -285,7 +285,7 @@ claude-dispatcher loop [--max-concurrent <N>] [<workflow の path>]
   4. trigger の `type` に書いた issue type 名が project にある (§2.2)。無い名前を trigger と一緒に名指しして exit 2。project の issue type を読めなければ §3 の acli の分類で、認証 (exit 4) か見えない (exit 2)
 - CL 置き場の確認は、`cl:` の CL 置き場の open な CL の一覧を 1 回読む。落ちたら §3 の gh / glab の分類で、認証 (exit 4) か見えない (exit 2)、それ以外は exit 1。観測の補助の要求だけが落ちたときは通す。試運転 (§5) と `doctor` (§7.4) も同じ確認を通す。`cl:` には token が無く、gh / glab 自身の認証を使う
 - lock は loop の生存期間だけ持つ。loop が死ねば外れる
-- `loop.lock` を取った loop は、続けて `alive.lock` も生存期間のあいだ持つ。`status` は `alive.lock` だけを確かめるので、`loop.lock` を取り合わない (`alive.lock` を `status` が一瞬持っていれば、外れるまで待つ)
+- `loop.lock` を取った loop は、続けて `alive.lock` も生存期間のあいだ持つ。単発起動の lock は §11。`status` は `alive.lock` だけを確かめるので、`loop.lock` を取り合わない (`alive.lock` を `status` が一瞬持っていれば、外れるまで待つ)
 
 **tick**: 起動直後に 1 回撃ち、以後は tick の終了から `polling.interval` だけ待って次を撃つ。tick ごとに workflow 定義を読み直す。
 
@@ -815,7 +815,7 @@ claude-dispatcher run <trigger> <作業対象> [<workflow の path>]
 
 - 事前検査は §6 と同じく、指名していない trigger が落ちても失敗させる
 - 当たっているかは指名した trigger の述語だけで決める。宣言順で先の trigger に当たっていても起動する (loop の読み直しの `earlier_trigger` は当てない)
-- lock は §6 と同じ `loop.lock` と `alive.lock` を、単発起動の終わりまで持つ
+- lock は §6 と同じ `loop.lock` だけを、単発起動の終わりまで持つ。`alive.lock` は取らないので、単発起動の間の `status` は `○ loop なし` と描く (止まった loop が残した状態 file を今の状態として描かない)。同じ scope key の loop・単発起動との排他は `loop.lock` が担う
 
 **worker の 1 回分**: §6 の「worker の 1 回分」と同じ (workspace の用意と hooks・描画・`claude -p` の起動・`limits.stall_timeout`・`limits.run_timeout`・`after_run`)。attempt は 1 で、session id は新しく発行する (`--session-id`)。retry も打ち切りもしない。
 

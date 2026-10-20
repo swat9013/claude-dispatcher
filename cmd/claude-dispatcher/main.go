@@ -266,7 +266,7 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 		return code
 	}
 	scopeKey, dir := e.stateDir(def)
-	lock, code := lockState(dir, scopeKey, stderr)
+	lock, code := lockState(state.Lock, dir, scopeKey, stderr)
 	if code != 0 {
 		return code
 	}
@@ -333,9 +333,10 @@ func (e environment) confirmLaunchable(def workflow.Definition, stderr io.Writer
 	return 0
 }
 
-// lockState は state dir を作って scope key の lock を取る (formats.md §6)。loop と単発起動が同じ lock を取り合う。
-func lockState(dir, scopeKey string, stderr io.Writer) (*state.Held, int) {
-	lock, err := state.Lock(dir, scopeKey)
+// lockState は state dir を作って scope key の lock を take に取らせる (formats.md §6・§11)。loop (state.Lock) と単発起動
+// (state.LockRun) が同じ loop.lock を取り合う。
+func lockState(take func(dir, scopeKey string) (*state.Held, error), dir, scopeKey string, stderr io.Writer) (*state.Held, int) {
+	lock, err := take(dir, scopeKey)
 	if errors.Is(err, state.ErrAlreadyRunning) {
 		fmt.Fprintln(stderr, err)
 		return nil, exitLoopRunning
