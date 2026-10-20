@@ -285,7 +285,7 @@ claude-dispatcher loop [--max-concurrent <N>] [<workflow の path>]
   4. trigger の `type` に書いた issue type 名が project にある (§2.2)。無い名前を trigger と一緒に名指しして exit 2。project の issue type を読めなければ §3 の acli の分類で、認証 (exit 4) か見えない (exit 2)
 - CL 置き場の確認は、`cl:` の CL 置き場の open な CL の一覧を 1 回読む。落ちたら §3 の gh / glab の分類で、認証 (exit 4) か見えない (exit 2)、それ以外は exit 1。観測の補助の要求だけが落ちたときは通す。試運転 (§5) と `doctor` (§7.4) も同じ確認を通す。`cl:` には token が無く、gh / glab 自身の認証を使う
 - lock は loop の生存期間だけ持つ。loop が死ねば外れる
-- `loop.lock` を取った loop は、続けて `alive.lock` も生存期間のあいだ持つ。単発起動 (§11) は `loop.lock` だけを取り、`alive.lock` を取らない (単発起動は loop ではないので、`status` に loop が生きていると見せない)。`status` は `alive.lock` だけを確かめるので、`loop.lock` を取り合わない (`alive.lock` を `status` が一瞬持っていれば、外れるまで待つ)
+- `loop.lock` を取った loop は、続けて `alive.lock` も生存期間のあいだ持つ。単発起動の lock は §11。`status` は `alive.lock` だけを確かめるので、`loop.lock` を取り合わない (`alive.lock` を `status` が一瞬持っていれば、外れるまで待つ)
 
 **tick**: 起動直後に 1 回撃ち、以後は tick の終了から `polling.interval` だけ待って次を撃つ。tick ごとに workflow 定義を読み直す。
 

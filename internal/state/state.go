@@ -33,8 +33,8 @@ func Dir(root, scopeKey string) string {
 	return filepath.Join(root, unsafeRune.ReplaceAllString(strings.ToLower(scopeKey), "_")+"-"+hex.EncodeToString(sum[:])[:8])
 }
 
-// ErrAlreadyRunning は同じ scope key の loop が走っていて lock を取れなかったこと。
-var ErrAlreadyRunning = errors.New("同じ scope key の loop がもう走っている")
+// ErrAlreadyRunning は同じ scope key の loop か単発起動が走っていて lock を取れなかったこと。
+var ErrAlreadyRunning = errors.New("同じ scope key の loop か単発起動がもう走っている")
 
 // state dir の中の置き場の名前
 const (
@@ -82,8 +82,7 @@ func Lock(dir, scopeKey string) (*Held, error) {
 	return &Held{lock: lock, alive: alive}, nil
 }
 
-// LockRun は state dir を作り、単発起動の lock (loop.lock だけ) を取る。単発起動は loop ではないので alive.lock を取らず、
-// その間 status は loop なしと描く (formats.md §11)。同じ scope key の loop・単発起動との排他は loop.lock が担う。
+// LockRun は state dir を作り、単発起動の lock (loop.lock だけ。alive.lock は取らない) を取る (formats.md §11)。
 func LockRun(dir, scopeKey string) (*Held, error) {
 	lock, err := lockScope(dir, scopeKey)
 	if err != nil {
