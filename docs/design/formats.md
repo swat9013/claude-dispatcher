@@ -562,7 +562,7 @@ issue#44  implement  2        waiting_retry  00:06:40 に再起動
 打ち切り issue#43 (implement): label を外して trigger から外し、1 周期待ってから付け直すと解ける
 曖昧な CL worktree-issue-7: cl#52, cl#53
 起動しない trigger fix-ci: action の先頭の /fix が見つからない (plugin・repo の .claude・~/.claude の skill と command)
-orphan issue#45: 前の loop の claude がまだ動いている。終わるのを待つか、worker log (state_dir の workers/issue-45.log) を開いている process (lsof で探す。claude の pid は log.jsonl のこの作業対象の直近の start の行にある) を止める
+orphan issue#45: 前の loop の claude がまだ動いている。終わるのを待つか、claude の pid (log.jsonl のこの作業対象の直近の start の行) を止める。止めても残れば、worker log (state_dir の workers/issue-45.log) を開いている process を lsof で探して止める
 ```
 
 - 見出しは 2 行。1 行目は loop の状態と scope key と版: loop が生きていれば `● loop 稼働中` (停止要求の後は `● loop 停止待ち`)、`alive.lock` を取れれば `○ loop なし`。版は scope key に続けて ` · <version>` (状態 file の `version`) を出す。commit は出さない (状態 file と log.jsonl で読める)。`○ loop なし` のとき (状態 file の版は止まった loop のもの) と、状態 file に `version` が無いとき (版を足す前の版が書いた状態 file) は出さない
