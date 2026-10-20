@@ -304,7 +304,7 @@ func needsAttention(s Snapshot) [][]Span {
 		lines = append(lines, []Span{{Red, "起動しない trigger"}, {Plain, fmt.Sprintf(" %s: %s", b.Trigger, b.Error)}})
 	}
 	for _, o := range s.Orphans {
-		lines = append(lines, []Span{{Yellow, "orphan"}, {Plain, fmt.Sprintf(" %s: 前の loop の claude がまだ動いている。終わるのを待つか、worker log (state_dir の %s) を開いている process (lsof で探す。claude の pid は log.jsonl のこの作業対象の直近の start の行にある) を止める", o.Target, o.Log)}})
+		lines = append(lines, []Span{{Yellow, "orphan"}, {Plain, fmt.Sprintf(" %s: 前の loop の claude がまだ動いている。終わるのを待つか、claude の pid (log.jsonl のこの作業対象の直近の start の行) を止める。止めても残れば、worker log (state_dir の %s) を開いている process を lsof で探して止める", o.Target, o.Log)}})
 	}
 	return lines
 }
