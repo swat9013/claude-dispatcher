@@ -192,3 +192,37 @@ Cockburn『ユースケース実践ガイド』(Writing Effective Use Cases) の
   - 3a1. loop は走っている worker の process group を止め、hooks を撃ち、止めた作業対象を log に残して step 4 へ進む
   - 3a2. SIGKILL を送れず claude が終わらない worker は、claude が終わるまで hooks を撃たず、終わりも待たない。loop が止まるまでに claude が終われば、3a1 と同じく hooks を撃って log に残す。終わらなければ、loop は claude の pid と workspace を error として log に残して step 4 へ進む。残った claude は orphan になる。運用者は loop を起動し直してよい。次の loop は orphan が終わるまでその workspace を残し、その作業対象で worker を起動しない。急ぐなら運用者がその pid を止める (system.md §7)
   - 3a3. 止められた worker が途中まで書いた成果は、workspace と remote branch に残る。次に起動した loop は、trigger に当たったままなら同じ workspace で続きから始める
+
+## UC-7 trigger と action を 1 件で確かめる (単発起動)
+
+- **Primary Actor**: 人間 (workflow 定義を書いた運用者)
+- **Scope**: dispatcher (機械システム)
+- **Level**: user-goal (sea)
+- **Trigger**: 運用者が、書いた trigger と action が実際の作業対象で期待どおりに動くかを確かめたい
+- **事前条件**: workflow 定義が commit されている。同じ issue 置き場の loop が走っていない。確かめる作業対象が trigger に当たっている
+- **成功保証**: 指名した作業対象に worker が 1 回だけ起動し、終わった後に trigger から外れたか (完了したか) を exit code で読める。retry はしない
+
+**Main Success Scenario**
+
+1. 運用者が trigger の名前と作業対象を指名して単発起動を求める
+2. dispatcher が loop の起動時と同じ検査を通し、trigger と作業対象の種類が合うことを確かめ、同じ issue 置き場の lock を取る
+3. dispatcher が作業対象を読み、指名した trigger に当たっていることを確かめる
+4. dispatcher が loop と同じ規則で workspace を用意し、worker を 1 回起動する
+5. dispatcher が worker の終わりを待ち、作業対象を読み直す
+6. dispatcher が trigger から外れたことを示し、完了として終わる
+
+**Extensions**
+
+- **2a.** trigger の名前が workflow 定義に無いか、作業対象の種類が trigger の `on` と合わない
+  - 2a1. dispatcher は起動せずに引数の誤りとして終わる
+- **2b.** 同じ issue 置き場の loop が走っている
+  - 2b1. dispatcher は起動せずに終わる。運用者は loop を止めてから撃ち直す
+- **3a.** 作業対象が trigger に当たっていない・終端・当たるかをまだ決められない、か前の loop の orphan が生きている
+  - 3a1. dispatcher は起動しなかったことを示して終わる。運用者は述語 (`when`) か作業対象を直して step 1 へ戻る
+- **5a.** 運用者が停止を求めた
+  - 5a1. 1 回目は worker の終わりを待って step 5 を続ける。2 回目は worker を止め、完了しなかったとして終わる
+  - 5a2. claude を止められない (stall・上限時間で止めようとしたときを含む) なら、1 回目で claude を残して完了しなかったとして終わる。残った claude は orphan になる
+- **4a.** worker を起動する前に停止を求められたか、claude を起動する前に失敗した (hooks・描画・claude の起動)
+  - 4a1. dispatcher は起動しなかったことを示して終わる
+- **6a.** 作業対象が trigger に当たったまま (worker の失敗を含む)
+  - 6a1. dispatcher は完了しなかったことを示して終わる。運用者は worker log を読んで action を直し、step 1 へ戻る。作業対象が終端でなければ workspace は残るので、続きの単発起動や loop が同じ workspace を使う

@@ -140,6 +140,12 @@ binary は署名していない。macOS でブラウザから取った archive �
    claude-dispatcher loop --dry-run
    ```
 
+   action まで 1 件で確かめるなら、trigger の名前と issue (か CL) を指して worker を 1 回だけ起動する。終わった後に trigger から外れていれば exit 0 で終わる。詳しくは `claude-dispatcher guide` の「導入の流れ」
+
+   ```sh
+   claude-dispatcher run implement issue#42
+   ```
+
 4. **導入を確かめる**: workflow 定義・issue の読み取り・要る CLI・起動の前の検査を確かめ、Claude Code の settings に要りそうな entry を示す
 
    ```sh

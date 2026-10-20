@@ -10,7 +10,7 @@ import (
 )
 
 // 引数の宣言の表。subcommand ごとの flag と位置引数、command の代わりに書く flag をここに書き、parser (parse と run の
-// 振り分け) と usage の Usage 節の 2 行目からと Options 節 (usageForms・options) が同じ表を読む。command の代わりの flag
+// 振り分け) と usage の Usage 節の command の代わりの形 (usageForms) と Options 節 (usageForms・options) が同じ表を読む。command の代わりの flag
 // ごとの処理は run が helpFlag・versionFlag を名指しで持つ。flag の一覧と規則の正本は
 // formats.md §10 (と §6・§7) で、この表はそれに合わせる側。setup の --kind が受ける種類と案内の綴りは provider の表も持つ。
 
@@ -34,6 +34,8 @@ type commandSpec struct {
 	flags []flagSpec
 	// arguments は flag 以外の引数の受け方
 	arguments arguments
+	// operands は WORKFLOW の前に必ず書く位置引数の usage 上の綴り (run の TRIGGER・TARGET)。workflowArgument に限る
+	operands []string
 	// required は必ず付ける flag の名前
 	required []string
 	// check は値付き flag を読んだ後、他の引数を読む前の、値付き flag の組み合わせの検査。nil なら検査しない
@@ -69,6 +71,7 @@ var commandSpecs = []commandSpec{
 		{name: "--repo", value: "<key>", help: "Jira の project key", field: provider.RepoField},
 	}},
 	{name: "doctor", arguments: workflowArgument},
+	{name: "run", arguments: workflowArgument, operands: []string{"TRIGGER", "TARGET"}},
 	{name: "guide", arguments: noArguments},
 }
 
@@ -114,6 +117,8 @@ type parsedArgs struct {
 	spec   commandSpec
 	values map[string]string
 	set    map[string]bool
+	// operands は spec.operands の位置引数の値。spec.operands と同じ並び
+	operands []string
 	// workflowPath は WORKFLOW。省けば defaultWorkflowFile
 	workflowPath string
 }
@@ -138,7 +143,8 @@ func (a parsedArgs) has(name string) bool {
 // 値付き flag は `--name value` と `--name=value` を読み、値が無い (直後が `-` で始まるときを含む)・空・2 回書いたら誤り。
 // 位置引数と flag は混ざってよい。
 func (c commandSpec) parse(argv []string) (parsedArgs, error) {
-	if c.arguments == undeclaredArguments || c.arguments == noArguments && len(c.flags) > 0 {
+	if c.arguments == undeclaredArguments || c.arguments == noArguments && len(c.flags) > 0 ||
+		c.arguments != workflowArgument && len(c.operands) > 0 {
 		panic(fmt.Sprintf("subcommand %s の引数の受け方の宣言が誤り", c.name))
 	}
 	a := parsedArgs{spec: c, values: map[string]string{}, set: map[string]bool{}}
@@ -187,11 +193,16 @@ func (c commandSpec) parse(argv []string) (parsedArgs, error) {
 			a.set[f.name] = true
 		case strings.HasPrefix(arg, "-"):
 			return a, fmt.Errorf("未知の flag: %s", arg)
+		case len(a.operands) < len(c.operands):
+			a.operands = append(a.operands, arg)
 		case a.workflowPath == "":
 			a.workflowPath = arg
 		default:
 			return a, fmt.Errorf("引数が多い: %s", arg)
 		}
+	}
+	if len(a.operands) < len(c.operands) {
+		return a, fmt.Errorf("%s が要る", c.operands[len(a.operands)])
 	}
 	for _, name := range c.required {
 		if !a.set[name] {
@@ -223,7 +234,7 @@ func positiveInt(name string) func(string) error {
 	}
 }
 
-// usageForms は usage の Usage 節の 2 行目からの、command の代わりに flag を書く形。1 行目と桁を揃える字下げで始める。
+// usageForms は usage の Usage 節の 3 行目からの (2 行目は main.go が手で書く run の形)、command の代わりに flag を書く形。1 行目と桁を揃える字下げで始める。
 func usageForms() string {
 	var b strings.Builder
 	for _, g := range globalFlags {

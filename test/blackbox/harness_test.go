@@ -313,7 +313,13 @@ func (s *sandbox) startLoop(args ...string) *backgroundRun {
 // startLoopWithEnv は sandbox の env に extra を足して startLoop する。
 func (s *sandbox) startLoopWithEnv(extra map[string]string, args ...string) *backgroundRun {
 	s.t.Helper()
-	cmd := exec.Command(dispatcherBin, append([]string{"loop"}, args...)...)
+	return s.startBackground(extra, append([]string{"loop"}, args...)...)
+}
+
+// startBackground は clone を cwd にして binary を args で起動し、待たずに返す。後片付けは startLoop と同じ。
+func (s *sandbox) startBackground(extra map[string]string, args ...string) *backgroundRun {
+	s.t.Helper()
+	cmd := exec.Command(dispatcherBin, args...)
 	cmd.Dir = s.clone
 	cmd.Env = s.environ(extra)
 	p := &backgroundRun{t: s.t, cmd: cmd, stdout: &syncBuffer{}, stderr: &syncBuffer{}, done: make(chan struct{})}
