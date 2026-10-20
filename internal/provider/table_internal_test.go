@@ -13,6 +13,14 @@ func TestNoProviderWritesTrackerTokenInTheSupportsOfItsTrackerRole(t *testing.T)
 	}
 }
 
+func TestNoProviderWritesTheSeparateCLPlaceInTheSupportsOfItsTrackerRole(t *testing.T) {
+	for _, p := range providers {
+		if slices.Contains(p.Tracker.declared.Supports, CLPlace) {
+			t.Fatalf("provider %s が Supports に cl: を書いている (CL host の役割の有無から導く)", p.Kind)
+		}
+	}
+}
+
 func TestAnEmptyDefaultHostIsADefaultSoTheHostIsNotRequired(t *testing.T) {
 	h := Host{parse: func(s string) (string, error) { return s, nil }, defaultHost: "", hasDefault: true}
 

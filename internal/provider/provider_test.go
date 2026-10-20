@@ -44,7 +44,7 @@ type roleDeclarations struct {
 func TestEveryRoleEitherSupportsOrDeclinesEachOfItsDeclarationsWithAReason(t *testing.T) {
 	for _, kind := range provider.Kinds() {
 		p, _ := provider.Of(kind)
-		roles := []roleDeclarations{{"tracker", p.Tracker.Declarations(), provider.TrackerFeatures}}
+		roles := []roleDeclarations{{"tracker", p.TrackerDeclarations(), provider.TrackerFeatures}}
 		if p.CLHost != nil {
 			roles = append(roles, roleDeclarations{"CL host", p.CLHost.Declarations, provider.CLHostFeatures})
 		}
@@ -90,7 +90,7 @@ func TestOnlyATrackerWithoutTheCLHostRoleAcceptsASeparateCLPlace(t *testing.T) {
 	for _, kind := range provider.Kinds() {
 		p, _ := provider.Of(kind)
 
-		if p.Tracker.Declarations().Supported(provider.CLPlace) != (p.CLHost == nil) {
+		if p.TrackerDeclarations().Supported(provider.CLPlace) != (p.CLHost == nil) {
 			t.Fatalf("%s: cl: を書けるのは CL host の役割を持たない種類だけ (CL host の役割: %v)", kind, p.CLHost != nil)
 		}
 	}

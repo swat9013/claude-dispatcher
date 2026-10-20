@@ -469,7 +469,7 @@ func (c *checker) supports(n *yaml.Node, path string, f provider.Feature) bool {
 	if c.provider == nil {
 		return false
 	}
-	return c.declared(n, path, "tracker.kind", c.provider.Kind, c.provider.Tracker.Declarations(), f)
+	return c.declared(n, path, "tracker.kind", c.provider.Kind, c.provider.TrackerDeclarations(), f)
 }
 
 // clSupports は supports の CL 置き場の役割の版。CL 置き場の役割を担う provider が引けていなければ名指しせず (誤りは on: cl
