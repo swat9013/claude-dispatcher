@@ -570,7 +570,7 @@ orphan issue#45: 前の loop の claude がまだ動いている。終わるの�
 
 - 見出しは 2 行。1 行目は loop の状態と scope key と版: loop が生きていれば `● loop 稼働中` (停止要求の後は `● loop 停止待ち`)、`alive.lock` を取れれば `○ loop なし`。版は scope key に続けて ` · <version>` (状態 file の `version`) を出す。commit は出さない (状態 file と log.jsonl で読める)。`○ loop なし` のとき (状態 file の版は止まった loop のもの) と、状態 file に `version` が無いとき (版を足す前の版が書いた状態 file) は出さない
 - 2 行目は `次の tick <時刻>` (停止要求の後は `次の tick なし`)・`直近の tick <時刻> ok · 候補 <n>` を ` · ` で繋ぐ。直近の tick が error なら `直近の tick <時刻> error: <理由>`。`loop なし` のときは次の tick の欄を出さない。出す欄が無ければ 2 行目を出さない
-- `loop なし` のときは見出しだけを出す (状態 file が残っていても、worker と打ち切りは loop の memory と一緒に消えている)。段階が `unstopped` の claim も描かない: 状態 file は止まった loop が最後に書いた記録で、その後に claude が終わったかを `status` は確かめられない (生死を確かめられるのは worker log の flock だけで、§6 の orphan)。終わった claude の pid を今のものとして描くと、古い状態を今のものと読ませる。残った claude の pid と workspace は、log.jsonl の `error` の行 `claude を止められないまま止まる (pid <pid>, workspace <path>)` (§6) で読む
+- `loop なし` のときは見出しだけを出す (状態 file が残っていても、worker と打ち切りは loop の memory と一緒に消えている)。段階が `unstopped` の claim も描かない: 状態 file は止まった loop が最後に書いた記録で、その後に claude が終わったかを `status` は確かめられない (生死を確かめられるのは worker log の flock だけで、§6 の orphan)。終わった claude の pid を今のものとして描くと、古い状態を今のものと読ませる。残った claude の pid と workspace は、log.jsonl の §6 の `error` の行 (`claude を止められないまま止まる`) で読む
 - 状態 file が無ければ、見出しの 2 行目は `記録なし`
 - 見出しの後に空行を挟み、セクションを空行で区切って並べる。セクションの 1 行目はセクション名と件数の後に罫線を引く
 - `workers <n>`: claim の表。列見出しの行 (作業対象・trigger・attempt・段階・経過・活動) の後に claim を 1 行ずつ並べる。claim が無ければ列見出しも出さない
