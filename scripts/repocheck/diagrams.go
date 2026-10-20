@@ -35,7 +35,7 @@ func runDiagrams() ([]string, error) {
 		return nil, err
 	}
 	pin := strings.TrimSpace(string(pinBytes))
-	pumls, err := filepath.Glob(filepath.Join(designDir, "*.puml"))
+	pumls, err := designPumls(designDir)
 	if err != nil {
 		return nil, err
 	}
@@ -55,6 +55,21 @@ func runDiagrams() ([]string, error) {
 		problems = append(problems, checkDiagram(p, string(puml), string(svg), pin)...)
 	}
 	return problems, nil
+}
+
+// designPumls は dir の直下の .puml の path を返す。`.` で始まる名前 (editor の lock file 等) は外す (CONTRIBUTING.md の「gate」)
+func designPumls(dir string) ([]string, error) {
+	all, err := filepath.Glob(filepath.Join(dir, "*.puml"))
+	if err != nil {
+		return nil, err
+	}
+	var pumls []string
+	for _, p := range all {
+		if !strings.HasPrefix(filepath.Base(p), ".") {
+			pumls = append(pumls, p)
+		}
+	}
+	return pumls, nil
 }
 
 // checkDiagram は、svg が pin の版の plantuml で今の puml から描かれたかを、svg に埋まった版と source で検査する

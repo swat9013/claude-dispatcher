@@ -1,8 +1,9 @@
-// repocheck は、同じ値を 2 箇所以上に書いている設定の一致と、ADR の番号の一意と file 名の形と、docs/design の図の描き直し漏れを検査する (方針は CONTRIBUTING.md の「gate」)。
+// repocheck は、同じ値を 2 箇所以上に書いている設定の一致と、ADR の番号の一意と、ADR の file 名の形と、docs/design の図の描き直し漏れを検査する (方針は CONTRIBUTING.md の「gate」)。
 // network は使わない。ruleset は呼び出し側が gh で取った JSON を標準入力で渡す。
 //
 //	go run ./scripts/repocheck files     # repo の root で撃つ。pre-commit の hook が撃つ
-//	go run ./scripts/repocheck adr       # ADR の番号の一意と file 名の形。commit 時の hook と adr-numbers.yml が撃つ (PR の gate では撃たない)
+//	go run ./scripts/repocheck adr       # ADR の番号の一意。commit 時の hook と adr-numbers.yml が撃つ (PR の gate では撃たない)
+//	go run ./scripts/repocheck adr-names docs/adr/<file>...  # 渡した ADR の file 名の形。commit 時の hook が撃ち、CI の pre-commit job でも撃つ
 //	go run ./scripts/repocheck diagrams  # docs/design の svg が、固定した版の plantuml で今の .puml から描かれたか。commit 時の hook が撃つ
 //	gh api repos/<owner>/<repo>/rules/branches/main | go run ./scripts/repocheck ruleset
 //
@@ -16,6 +17,7 @@ import (
 	"io"
 	"maps"
 	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -47,8 +49,9 @@ var goVersionForm = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
 var adrNameForm = regexp.MustCompile(`^([0-9]{4})[^0-9].*\.md$`)
 
 func main() {
-	if len(os.Args) != 2 {
-		fatal(errors.New("使い方: repocheck files | repocheck adr | repocheck diagrams | repocheck ruleset < rules.json"))
+	// adr-names だけが file 名を 1 つ以上取る。0 個で黙って通ると、手で再現したつもりで何も検査しない
+	if len(os.Args) < 2 || (os.Args[1] == "adr-names") != (len(os.Args) > 2) {
+		fatal(errors.New("使い方: repocheck files | repocheck adr | repocheck adr-names <file>... | repocheck diagrams | repocheck ruleset < rules.json"))
 	}
 	var problems []string
 	var err error
@@ -63,8 +66,10 @@ func main() {
 		var names []string
 		names, err = readADRNames()
 		if err == nil {
-			problems = checkADR(names)
+			problems = duplicateADRNumbers(names)
 		}
+	case "adr-names":
+		problems = checkADRNames(os.Args[2:])
 	case "ruleset":
 		problems, err = runRuleset()
 	case "diagrams":
@@ -202,9 +207,14 @@ func duplicateADRNumbers(names []string) []string {
 	return problems
 }
 
-// checkADR は repocheck adr が報告する問題 (番号の重なりと file 名の形の崩れ) を返す
-func checkADR(names []string) []string {
-	return append(duplicateADRNumbers(names), malformedADRNames(names)...)
+// checkADRNames は repocheck adr-names が報告する問題 (渡した file 名の形の崩れ) を返す。
+// 作業ツリーの directory を読まず、hook が渡す git に載った file だけを見る (git に載っていない lock file 等で落ちないように)
+func checkADRNames(paths []string) []string {
+	names := make([]string, len(paths))
+	for i, p := range paths {
+		names[i] = filepath.Base(p)
+	}
+	return malformedADRNames(names)
 }
 
 // malformedADRNames は、ADR のつもりの名前のうち adrNameForm に合わないものを 1 件 1 行で返す。

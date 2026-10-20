@@ -2,6 +2,8 @@ package main
 
 import (
 	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -80,5 +82,24 @@ func TestCheckDiagram_svgが無ければ落とす(t *testing.T) {
 	puml, _ := readSample(t)
 	if got := checkDiagram("sample.puml", puml, "", "1.2026.8"); len(got) != 1 {
 		t.Fatalf("svg の無い puml を通した: %v", got)
+	}
+}
+
+func TestDesignPumls_ドットで始まる名前は行き先の無いsymlinkでも検査の対象から外す(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "statechart.puml"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("nobody@host.1234", filepath.Join(dir, ".#statechart.puml")); err != nil {
+		t.Fatal(err)
+	}
+
+	pumls, err := designPumls(dir)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{filepath.Join(dir, "statechart.puml")}; !slices.Equal(pumls, want) {
+		t.Fatalf("got %q, want %q", pumls, want)
 	}
 }
