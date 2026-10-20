@@ -13,7 +13,7 @@ CLI のコード、または `docs/design/` の正本を変える前に `docs/de
 
 ### Issue tracker
 
-issue は GitHub Issues (`swat9013/claude-dispatcher`) に置き、`gh` CLI で操作する。See `docs/agents/issue-tracker.md`.
+issue は GitHub Issues (`swat9013/claude-dispatcher`) に置き、`gh` CLI で操作する。See `docs/agents/issue-tracker.md` (issue の起票・分割を決める前には必ず読む).
 
 ### Triage labels
 

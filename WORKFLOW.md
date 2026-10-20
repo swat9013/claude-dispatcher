@@ -112,9 +112,8 @@ triggers:
 
 ## 残りを issue にする
 
-- 実装が要る残タスク・担当範囲の外で見つけた欠陥・直さなかったレビューの指摘は issue にし、pull request 本文の「user に残る作業」から番号で指す
-- 起票の前に `gh issue list --state open --search "<題名> in:title" --json number,title` で同じ題名の open な issue を探す。あれば新しく作らず、発端 (担当の issue と pull request の番号) をコメントで足す
-- 起票した issue には `needs-triage` を付ける。`ready-for-agent` と `ready-for-human` は付けない (`ready-for-agent` を付けると、dispatcher が worker 自身の起票を拾って作業を自己増殖させる)
+- 実装が要る残タスク・担当範囲の外で見つけた欠陥・直さなかったレビューの指摘は、起票するか・重複の探し方・本文の形・付ける label を `docs/agents/issue-tracker.md`「follow-up issue の起票」を読んで従って決める
+- 起票した issue と、重複として発端をコメントで足した issue は、pull request 本文の「user に残る作業」から番号で指す
 
 ## 人へ返す
 
