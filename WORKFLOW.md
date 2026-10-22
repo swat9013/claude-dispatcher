@@ -97,7 +97,7 @@ triggers:
 
 ## pull request の本文
 
-本文は CONTRIBUTING.md の「commit・PR 規約」に従って書き、加えて次を守る。
+本文は、上の「作業の場所」が従わせる CONTRIBUTING.md の規約に加えて、次を守る。
 
 - 作業ツリーの外にある実体 (settings の適用・label の作成・実機での確かめ) に触る受け入れ条件は担当から外し、「user に残る作業」の節に書く
 
