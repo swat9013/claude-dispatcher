@@ -16,24 +16,25 @@ import (
 // connectionSize は GraphQL の connection を 1 往復で読む件数 (GitLab の上限)。REST の一覧の 1 page と、id で絞る件数にも使う
 const connectionSize = 100
 
-// mergeRequestPageSize は open な merge request の一覧を 1 往復で読む本数。1 本ごとに discussion を connectionSize 本まで
-// 読むので、page を大きくすると GitLab の問い合わせの時間の上限 (既定 30 秒) に届く。open な merge request が 100 本を超える
-// self-managed の GitLab で、100 本と 50 本の page は時間切れで落ちた。20 本の page は通ったが最も遅い page が 19 秒で上限に
-// 近く、10 本の page は最も遅い page が 12 秒だった
-const mergeRequestPageSize = 10
-
 // discussionFields は discussion 1 本のうち読むもの。書き手と system note かは最初の note で決まるので、note は先頭だけを読む
 const discussionFields = `
         resolvable resolved
         notes(first: 1) { nodes { system maxAccessLevelOfAuthor } }`
 
-// mergeRequestFields は merge request 1 本のうち読むもの。discussion は最初の connectionSize 本を読み、続きは
-// discussionsQuery で読み足す。
-var mergeRequestFields = fmt.Sprintf(`
+// listFields は open な一覧で merge request 1 本のうち読むもの。discussion は読まず、解決できる数と解決済みの数だけを読む。
+// discussion は 1 本ごとに往復が要るほど重い: 一覧と同じ問い合わせで読むと、open な merge request が 100 本を超える
+// self-managed の GitLab で 10 本の page でも 1 page 最大 10 秒・193 本で 79 秒かかり、page を大きくすると問い合わせの時間の
+// 上限 (既定 30 秒) に届いた。discussion を抜けば 100 本の page で 193 本を 4 秒で読めた
+const listFields = `
       iid title webUrl state createdAt draft sourceBranch sourceProjectId targetProjectId mergeStatusEnum approved
+      resolvableDiscussionsCount resolvedDiscussionsCount
       labels { pageInfo { hasNextPage } nodes { title } }
       headPipeline { status }
-      author { id }
+      author { id }`
+
+// mergeRequestFields は merge request 1 本を読み直すときに読むもの。discussion は最初の connectionSize 本を読み、続きは
+// discussionsQuery で読み足す。
+var mergeRequestFields = listFields + fmt.Sprintf(`
       discussions(first: %[1]d) { pageInfo { hasNextPage endCursor } nodes {`+discussionFields+` } }`, connectionSize)
 
 // 問い合わせの operation 名は、どの問い合わせを撃ったかを glab の argv から読めるように付ける
@@ -43,11 +44,11 @@ query OpenMergeRequests($fullPath: ID!, $after: String) {
   project(fullPath: $fullPath) {
     mergeRequests(state: opened, sort: CREATED_ASC, first: %d, after: $after) {
       pageInfo { hasNextPage endCursor }
-      nodes {`+mergeRequestFields+`
+      nodes {`+listFields+`
       }
     }
   }
-}`, mergeRequestPageSize)
+}`, connectionSize)
 
 	mergeRequestQuery = `
 query MergeRequest($fullPath: ID!, $iid: String!) {
@@ -86,7 +87,10 @@ type mergeRequestNode struct {
 	TargetProjectID int
 	MergeStatusEnum string
 	Approved        bool
-	Labels          struct {
+	// ResolvableDiscussionsCount と ResolvedDiscussionsCount は解決できる discussion の数と、そのうち解決済みの数
+	ResolvableDiscussionsCount int
+	ResolvedDiscussionsCount   int
+	Labels                     struct {
 		PageInfo pageInfo
 		Nodes    []struct{ Title string }
 	}
@@ -190,6 +194,20 @@ func (s Store) openMergeRequests() ([]target.CL, error) {
 	if err != nil {
 		return nil, err
 	}
+	// 一覧は discussion を読まないので、cl.review_unresolved は偽のまま。未解決の discussion があり、review_unresolved が
+	// trigger の評価を変えうる CL だけ discussion を読み足す (system.md §6 の手順 3)
+	for i := range nodes {
+		if nodes[i].ResolvableDiscussionsCount <= nodes[i].ResolvedDiscussionsCount || !s.needsReview(cls[i]) {
+			continue
+		}
+		nodes[i].Discussions.PageInfo = pageInfo{HasNextPage: true}
+		if err := s.readRemainingDiscussions(&nodes[i]); err != nil {
+			return nil, err
+		}
+		if cls[i].ReviewUnresolved, err = s.reviewUnresolvedOf(nodes[i]); err != nil {
+			return nil, err
+		}
+	}
 	if err := s.requestRecheck(cls); err != nil {
 		return cls, &target.NonFatal{Place: s.project.String(), Err: err}
 	}
@@ -247,7 +265,7 @@ func (s Store) readCLs(nodes []mergeRequestNode) ([]target.CL, error) {
 	return cls, nil
 }
 
-// readRemainingDiscussions は、最初の page に収まらなかった discussion を読み足す。
+// readRemainingDiscussions は、読んだ page の続きの discussion を読み足す。page の endCursor が空なら最初の page から読む。
 func (s Store) readRemainingDiscussions(n *mergeRequestNode) error {
 	for n.Discussions.PageInfo.HasNextPage {
 		var data struct {
@@ -361,9 +379,9 @@ func (s Store) normalizeMergeRequest(n mergeRequestNode, authorIsCollaborator bo
 	if !ok {
 		return target.CL{}, s.fail(target.Unavailable, fmt.Errorf("merge request !%d の mergeStatusEnum %q を読めない", iid, n.MergeStatusEnum))
 	}
-	reviewUnresolved, err := reviewUnresolved(n.Discussions.Nodes)
+	reviewUnresolved, err := s.reviewUnresolvedOf(n)
 	if err != nil {
-		return target.CL{}, s.fail(target.Unavailable, fmt.Errorf("merge request !%d の %w", iid, err))
+		return target.CL{}, err
 	}
 	labels := make([]string, len(n.Labels.Nodes))
 	for i, l := range n.Labels.Nodes {
@@ -410,6 +428,15 @@ var mergeability = map[string]target.Mergeability{
 var accessLevels = map[string]int{
 	"Minimal Access": 5, "Guest": 10, "Planner": 15, "Reporter": 20, "Security Manager": 25, "Developer": developerAccess,
 	"Maintainer": 40, "Owner": 50,
+}
+
+// reviewUnresolvedOf は、読んだ discussion から merge request n の cl.review_unresolved を決める。失敗は *target.Failure。
+func (s Store) reviewUnresolvedOf(n mergeRequestNode) (bool, error) {
+	unresolved, err := reviewUnresolved(n.Discussions.Nodes)
+	if err != nil {
+		return false, s.fail(target.Unavailable, fmt.Errorf("merge request !%s の %w", n.IID, err))
+	}
+	return unresolved, nil
 }
 
 // reviewUnresolved は、collaborator が書いた未解決の discussion が 1 本以上あるか (cl.review_unresolved)。discussion の書き手は

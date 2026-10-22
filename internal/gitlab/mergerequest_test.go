@@ -79,7 +79,14 @@ func (m mr) node() map[string]any {
 	if m.sourceID != nil {
 		source = *m.sourceID
 	}
+	resolved := 0
+	for _, d := range m.discussions {
+		if d.resolved {
+			resolved++
+		}
+	}
 	return map[string]any{
+		"resolvableDiscussionsCount": len(m.discussions), "resolvedDiscussionsCount": resolved,
 		"iid": strconv.Itoa(m.iid), "title": "t", "webUrl": "https://gitlab.example.com/acme/sub/widgets/-/merge_requests/" + strconv.Itoa(m.iid),
 		"state": m.state, "createdAt": "2026-01-01T00:00:00Z", "draft": m.draft, "sourceBranch": "b" + strconv.Itoa(m.iid),
 		"sourceProjectId": source, "targetProjectId": 7, "mergeStatusEnum": m.mergeStatus, "approved": false,
@@ -102,11 +109,13 @@ func marshal(t *testing.T, v any) string {
 	return string(raw)
 }
 
-// listPage は一覧の 1 page の応答。next が空でなければ、続きの page の endCursor。
+// listPage は一覧の 1 page の応答。next が空でなければ、続きの page の endCursor。一覧は discussion を返さない。
 func listPage(t *testing.T, next string, mrs ...mr) response {
 	nodes := []any{}
 	for _, m := range mrs {
-		nodes = append(nodes, m.node())
+		node := m.node()
+		delete(node, "discussions")
+		nodes = append(nodes, node)
 	}
 	page := map[string]any{"pageInfo": map[string]any{"hasNextPage": next != "", "endCursor": next}, "nodes": nodes}
 	return response{stdout: marshal(t, map[string]any{"data": map[string]any{"project": map[string]any{"mergeRequests": page}}})}
@@ -137,7 +146,7 @@ func readMR(t *testing.T, m mr) (target.Item, error) {
 		"graphql:MergeRequest?" + fullPath + "&iid=" + strconv.Itoa(m.iid): single(t, &m),
 		membersEndpoint: members(t, map[int]int{1: 30}),
 	}
-	return gitlab.NewStore(g, project).ReadCL(m.iid)
+	return gitlab.NewStore(g, project, everyCL).ReadCL(m.iid)
 }
 
 func readCL(t *testing.T, m mr) target.CL {
@@ -201,7 +210,7 @@ func TestMergeRequestsWhoseConflictIsNotYetDecidedAreRecheckedInOneCall(t *testi
 		recheckEndpoint:   {stdout: "[]"},
 	}, &endpoints}
 
-	_, err := gitlab.NewStore(g, project).OpenCLs()
+	_, err := gitlab.NewStore(g, project, everyCL).OpenCLs()
 
 	want := recheckEndpoint[:len(recheckEndpoint)-1] + "?iids[]=1&iids[]=3&with_merge_status_recheck=true&per_page=100"
 	if err != nil || !slices.Contains(endpoints, want) {
@@ -216,7 +225,7 @@ func TestNoRecheckIsAskedWhenEveryConflictIsDecided(t *testing.T) {
 		membersEndpoint:   members(t, map[int]int{1: 30}),
 	}, &endpoints}
 
-	_, err := gitlab.NewStore(g, project).OpenCLs()
+	_, err := gitlab.NewStore(g, project, everyCL).OpenCLs()
 
 	if err != nil || slices.ContainsFunc(endpoints, func(e string) bool { return strings.Contains(e, "with_merge_status_recheck") }) {
 		t.Fatalf("endpoints = %q, err = %v", endpoints, err)
@@ -235,7 +244,7 @@ func TestOpenMergeRequestsCostOneCallPerPagePlusOneMemberReadAndOneRecheck(t *te
 		recheckEndpoint:                            {stdout: "[]"},
 	}, &endpoints}
 
-	items, err := gitlab.NewStore(g, project).OpenCLs()
+	items, err := gitlab.NewStore(g, project, everyCL).OpenCLs()
 
 	if err != nil || len(items) != 3 || len(endpoints) != 4 {
 		t.Fatalf("items = %d, endpoints = %q, err = %v (want GraphQL 2・member 1・計算し直し 1)", len(items), endpoints, err)
@@ -251,7 +260,7 @@ func TestAuthorsAreCollaboratorsFromDeveloperUpAndAreReadInOneCall(t *testing.T)
 		membersEndpoint:   members(t, map[int]int{1: 30, 2: 20}),
 	}, &endpoints}
 
-	items, err := gitlab.NewStore(g, project).OpenCLs()
+	items, err := gitlab.NewStore(g, project, everyCL).OpenCLs()
 
 	if err != nil {
 		t.Fatal(err)
@@ -315,10 +324,66 @@ func TestDiscussionsBeyondTheFirstPageAreReadToo(t *testing.T) {
 		membersEndpoint: members(t, map[int]int{1: 30}),
 	}
 
-	item, err := gitlab.NewStore(g, project).ReadCL(7)
+	item, err := gitlab.NewStore(g, project, everyCL).ReadCL(7)
 
 	if err != nil || !item.(target.CL).ReviewUnresolved {
 		t.Fatalf("item = %v, err = %v", item, err)
+	}
+}
+
+// discussionsPage は merge request の discussion を最初の page から読んだ応答。
+func discussionsPage(t *testing.T, ds ...discussion) response {
+	page := map[string]any{"pageInfo": map[string]any{"hasNextPage": false, "endCursor": "e"}, "nodes": discussionNodes(ds)}
+	return response{stdout: marshal(t, map[string]any{"data": map[string]any{
+		"project": map[string]any{"mergeRequest": map[string]any{"discussions": page}}}})}
+}
+
+func TestOpenMergeRequestsReadDiscussionsOnlyOfThoseWithUnresolvedOnesThatTheTriggersNeed(t *testing.T) {
+	needed, notNeeded, allResolved := openMR(1), openMR(2), openMR(3)
+	needed.discussions = []discussion{{authorID: 5, access: "Developer"}}
+	notNeeded.discussions = []discussion{{authorID: 5, access: "Developer"}}
+	allResolved.discussions = []discussion{{authorID: 5, access: "Developer", resolved: true}}
+	var endpoints []string
+	g := recording{glab{
+		openMergeRequests: listPage(t, "", needed, notNeeded, allResolved),
+		"graphql:MergeRequestDiscussions?" + fullPath + "&iid=1": discussionsPage(t, needed.discussions...),
+		membersEndpoint: members(t, map[int]int{1: 30}),
+	}, &endpoints}
+	needsReview := func(cl target.CL) bool { return cl.Number != 2 }
+
+	items, err := gitlab.NewStore(g, project, needsReview).OpenCLs()
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	var unresolved []bool
+	for _, item := range items {
+		unresolved = append(unresolved, item.(target.CL).ReviewUnresolved)
+	}
+	var discussionReads []string
+	for _, e := range endpoints {
+		if strings.HasPrefix(e, "graphql:MergeRequestDiscussions?") {
+			discussionReads = append(discussionReads, e)
+		}
+	}
+	if !slices.Equal(unresolved, []bool{true, false, false}) || len(discussionReads) != 1 {
+		t.Fatalf("ReviewUnresolved = %v, discussion の読み出し = %q", unresolved, discussionReads)
+	}
+}
+
+func TestDiscussionsReadForTheOpenOnesAreJudgedByTheirAuthors(t *testing.T) {
+	m := openMR(1)
+	m.discussions = []discussion{{authorID: 5, access: "Reporter"}}
+	g := glab{
+		openMergeRequests: listPage(t, "", m),
+		"graphql:MergeRequestDiscussions?" + fullPath + "&iid=1": discussionsPage(t, m.discussions...),
+		membersEndpoint: members(t, map[int]int{1: 30}),
+	}
+
+	items, err := gitlab.NewStore(g, project, everyCL).OpenCLs()
+
+	if err != nil || items[0].(target.CL).ReviewUnresolved {
+		t.Fatalf("items = %v, err = %v (Reporter の未解決は数えない)", items, err)
 	}
 }
 
@@ -355,7 +420,7 @@ func TestMergeRequestThatIsNotOpenedIsLeftOutOfTheOpenOnes(t *testing.T) {
 	locked.state = "locked"
 	g := glab{openMergeRequests: listPage(t, "", locked, openMR(2)), membersEndpoint: members(t, map[int]int{1: 30})}
 
-	items, err := gitlab.NewStore(g, project).OpenCLs()
+	items, err := gitlab.NewStore(g, project, everyCL).OpenCLs()
 
 	if err != nil || len(items) != 1 || items[0].(target.CL).Number != 2 {
 		t.Fatalf("items = %v, err = %v", items, err)
@@ -365,7 +430,7 @@ func TestMergeRequestThatIsNotOpenedIsLeftOutOfTheOpenOnes(t *testing.T) {
 func TestMergeRequestThatIsGoneIsReadAsClosed(t *testing.T) {
 	g := glab{"graphql:MergeRequest?" + fullPath + "&iid=7": single(t, nil)}
 
-	item, err := gitlab.NewStore(g, project).ReadCL(7)
+	item, err := gitlab.NewStore(g, project, everyCL).ReadCL(7)
 
 	if err != nil || !item.Terminal() {
 		t.Fatalf("item = %v, err = %v", item, err)
@@ -386,7 +451,7 @@ func TestMergeRequestFromADeletedForkHasNoHeadRepo(t *testing.T) {
 func TestMergeRequestsOfAProjectThatIsNotVisibleFailAsNotVisible(t *testing.T) {
 	g := glab{openMergeRequests: {stdout: `{"data":{"project":null}}`}}
 
-	_, err := gitlab.NewStore(g, project).OpenCLs()
+	_, err := gitlab.NewStore(g, project, everyCL).OpenCLs()
 
 	var failure *target.Failure
 	if !errors.As(err, &failure) || failure.Kind != target.NotVisible {
@@ -407,7 +472,7 @@ func TestGraphQLFailureWithoutAStatusIsClassifiedByReadingTheProjectOverREST(t *
 		t.Run(name, func(t *testing.T) {
 			g := glab{openMergeRequests: {stderr: "glab: Invalid token\n"}, projectEndpoint: tc.project}
 
-			_, err := gitlab.NewStore(g, project).OpenCLs()
+			_, err := gitlab.NewStore(g, project, everyCL).OpenCLs()
 
 			var failure *target.Failure
 			if !errors.As(err, &failure) || failure.Kind != tc.want {
@@ -420,7 +485,7 @@ func TestGraphQLFailureWithoutAStatusIsClassifiedByReadingTheProjectOverREST(t *
 func TestReasonOfAGraphQLFailureKeepsTheGraphQLMessageWhenTheRESTProbeAlsoFails(t *testing.T) {
 	g := glab{openMergeRequests: {stderr: "glab: Invalid token\n"}, projectEndpoint: {stderr: "glab: 401 Unauthorized (HTTP 401)"}}
 
-	_, err := gitlab.NewStore(g, project).OpenCLs()
+	_, err := gitlab.NewStore(g, project, everyCL).OpenCLs()
 
 	if err == nil || !strings.Contains(err.Error(), "Invalid token") || !strings.Contains(err.Error(), "401 Unauthorized") {
 		t.Fatalf("err = %v, want GraphQL と REST の両方の失敗を載せる", err)
@@ -431,7 +496,7 @@ func TestGraphQLFailureWithAStatusIsClassifiedWithoutTheRESTProbe(t *testing.T) 
 	// 登録の無い REST の project を撃てば読めないの失敗になるので、認証と分類されたなら probe を撃っていない
 	g := glab{openMergeRequests: {stderr: "glab: 401 Unauthorized (HTTP 401)"}}
 
-	_, err := gitlab.NewStore(g, project).OpenCLs()
+	_, err := gitlab.NewStore(g, project, everyCL).OpenCLs()
 
 	var failure *target.Failure
 	if !errors.As(err, &failure) || failure.Kind != target.Auth {
@@ -448,7 +513,7 @@ func TestFailedRecheckRequestReturnsTheMergeRequestsWithANonFatalFailure(t *test
 		recheckEndpoint:   {stderr: "glab: HTTP 502\n"},
 	}
 
-	items, err := gitlab.NewStore(g, project).OpenCLs()
+	items, err := gitlab.NewStore(g, project, everyCL).OpenCLs()
 
 	var nonFatal *target.NonFatal
 	if !errors.As(err, &nonFatal) || len(items) != 2 || items[0].(target.CL).Mergeable != target.MergeUnknown {
@@ -467,7 +532,7 @@ func TestRereadDoesNotAskForARecheck(t *testing.T) {
 		recheckEndpoint: {stdout: "[]"},
 	}, &endpoints}
 
-	item, err := gitlab.NewStore(g, project).ReadCL(7)
+	item, err := gitlab.NewStore(g, project, everyCL).ReadCL(7)
 
 	asked := slices.ContainsFunc(endpoints, func(e string) bool { return strings.Contains(e, "with_merge_status_recheck") })
 	if err != nil || item.(target.CL).Mergeable != target.MergeUnknown || asked {
@@ -489,7 +554,7 @@ func TestRecheckIsAskedOncePerHundredUndecidedMergeRequests(t *testing.T) {
 		recheckEndpoint:   {stdout: "[]"},
 	}, &endpoints}
 
-	_, err := gitlab.NewStore(g, project).OpenCLs()
+	_, err := gitlab.NewStore(g, project, everyCL).OpenCLs()
 
 	rechecks := slices.DeleteFunc(endpoints, func(e string) bool { return !strings.Contains(e, "with_merge_status_recheck") })
 	if err != nil || len(rechecks) != 2 {
