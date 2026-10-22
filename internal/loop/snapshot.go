@@ -91,8 +91,8 @@ func (l *loop) snapshot() status.Snapshot {
 	}
 	if r := l.mediation; r != nil {
 		s.Loop, s.TakenOver, s.NewerFormat = r.c.LoopName(), r.takenOver, r.newer
-		if r.heartbeatFailures >= 2 {
-			s.HeartbeatFailures = &status.HeartbeatFailures{Count: r.heartbeatFailures, Error: r.heartbeatError}
+		if f := r.failures; f.Count >= 2 {
+			s.HeartbeatFailures = &status.HeartbeatFailures{Count: f.Count, Error: oneLine(f.Last)}
 		}
 	}
 	return s

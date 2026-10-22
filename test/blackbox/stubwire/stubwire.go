@@ -41,7 +41,7 @@ type Call struct {
 var RecordedEnv = []string{
 	"GH_TOKEN", "GITHUB_TOKEN", "GITLAB_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN",
 	"HOME", "PATH", "XDG_CONFIG_HOME", "XDG_STATE_HOME",
-	"GIT_TERMINAL_PROMPT",
+	"GIT_TERMINAL_PROMPT", "GIT_SSH_COMMAND",
 }
 
 // Rule は応答 1 つ。ArgsPrefix と ArgsContain の両方に当たった呼び出しに応答する。

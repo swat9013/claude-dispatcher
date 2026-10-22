@@ -8,12 +8,15 @@ func KeepBeating(heartbeat func(time.Duration) error, interval time.Duration, af
 	quit, done := make(chan struct{}), make(chan struct{})
 	go func() {
 		defer close(done)
+		// 次の待ちは置き直しを始める前に掛け、置き直しにかかった時間で間隔を延ばさない
+		next := after(interval)
 		for {
 			select {
 			case <-quit:
 				return
-			case <-after(interval):
+			case <-next:
 			}
+			next = after(interval)
 			report(heartbeat(interval))
 		}
 	}()
@@ -23,12 +26,17 @@ func KeepBeating(heartbeat func(time.Duration) error, interval time.Duration, af
 	}
 }
 
-// Newer は、自分の知る版より新しい版 (版を読めないものを含む) の commit message があればそれを返す。
-func (v View) Newer() (Message, bool) {
-	for _, m := range v.Messages {
-		if m.Newer() {
-			return m, true
-		}
+// Failures は生存報告の置き直しが続けて落ちた回数と、直近の理由。loop と単発起動が同じ数え方で数える。
+type Failures struct {
+	Count int
+	Last  error
+}
+
+// Note は置き直しの結果を数える。落ちていれば続けて落ちた回数を足し、通っていれば 0 に戻す。
+func (f *Failures) Note(err error) {
+	if err != nil {
+		f.Count, f.Last = f.Count+1, err
+		return
 	}
-	return Message{}, false
+	f.Count, f.Last = 0, nil
 }

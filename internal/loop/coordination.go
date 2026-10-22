@@ -64,9 +64,8 @@ type mediation struct {
 	inherited map[target.Ref]string
 	// takenOver は乗っ取られた作業対象。loop を起動し直すまで残す
 	takenOver []status.TakenOver
-	// heartbeatFailures と heartbeatError は続けて落ちた生存報告の置き直しの回数と直近の理由
-	heartbeatFailures int
-	heartbeatError    string
+	// failures は続けて落ちた生存報告の置き直しの回数と直近の理由
+	failures coord.Failures
 	// interval は生存報告の間隔。起動時の workflow 定義から決め、走っている間は変えない (system.md §9)
 	interval time.Duration
 	// results は生存報告の置き直しの結果。dropped は results の満杯で捨てた結果の数。stopBeating は置き直しの goroutine を
@@ -99,16 +98,20 @@ func (l *loop) beats() <-chan error {
 
 // beat は生存報告の置き直しの結果を受ける。落ちたら error の行を残して数え、続けて 2 回以上落ちていれば要対処に出す。
 func (l *loop) beat(err error) {
+	l.noteDropped()
+	if err != nil {
+		l.mediation.failures.Note(err)
+		l.rec.error(target.Ref{}, "生存報告を置けない: "+oneLine(err))
+		return
+	}
+	l.mediation.failures.Note(nil)
+}
+
+// noteDropped は、results の満杯で捨てた置き直しの結果があれば、その数を error の行に残す。
+func (l *loop) noteDropped() {
 	if n := l.mediation.dropped.Swap(0); n > 0 {
 		l.rec.error(target.Ref{}, fmt.Sprintf("生存報告の置き直しの結果 %d 件を読まずに捨てた", n))
 	}
-	if err != nil {
-		l.mediation.heartbeatFailures++
-		l.mediation.heartbeatError = oneLine(err)
-		l.rec.error(target.Ref{}, "生存報告を置けない: "+l.mediation.heartbeatError)
-		return
-	}
-	l.mediation.heartbeatFailures, l.mediation.heartbeatError = 0, ""
 }
 
 // coordinate は調停 remote の突き合わせ (formats.md §12 の 1–5)。ref を読めなければ error を返す (その tick は掃除も起動も
@@ -389,10 +392,11 @@ func (l *loop) cleanupDeadLoops() {
 		}
 		claims := 0
 		for _, ref := range sortedRefs(r.holders) {
-			// この tick に乗っ取った (claim を立てた) 着手宣言は消さない。生きている orphan の作業対象の着手宣言は、orphan の
-			// claude が作業を続けているので、消さずに引き継ぐ
+			// 自分が着手宣言を置いて claim している (この tick の候補の起動で乗っ取った) 作業対象の着手宣言は消さない。生きている
+			// orphan の作業対象の着手宣言は、orphan の claude が作業を続けているので、消さずに引き継ぐ
 			h := r.holders[ref]
-			if _, takenByMe := l.claims[ref]; h.loop != loop || !h.dead || takenByMe {
+			c, claimed := l.claims[ref]
+			if mine := claimed && c.claimSHA != ""; h.loop != loop || !h.dead || mine {
 				continue
 			}
 			if l.orphans[ref] {
@@ -452,6 +456,7 @@ func (l *loop) leaveRemote() {
 			drained = true
 		}
 	}
+	l.noteDropped()
 	claudeLeft := false
 	for _, ref := range sortedRefs(l.claims) {
 		// 止められない claude が生きている claim の着手宣言は残す。claude が作業を続けうるので、他のマシンの loop には、

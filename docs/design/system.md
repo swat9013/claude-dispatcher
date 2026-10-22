@@ -380,6 +380,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。claim の段階と打�
   - 置き直しが続けて落ちたら要対処に出す。他のマシンの loop に死んだとみなされ、着手宣言を乗っ取られうるため
   - 置き直しの結果は loop が受け取りきれなければ捨て (置き直し自体は止めない)、捨てた数を残す
   - 停止要求の後も、loop が止まるまで置き直す (worker の終わりを待つ間に死んだとみなされないため)。止まるときに消す
+  - 起動時の確認の後に起動を失敗させたときも、置いた生存報告を消す
   - 止められない claude (§7) を残して止まるときと、orphan のために引き継いだ着手宣言 (§7) の orphan がまだ生きているときは、その作業対象の着手宣言も自分の生存報告も消さない。claude が作業を続けうるので、生存報告を途絶えさせ、他のマシンの loop には間隔の 3 倍を待ってから死を判定させる (生存報告を消すと、持ち主の生存報告の無い着手宣言としてすぐに乗っ取られうる)
 - **loop は自分では起き直さない** (ADR 0006)
   - 起動し直した loop は、外部 store と workspace から続きを拾う
@@ -488,6 +489,6 @@ CLI の中で、呼び出し側から中身を隠す部品と、差し替えの�
   - 死んだ loop の判定 (sha が変わったのを最後に見た時刻と間隔) は、時計を持つ loop が行う。部品は時計を持たない
   - git は workflow 定義のある clone を cwd にして撃つ。commit の作者と committer は部品が環境変数で渡し、利用者の git の設定 (`user.name` など) に頼らない
   - push はすべて `--no-verify --porcelain` で撃つ (§4)
-  - git 自身の認証の prompt を出させない (`GIT_TERMINAL_PROMPT=0`)。loop は無人で回るので、prompt は答えられずに上限時間まで止まる。利用者が `core.sshCommand` も `GIT_SSH_COMMAND` も設定していないときは、ssh の passphrase と host key の確認も出させない (`GIT_SSH_COMMAND="ssh -o BatchMode=yes"`)。どちらかが設定されていれば何も足さず、利用者の設定を使う (利用者の ssh の設定を上書きしないため)。その設定では、agent か鍵の設定で prompt なしに通るようにしておく
+  - git 自身の認証の prompt を出させない (`GIT_TERMINAL_PROMPT=0`)。loop は無人で回るので、prompt は答えられずに上限時間まで止まる。利用者が `core.sshCommand`・`GIT_SSH_COMMAND`・`GIT_SSH` のどれも設定していないときは、ssh の passphrase と host key の確認も出させない (`GIT_SSH_COMMAND="ssh -o BatchMode=yes"`)。どれかが設定されていれば何も足さず、利用者の設定を使う (利用者の ssh の設定を上書きしないため)。どちらの場合も、agent か鍵の設定で prompt なしに通るようにしておく
   - 本番の adapter は git、テストの adapter は loop の単体テストの fake。black-box テストは PATH の git の stub で、git に渡す引数を確かめる
 - **trigger の評価は、正規化した作業対象だけを見る**。adapter の生の応答を覗かない (SPEC §11.2)
