@@ -57,8 +57,8 @@ func (s *sandbox) gitRules(refs []remoteRef, before ...stubwire.Rule) []stubwire
 		rules = append(rules, stubwire.Rule{ArgsPrefix: []string{"cat-file", "commit", r.sha}, Stdout: commitOf(r.message)})
 	}
 	return append(rules,
-		stubwire.Rule{ArgsPrefix: []string{"remote", "get-url", "origin"}, Stdout: originURL + "\n"},
-		stubwire.Rule{ArgsPrefix: []string{"remote", "get-url", "--push", "origin"}, Stdout: originURL + "\n"},
+		stubwire.Rule{ArgsPrefix: []string{"remote", "get-url", "--all", "origin"}, Stdout: originURL + "\n"},
+		stubwire.Rule{ArgsPrefix: []string{"remote", "get-url", "--push", "--all", "origin"}, Stdout: originURL + "\n"},
 		stubwire.Rule{ArgsPrefix: []string{"ls-remote", "origin", s.refPrefix() + "*"}, Stdout: listed.String()},
 		stubwire.Rule{ArgsPrefix: []string{"fetch", "--no-tags", "--no-write-fetch-head", "origin"}},
 		stubwire.Rule{ArgsPrefix: []string{"mktree"}, Stdout: emptyTree + "\n"},
@@ -260,7 +260,7 @@ func TestLoopNameIsNewOnEveryStart(t *testing.T) {
 func TestLoopFailsToStartWhenTheRemoteReadsAndWritesDifferentURLs(t *testing.T) {
 	s := newSandbox(t)
 	s.writeWorkflowWithCommands(s.workerWorkflow(coordinated))
-	s.respondAll("git", s.gitRules(nil, stubwire.Rule{ArgsPrefix: []string{"remote", "get-url", "--push", "origin"}, Stdout: "git@github.com:me/widgets.git\n"}))
+	s.respondAll("git", s.gitRules(nil, stubwire.Rule{ArgsPrefix: []string{"remote", "get-url", "--push", "--all", "origin"}, Stdout: "git@github.com:me/widgets.git\n"}))
 
 	r := s.run("loop")
 

@@ -139,6 +139,22 @@ func TestConfirmRefusesARemoteThatPushesToAnotherURL(t *testing.T) {
 	}
 }
 
+func TestConfirmRefusesARemoteThatPushesToMoreThanOneURL(t *testing.T) {
+	r := remoteForTest(t)
+	url, _ := r.Git.Output("remote", "get-url", "origin")
+	for _, push := range []string{strings.TrimSpace(url), filepath.Join(t.TempDir(), "mirror.git")} {
+		if out, err := exec.Command(r.Git.Path, "-C", r.Git.Dir, "config", "--add", "remote.origin.pushurl", push).CombinedOutput(); err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+	}
+
+	_, err := r.Confirm()
+
+	if err == nil || !strings.Contains(err.Error(), "読む URL と書く URL が違う") {
+		t.Fatalf("Confirm = %v, want 書く URL が複数あることで失敗", err)
+	}
+}
+
 func TestConfirmNamesAnUnknownRemote(t *testing.T) {
 	r := remoteForTest(t)
 	r.Name = "nowhere"

@@ -36,6 +36,8 @@ type Coordination interface {
 type sighting struct {
 	sha   string
 	since time.Time
+	// checked は、この sha の commit message を読んで、読めない項目を確かめたか
+	checked bool
 }
 
 // holder は他の loop が持つ着手宣言。
@@ -128,23 +130,28 @@ func (l *loop) coordinate() error {
 	}
 	now := l.o.Now()
 	current := map[string]sighting{}
-	// note は ref の sha を覚え、この tick に初めて見た sha なら true を返す
-	note := func(name, sha string) bool {
-		if s, ok := r.seen[name]; ok && s.sha == sha {
-			current[name] = s
-			return false
+	// note は ref の sha を覚える。sha の commit message を初めて読めた tick なら、その message と true を返す (読めない
+	// 項目の error の行を、fetch が落ちた tick の後でも 1 回だけ書くため)
+	note := func(name, sha string) (coord.Message, bool) {
+		s, ok := r.seen[name]
+		if !ok || s.sha != sha {
+			s = sighting{sha: sha, since: now}
 		}
-		current[name] = sighting{sha: sha, since: now}
-		return true
+		m, read := v.Messages[sha]
+		fresh := read && !s.checked
+		s.checked = s.checked || read
+		current[name] = s
+		return m, fresh
 	}
 	for _, ref := range sortedRefs(v.Claims) {
-		sha := v.Claims[ref]
-		if m, read := v.Messages[sha]; note(r.c.ClaimRef(ref), sha) && read && m.Loop == "" {
+		m, fresh := note(r.c.ClaimRef(ref), v.Claims[ref])
+		if fresh && m.Loop == "" {
 			l.rec.error(ref, "持ち主の loop を読めない着手宣言がある (この作業対象は起動しない): "+r.c.ClaimRef(ref))
 		}
 	}
 	for loop, sha := range v.Loops {
-		if m, read := v.Messages[sha]; note(r.c.HeartbeatRef(loop), sha) && read && !m.Newer() && m.Interval <= 0 && loop != r.c.LoopName() {
+		m, fresh := note(r.c.HeartbeatRef(loop), sha)
+		if fresh && !m.Newer() && m.Interval <= 0 && loop != r.c.LoopName() {
 			l.rec.error(target.Ref{}, fmt.Sprintf("間隔を読めない生存報告がある (loop %s の死を判定しない): %s", loop, r.c.HeartbeatRef(loop)))
 		}
 	}
@@ -220,7 +227,7 @@ func (l *loop) detectTakeovers(v coord.View) {
 		by := ""
 		if ok {
 			by = "?"
-			if m, read := v.Messages[sha]; read {
+			if m, read := v.Messages[sha]; read && m.Loop != "" {
 				by = m.Loop
 			}
 		}
@@ -362,12 +369,19 @@ func (l *loop) leaveRemote() {
 			drained = true
 		}
 	}
+	claudeLeft := false
 	for _, ref := range sortedRefs(l.claims) {
 		// 止められない claude が生きている claim の着手宣言は残す。claude が作業を続けうるので、他のマシンの loop には、
 		// 生存報告が途絶えてから死を判定するまで起動させない (system.md §9)
-		if c := l.claims[ref]; !c.claudeAlive() {
+		if c := l.claims[ref]; c.claudeAlive() {
+			claudeLeft = true
+		} else {
 			l.releaseRemote(ref, c)
 		}
+	}
+	if claudeLeft {
+		// 生存報告も消さずに途絶えさせる。消すと、持ち主の生存報告の無い着手宣言としてすぐに乗っ取られうる
+		return
 	}
 	if err := l.remote.c.Leave(); err != nil {
 		l.rec.error(target.Ref{}, "生存報告を消せない: "+oneLine(err))

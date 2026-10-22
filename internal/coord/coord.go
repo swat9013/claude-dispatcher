@@ -135,17 +135,18 @@ func (r Remote) HeartbeatRef(loop string) string { return r.prefix() + "loops/" 
 
 // Confirm は起動時の調停 remote の確認 (formats.md §12): remote を解き、ref を読めることを確かめ、remote の URL を返す。
 func (r Remote) Confirm() (string, error) {
-	url, err := r.git().Output("remote", "get-url", r.Name)
+	url, err := r.git().Output("remote", "get-url", "--all", r.Name)
 	if err != nil {
 		return "", fmt.Errorf("調停 remote %s を解けない: %w", r.Name, err)
 	}
-	push, err := r.git().Output("remote", "get-url", "--push", r.Name)
+	push, err := r.git().Output("remote", "get-url", "--push", "--all", r.Name)
 	if err != nil {
 		return "", fmt.Errorf("調停 remote %s を解けない: %w", r.Name, err)
 	}
-	// 読む URL と書く URL が違うと、自分の置いた ref を読めず、自分の着手宣言を乗っ取られたと読む
-	if url, push = strings.TrimSpace(url), strings.TrimSpace(push); url != push {
-		return "", fmt.Errorf("調停 remote %s の読む URL と書く URL が違う: %s と %s", r.Name, url, push)
+	// 読む URL と書く URL が違うか複数あると、自分の置いた ref を読めないか、push の勝ち負けが読む URL の状態と食い違う
+	url, push = strings.TrimSpace(url), strings.TrimSpace(push)
+	if url != push || strings.Contains(url, "\n") {
+		return "", fmt.Errorf("調停 remote %s の読む URL と書く URL が違う: %s と %s", r.Name, strings.ReplaceAll(url, "\n", ", "), strings.ReplaceAll(push, "\n", ", "))
 	}
 	if _, err := r.List(); err != nil {
 		return "", fmt.Errorf("調停 remote %s を読めない: %w", r.Name, err)

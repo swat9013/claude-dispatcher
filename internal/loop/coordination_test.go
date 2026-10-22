@@ -342,7 +342,8 @@ func TestHeartbeatFailingTwiceInARowNeedsAttention(t *testing.T) {
 				return nil
 			}
 			fired := make(chan time.Time, 1)
-			fired <- r.now
+			// 置き直しの goroutine から呼ばれるので、rig の時計は読まない
+			fired <- rigStart
 			return fired
 		},
 	})
@@ -350,5 +351,83 @@ func TestHeartbeatFailingTwiceInARowNeedsAttention(t *testing.T) {
 	last := r.published[len(r.published)-1]
 	if last.HeartbeatFailures == nil || last.HeartbeatFailures.Count != 2 || !strings.Contains(last.HeartbeatFailures.Error, "push が落ちた") {
 		t.Fatalf("状態 file の heartbeat_failures = %+v", last.HeartbeatFailures)
+	}
+}
+
+func TestATakeoverByAClaimWithoutItsOwnerIsShownAsUnreadable(t *testing.T) {
+	remote := newMemoryRemote()
+	remote.onObserve = func(m *memoryRemote, times int) {
+		if times == 2 {
+			m.put(&issue42, coord.Message{Kind: coord.KindClaim, Format: coord.Format, Target: "issue#42"})
+		}
+	}
+
+	r := coordinatedRun(t, remote, 3, func(worker.Job) workerScript { return workerScript{untilStopped: true} })
+
+	if taken := r.logEvents(t, "taken_over"); len(taken) != 1 || taken[0]["by"] != "?" {
+		t.Fatalf("taken_over の行 = %v, want 持ち主を読めない ?", taken)
+	}
+	if errs := r.logEvents(t, "error"); len(errs) != 1 || !strings.Contains(errs[0]["error"].(string), "持ち主の loop を読めない着手宣言") {
+		t.Fatalf("error の行 = %v, want 持ち主を読めない着手宣言の行を 1 回", errs)
+	}
+}
+
+// unreadableOnce は、最初の Observe でだけ sha の commit message を読ませない調停 remote (fetch が一度落ちた)。
+type unreadableOnce struct {
+	*memoryRemote
+	sha string
+}
+
+func (u unreadableOnce) Observe() (coord.View, error) {
+	v, err := u.memoryRemote.Observe()
+	if u.observed == 1 {
+		delete(v.Messages, u.sha)
+		v.Unread = errors.New("fetch が落ちた")
+	}
+	return v, err
+}
+
+func TestAHeartbeatWithoutAnIntervalIsReportedOnceAfterItsMessageIsRead(t *testing.T) {
+	remote := newMemoryRemote()
+	sha := remote.put(nil, coord.Message{Kind: coord.KindHeartbeat, Format: coord.Format, Loop: "odd-00000002"})
+	r := newRig()
+	n := 0
+	r.timer = func(kind timerKind, _ time.Duration) timing {
+		if kind != periodTimer {
+			return timing{fate: neverFires}
+		}
+		if n++; n >= 4 {
+			return timing{fate: stopsTheLoop}
+		}
+		return timing{fate: fires}
+	}
+
+	r.run(t, loop.Options{
+		Definition: definition(time.Minute, 0), Coordination: unreadableOnce{remote, sha},
+		HeartbeatAfter: func(time.Duration) <-chan time.Time { return nil },
+	})
+
+	reported := 0
+	for _, e := range r.logEvents(t, "error") {
+		if strings.Contains(e["error"].(string), "間隔を読めない生存報告") {
+			reported++
+		}
+	}
+	if reported != 1 {
+		t.Fatalf("間隔を読めない生存報告の error の行 = %d 回, want fetch が落ちた tick の後に 1 回", reported)
+	}
+}
+
+func TestALoopLeavingAnUnstoppedClaudeKeepsItsClaimAndHeartbeat(t *testing.T) {
+	remote := newMemoryRemote()
+	remote.put(nil, coord.Message{Kind: coord.KindHeartbeat, Format: coord.Format, Loop: me, Interval: time.Minute})
+
+	coordinatedRun(t, remote, 2, func(worker.Job) workerScript { return workerScript{unstopped: "EPERM", neverEnds: true} })
+
+	if _, held := remote.claims[issue42]; !held {
+		t.Fatalf("着手宣言 = %v, want 止められない claude の作業対象の着手宣言を残す", remote.claims)
+	}
+	if _, beating := remote.loops[me]; !beating {
+		t.Fatalf("生存報告 = %v, want 消さずに途絶えさせる", remote.loops)
 	}
 }

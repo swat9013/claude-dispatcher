@@ -17,7 +17,7 @@ type Party struct {
 	Loop string
 
 	mu sync.Mutex
-	// seq は直近に置いた生存報告の seq
+	// seq は直近に置こうとした (置けたとは限らない) 生存報告の seq
 	seq int
 	// heartbeat は直近に置けた生存報告の sha。無ければ ""
 	heartbeat string

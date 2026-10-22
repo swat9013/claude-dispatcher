@@ -95,10 +95,17 @@ func runOnce(args []string, stdout, stderr io.Writer) int {
 	if code != 0 {
 		return code
 	}
+	// claudeLeft は、止められない claude を残して終えるか
+	var claudeLeft bool
 	if party != nil {
 		var claimSHA string
-		// 起動しなかったときも、置いた分の着手宣言と生存報告を消す
-		defer func() { leaveOnce(party, ref, claimSHA, stderr) }()
+		// 起動しなかったときも、置いた分の着手宣言と生存報告を消す。止められない claude を残すなら、どちらも消さずに生存報告を
+		// 途絶えさせる (formats.md §12 の後片付け)
+		defer func() {
+			if !claudeLeft {
+				leaveOnce(party, ref, claimSHA, stderr)
+			}
+		}()
 		if claimSHA, code = claimOnce(party, ref, stderr); code != 0 {
 			return code
 		}
@@ -121,7 +128,7 @@ func runOnce(args []string, stdout, stderr io.Writer) int {
 	ws := e.workspaces(def, &sync.Mutex{})
 	run := worker.Runner{Workspaces: ws, Definition: def, StateDir: dir}.
 		Start(worker.Job{Item: item, Trigger: t, Attempt: 1, SessionID: sessionID, Prompt: def.Prompt}, events)
-	o := once{store: store, workspaces: ws, stateDir: dir, trigger: t, ref: ref, stdout: stdout, stderr: stderr}
+	o := once{store: store, workspaces: ws, stateDir: dir, trigger: t, ref: ref, stdout: stdout, stderr: stderr, claudeLeft: &claudeLeft}
 	return o.await(sessionID, run, events, signals)
 }
 
@@ -134,6 +141,8 @@ type once struct {
 	ref        target.Ref
 	stdout     io.Writer
 	stderr     io.Writer
+	// claudeLeft には、止められない claude を残して終えるときに true を書く
+	claudeLeft *bool
 }
 
 // await は単発起動の worker の終わりを待ち、exit code を返す (formats.md §11)。停止要求は 1 回目で worker の終わりを待ち、
@@ -155,6 +164,7 @@ func (o once) await(sessionID string, run *worker.Run, events <-chan worker.Even
 		}
 	}
 	unstoppedEnd := func() int {
+		*o.claudeLeft = true
 		fmt.Fprintf(o.stdout, "終了: %s 未完了 (claude を止められない)\n", o.ref)
 		return exitNotCompleted
 	}
