@@ -206,6 +206,46 @@ func TestReviewUnresolvedIsNeededOnlyForCLsMatchingTheOtherConditionsOfATriggerT
 	}
 }
 
+func TestBlockedIsNeededOnlyForIssuesMatchingTheOtherConditionsOfATriggerThatWritesIt(t *testing.T) {
+	cases := []struct {
+		name     string
+		triggers []trigger.Trigger
+		needed   []target.Issue
+		unneeded []target.Issue
+	}{
+		{"blocked を書いた trigger が無ければ要らない",
+			[]trigger.Trigger{{On: target.KindIssue, Issue: trigger.IssuePredicate{LabelsAll: []string{"ready"}}}, {On: target.KindCL}},
+			nil, []target.Issue{{Labels: []string{"ready"}}}},
+		{"ほかの条件をすべて満たす issue にだけ要る",
+			[]trigger.Trigger{{On: target.KindIssue, Issue: trigger.IssuePredicate{Blocked: yes(), LabelsAll: []string{"ready"}}}},
+			[]target.Issue{{Labels: []string{"ready"}}}, []target.Issue{{}}},
+		{"blocked: false の trigger でも要る",
+			[]trigger.Trigger{{On: target.KindIssue, Issue: trigger.IssuePredicate{Blocked: no(), StatusAny: []string{"Ready"}}}},
+			[]target.Issue{{Status: "Ready"}}, []target.Issue{{Status: "Done"}}},
+		{"どれか 1 つの trigger の条件を満たせば要る",
+			[]trigger.Trigger{
+				{On: target.KindIssue, Issue: trigger.IssuePredicate{Blocked: yes(), StatusAny: []string{"Ready"}}},
+				{On: target.KindIssue, Issue: trigger.IssuePredicate{Blocked: yes(), TypeAny: []string{"Bug"}}},
+			},
+			[]target.Issue{{Status: "Ready"}, {Type: "Bug"}}, []target.Issue{{}}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			needs := trigger.NeedsBlocked(c.triggers)
+			for _, issue := range c.needed {
+				if !needs(issue) {
+					t.Errorf("%+v に要らないとした", issue)
+				}
+			}
+			for _, issue := range c.unneeded {
+				if needs(issue) {
+					t.Errorf("%+v に要るとした", issue)
+				}
+			}
+		})
+	}
+}
+
 func TestIssueTriggerDoesNotMatchACL(t *testing.T) {
 	issueTrigger := trigger.Trigger{Name: "i", On: target.KindIssue}
 
