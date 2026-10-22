@@ -72,6 +72,10 @@ func (l *loop) retry(store Store, v *view) {
 			l.apply(ref, c, c.backoffElapsed(ref, hindranceTriggerRemoved, nil, l.env()))
 			continue
 		}
+		if l.remote != nil && v == outsideTick {
+			// 調停 remote を指した loop は、乗っ取られたかを tick の突き合わせで確かめてから再起動する (system.md §7)
+			continue
+		}
 		if ref.Kind == target.KindCL && v == outsideTick {
 			// CL の曖昧さと branch を確かめられないので、backoff の明けを tick の中まで持ち越す
 			continue

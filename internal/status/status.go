@@ -344,8 +344,11 @@ func needsAttention(s Snapshot) [][]Span {
 	}
 	for _, o := range s.TakenOver {
 		holder := fmt.Sprintf("loop %s が着手宣言を持っている", o.By)
-		if o.By == "" {
+		switch o.By {
+		case "":
 			holder = "着手宣言が消えていた"
+		case "?":
+			holder = "持ち主を読めない着手宣言に置き換わっていた"
 		}
 		lines = append(lines, []Span{{Yellow, "乗っ取られた"}, {Plain, fmt.Sprintf(" %s: %s。worker を止めた。止まる前に push された成果を確かめる", o.Target, holder)}})
 	}

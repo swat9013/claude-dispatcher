@@ -63,14 +63,50 @@ type remote struct {
 	// heartbeatFailures と heartbeatError は続けて落ちた生存報告の置き直しの回数と直近の理由
 	heartbeatFailures int
 	heartbeatError    string
+	// interval は生存報告の間隔。起動時の workflow 定義から決め、走っている間は変えない (system.md §9)
+	interval time.Duration
+	// results は生存報告の置き直しの結果。stopBeating は置き直しの goroutine を止めて終わりを待つ
+	results     chan error
+	stopBeating func()
 }
 
-// heartbeatInterval は今の生存報告の間隔。
-func (l *loop) heartbeatInterval() time.Duration { return coord.HeartbeatInterval(l.def.Interval) }
+// startBeating は、生存報告を tick と別の goroutine で間隔ごとに置き直し始める。tick が長引いても置き直しを遅らせない
+// (system.md §9)。結果は results に送り、loop が読めないほど溜まれば捨てる (置き直し自体は止めない)。
+func (r *remote) startBeating(after func(time.Duration) <-chan time.Time) {
+	r.results = make(chan error, 16)
+	quit, done := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-quit:
+				return
+			case <-after(r.interval):
+			}
+			err := r.c.Heartbeat(r.interval)
+			select {
+			case r.results <- err:
+			default:
+			}
+		}
+	}()
+	r.stopBeating = func() {
+		close(quit)
+		<-done
+	}
+}
 
-// heartbeat は生存報告を置き直す。落ちたら error の行を残して数え、続けて 2 回以上落ちていれば要対処に出す。
-func (l *loop) heartbeat() {
-	if err := l.remote.c.Heartbeat(l.heartbeatInterval()); err != nil {
+// beats は生存報告の置き直しの結果が届く channel。調停 remote を指さない loop では nil (届かない)。
+func (l *loop) beats() <-chan error {
+	if l.remote == nil {
+		return nil
+	}
+	return l.remote.results
+}
+
+// beat は生存報告の置き直しの結果を受ける。落ちたら error の行を残して数え、続けて 2 回以上落ちていれば要対処に出す。
+func (l *loop) beat(err error) {
+	if err != nil {
 		l.remote.heartbeatFailures++
 		l.remote.heartbeatError = oneLine(err)
 		l.rec.error(target.Ref{}, "生存報告を置けない: "+l.remote.heartbeatError)
@@ -92,18 +128,25 @@ func (l *loop) coordinate() error {
 	}
 	now := l.o.Now()
 	current := map[string]sighting{}
-	note := func(name, sha string) {
+	// note は ref の sha を覚え、この tick に初めて見た sha なら true を返す
+	note := func(name, sha string) bool {
 		if s, ok := r.seen[name]; ok && s.sha == sha {
 			current[name] = s
-			return
+			return false
 		}
 		current[name] = sighting{sha: sha, since: now}
+		return true
 	}
-	for ref, sha := range v.Claims {
-		note(r.c.ClaimRef(ref), sha)
+	for _, ref := range sortedRefs(v.Claims) {
+		sha := v.Claims[ref]
+		if m, read := v.Messages[sha]; note(r.c.ClaimRef(ref), sha) && read && m.Loop == "" {
+			l.rec.error(ref, "持ち主の loop を読めない着手宣言がある (この作業対象は起動しない): "+r.c.ClaimRef(ref))
+		}
 	}
 	for loop, sha := range v.Loops {
-		note(r.c.HeartbeatRef(loop), sha)
+		if m, read := v.Messages[sha]; note(r.c.HeartbeatRef(loop), sha) && read && !m.Newer() && m.Interval <= 0 && loop != r.c.LoopName() {
+			l.rec.error(target.Ref{}, fmt.Sprintf("間隔を読めない生存報告がある (loop %s の死を判定しない): %s", loop, r.c.HeartbeatRef(loop)))
+		}
 	}
 	r.seen = current
 
@@ -153,7 +196,7 @@ func (l *loop) coordinate() error {
 			continue
 		}
 		// 持ち主の生存報告が無い着手宣言は、自分の生存報告の間隔の 3 倍変わらなければ持ち主を死んだとみなす
-		if now.Sub(r.seen[r.c.ClaimRef(ref)].since) >= 3*l.heartbeatInterval() {
+		if now.Sub(r.seen[r.c.ClaimRef(ref)].since) >= 3*r.interval {
 			h.dead = true
 			if _, known := r.deadLoops[h.loop]; !known {
 				r.deadLoops[h.loop] = ""
@@ -176,7 +219,10 @@ func (l *loop) detectTakeovers(v coord.View) {
 		}
 		by := ""
 		if ok {
-			by = v.Messages[sha].Loop
+			by = "?"
+			if m, read := v.Messages[sha]; read {
+				by = m.Loop
+			}
 		}
 		l.remote.takenOver = append(l.remote.takenOver, status.TakenOver{Target: ref.String(), By: by})
 		l.apply(ref, c, c.takenOverBy(ref, by))
@@ -249,29 +295,45 @@ func (l *loop) cleanupDeadLoops() {
 	slices.Sort(loops)
 	for _, loop := range loops {
 		deleted := []string{}
-		remove := func(ref target.Ref, name, sha string) {
+		remove := func(ref target.Ref, name, sha string) bool {
 			err := r.c.Delete(name, sha)
 			switch {
 			case err == nil:
 				deleted = append(deleted, name)
+				return true
 			case !errors.Is(err, coord.ErrLost):
 				l.rec.error(ref, fmt.Sprintf("死んだ loop %s の ref を消せない: %s", loop, oneLine(err)))
 			}
+			return false
 		}
+		claims := 0
 		for _, ref := range sortedRefs(r.holders) {
-			if h := r.holders[ref]; h.loop == loop && h.dead && !h.takenByMe {
-				remove(ref, r.c.ClaimRef(ref), h.sha)
+			// 生きている orphan の作業対象の着手宣言は消さない (orphan の claude が作業を続けている)
+			if h := r.holders[ref]; h.loop == loop && h.dead && !h.takenByMe && !l.orphans[ref] && remove(ref, r.c.ClaimRef(ref), h.sha) {
+				claims++
 			}
 		}
+		heartbeat := false
 		if sha := r.deadLoops[loop]; sha != "" {
-			remove(target.Ref{}, r.c.HeartbeatRef(loop), sha)
+			heartbeat = remove(target.Ref{}, r.c.HeartbeatRef(loop), sha)
 		}
 		if len(deleted) > 0 {
 			l.rec.event("dead_loop", map[string]any{"loop": loop, "refs": deleted},
-				LineNote, "死んだ loop", " %s: ref %d 本を消した", loop, len(deleted))
+				LineNote, "死んだ loop", " %s: %s", loop, deletedScreen(heartbeat, claims))
 		}
 	}
 	r.deadLoops = map[string]string{}
+}
+
+// deletedScreen は死んだ loop の掃除で消した ref の、人が読む文 (formats.md §6)。
+func deletedScreen(heartbeat bool, claims int) string {
+	switch {
+	case heartbeat && claims > 0:
+		return fmt.Sprintf("生存報告と着手宣言 %d 本を消した", claims)
+	case heartbeat:
+		return "生存報告を消した"
+	}
+	return fmt.Sprintf("着手宣言 %d 本を消した", claims)
 }
 
 // releaseRemote は claim を解いた作業対象の自分の着手宣言を消す。消せなければ error の行を残す (次の tick で消し直す)。
@@ -290,8 +352,22 @@ func (l *loop) leaveRemote() {
 	if l.remote == nil {
 		return
 	}
+	l.remote.stopBeating()
+	// 止めた後に届いていた置き直しの結果も数える
+	for drained := false; !drained; {
+		select {
+		case err := <-l.remote.results:
+			l.beat(err)
+		default:
+			drained = true
+		}
+	}
 	for _, ref := range sortedRefs(l.claims) {
-		l.releaseRemote(ref, l.claims[ref])
+		// 止められない claude が生きている claim の着手宣言は残す。claude が作業を続けうるので、他のマシンの loop には、
+		// 生存報告が途絶えてから死を判定するまで起動させない (system.md §9)
+		if c := l.claims[ref]; !c.claudeAlive() {
+			l.releaseRemote(ref, c)
+		}
 	}
 	if err := l.remote.c.Leave(); err != nil {
 		l.rec.error(target.Ref{}, "生存報告を消せない: "+oneLine(err))

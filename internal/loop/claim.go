@@ -303,8 +303,11 @@ func (c *claim) takenOverBy(ref target.Ref, by string) effect {
 
 // holderScreen は乗っ取られた着手宣言の今の持ち主を人が読む文。
 func holderScreen(by string) string {
-	if by == "" {
+	switch by {
+	case "":
 		return "着手宣言が消えていた"
+	case "?":
+		return "持ち主を読めない着手宣言に置き換わっていた"
 	}
 	return "loop " + by + " が着手宣言を持っている"
 }

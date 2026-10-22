@@ -58,6 +58,7 @@ func (s *sandbox) gitRules(refs []remoteRef, before ...stubwire.Rule) []stubwire
 	}
 	return append(rules,
 		stubwire.Rule{ArgsPrefix: []string{"remote", "get-url", "origin"}, Stdout: originURL + "\n"},
+		stubwire.Rule{ArgsPrefix: []string{"remote", "get-url", "--push", "origin"}, Stdout: originURL + "\n"},
 		stubwire.Rule{ArgsPrefix: []string{"ls-remote", "origin", s.refPrefix() + "*"}, Stdout: listed.String()},
 		stubwire.Rule{ArgsPrefix: []string{"fetch", "--no-tags", "--no-write-fetch-head", "origin"}},
 		stubwire.Rule{ArgsPrefix: []string{"mktree"}, Stdout: emptyTree + "\n"},
@@ -233,6 +234,43 @@ func TestLoopStopsTheWorkerWhoseClaimIsTakenOver(t *testing.T) {
 		return strings.Contains(s.statusJSON(), `"taken_over":[{"by":"`+otherLoop+`","target":"issue#42"}]`)
 	},
 		"状態 file に taken_over が出ない")
+	s.assertEveryPushSkipsHooks()
+}
+
+func TestLoopNameIsNewOnEveryStart(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflowWithCommands(s.workerWorkflow(coordinated))
+	s.respondAll("git", s.gitRules(nil))
+
+	for range 2 {
+		loop := s.startLoop()
+		s.waitEvents("loop_start", len(s.events("loop_start"))+1)
+		loop.signal(syscall.SIGINT)
+		assertExit(t, loop.wait(), 0)
+	}
+
+	starts := s.events("loop_start")
+	first, _ := starts[0]["loop"].(string)
+	second, _ := starts[1]["loop"].(string)
+	if !loopNamePattern.MatchString(first) || !loopNamePattern.MatchString(second) || first == second {
+		t.Fatalf("loop 名 = %q と %q, want 起動ごとに新しい <hostname>-<乱数 8 hex>", first, second)
+	}
+}
+
+func TestLoopFailsToStartWhenTheRemoteReadsAndWritesDifferentURLs(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflowWithCommands(s.workerWorkflow(coordinated))
+	s.respondAll("git", s.gitRules(nil, stubwire.Rule{ArgsPrefix: []string{"remote", "get-url", "--push", "origin"}, Stdout: "git@github.com:me/widgets.git\n"}))
+
+	r := s.run("loop")
+
+	assertExit(t, r, 1)
+	if !strings.Contains(r.stderr, "調停 remote origin の読む URL と書く URL が違う") {
+		t.Fatalf("stderr = %q", r.stderr)
+	}
+	if pushes := s.pushes(); len(pushes) != 0 {
+		t.Fatalf("起動を失敗させる前に push した: %v", pushes)
+	}
 }
 
 func TestLoopDoesNotLaunchWhileARefOfANewerFormatIsOnTheRemote(t *testing.T) {

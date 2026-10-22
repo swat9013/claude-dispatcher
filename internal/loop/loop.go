@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/swat9013/claude-dispatcher/internal/coord"
 	"github.com/swat9013/claude-dispatcher/internal/precheck"
 	"github.com/swat9013/claude-dispatcher/internal/provider"
 	"github.com/swat9013/claude-dispatcher/internal/status"
@@ -224,11 +225,12 @@ func Run(o Options) int {
 		o: o, def: o.Definition, claims: map[target.Ref]*claim{}, abandoned: map[target.Ref]string{}, events: make(chan worker.Event),
 		rec: recorder{log: o.Log, output: o.Output, now: o.Now, scope: o.ScopeKey}, board: board{startedAt: o.Now()},
 	}
-	var next, heartbeat <-chan time.Time
+	var next <-chan time.Time
 	start := map[string]any{"version": o.Build.Version, "commit": o.Build.Commit}
 	if o.Coordination != nil {
-		l.remote = &remote{c: o.Coordination, seen: map[string]sighting{}}
+		l.remote = &remote{c: o.Coordination, seen: map[string]sighting{}, interval: coord.HeartbeatInterval(o.Definition.Interval)}
 		start["loop"] = o.Coordination.LoopName()
+		l.remote.startBeating(o.HeartbeatAfter)
 	}
 	// どの版の binary が書いた log かを後から読めるよう、起動を 1 行残す。人が読む起動の行は呼び出し側が出している
 	l.rec.write("loop_start", start)
@@ -248,10 +250,6 @@ func Run(o Options) int {
 		if next == nil {
 			next = o.After(l.def.Interval)
 			l.board.nextTickAt = o.Now().Add(l.def.Interval)
-		}
-		if heartbeat == nil && l.remote != nil {
-			// 生存報告は tick とは別の時計で置き直す。停止要求の後も、止まるまで置き直す (system.md §9)
-			heartbeat = o.HeartbeatAfter(l.heartbeatInterval())
 		}
 		l.arm()
 		l.publish()
@@ -274,9 +272,8 @@ func Run(o Options) int {
 			}
 		case <-o.Refresh:
 			l.refresh()
-		case <-heartbeat:
-			heartbeat = nil
-			l.heartbeat()
+		case err := <-l.beats():
+			l.beat(err)
 		}
 	}
 }
@@ -353,6 +350,11 @@ func (l *loop) tick() {
 	if place, start := def.CLPlace(), l.o.Definition.CLPlace(); !strings.EqualFold(place, start) {
 		// claim している CL を、起動時と別の CL 置き場で読み直さない。scope key と同じく大文字と小文字は区別しない (formats.md §6)
 		l.tickFailed(fmt.Sprintf("workflow 定義の CL 置き場 %q が起動時の %q と違う (loop を起動し直す)", place, start))
+		return
+	}
+	if remote, start := def.CoordinationRemote, l.o.Definition.CoordinationRemote; remote != start {
+		// 調停 remote は起動時に解いて最初の生存報告を置いている。別の remote を読み書きしない (formats.md §6)
+		l.tickFailed(fmt.Sprintf("workflow 定義の coordination.remote %q が起動時の %q と違う (loop を起動し直す)", remote, start))
 		return
 	}
 	l.def, l.blocked = def, l.o.Precheck(def)

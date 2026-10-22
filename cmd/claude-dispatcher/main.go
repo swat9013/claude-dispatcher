@@ -273,16 +273,17 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 		return code
 	}
 	defer lock.Close()
-	party, code := e.join(def, stderr)
-	if code != 0 {
-		return code
-	}
 	logFile, err := os.OpenFile(filepath.Join(dir, state.LogFile), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		fmt.Fprintf(stderr, "log.jsonl を開けない: %v\n", err)
 		return exitFailed
 	}
 	defer logFile.Close()
+	// 最初の生存報告は、起動を失敗させうる処理を済ませてから置く (後で失敗すると、置いた生存報告が remote に残る)
+	party, code := e.join(def, stderr)
+	if code != 0 {
+		return code
+	}
 	surviveClosedStdout()
 	publish := func(snap status.Snapshot) error { return status.Write(dir, snap) }
 	// 端末なら画面を描き直し、そうでなければログの行を追記する (formats.md §6)

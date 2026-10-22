@@ -202,6 +202,74 @@ func TestAClaimWithoutItsOwnersHeartbeatIsTakenOverAfterThreeOwnIntervals(t *tes
 	}
 }
 
+// tickRig は、周期の timer を ticks 回目で停止要求に替える rig。
+func tickRig(ticks int) *rig {
+	r := newRig()
+	n := 0
+	r.timer = func(kind timerKind, _ time.Duration) timing {
+		if kind != periodTimer {
+			return timing{fate: neverFires}
+		}
+		if n++; n >= ticks {
+			return timing{fate: stopsTheLoop}
+		}
+		return timing{fate: fires}
+	}
+	return r
+}
+
+// matchingStore は issue 42 が当たり続ける置き場。
+func matchingStore(workflow.Definition) loop.Store {
+	item := target.Issue{Number: 42}
+	return memoryStore{
+		observe: func() ([]target.Item, error) { return []target.Item{item}, nil },
+		reread:  func(target.Ref) (target.Item, error) { return item, nil },
+	}.store()
+}
+
+func TestADeadLoopsClaimIsKeptWhileAnOrphanWorksOnTheTarget(t *testing.T) {
+	remote := newMemoryRemote()
+	old := remote.put(&issue42, coord.Message{Kind: coord.KindClaim, Format: coord.Format, Loop: "dead-00000002", Target: "issue#42"})
+	r := tickRig(6)
+
+	r.run(t, loop.Options{
+		Definition: definition(time.Minute, 1), Coordination: remote, Store: matchingStore,
+		HeartbeatAfter: func(time.Duration) <-chan time.Time { return nil },
+		Workspaces:     func(workflow.Definition) loop.Workspaces { return listedWorkspaces{issue42} },
+		Orphaned:       func(target.Ref) (bool, error) { return true, nil },
+	})
+
+	if remote.claims[issue42] != old || len(r.jobs) != 0 {
+		t.Fatalf("着手宣言 %q (起動 %d 回), want orphan が作業している間は死んだ loop の着手宣言 %s を消さない", remote.claims[issue42], len(r.jobs), old)
+	}
+}
+
+// listedWorkspaces は refs の workspace が在る掃除の口。
+type listedWorkspaces []target.Ref
+
+func (w listedWorkspaces) Existing() ([]target.Ref, error) { return w, nil }
+func (listedWorkspaces) Remove(target.Ref) error           { return nil }
+func (listedWorkspaces) Branch(target.Ref) (string, error) { return "", nil }
+
+func TestALoopWhoseCoordinationRemoteChangedLaunchesNothing(t *testing.T) {
+	start := definition(time.Minute, 1)
+	start.CoordinationRemote = "origin"
+	changed := start
+	changed.CoordinationRemote = "upstream"
+	r := tickRig(2)
+
+	r.run(t, loop.Options{
+		Definition: start, Coordination: newMemoryRemote(), Store: matchingStore,
+		Load:           func() (workflow.Definition, error) { return changed, nil },
+		HeartbeatAfter: func(time.Duration) <-chan time.Time { return nil },
+	})
+
+	ticks := r.logEvents(t, "tick")
+	if len(r.jobs) != 0 || len(ticks) == 0 || ticks[0]["result"] != "error" || !strings.Contains(ticks[0]["error"].(string), "coordination.remote") {
+		t.Fatalf("起動 %d 回・tick の行 %v, want coordination.remote の違いで何も起動しない", len(r.jobs), ticks)
+	}
+}
+
 func TestATakenOverWorkerIsStoppedAndItsClaimIsNotDeleted(t *testing.T) {
 	remote := newMemoryRemote()
 	remote.onObserve = func(m *memoryRemote, times int) {

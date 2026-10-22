@@ -120,6 +120,13 @@ var identity = []string{
 
 func (r Remote) prefix() string { return "refs/dispatcher/" + r.ScopeDir + "/" }
 
+// git は認証の prompt を出させない git の呼び出し口。loop は無人で回るので、prompt は答えられずに上限時間まで止まる。
+func (r Remote) git(env ...string) proc.Command {
+	git := r.Git
+	git.Env = append(append(slices.Clone(git.Env), "GIT_TERMINAL_PROMPT=0"), env...)
+	return git
+}
+
 // ClaimRef は作業対象の着手宣言の ref。
 func (r Remote) ClaimRef(ref target.Ref) string { return r.prefix() + "claims/" + ref.FileName() }
 
@@ -128,19 +135,27 @@ func (r Remote) HeartbeatRef(loop string) string { return r.prefix() + "loops/" 
 
 // Confirm は起動時の調停 remote の確認 (formats.md §12): remote を解き、ref を読めることを確かめ、remote の URL を返す。
 func (r Remote) Confirm() (string, error) {
-	url, err := r.Git.Output("remote", "get-url", r.Name)
+	url, err := r.git().Output("remote", "get-url", r.Name)
 	if err != nil {
 		return "", fmt.Errorf("調停 remote %s を解けない: %w", r.Name, err)
+	}
+	push, err := r.git().Output("remote", "get-url", "--push", r.Name)
+	if err != nil {
+		return "", fmt.Errorf("調停 remote %s を解けない: %w", r.Name, err)
+	}
+	// 読む URL と書く URL が違うと、自分の置いた ref を読めず、自分の着手宣言を乗っ取られたと読む
+	if url, push = strings.TrimSpace(url), strings.TrimSpace(push); url != push {
+		return "", fmt.Errorf("調停 remote %s の読む URL と書く URL が違う: %s と %s", r.Name, url, push)
 	}
 	if _, err := r.List(); err != nil {
 		return "", fmt.Errorf("調停 remote %s を読めない: %w", r.Name, err)
 	}
-	return strings.TrimSpace(url), nil
+	return url, nil
 }
 
 // List は scope dir の下の ref を読み、ref の名前から sha への表を返す。
 func (r Remote) List() (map[string]string, error) {
-	out, err := r.Git.Output("ls-remote", r.Name, r.prefix()+"*")
+	out, err := r.git().Output("ls-remote", r.Name, r.prefix()+"*")
 	if err != nil {
 		return nil, err
 	}
@@ -161,12 +176,12 @@ func (r Remote) Read(shas []string) (map[string]Message, error) {
 		return messages, nil
 	}
 	args := append([]string{"fetch", "--no-tags", "--no-write-fetch-head", r.Name}, shas...)
-	if _, err := r.Git.Output(args...); err != nil {
+	if _, err := r.git().Output(args...); err != nil {
 		return messages, fmt.Errorf("調停 remote %s の commit を fetch できない: %w", r.Name, err)
 	}
 	var errs []error
 	for _, sha := range shas {
-		raw, err := r.Git.Output("cat-file", "commit", sha)
+		raw, err := r.git().Output("cat-file", "commit", sha)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("調停 remote の commit %s を読めない: %w", sha, err))
 			continue
@@ -178,13 +193,11 @@ func (r Remote) Read(shas []string) (map[string]Message, error) {
 
 // Commit は m を commit message に持つ、空の tree の commit を作る。
 func (r Remote) Commit(m Message) (string, error) {
-	tree, err := r.Git.OutputWithInput("", "mktree")
+	tree, err := r.git().OutputWithInput("", "mktree")
 	if err != nil {
 		return "", err
 	}
-	git := r.Git
-	git.Env = append(slices.Clone(git.Env), identity...)
-	sha, err := git.Output("commit-tree", strings.TrimSpace(tree), "-m", m.String())
+	sha, err := r.git(identity...).Output("commit-tree", strings.TrimSpace(tree), "-m", m.String())
 	if err != nil {
 		return "", err
 	}
@@ -208,7 +221,7 @@ func Holding(sha string) Expect { return Expect{sha: sha} }
 // Unconditional は条件を付けない (生存報告。書くのは持ち主の loop だけ)。
 func Unconditional() Expect { return Expect{unconditional: true} }
 
-// String は期待値の綴り (log と test のため): `absent` / `holding <sha>` / `unconditional`。
+// String は期待値の綴り: `absent` / `holding <sha>` / `unconditional`。loop のテストの fake が期待値を照合するのに使う。
 func (e Expect) String() string {
 	switch {
 	case e.unconditional:
@@ -229,7 +242,7 @@ func (r Remote) Push(ref, sha string, expect Expect) error {
 	} else {
 		args = append(args, "--force-with-lease="+ref+":"+expect.sha)
 	}
-	_, err := r.Git.Output(append(args, r.Name, spec)...)
+	_, err := r.git().Output(append(args, r.Name, spec)...)
 	var failure *proc.Error
 	if errors.As(err, &failure) && lost(failure.Stdout) {
 		return fmt.Errorf("%s: %w", ref, ErrLost)

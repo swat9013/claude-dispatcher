@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -122,6 +123,19 @@ func TestMessagesAreReadFromTheRemote(t *testing.T) {
 
 	if err != nil || messages[sha] != m {
 		t.Fatalf("読んだ = %+v (%v), 書いた = %+v", messages, err, m)
+	}
+}
+
+func TestConfirmRefusesARemoteThatPushesToAnotherURL(t *testing.T) {
+	r := remoteForTest(t)
+	if out, err := exec.Command(r.Git.Path, "-C", r.Git.Dir, "config", "remote.origin.pushurl", filepath.Join(t.TempDir(), "fork.git")).CombinedOutput(); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+
+	_, err := r.Confirm()
+
+	if err == nil || !strings.Contains(err.Error(), "読む URL と書く URL が違う") {
+		t.Fatalf("Confirm = %v, want 読む URL と書く URL の違いで失敗", err)
 	}
 }
 
