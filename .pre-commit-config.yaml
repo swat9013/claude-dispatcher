@@ -46,9 +46,10 @@ repos:
       # golangci-lint の既定セットも govet を含むが、go vet も撃つ。go vet は go.mod の toolchain の Go に入っている
       # analyzer で動き、golangci-lint の govet は golangci-lint を build したときの analyzer で動くので、
       # Go の新しい版で足された analyzer は go vet にしか無いことがある
+      # -tags blackbox で build tag `blackbox` の file も読む (`!blackbox` の file は無いので、tag 付きで全 file を読む)
       - id: go-vet
         name: go vet
-        entry: go vet ./...
+        entry: go vet -tags blackbox ./...
         language: unsupported
         pass_filenames: false
         always_run: true
