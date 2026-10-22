@@ -21,6 +21,10 @@ ADR 0011 の調停では、着手宣言と生存報告の push が通らなか�
 
 判定の規則の正本は `docs/design/system.md` §4。
 
+## Alternatives considered
+
+- **理由の文言 (`cannot lock ref ...`・`stale info`) で判定する**: 文言は server の実装と git の version で変わり、host を替えると負けを network などの失敗と取り違えるので退けた
+
 ## Consequences
 
 ### 良い影響

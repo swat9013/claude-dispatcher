@@ -101,7 +101,7 @@ dispatcher は、状態の意味を定めない。issue の label が何を表�
   - 同じマシンの中では、scope key の lock で 2 本目の loop を拒む (§9)
   - マシンを跨いでは、workflow 定義で調停 remote (`coordination.remote`) を指した project に限り、下の「マシンを跨いだ分担」で分担する。指さない project はマシンを跨いだ排他を持たないので、1 つの issue 置き場は 1 台から回す
 
-**マシンを跨いだ分担** (ADR 0011・0017・0023)。調停 remote を指した project では、loop と単発起動は、着手宣言と生存報告を実装 repo の git remote の独自 ref に置き合って、作業対象を分け合う。leader は持たない。
+**マシンを跨いだ分担** (ADR 0011・0017・0023・0025)。調停 remote を指した project では、loop と単発起動は、着手宣言と生存報告を実装 repo の git remote の独自 ref に置き合って、作業対象を分け合う。leader は持たない。
 
 - **調停 remote は、workflow 定義のある clone の git remote の名前で指す**。名前はその clone で解き、URL と認証はその clone の設定 (`git remote`・credential helper・ssh の鍵) をそのまま使う。dispatcher は認証を持たない。読む URL と書く URL (`pushurl`・`pushInsteadOf`) が違うか、どちらかが複数ある remote は使えない (自分の置いた ref を読めない・push の勝ち負けが読む URL の状態と食い違う) ので、起動時の確認で落とす
 - **ref は scope dir (formats.md §1) の 1 段の下に置く**。着手宣言は作業対象ごとに 1 本 (`refs/dispatcher/<scope dir>/claims/<作業対象>`)、生存報告は loop ごとに 1 本 (`refs/dispatcher/<scope dir>/loops/<loop 名>`)。どちらも空の tree の commit を指し、形式の版・持ち主の loop 名・生存報告の間隔は commit message に書く (綴りは formats.md §12)
