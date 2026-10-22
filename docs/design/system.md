@@ -351,6 +351,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。claim の段階と打�
   - 解決するのは workflow 定義が撃つ CLI だけ。tracker の CLI は `tracker.kind` で決まる (`github` は gh、`gitlab` は glab、`jira` は acli)。`jira` では `cl.kind` の CLI (gh か glab) も撃つ。使わない置き場の CLI が無いことは、PATH を書き換える理由にしない
 - **試運転**
   - 1 tick 分の読み直し・事前検査・trigger の評価までを通し、起動する直前で止めて、起動するはずの作業対象と trigger を示す
+  - open な一覧は、起動時の確認で読んだものがあればそれを snapshot に使う (tick の「workflow 定義を読み直してから snapshot を作る」順の例外。一覧を 1 回だけ読むため)
   - state dir に何も書かない
 
 ## 10. worker に渡すもの
