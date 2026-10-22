@@ -324,7 +324,7 @@ claude-dispatcher loop [--max-concurrent <N>] [<workflow の path>]
 - 1 回の読み出しにつき 1 行だけ出す。読み出しは止めず、読み出しの結果も exit code も変えない (観測を失敗にしない)
 - 閾値は 15 秒の固定値で、workflow 定義では変えられない
 - loop は人が読む行 (下の「画面」) に出す。log.jsonl (§4) には書かない。試運転 (§5) と `doctor` (§7.4) は stderr に出す
-- 掛けるのは tick の手順 3 の snapshot と、試運転・`doctor` が置き場を読む一覧の読み出し。`jira` の起動時の確認 (上) が読む一覧には掛けない
+- 掛けるのは tick の手順 3 の snapshot と、試運転・`doctor` が置き場を読む一覧の読み出しと、起動時の確認 (上。`jira` の issue 置き場の確認の手順 2 と、`cl:` の CL 置き場の確認) が読む open な一覧。loop の起動時の確認では、tick と同じく人が読む行に出す。単発起動 (§11) の起動時の確認では stderr に出す
 
 1. 突き合わせ: 走っている worker の作業対象を読み直し、終端 (issue の close、CL の merge か close) になっていれば worker を止め、`after_run` と `before_remove` を撃って workspace を消す。trigger から外れただけでは止めない
 2. 終わった worker のうち、作業対象を読み直せなかったものを読み直す
@@ -765,6 +765,7 @@ triggers:
    - `jira` は、続けて loop の起動時と同じ `cl:` の CL 置き場の確認 (§6) を通し、`ok   CL 置き場 <置き場>` か `NG   CL 置き場 <置き場>: <理由>` の行を出す。置き場は `cl.kind` が `github` なら `<owner>/<name>`、`gitlab` なら `<host>/<path>` で出す
    - `jira` は loop の起動時と同じ issue 置き場の確認 (§6) を通す。落ちたら理由を `NG` の行に出す (存在しない status 名と issue type 名は、1 つ 1 行で trigger と一緒に名指しする)
    - 観測の補助の要求が落ちたとき (§3) は `NG` にせず、`ok` の行の後ろに ` (補助の要求が落ちた: <理由>)` を足す
+   - `jira` の issue 置き場と `cl:` の CL 置き場は、確認 (§6) で読んだ open な一覧を使い回し、読み直さない。issue 置き場と CL 置き場の open な一覧は、それぞれ 1 回だけ読む
    - 一覧の読み出しが 15 秒を超えたら、読み終わる前に stderr に 1 行出す (§6 の「遅い一覧」)。stdout の行と exit は変えない
 3. tracker の CLI・`jira` では `cl.kind` の CLI・`claude.command` を解決できる。`on: cl` の trigger があるか `coordination.remote` を書いたなら git も (loop の起動時の検査と同じ。§6)
 4. 事前検査 (§2.9)。落ちた trigger ごとに `NG` の行
