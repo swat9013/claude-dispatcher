@@ -531,7 +531,7 @@ func TestTheDeadLoopLineNamesWhatWasDeleted(t *testing.T) {
 	}
 }
 
-func TestALoopWithACoordinationRemoteDoesNotRelaunchOutsideATick(t *testing.T) {
+func TestALoopWithACoordinationRemoteRelaunchesOnlyInATick(t *testing.T) {
 	remote := newMemoryRemote()
 	def := definition(time.Minute, 1)
 	def.MaxAttempts = 2
