@@ -28,6 +28,17 @@ func TestHeadingOfARunningLoopShowsTheNextAndTheLastTick(t *testing.T) {
 	}
 }
 
+func TestHeadingOfARunningLoopShowsItsMaxConcurrentBetweenTheTicks(t *testing.T) {
+	s := status.Snapshot{Scope: "s", NextTickAt: at(5 * time.Minute), MaxConcurrent: 3, LastTick: &status.Tick{At: base, Result: status.TickOK, Candidates: 1}}
+
+	got := status.Render(s, status.LoopAlive, base, time.UTC, pipe)
+
+	want := "● loop 稼働中  s\n次の tick 00:05:00 · 並列上限 3 · 直近の tick 00:00:00 ok · 候補 1\n"
+	if !strings.HasPrefix(got, want) {
+		t.Fatalf("描画:\n%s\nwant 見出し:\n%s", got, want)
+	}
+}
+
 func TestHeadingOfAStoppingLoopShowsTheLastTickError(t *testing.T) {
 	s := status.Snapshot{Scope: "s", Stopping: true, LastTick: &status.Tick{At: base, Result: status.TickError, Error: "workflow 定義の誤り"}}
 
@@ -48,7 +59,7 @@ func TestHeadingOfALoopBeforeItsFirstTickIsOneLine(t *testing.T) {
 }
 
 func TestStoppedLoopShowsOnlyItsHeading(t *testing.T) {
-	s := status.Snapshot{Scope: "s", NextTickAt: at(time.Minute), LastTick: &status.Tick{At: base, Result: status.TickOK},
+	s := status.Snapshot{Scope: "s", NextTickAt: at(time.Minute), MaxConcurrent: 3, LastTick: &status.Tick{At: base, Result: status.TickOK},
 		Workers: []status.Worker{{Target: "issue#42", Phase: status.Running}}, Abandoned: []status.Abandoned{{Target: "issue#43"}}}
 
 	got := status.Render(s, status.LoopGone, base, time.UTC, pipe)

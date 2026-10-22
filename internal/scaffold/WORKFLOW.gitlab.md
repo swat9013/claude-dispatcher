@@ -11,8 +11,6 @@ hooks:
   # で checkout できないので、merge request の worker は source branch を detach で取り出して push する (action に書いてある)
   after_create: git -C "$CLAUDE_DISPATCHER_CLONE" worktree add --detach "$CLAUDE_DISPATCHER_WORKSPACE"
   before_remove: git -C "$CLAUDE_DISPATCHER_CLONE" worktree remove --force "$CLAUDE_DISPATCHER_WORKSPACE"
-limits:
-  max_concurrent: 1
 claude:
   # 再入の仕組みを塞ぐ (理由は `claude-dispatcher guide` の項目の表の下の注記「再入の仕組みを塞ぐ」)。
   # --disallowedTools は値を複数取るが、dispatcher が後ろに渡す -p で止まる

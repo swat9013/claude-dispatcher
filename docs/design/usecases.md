@@ -149,7 +149,7 @@ Cockburn『ユースケース実践ガイド』(Writing Effective Use Cases) の
 **Main Success Scenario**
 
 1. 導入者が実装 repo の clone で `setup` を実行し、CLI が汎用の action を入れた workflow 定義の雛形を置く
-2. 導入者が workflow 定義の issue 置き場・trigger・action・hooks・並列上限を自分の project に合わせて書き、repo に commit する
+2. 導入者が workflow 定義の issue 置き場・trigger・action・hooks を自分の project に合わせて書き、repo に commit する
 3. CLI が workflow 定義を検査し、issue 置き場が見えること・述語が文法に合うこと (`jira` では status 名と issue type 名が実在すること)・各 action の先頭の skill が呼べることを確かめる
 4. CLI が試運転で、起動するはずの作業対象と trigger を示す。何も起動せず、何も書かない
 5. 導入者が `doctor` で、Claude Code の settings に要る entry を確かめて自分で足す
@@ -261,3 +261,30 @@ Cockburn『ユースケース実践ガイド』(Writing Effective Use Cases) の
   - 3c1. dispatcher はその scope で worker を起動せず、要対処に出す。運用者は dispatcher を上げて step 1 へ戻る
 - **2b.** 生存報告の置き直しが続けて落ちる
   - 2b1. dispatcher は要対処に出す。他のマシンの loop に乗っ取られうることを運用者が知る
+
+## UC-9 loop を止めずに並列上限を変える
+
+- **Primary Actor**: 人間 (loop を起動した運用者)
+- **Scope**: dispatcher (機械システム)
+- **Level**: user-goal (sea)
+- **Trigger**: 運用者が、走っている worker を中断せずに、同時に走らせる worker の数を絞りたい・広げたい (マシンの負荷・rate limit・急ぎの作業対象)
+- **事前条件**: loop が走っている
+- **成功保証**: 次の tick から、loop は運用者が渡した並列上限で空きを判定し、loop が止まるまでその値を使う。走っている worker は止まらない。loop が新しい値を採ったことと今の値が、画面と `status` に残る
+
+**Main Success Scenario**
+
+1. 運用者が別の端末で、新しい並列上限を CLI に渡す
+2. CLI が loop が立っていることを確かめ、値を loop の state dir に書き、次の tick から効くことを返す
+3. loop が次の tick で値を読み、前の値と新しい値をログの行に 1 行残す
+4. loop がその tick から新しい並列上限で空きを判定し、画面の見出しに今の値を出す
+
+**Extensions**
+
+- **2a.** loop が立っていない
+  - 2a1. CLI は値を書かずに失敗する。運用者は loop を起動するときに引数で並列上限を渡す
+- **3a.** state dir の値が読めない (人が手で書き換えた)
+  - 3a1. loop はその tick を error で終え、起動しない。運用者は値を CLI で撃ち直して step 1 へ戻る
+- **4a.** 新しい並列上限が、走っている worker の数より小さい
+  - 4a1. loop は走っている worker を止めず、走っている数が並列上限を下回るまで新しい起動と再起動を待つ
+- **4b.** 運用者が loop を起動し直した
+  - 4b1. loop は起動時に前の値を消し、起動時の引数の値 (省けば 1) から始める

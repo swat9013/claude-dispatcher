@@ -306,17 +306,18 @@ func TestWorkerThatExitsAbnormallyIsRetried(t *testing.T) {
 }
 
 func TestRetryWaitingForAFreeSlotDoesNotAdvanceTheAttempt(t *testing.T) {
-	// issue#42 は失敗して再起動を待ち、issue#43 は走り続ける。並列上限を 1 に下げると、#42 の再起動は空きを待つ
+	// issue#42 は失敗して再起動を待ち、issue#43 は走り続ける。max-concurrent で並列上限を 1 に下げると、走っている #43 は
+	// 止めず、#42 の再起動は空きを待つ
 	s := newSandbox(t)
-	s.writeWorkflowWithCommands(s.workerWorkflow(fastRetry + "  max_concurrent: 2\n"))
+	s.writeWorkflowWithCommands(s.workerWorkflow(fastRetry))
 	s.setIssues(readyIssue(42), readyIssue(43))
 	s.respondAll("claude", []stubwire.Rule{
 		{ArgsContain: []string{"issue #43"}, Stdout: `{"type":"result"}` + "\n", ReleaseFile: s.releaseFile()},
 		{Stdout: `{"type":"result"}` + "\n", ReleaseFile: s.mark("never")}, // #42 は never を書くまで走り、書いたら当たったまま終わる
 	})
-	s.startLoop()
+	s.startLoop("--max-concurrent", "2")
 	s.waitEvents("start", 2)
-	s.writeWorkflowWithCommands(s.workerWorkflow(fastRetry + "  max_concurrent: 1\n"))
+	assertExit(t, s.run("max-concurrent", "1"), 0)
 	ticks := len(s.events("tick"))
 	s.waitEvents("tick", ticks+1)
 	mustWrite(t, s.mark("never"), "")

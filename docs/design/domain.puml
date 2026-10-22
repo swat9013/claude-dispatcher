@@ -17,7 +17,7 @@ package "集約: workflow 定義 (project の宣言。tick ごとに読み直す
   class "workflow 定義" as Definition {
     {field} tracker.kind : github | gitlab | jira
     {field} cl.kind : github | gitlab (tracker.kind が jira のときだけ書き、そのときは必須)
-    {field} 並列上限・attempt の上限
+    {field} attempt の上限
     {field} coordination.remote : clone の git remote の名前 (書かなければ 1 台で回す)
   }
   class "trigger" as Trigger {

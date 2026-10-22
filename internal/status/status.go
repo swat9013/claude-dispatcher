@@ -29,11 +29,13 @@ type Snapshot struct {
 	// Stopping は停止要求を受けて、worker の終了を待っているか
 	Stopping bool `json:"stopping"`
 	// NextTickAt は次の tick の予定。停止要求の後は nil
-	NextTickAt *time.Time  `json:"next_tick_at"`
-	LastTick   *Tick       `json:"last_tick"`
-	Workers    []Worker    `json:"workers"`
-	Abandoned  []Abandoned `json:"abandoned"`
-	Ambiguous  []Ambiguous `json:"ambiguous"`
+	NextTickAt *time.Time `json:"next_tick_at"`
+	// MaxConcurrent は直近の tick が採った並列上限 (最初の tick の前は起動時の値)。key を足す前の版が書いた状態 file を読むと 0
+	MaxConcurrent int         `json:"max_concurrent,omitempty"`
+	LastTick      *Tick       `json:"last_tick"`
+	Workers       []Worker    `json:"workers"`
+	Abandoned     []Abandoned `json:"abandoned"`
+	Ambiguous     []Ambiguous `json:"ambiguous"`
 	// Blocked は事前検査 (formats.md §2.9) に落ちて起動しない trigger
 	Blocked []Blocked `json:"blocked"`
 	// Orphans は直近に確かめられた tick で生きていた orphan (前の loop が起動した claude。system.md §7)。key を足す前の版が
@@ -212,7 +214,7 @@ func Render(s Snapshot, loop Liveness, now time.Time, loc *time.Location, d Disp
 
 func clock(t time.Time, loc *time.Location) string { return t.In(loc).Format("15:04:05") }
 
-// Heading は見出し: loop の状態と scope key と版の行と、次の tick と直近の tick の行 (出す欄が無ければ出さない)。
+// Heading は見出し: loop の状態と scope key と版の行と、次の tick と並列上限と直近の tick の行 (出す欄が無ければ出さない)。
 // 版は loop が生きていて、状態 file が版を持つときだけ出す (止まった loop の状態 file の版は、今の loop のものでない)。
 func Heading(s Snapshot, loop Liveness, loc *time.Location, d Display) string {
 	first := []Span{state(loop, s.Stopping), {Plain, "  "}, {Bold, s.Scope}}
@@ -227,6 +229,9 @@ func Heading(s Snapshot, loop Liveness, loc *time.Location, d Display) string {
 		ticks = append(ticks, []Span{{Gray, "次の tick なし"}})
 	case s.NextTickAt != nil:
 		ticks = append(ticks, []Span{{Gray, "次の tick "}, {Plain, clock(*s.NextTickAt, loc)}})
+	}
+	if loop != LoopGone && s.MaxConcurrent > 0 {
+		ticks = append(ticks, []Span{{Gray, "並列上限 "}, {Plain, strconv.Itoa(s.MaxConcurrent)}})
 	}
 	if t := s.LastTick; t != nil {
 		last := []Span{{Gray, "直近の tick "}, {Plain, clock(t.At, loc) + " "}}

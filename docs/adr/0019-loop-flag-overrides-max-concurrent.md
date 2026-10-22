@@ -1,6 +1,6 @@
 # ADR 0019: 並列上限は loop の引数で上書きでき、上書きした値は読み直しで変わらない
 
-- Status: Accepted
+- Status: Accepted (`limits.max_concurrent` を残す部分と、引数で渡した値を loop が止まるまで固定する部分は ADR 0024 が置き換えた。並列上限をマシンの資源で決まる値として loop の引数で渡す部分は残る)
 - Date: 2026-10-15
 
 ## Context

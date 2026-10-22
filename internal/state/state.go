@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 )
@@ -67,9 +68,16 @@ func (h *Held) Close() error {
 
 // Lock は state dir を作り、loop の生存期間の lock (loop.lock と alive.lock) を取る。返した lock を閉じると外れる — loop が
 // 終わるまで開いておく。flock は process が消えれば外れるので、落ちた loop の lock が次の起動を塞ぐことはない。
+// loop.lock を取った後、alive.lock を取る前に、前の loop が max-concurrent で渡した並列上限を消す。
 func Lock(dir, scopeKey string) (*Held, error) {
 	lock, err := lockScope(dir, scopeKey)
 	if err != nil {
+		return nil, err
+	}
+	// 前の loop が残した並列上限は、alive.lock を取る前に消す。取った後に消すと、その間に撃った max-concurrent が loop を
+	// 生きていると見て書き、成功を返した値を消してしまう (formats.md §6 の起動時の検査)
+	if err := RemoveMaxConcurrent(dir); err != nil {
+		lock.Close()
 		return nil, err
 	}
 	// loop.lock を持つのは 1 本だけなので、alive.lock を取り合うのは生死を確かめる status の一瞬の共有 lock だけ。
@@ -148,4 +156,55 @@ func Locked(file string) (bool, error) {
 		return false, fmt.Errorf("flock を試せない (%s): %w", file, err)
 	}
 	return false, syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+}
+
+// MaxConcurrentFile は max-concurrent が渡した並列上限を置く file (formats.md §1・§13)。max-concurrent が書き、loop が
+// tick ごとに読み、起動時に消す
+const MaxConcurrentFile = "max_concurrent"
+
+// WriteMaxConcurrent は並列上限 n を書く。loop に書きかけを見せないよう、同じ dir の一時 file から rename する。一時 file は
+// 呼び出しごとに名前を変え、同時に撃った呼び出しが取り合わないようにする。書けなければ一時 file を消す。
+func WriteMaxConcurrent(dir string, n int) error {
+	tmp, err := os.CreateTemp(dir, MaxConcurrentFile+".*.tmp")
+	if err != nil {
+		return fmt.Errorf("並列上限を書けない: %w", err)
+	}
+	// CreateTemp は 0600 で作るので、state dir の他の file と同じ 0644 に揃える
+	_, err = tmp.WriteString(strconv.Itoa(n) + "\n")
+	err = errors.Join(err, tmp.Chmod(0o644), tmp.Close())
+	if err == nil {
+		err = os.Rename(tmp.Name(), filepath.Join(dir, MaxConcurrentFile))
+	}
+	if err != nil {
+		os.Remove(tmp.Name())
+		return fmt.Errorf("並列上限を書けない: %w", err)
+	}
+	return nil
+}
+
+// ReadMaxConcurrent は max-concurrent が渡した並列上限を読む。無ければ ok が false。1 以上の整数でなければ誤り
+// (黙って前の値を使い続けると、渡したつもりの値が効いていないことに気づけない。system.md §7)。
+func ReadMaxConcurrent(dir string) (n int, ok bool, err error) {
+	file := filepath.Join(dir, MaxConcurrentFile)
+	raw, err := os.ReadFile(file)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("max-concurrent で渡した並列上限を読めない: %w", err)
+	}
+	text := strings.TrimSpace(string(raw))
+	n, err = strconv.Atoi(text)
+	if err != nil || n < 1 {
+		return 0, false, fmt.Errorf("max-concurrent で渡した並列上限が 1 以上の整数でない (%s: %q)", file, text)
+	}
+	return n, true, nil
+}
+
+// RemoveMaxConcurrent は max-concurrent が渡した並列上限を消す。前の loop が残した値を次の loop に継がない。無ければ何もしない。
+func RemoveMaxConcurrent(dir string) error {
+	if err := os.Remove(filepath.Join(dir, MaxConcurrentFile)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("前の loop が max-concurrent で渡した並列上限を消せない: %w", err)
+	}
+	return nil
 }

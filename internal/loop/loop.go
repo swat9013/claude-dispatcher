@@ -123,6 +123,8 @@ type Worker interface {
 type Options struct {
 	// Load は workflow 定義を読み直す
 	Load func() (workflow.Definition, error)
+	// MaxConcurrent は max-concurrent で渡した並列上限を読む。渡されていなければ ok が false。nil なら渡されていないとみなす
+	MaxConcurrent func() (n int, ok bool, err error)
 	// Definition は起動時に検査に通った workflow 定義
 	Definition workflow.Definition
 	// Precheck は workflow 定義の事前検査 (formats.md §2.9)。落ちた trigger は起動しない
@@ -395,6 +397,18 @@ func (l *loop) tick() {
 		l.tickFailed("workflow 定義の誤り: " + oneLine(err))
 		return
 	}
+	if l.o.MaxConcurrent != nil {
+		// max-concurrent で渡した値は --max-concurrent より優先する。読めなければ、workflow 定義を採れない tick と同じく
+		// 何も起動しない (system.md §7 の手順 2)
+		n, ok, err := l.o.MaxConcurrent()
+		if err != nil {
+			l.tickFailed(oneLine(err))
+			return
+		}
+		if ok {
+			def.MaxConcurrent = n
+		}
+	}
 	if key := l.o.ScopeKeyOf(def); key != l.o.ScopeKey {
 		// 別の置き場を指す版は採らない。この tick は掃除も起動もせず、次の tick の突き合わせは採っていた版の置き場を読む
 		l.tickFailed(fmt.Sprintf("workflow 定義の scope key %s が起動時の %s と違う (loop を起動し直す)", key, l.o.ScopeKey))
@@ -409,6 +423,10 @@ func (l *loop) tick() {
 		// 調停 remote は起動時に解いて最初の生存報告を置いている。別の remote を読み書きしない (formats.md §6)
 		l.tickFailed(fmt.Sprintf("workflow 定義の coordination.remote %q が起動時の %q と違う (loop を起動し直す)", remote, start))
 		return
+	}
+	if def.MaxConcurrent != l.def.MaxConcurrent {
+		// max-concurrent で渡した値を採った。採った値は tick の行と状態 file にも出る (formats.md §6)
+		l.rec.human(LineNote, "並列上限を変えた", ": %d → %d", l.def.MaxConcurrent, def.MaxConcurrent)
 	}
 	l.def, l.blocked = def, l.o.Precheck(def)
 	if l.remote != nil {

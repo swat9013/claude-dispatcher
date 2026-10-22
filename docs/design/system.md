@@ -225,6 +225,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。claim の段階と打�
      - orphan が終われば、その作業対象は普通の掃除と候補の扱いに戻る
 2. **workflow 定義の読み直しと事前検査** (§8)
    - 読めない・文法に合わないときは、この tick は何も起動しない。突き合わせは続ける
+   - subcommand で渡した並列上限 (§8) も読む。読めない・1 以上の整数でないときも、この tick は何も起動しない。突き合わせは続ける。黙って前の値を使い続けると、渡したつもりの値が効いていないことに気づけない
    - action の template の先頭の `/名前` が見つからない trigger だけは、その trigger を評価から外し、再起動もしない。他の trigger は評価する
    - 調停 remote を指した project では、採った版で調停 remote の ref を読む (下の「調停 remote の突き合わせ」)。読めなければ、その tick は掃除も起動 (再起動を含む) もしない。突き合わせ (手順 1) は続ける
 3. **snapshot を作る**: open な issue と open な CL を読み、正規化する
@@ -328,11 +329,16 @@ SPEC §7・§8・§16 の状態機械を土台にする。claim の段階と打�
     - 種類ごとに何を書けるかは、案内の「置き場のサービスごとの違い」の表が正本
   - trigger の列
   - hooks
-  - 並列上限・attempt の上限・backoff の上限・stall の上限・worker 1 回分の上限時間 (既定 1 時間。0 で無効)
+  - attempt の上限・backoff の上限・stall の上限・worker 1 回分の上限時間 (既定 1 時間。0 で無効)
   - 周期
   - `claude` の起動 command と引数
   - 調停 remote (`coordination.remote`): マシンを跨いで分担するときに、workflow 定義のある clone の git remote の名前で書く (§4)。書かなければ調停 remote を読みも書きもせず、1 台で回す
-- **`loop` の引数で上書きできるのは、loop を回すマシンの資源で決まる値だけ** (今は並列上限。ADR 0019)。workflow 定義は repo に commit され、その版を読むどの loop にも同じ値が効く。マシンの資源で決まる値を宣言だけで決めると、loop を回すマシンを替える・一時的に絞るたびに commit が要り、調停 remote (§4) で分担すると、マシンごとに違う値を置けない。trigger・action・hooks・置き場・周期・retry と時間の上限・起動の command と引数は project の宣言なので、引数では変えない。引数で上書きした値は loop が止まるまで固定し、tick ごとの読み直しでは変わらない
+- **loop を回すマシンごとに値が変わらざるを得ないものは、workflow 定義に置かず、loop の引数と subcommand で渡す** (今は並列上限。ADR 0024)。workflow 定義は repo に commit され、その版を読むどの loop にも同じ値が効くので、マシンごとの値を置くと、loop を回すマシンを替える・一時的に絞るたびに commit が要り、調停 remote (§4) で分担するとマシンごとに違う値を置けない。trigger・action・hooks・置き場・周期・retry と時間の上限・起動の command と引数は project の宣言なので workflow 定義に置く。path と command のようにマシンで変わりうる値でも、相対 path や PATH からの探索でどのマシンでも同じ値に書けるなら、workflow 定義に置く
+  - 並列上限は、loop の起動時に引数 (`--max-concurrent`) で受け、省けば 1 にする。走っている間は `max-concurrent` subcommand で変えられ、subcommand で渡した値が引数より優先して、その loop が止まるまで効く
+  - subcommand は、workflow 定義から scope key を引き、その state dir に値を書く。loop が立っていなければ書かずに失敗する (書いても次の loop には効かないため)
+  - loop は tick の手順 2 (§7) でこの値を読み、次の tick から新しい値で空きを判定する。新しい値を採った tick で、ログの行に前の値と新しい値を 1 行出す。loop を起こして tick を早めることはしない
+  - loop は起動時にこの値を消す。落ちた loop が残した値を、次の loop に継がない
+  - 走っている worker の数より下げても、走っている worker は止めない。空きが出るまで、新しい起動と再起動を待つ (§7 の手順 1 と同じく、worker は終端でだけ止める)
 - **本文は共通 prompt**
 - **秘密は `$VAR` で間接参照する**。値そのものは書かない (SPEC §5.3.1)
   - loop は、起動した shell の環境変数を引き継ぐ
@@ -340,7 +346,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。claim の段階と打�
   - `tracker.token` は、loop が撃つ置き場の CLI・worker・hooks のすべてに、その CLI が読む環境変数 (gh は `GH_TOKEN`、glab は `GITLAB_TOKEN`) として渡す
     - glab は `GITLAB_TOKEN` を host を問わず使う。dispatcher はそれを `tracker.host` に絞らない。worker と hooks が `tracker.host` と別の GitLab の host へ glab を撃つと、token がその host にも送られうる。理由と退けた案は ADR 0020。この露出と回避は案内で告げる
 - **tick ごとに読み直す** (SPEC §6.2)
-  - 直せば、loop を起動し直さずに効く。`loop` の引数で上書きした値は除く (上の「`loop` の引数で上書きできるのは」)
+  - 直せば、loop を起動し直さずに効く
   - 読めない版・文法に合わない版では、新しい起動を止める。走っている worker の突き合わせは続ける
 - **未知の key は名指しで失敗させる** (ADR 0009「未知の key は失敗させる」)
 - **事前検査** (SPEC §6.3)
@@ -384,7 +390,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。claim の段階と打�
   - loop が死んでも claude は止まらず、orphan として残る (§7)。次に起動した loop は、orphan が終わるまでその workspace を残して起動せず、終われば、trigger に当たったままの作業対象を再び拾う
 - **loop の画面が第一の観測点**
   - 見出し・`workers`・`要対処`・`ログ` のセクションに分けて描き直す
-  - 見出しは loop の状態 (稼働中・停止待ち) と scope key と loop の binary の版、次の tick の時刻、直近の tick の結果と error
+  - 見出しは loop の状態 (稼働中・停止待ち) と scope key と loop の binary の版、並列上限、次の tick の時刻、直近の tick の結果と error
   - `workers` は claim の表 (作業対象・trigger・attempt・段階・経過・stream の最新の活動)。最新の活動は表の列で見るので、`ログ` には活動の行を出さない
   - `要対処` は人の手当てを待つもの (打ち切り・曖昧な CL・起動しない trigger・止められない worker (SIGKILL を送れず claude が終わっていない claim。段階は unstopped)・orphan)。無ければ出さない
   - stdout が端末のときだけ色を付ける。`status` も同じ描画を使う

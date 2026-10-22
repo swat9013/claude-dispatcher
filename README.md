@@ -133,7 +133,7 @@ binary は署名していない。macOS でブラウザから取った archive �
    claude-dispatcher setup --kind jira --host acme.atlassian.net --repo WIDGETS   # issue を Jira に置くとき
    ```
 
-2. **自分の project に合わせて書く**: trigger・action・hooks・並列の上限を直し、repo に commit する。書き方は `claude-dispatcher guide` の「workflow 定義の書き方」と「action が守る約束」(Claude Code に読ませて手伝わせてもよい)。この repo 自身の例は [`WORKFLOW.md`](WORKFLOW.md)
+2. **自分の project に合わせて書く**: trigger・action・hooks を直し、repo に commit する。書き方は `claude-dispatcher guide` の「workflow 定義の書き方」と「action が守る約束」(Claude Code に読ませて手伝わせてもよい)。この repo 自身の例は [`WORKFLOW.md`](WORKFLOW.md)
 3. **試運転**: 何も起動せずに、worker を起動するはずの issue や CL を、当たる trigger と組にして示す
 
    ```sh
