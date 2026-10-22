@@ -79,7 +79,7 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	dispatcherBin = filepath.Join(dir, "claude-dispatcher")
-	if out, err := exec.Command("go", "build", "-o", dispatcherBin, dispatcherPackage).CombinedOutput(); err != nil {
+	if out, err := exec.Command("go", "build", "-tags", "blackbox", "-o", dispatcherBin, dispatcherPackage).CombinedOutput(); err != nil {
 		fmt.Fprintf(os.Stderr, "テスト対象の binary を build できない (%s): %v\n%s", dispatcherPackage, err, out)
 		os.RemoveAll(dir)
 		os.Exit(1)
