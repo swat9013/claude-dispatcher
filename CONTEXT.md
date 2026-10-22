@@ -13,12 +13,16 @@ dispatcher を回す単位。1 つの issue 置き場と、1 つの CL 置き場
 _Avoid_: workspace, repo (実装 repo と置き場を指す語と紛れる)
 
 **workflow 定義**:
-project の trigger・共通 prompt・並列上限・起動の仕方をまとめた宣言。実装 repo の中に置き、repo と一緒に版を管理する。
+project の trigger・共通 prompt・起動の仕方をまとめた宣言。実装 repo の中に置き、repo と一緒に版を管理する。
 _Avoid_: config, 宣言 config
 
 **loop**:
 人が起動してから人が止めるまで、1 つの project の tick を周期ごとに回し続ける CLI の process。claim を持ち、worker の親になる。落ちても自分では起き直さない。
 _Avoid_: daemon, scheduler (監督を持つ常駐物と紛れる)
+
+**並列上限**:
+1 つの loop が同時に塞いでおける並列の枠の数。走っている worker のほか、再起動待ちの claim と生きている orphan も枠を塞ぐ。project の宣言ではなく、loop を回すマシンの資源で決まる値。
+_Avoid_: 並列数 (走っている worker の数と紛れる), concurrency (同時に走っている状態全般に広がり、上限を呼び出さない)
 
 **tick**:
 loop の 1 周期分の仕事。走っている worker を外部 store と突き合わせ、作業対象を読み直し、trigger を評価して、空いている分だけ worker を起動する。
