@@ -76,6 +76,11 @@ func SlowListingLine(def workflow.Definition, kind target.Kind) string {
 	return fmt.Sprintf("%s の一覧の読み出しが %d 秒を超えた", PlaceLabel(def, kind), int(SlowListing/time.Second))
 }
 
+// slowListingFields は log.jsonl の slow_listing の行の中身 (formats.md §4)。
+func slowListingFields(def workflow.Definition, kind target.Kind) map[string]any {
+	return map[string]any{"kind": string(kind), "place": placeOf(def, kind)}
+}
+
 // Open は種類の open な作業対象を、その種類の置き場の部品で全件読む。読み出しが SlowListing を超えたら、読み終わる前に
 // s.Slow で知らせる。知らせても読み出しは止めず、結果も変えない。
 func (s Store) Open(kind target.Kind) ([]target.Item, error) {
@@ -189,6 +194,9 @@ type Options struct {
 	// SlowAfter は tick の一覧の読み出しが遅いかを測る (time.After。テストは差し替える)。After と分けるのは、After が
 	// 周期と再起動の wake だけを置くため。nil なら測らない
 	SlowAfter func(d time.Duration) <-chan time.Time
+	// StartupSlowKinds は、起動時の確認で一覧の読み出しが SlowListing を超えた置き場の種類 (読んだ順)。確認は log.jsonl を
+	// 開く前に読むので、loop_start の後に slow_listing の行として書く。人が読む行は確認のときに出ているので出さない
+	StartupSlowKinds []target.Kind
 	// Coordination は調停 remote の口 (system.md §4 のマシンを跨いだ分担)。調停 remote を指さない project では nil。
 	// 最初の生存報告は呼び出し側が起動時の検査として置いてから渡す
 	Coordination Coordination
@@ -336,6 +344,9 @@ func Run(o Options) int {
 	}
 	// どの版の binary が書いた log かを後から読めるよう、起動を 1 行残す。人が読む起動の行は呼び出し側が出している
 	l.rec.write("loop_start", start)
+	for _, kind := range o.StartupSlowKinds {
+		l.rec.write("slow_listing", slowListingFields(o.Definition, kind))
+	}
 	// 前の loop が残した状態 file を、最初の tick の前に今の loop の状態で書き換える
 	l.publish()
 	l.tick()
@@ -476,7 +487,7 @@ func (l *loop) tick() {
 	store := l.o.Store(def)
 	// 遅い一覧は目標を超えた読み出しなので、画面の行に加えて log.jsonl にも残す (formats.md §4 の冒頭の規則)
 	store.Slow = SlowNotice{After: l.o.SlowAfter, Notify: func(kind target.Kind) {
-		l.rec.event("slow_listing", map[string]any{"kind": string(kind), "place": placeOf(def, kind)}, LineNote, SlowListingLine(def, kind), "")
+		l.rec.event("slow_listing", slowListingFields(def, kind), LineNote, SlowListingLine(def, kind), "")
 	}}
 	open, err := OpenItems(store, def)
 	var nonFatal *target.NonFatal

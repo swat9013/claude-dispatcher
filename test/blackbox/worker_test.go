@@ -68,9 +68,12 @@ func (s *sandbox) releaseFile() string { return filepath.Join(s.root, "release")
 func (s *sandbox) release() { mustWrite(s.t, s.releaseFile(), "") }
 
 // logLines は log.jsonl の完全な行を返す。
-func (s *sandbox) logLines() []map[string]any {
+func (s *sandbox) logLines() []map[string]any { return s.logLinesIn(s.defaultStateDir()) }
+
+// logLinesIn は state dir dir の log.jsonl の完全な行を返す。
+func (s *sandbox) logLinesIn(dir string) []map[string]any {
 	s.t.Helper()
-	f, err := os.Open(filepath.Join(s.defaultStateDir(), "log.jsonl"))
+	f, err := os.Open(filepath.Join(dir, "log.jsonl"))
 	if err != nil {
 		return nil
 	}

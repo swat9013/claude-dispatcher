@@ -3,6 +3,8 @@ package blackbox_test
 import (
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -143,6 +145,31 @@ func TestLoopShowsTheSlowListingLinesOfTheStartupConfirmationBeforeItStarts(t *t
 		}
 		if strings.Contains(loop.stderr.String(), line) {
 			t.Errorf("stderr に %q が出た:\n%s", line, loop.stderr)
+		}
+	}
+}
+
+func TestLoopWritesTheSlowListingsOfTheStartupConfirmationRightAfterLoopStart(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflowWithCommands(s.jiraWorkerWorkflow())
+	s.setJiraPlaces()
+	s.makeSlow("acli", "gh")
+
+	loop := s.startLoopWithEnv(slowEnv)
+	loop.waitForOutput(loopStartedLine)
+	loop.waitForOutput(regexp.MustCompile(`tick ok`))
+
+	// tick の読み出しも遅いので、loop_start の直後の 2 行を起動時の確認の分として見る
+	lines := s.logLinesIn(s.jiraStateDir())
+	start := slices.IndexFunc(lines, func(l map[string]any) bool { return l["event"] == "loop_start" })
+	if start < 0 || len(lines) < start+3 {
+		t.Fatalf("log.jsonl = %v, want loop_start の後に 2 行", lines)
+	}
+	want := []struct{ kind, place string }{{"issue", jiraSite + "/" + jiraKey}, {"cl", "acme/widgets"}}
+	for i, w := range want {
+		got := lines[start+1+i]
+		if got["event"] != "slow_listing" || got["kind"] != w.kind || got["place"] != w.place {
+			t.Errorf("loop_start の %d 行後 = %v, want slow_listing (kind %s, place %s)", i+1, got, w.kind, w.place)
 		}
 	}
 }
