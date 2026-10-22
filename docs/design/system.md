@@ -101,13 +101,13 @@ dispatcher は、状態の意味を定めない。issue の label が何を表�
   - 同じマシンの中では、scope key の lock で 2 本目の loop を拒む (§9)
   - マシンを跨いでは、workflow 定義で調停 remote (`coordination.remote`) を指した project に限り、下の「マシンを跨いだ分担」で分担する。指さない project はマシンを跨いだ排他を持たないので、1 つの issue 置き場は 1 台から回す
 
-**マシンを跨いだ分担** (ADR 0011・0017・0023)。調停 remote を指した project では、loop と単発起動は、着手宣言と生存報告を実装 repo の git remote の独自 ref に置き合って、作業対象を分け合う。leader は持たない。
+**マシンを跨いだ分担** (ADR 0011・0017・0023・0025)。調停 remote を指した project では、loop と単発起動は、着手宣言と生存報告を実装 repo の git remote の独自 ref に置き合って、作業対象を分け合う。leader は持たない。
 
 - **調停 remote は、workflow 定義のある clone の git remote の名前で指す**。名前はその clone で解き、URL と認証はその clone の設定 (`git remote`・credential helper・ssh の鍵) をそのまま使う。dispatcher は認証を持たない。読む URL と書く URL (`pushurl`・`pushInsteadOf`) が違うか、どちらかが複数ある remote は使えない (自分の置いた ref を読めない・push の勝ち負けが読む URL の状態と食い違う) ので、起動時の確認で落とす
 - **ref は scope dir (formats.md §1) の 1 段の下に置く**。着手宣言は作業対象ごとに 1 本 (`refs/dispatcher/<scope dir>/claims/<作業対象>`)、生存報告は loop ごとに 1 本 (`refs/dispatcher/<scope dir>/loops/<loop 名>`)。どちらも空の tree の commit を指し、形式の版・持ち主の loop 名・生存報告の間隔は commit message に書く (綴りは formats.md §12)
 - **loop 名は `<hostname を無害化したもの>-<乱数 8 hex>`** で、起動ごとに新しくする。無害化は scope dir と同じ規則 (formats.md §1)。起動し直した loop を、前の loop と別の持ち主として扱う (前の loop の着手宣言を、落ちた loop のものとして片付ける)
 - **先着は条件付きの push で決める**。着手宣言は「ref が無いときだけ作る」で push し、通った loop だけが claim を立てて worker を起動する。負けたら claim を立てず、log に行を残すだけにする (他のマシンが作業しているのは正常な状態)
-  - 負けたと判定するのは、push の exit code が非 0 で、porcelain の行が `!` で始まり `[remote rejected]` か `[rejected]` を含むとき。理由の文言 (`cannot lock ref ...`・`stale info`) は判定に使わない。`[remote rejected]` は server が old-oid の照合で拒んだとき、`[rejected]` は push の前に読んだ remote の ref が期待値と違い、git が送らずに拒んだときに出る (#169 の実機確認と、手元の bare repo での再現)
+  - 負けたと判定するのは、push の exit code が非 0 で、porcelain の行が `!` で始まり `[remote rejected]` か `[rejected]` を含むとき。理由の文言 (`cannot lock ref ...`・`stale info`) は判定に使わない。`[remote rejected]` は server が old-oid の照合で拒んだとき、`[rejected]` は push の前に読んだ remote の ref が期待値と違い、git が送らずに拒んだときに出る (ADR 0025)
   - それ以外の失敗 (network・認証・権限) は error の行を残し、claim を立てずにその tick では起動しない。次の tick で候補になれば試み直す
 - **生存報告は、生存報告の間隔ごとに新しい commit で置き直す**。間隔は「`polling.interval` と 1 分の長いほう」で、push の回数を GitHub の推奨 (repo あたり 6 push/分) に収める (§9 の駆動)。書くのは持ち主の loop だけなので、条件を付けずに置き直す (他の loop に消された後も置き直せる)
 - **生存報告が「その報告に書かれた間隔の 3 倍」新しくならない loop は死んだとみなす**。新しくなったかは ref の sha が変わったかで見て、経過は観測した側の時計だけで数える (sha が変わったのを最後に見た時刻から)。マシン間の時計は比べない。持ち主の生存報告が無い着手宣言は、着手宣言の sha が自分の生存報告の間隔の 3 倍変わらなければ、持ち主は死んだとみなす
