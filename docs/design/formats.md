@@ -743,7 +743,7 @@ triggers:
    - 観測の補助の要求が落ちたとき (§3) は `NG` にせず、`ok` の行の後ろに ` (補助の要求が落ちた: <理由>)` を足す
 3. tracker の CLI・`jira` では `cl.kind` の CLI・`claude.command` を解決できる。`on: cl` の trigger があるか `coordination.remote` を書いたなら git も (loop の起動時の検査と同じ。§6)
 4. 事前検査 (§2.9)。落ちた trigger ごとに `NG` の行
-   - 調停 remote を指した project では、続けて loop の起動時と同じ調停 remote の確認 (§12) を通し、`ok   調停 remote <名前> (<URL>)` か `NG   調停 remote <名前>: <理由>` の行を出す。push は撃たない
+   - 調停 remote を指した project では、続けて loop の起動時と同じ調停 remote の確認 (§12) を通し、`ok   調停 remote <名前> (<URL>)` か、§12 の起動時の確認の文を載せた `NG   調停 remote <名前> を解けない: <理由>` / `NG   調停 remote <名前> を読めない: <理由>` の行を出す。push は撃たない
 5. 利用者の約束に頼る宣言を `警告` の行に出す (system.md §11)
    - `approved: true` の CL 側の trigger (merge を worker に任せうる)
    - `head`・`labels.all`・`labels.any`・`same_repo: true` のどれも書いていない CL 側の trigger (人の CL や fork の CL に worker を送りうる)
@@ -844,11 +844,11 @@ claude-dispatcher run <trigger> <作業対象> [<workflow の path>]
 | 読んだ作業対象が終端でなく、その trigger に当たっている (当たるかをまだ決められないときを含めず) | 5 |
 | 調停 remote を指した project だけ: 最初の生存報告を置ける (§12) | 1 |
 | 調停 remote を指した project だけ: ref を読めて、自分の知る版より新しい版の ref が無い | 1 / 5 (新しい版) |
-| 調停 remote を指した project だけ: 作業対象に他の生きている loop の着手宣言が無く、着手宣言の push に勝つ (負け以外の失敗は exit 1) | 5 |
+| 調停 remote を指した project だけ: 作業対象に他の loop の着手宣言が無く、着手宣言の push に勝つ (負け以外の失敗は exit 1) | 5 |
 
 - 事前検査は §6 と同じく、指名していない trigger が落ちても失敗させる
 - 当たっているかは指名した trigger の述語だけで決める。宣言順で先の trigger に当たっていても起動する (loop の読み直しの `earlier_trigger` は当てない)
-- 調停 remote を指した project では、loop と同じく、単発起動の終わりまで生存報告を置き直し (§12)、終わるときに着手宣言と生存報告を消す (起動しなかったときも、置いた分を消す)。乗っ取られたかは確かめない。持ち主の死んだ着手宣言は、loop と同じく旧 sha を期待値にした置き換えで乗っ取る。死んだ loop の ref の掃除はしない
+- 調停 remote を指した project では、loop と同じく、単発起動の終わりまで生存報告を置き直し (§12)、終わるときに着手宣言と生存報告を消す (起動しなかったときも、置いた分を消す)。乗っ取られたかは確かめない。ref を 1 回しか読まず、生存報告が新しくならない経過を数えられないので、死んだ loop を判定しない (他の loop の着手宣言があれば、持ち主が落ちていても起動しない。乗っ取りと死んだ loop の ref の掃除は loop に任せる)
 - lock は §6 と同じ `loop.lock` だけを、単発起動の終わりまで持つ。`alive.lock` は取らないので、単発起動の間の `status` は `○ loop なし` と描く (止まった loop が残した状態 file を今の状態として描かない)。同じ scope key の loop・単発起動との排他は `loop.lock` が担う
 
 **worker の 1 回分**: §6 の「worker の 1 回分」と同じ (workspace の用意と hooks・描画・`claude -p` の起動・`limits.stall_timeout`・`limits.run_timeout`・`after_run`)。attempt は 1 で、session id は新しく発行する (`--session-id`)。retry も打ち切りもしない。
