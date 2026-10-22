@@ -4,7 +4,7 @@
 '    メソッド扱いされて画像から無言で消える (構文検査は exit 0 のまま)
 ' 2. 検査は exit code で判定する。-tsvg は syntax error でもエラー画像を出して exit 0 を返しうるので、
 '    生成物の有無を成功の判定に使わない
-' 3. stereotype は正本の持ち主: «外部 store» / «loop の記憶» / «CLI の disk»。印の無いものは宣言
+' 3. stereotype は正本の持ち主: «外部 store» / «調停 remote» / «loop の記憶» / «CLI の disk»。印の無いものは宣言
 hide circle
 hide empty members
 skinparam packageStyle rectangle
@@ -18,6 +18,7 @@ package "集約: workflow 定義 (project の宣言。tick ごとに読み直す
     {field} tracker.kind : github | gitlab | jira
     {field} cl.kind : github | gitlab (tracker.kind が jira のときだけ書き、そのときは必須)
     {field} 並列上限・attempt の上限
+    {field} coordination.remote : clone の git remote の名前 (書かなければ 1 台で回す)
   }
   class "trigger" as Trigger {
     {field} 名前 : workflow 定義の中で一意
@@ -47,9 +48,25 @@ package "外部 store (正本は dispatcher の外。dispatcher の集約に入�
   }
 }
 
+package "調停 remote (正本は実装 repo の git remote の独自 ref。dispatcher の機械が書く)" as Coordination {
+  class "着手宣言" as ClaimRef <<調停 remote>> {
+    {field} ref : refs/dispatcher/<scope dir>/claims/<作業対象>
+    {field} 作業対象 : Ref
+    {field} 持ち主 : loop 名
+    {field} 形式の版
+  }
+  class "生存報告" as Heartbeat <<調停 remote>> {
+    {field} ref : refs/dispatcher/<scope dir>/loops/<loop 名>
+    {field} loop 名
+    {field} 間隔 : polling.interval と 1 分の長いほう
+    {field} 形式の版
+  }
+}
+
 package "集約: loop (claim・attempt・打ち切りの記憶)" as LoopAgg {
   class "loop" as Loop <<loop の記憶>> {
     {field} scope key : 起動時の issue 置き場のもの
+    {field} loop 名 : <hostname を無害化したもの>-<乱数 8 hex>。起動ごとに新しい
   }
   class "claim" as Claim <<loop の記憶>> {
     {field} 作業対象 : Ref
@@ -88,6 +105,11 @@ Claim "0..1" ..> "1" WorkTarget : ID参照 Ref
 Abandoned "0..1" ..> "1" WorkTarget : ID参照 Ref
 Workspace "0..1" ..> "1" WorkTarget : ID参照 Ref
 Claim "*" ..> "1" Trigger : ID参照 名前 (起動した trigger)
+Project "1" ..> "0..1" Coordination : ID参照 coordination.remote
+Loop "1" -- "0..1" Heartbeat : 調停 remote を指した project だけ
+Claim "1" -- "0..1" ClaimRef : 調停 remote を指した project では 1
+ClaimRef "*" ..> "1" Heartbeat : ID参照 loop 名 (持ち主)
+ClaimRef "0..1" ..> "1" WorkTarget : ID参照 Ref
 Abandoned "*" ..> "1" Trigger : ID参照 名前 (打ち切ったときの trigger)
 
 note right of Project
@@ -96,14 +118,15 @@ note right of Project
 end note
 
 note bottom of External
-  CLI はここに書かない。読むだけで、書くのは worker と人。
+  CLI はここに書かない。読むだけで、書くのは worker と人 (調停 remote の独自 ref は別の package)。
   adapter がサービス固有の形を作業対象へ正規化して写す (Anti-Corruption Layer)。
   1 つのサービスが tracker と CL host を兼ねうる (GitHub・GitLab)。Jira は tracker にだけなれる
 end note
 
 note top of Loop
   同じ scope key の loop は、マシンの中で 1 本 (scope key の lock)。
-  候補 = いずれかの trigger に当たり ∧ claim されておらず ∧ 打ち切られておらず ∧ orphan が生きていない作業対象。
+  候補 = いずれかの trigger に当たり ∧ claim されておらず ∧ 打ち切られておらず ∧ orphan が生きていない
+  ∧ 他の生きている loop の着手宣言が立っていない作業対象。
   snapshot (1 tick で読んだ作業対象の正規化像) は tick を跨いで持ち越さない
 end note
 
@@ -111,6 +134,14 @@ note bottom of Claim
   同じ作業対象に、claim と打ち切りは同時に立たない。
   attempt は上限を超えない (上限に達したら打ち切りに移る)。
   完了 = worker が終わった後に、起動した trigger から外れていること。完了で claim を解く
+end note
+
+note bottom of Coordination
+  機械が外部 store に書く唯一の entity (ADR 0011)。書くのは refs/dispatcher/ の下だけで、
+  空の tree の commit を指し、形式の版・持ち主・間隔は commit message に書く (ADR 0023)。
+  1 つの作業対象の着手宣言は 1 本 (条件付きの push で先着の loop だけが置く)。
+  マシンを跨いだ複数の loop が、生存報告を 1 本ずつ置いて同じ issue 置き場を分け合う。
+  生存報告が間隔の 3 倍新しくならない loop の着手宣言は、他の loop が乗っ取るか消す
 end note
 
 note bottom of Workspace
