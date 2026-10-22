@@ -184,7 +184,7 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 | `orphan_end` | 前の tick まで生きていた orphan が終わったのを見た (1 行) | `target` |
 | `claim_lost` | 着手宣言の push に負けて、claim を立てずに起動しなかった (§12。tick ごとに、候補 1 件につき 1 行) | `target`・`trigger` |
 | `takeover` | 死んだ loop の着手宣言を乗っ取って claim を立てた (§12。続けて `start` の行) | `target`・`trigger`・`from` (死んだ loop の loop 名) |
-| `inherit` | 生きている orphan (§6) の作業対象に残った死んだ loop の着手宣言を、自分の名前に引き継いだ (§12。claim は立てない。既存の `takeover` の行は claim を立てたときだけ書き、この経路では書かない) | `target`・`from` (死んだ loop の loop 名) |
+| `inherit` | 生きている orphan (§6) の作業対象に残った死んだ loop の着手宣言を、自分の名前に引き継いだ (§12。claim は立てない。この経路では `takeover` の行を書かない) | `target`・`from` (死んだ loop の loop 名) |
 | `taken_over` | 自分の着手宣言が乗っ取られていたのを見た (§12。走っている worker は止め、それ以外の claim は解く) | `target`・`trigger`・`by` (今の持ち主の loop 名。消えていたら空文字列、持ち主の commit message を読めなければ `?`) |
 | `dead_loop` | 他の loop を死んだとみなし、その生存報告と、乗っ取らなかった着手宣言を消した (§12。1 つの loop につき 1 行) | `loop` (死んだ loop の loop 名)・`refs` (消した ref の列) |
 | `error` | 処理は続けるが、運用者が知るべき失敗 | `target` (あれば)・`error` |

@@ -424,7 +424,6 @@ func sameMachine(a, b string) bool {
 // 生きている orphan の作業対象の着手宣言は消さずに引き継ぐ。消すときの負けは読み飛ばす (他の loop が先に消したか乗っ取った)。
 func (l *loop) cleanupDeadLoops() {
 	r := l.mediation
-	l.inheritOrphanClaims()
 	loops := make([]string, 0, len(r.deadLoops))
 	for loop := range r.deadLoops {
 		loops = append(loops, loop)

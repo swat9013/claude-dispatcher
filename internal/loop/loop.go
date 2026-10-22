@@ -527,6 +527,7 @@ func (l *loop) tick() {
 		}
 	}
 	if l.mediation != nil {
+		l.inheritOrphanClaims()
 		l.cleanupDeadLoops()
 	}
 	l.board.lastTick = &status.Tick{At: l.o.Now(), Result: status.TickOK, Candidates: len(candidates)}
