@@ -487,6 +487,6 @@ CLI の中で、呼び出し側から中身を隠す部品と、差し替えの�
   - 死んだ loop の判定 (sha が変わったのを最後に見た時刻と間隔) は、時計を持つ loop が行う。部品は時計を持たない
   - git は workflow 定義のある clone を cwd にして撃つ。commit の作者と committer は部品が環境変数で渡し、利用者の git の設定 (`user.name` など) に頼らない
   - push はすべて `--no-verify --porcelain` で撃つ (§4)
-  - git 自身の認証の prompt を出させない (`GIT_TERMINAL_PROMPT=0`)。loop は無人で回るので、prompt は答えられずに上限時間まで止まる。利用者が `core.sshCommand` も `GIT_SSH_COMMAND` も設定していないときは、ssh の passphrase と host key の確認も出させない (`GIT_SSH_COMMAND="ssh -o BatchMode=yes"`)。どちらかが設定されていれば何も足さず、利用者の設定を使う (利用者の ssh の設定を上書きしないため)。その設定では、agent か鍵の設定で prompt なしに通るようにしておく
+  - git 自身の認証の prompt を出させない (`GIT_TERMINAL_PROMPT=0`)。loop は無人で回るので、prompt は答えられずに上限時間まで止まる。利用者が `core.sshCommand`・`GIT_SSH_COMMAND`・`GIT_SSH` のどれも設定していないときは、ssh の passphrase と host key の確認も出させない (`GIT_SSH_COMMAND="ssh -o BatchMode=yes"`)。どれかが設定されていれば何も足さず、利用者の設定を使う (利用者の ssh の設定を上書きしないため)。どちらの場合も、agent か鍵の設定で prompt なしに通るようにしておく
   - 本番の adapter は git、テストの adapter は loop の単体テストの fake。black-box テストは PATH の git の stub で、git に渡す引数を確かめる
 - **trigger の評価は、正規化した作業対象だけを見る**。adapter の生の応答を覗かない (SPEC §11.2)
