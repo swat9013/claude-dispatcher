@@ -59,6 +59,8 @@ func (s *sandbox) gitRules(refs []remoteRef, before ...stubwire.Rule) []stubwire
 		rules = append(rules, stubwire.Rule{ArgsPrefix: []string{"cat-file", "commit", r.sha}, Stdout: commitOf(r.message)})
 	}
 	return append(rules,
+		// 利用者は ssh の撃ち方を決めていない (git は未設定の key に exit 1 を返す)
+		stubwire.Rule{ArgsPrefix: []string{"config", "--get", "core.sshCommand"}, Exit: 1},
 		stubwire.Rule{ArgsPrefix: []string{"remote", "get-url", "--all", "origin"}, Stdout: originURL + "\n"},
 		stubwire.Rule{ArgsPrefix: []string{"remote", "get-url", "--push", "--all", "origin"}, Stdout: originURL + "\n"},
 		stubwire.Rule{ArgsPrefix: []string{"ls-remote", "origin", s.refPrefix() + "*"}, Stdout: listed.String()},
@@ -201,7 +203,7 @@ func TestEveryGitCallToTheCoordinationRemoteDisablesTheTerminalPrompt(t *testing
 }
 
 // assertEveryGitCallDisablesTheTerminalPrompt は、git の stub が受けた呼び出しが 1 回以上あり、どれも
-// GIT_TERMINAL_PROMPT=0 を付けていることを確かめる。
+// GIT_TERMINAL_PROMPT=0 と BatchMode の ssh を付けていることを確かめる。
 func (s *sandbox) assertEveryGitCallDisablesTheTerminalPrompt() {
 	s.t.Helper()
 	calls := s.calls("git")
@@ -211,6 +213,10 @@ func (s *sandbox) assertEveryGitCallDisablesTheTerminalPrompt() {
 	for _, c := range calls {
 		if c.Env["GIT_TERMINAL_PROMPT"] != "0" {
 			s.t.Fatalf("GIT_TERMINAL_PROMPT=0 の無い git の呼び出し: %v (env %v)", c.Argv[1:], c.Env)
+		}
+		// 利用者が ssh の撃ち方を決めていない sandbox では、ssh の prompt も止める。その判定に撃つ config は ssh を撃たない
+		if c.Argv[1] != "config" && c.Env["GIT_SSH_COMMAND"] != "ssh -o BatchMode=yes" {
+			s.t.Fatalf("BatchMode の ssh の無い git の呼び出し: %v (env %v)", c.Argv[1:], c.Env)
 		}
 	}
 }

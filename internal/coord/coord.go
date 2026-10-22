@@ -121,10 +121,32 @@ var identity = []string{
 func (r Remote) prefix() string { return "refs/dispatcher/" + r.ScopeDir + "/" }
 
 // git は認証の prompt を出させない git の呼び出し口。loop は無人で回るので、prompt は答えられずに上限時間まで止まる。
+// 利用者が ssh の撃ち方を決めていなければ、ssh の passphrase と host key の確認も出させない (system.md §13)。
 func (r Remote) git(env ...string) proc.Command {
 	git := r.Git
-	git.Env = append(append(slices.Clone(git.Env), "GIT_TERMINAL_PROMPT=0"), env...)
+	git.Env = append(slices.Clone(git.Env), "GIT_TERMINAL_PROMPT=0")
+	if !sshCommandIsSet(git) {
+		git.Env = append(git.Env, "GIT_SSH_COMMAND=ssh -o BatchMode=yes")
+	}
+	git.Env = append(git.Env, env...)
 	return git
+}
+
+// sshCommandIsSet は、利用者が GIT_SSH_COMMAND・GIT_SSH・core.sshCommand で ssh の撃ち方を決めているかを返す。決めていれば
+// その設定を上書きしない。設定を読めなかったときも、上書きしないほうへ倒す。
+func sshCommandIsSet(git proc.Command) bool {
+	for _, kv := range git.Env {
+		// GIT_SSH は GIT_SSH_COMMAND に負けるので、足すと利用者の wrapper を上書きする
+		if strings.HasPrefix(kv, "GIT_SSH_COMMAND=") || strings.HasPrefix(kv, "GIT_SSH=") {
+			return true
+		}
+	}
+	value, err := git.Output("config", "--get", "core.sshCommand")
+	// 設定が無ければ git は exit 1 で何も出さない
+	if pe := (*proc.Error)(nil); errors.As(err, &pe) && pe.Exit == 1 {
+		return false
+	}
+	return err != nil || strings.TrimSpace(value) != ""
 }
 
 // ClaimRef は作業対象の着手宣言の ref。
