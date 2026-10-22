@@ -167,6 +167,8 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 
 値のうち、列挙の値 (`event`・`result`・`outcome`・`reason`) は言語に依らない ASCII の token、自由文の値 (`error`・`failure` など) は人向けの日本語にする (ADR 0013)。
 
+人が読む行 (§6 の画面) にだけ出す知らせと、log.jsonl にも残す知らせは、後から辿る必要があるかで分ける。運用の目標や上限を超えた・失敗に至らない異常のように、いつ・どの置き場で起きたかを後から読む必要があるものは、event の行として log.jsonl にも残す。その場の進み具合を知らせるだけの行 (待っていることの表示など) は画面にだけ出す。
+
 | `event` | いつ | ほかの key |
 |---|---|---|
 | `loop_start` | loop を起動した (起動時の検査に通り、最初の tick の前。1 回の起動につき 1 行) | `version`・`commit` (loop を書いた binary の版と commit。値は `--version` (§8) と同じ)・`loop` (loop 名 (§12)。調停 remote を指した project だけ) |
