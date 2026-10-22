@@ -106,6 +106,11 @@ type Options struct {
 	After func(d time.Duration) <-chan time.Time
 	// Refresh は走っている worker の活動を確かめる周期 (1s) に届く。nil なら確かめない
 	Refresh <-chan time.Time
+	// Coordination は調停 remote の口 (system.md §4 のマシンを跨いだ分担)。調停 remote を指さない project では nil。
+	// 最初の生存報告は呼び出し側が起動時の検査として置いてから渡す
+	Coordination Coordination
+	// HeartbeatAfter は d 後に届く、次の生存報告の時計 (time.After。テストは差し替える)。Coordination があるときだけ使う
+	HeartbeatAfter func(d time.Duration) <-chan time.Time
 }
 
 // phase は claim の段階。
@@ -128,6 +133,7 @@ type stopReason Reason
 const (
 	stoppedAtTerminal = stopReason(reasonTerminal)
 	stoppedByRequest  = stopReason(reasonStopRequested)
+	stoppedByTakeover = stopReason(reasonTakenOver)
 )
 
 // outcome は claim を解いたときの終わり方 (formats.md §4)。
@@ -171,6 +177,10 @@ type claim struct {
 	// pid と workspace は今の attempt で起動した claude の pid と workspace の path (止められない claude を人が探すため)
 	pid       int
 	workspace string
+	// claimSHA は調停 remote に置いた自分の着手宣言の sha。調停 remote を指さない project と、乗っ取られた後は ""
+	claimSHA string
+	// takenOver は着手宣言を乗っ取られたか。乗っ取られた worker は、終われば終わりを確かめずに claim を解く (system.md §7)
+	takenOver bool
 	// exited は、SIGKILL を送れず claude が終わっていなかった worker の知らせ (worker.Unstopped) が渡した、claude が終わると
 	// 閉じる channel。知らせを受けてから worker の終わりが届くまで nil でない。その間、段階は phaseStopping のまま残し、loop の
 	// 停止は claude が終わるまでこの worker を待たない (system.md §7)
@@ -202,6 +212,8 @@ type loop struct {
 	orphansUnknown bool
 	// board は状態 file にだけ使う状態。loop の判断には使わない
 	board board
+	// remote は調停 remote を指した loop の調停の記憶。指さなければ nil
+	remote *remote
 }
 
 // Run は停止要求で止まるまで tick を回す。起動の直後に 1 回 tick を撃ち、以後は tick の終了から周期だけ待つ。
@@ -212,9 +224,14 @@ func Run(o Options) int {
 		o: o, def: o.Definition, claims: map[target.Ref]*claim{}, abandoned: map[target.Ref]string{}, events: make(chan worker.Event),
 		rec: recorder{log: o.Log, output: o.Output, now: o.Now, scope: o.ScopeKey}, board: board{startedAt: o.Now()},
 	}
-	var next <-chan time.Time
+	var next, heartbeat <-chan time.Time
+	start := map[string]any{"version": o.Build.Version, "commit": o.Build.Commit}
+	if o.Coordination != nil {
+		l.remote = &remote{c: o.Coordination, seen: map[string]sighting{}}
+		start["loop"] = o.Coordination.LoopName()
+	}
 	// どの版の binary が書いた log かを後から読めるよう、起動を 1 行残す。人が読む起動の行は呼び出し側が出している
-	l.rec.write("loop_start", map[string]any{"version": o.Build.Version, "commit": o.Build.Commit})
+	l.rec.write("loop_start", start)
 	// 前の loop が残した状態 file を、最初の tick の前に今の loop の状態で書き換える
 	l.publish()
 	l.tick()
@@ -231,6 +248,10 @@ func Run(o Options) int {
 		if next == nil {
 			next = o.After(l.def.Interval)
 			l.board.nextTickAt = o.Now().Add(l.def.Interval)
+		}
+		if heartbeat == nil && l.remote != nil {
+			// 生存報告は tick とは別の時計で置き直す。停止要求の後も、止まるまで置き直す (system.md §9)
+			heartbeat = o.HeartbeatAfter(l.heartbeatInterval())
 		}
 		l.arm()
 		l.publish()
@@ -253,6 +274,9 @@ func Run(o Options) int {
 			}
 		case <-o.Refresh:
 			l.refresh()
+		case <-heartbeat:
+			heartbeat = nil
+			l.heartbeat()
 		}
 	}
 }
@@ -274,6 +298,7 @@ func (l *loop) exit() int {
 	for ref, c := range l.claims {
 		l.apply(ref, c, c.loopEnded())
 	}
+	l.leaveRemote()
 	// 止まる時点の claim を状態 file に残す (loop が止まった後の status は worker を出さないが、file は読み返せる)
 	l.publish()
 	l.rec.human(LineNote, "loop を止めた", " (停止要求 %s)", SignalName(l.lastStop))
@@ -331,6 +356,13 @@ func (l *loop) tick() {
 		return
 	}
 	l.def, l.blocked = def, l.o.Precheck(def)
+	if l.remote != nil {
+		if err := l.coordinate(); err != nil {
+			// 誰が着手しているかを決められないので、掃除も起動 (再起動を含む) もしない
+			l.tickFailed(oneLine(err))
+			return
+		}
+	}
 	store := l.o.Store(def)
 	open, err := OpenItems(store, def)
 	var nonFatal *target.NonFatal
@@ -377,6 +409,13 @@ func (l *loop) tick() {
 		if l.orphans[ref] {
 			continue
 		}
+		if l.remote != nil && l.remote.newer != nil {
+			// 新しい版の ref がある間は、その scope で worker を起動しない (formats.md §12)
+			break
+		}
+		if l.heldByOther(ref) {
+			continue
+		}
 		// claim している作業対象の branch に、CL の worker を重ねない。一覧の CL で外せるものは読み直さずに外し、読み直した
 		// CL でも確かめ直す
 		if cl, isCL := c.Item.(target.CL); isCL && v.branchHeld(cl, target.Ref{}) {
@@ -398,6 +437,9 @@ func (l *loop) tick() {
 		if l.launch(def, c) {
 			launched = append(launched, ref.String())
 		}
+	}
+	if l.remote != nil {
+		l.cleanupDeadLoops()
 	}
 	l.board.lastTick = &status.Tick{At: l.o.Now(), Result: status.TickOK, Candidates: len(candidates)}
 	l.board.ambiguous = ambiguous
@@ -725,7 +767,12 @@ func (l *loop) launch(def workflow.Definition, c trigger.Candidate) bool {
 		l.rec.error(ref, err.Error())
 		return false
 	}
-	claimed := newClaim(c.Item, *c.Trigger, sessionID, def.WorkspaceRoot)
+	// 着手宣言は claim を立てる直前に置く。負けたら claim を立てない (system.md §7 の調停 remote の突き合わせ)
+	claimSHA, ok := l.claimRemote(ref, c.Trigger.Name)
+	if !ok {
+		return false
+	}
+	claimed := newClaim(c.Item, *c.Trigger, sessionID, def.WorkspaceRoot, claimSHA)
 	l.claims[ref] = claimed
 	l.start(claimed)
 	return true

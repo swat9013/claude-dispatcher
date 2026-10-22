@@ -16,12 +16,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/swat9013/claude-dispatcher/internal/coord"
 	"github.com/swat9013/claude-dispatcher/internal/deps"
 	"github.com/swat9013/claude-dispatcher/internal/guide"
 	"github.com/swat9013/claude-dispatcher/internal/loop"
 	"github.com/swat9013/claude-dispatcher/internal/places"
 	"github.com/swat9013/claude-dispatcher/internal/precheck"
 	"github.com/swat9013/claude-dispatcher/internal/printable"
+	"github.com/swat9013/claude-dispatcher/internal/proc"
 	"github.com/swat9013/claude-dispatcher/internal/provider"
 	"github.com/swat9013/claude-dispatcher/internal/state"
 	"github.com/swat9013/claude-dispatcher/internal/status"
@@ -271,6 +273,10 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 		return code
 	}
 	defer lock.Close()
+	party, code := e.join(def, stderr)
+	if code != 0 {
+		return code
+	}
 	logFile, err := os.OpenFile(filepath.Join(dir, state.LogFile), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		fmt.Fprintf(stderr, "log.jsonl を開けない: %v\n", err)
@@ -289,14 +295,22 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 			return status.Write(dir, snap)
 		}
 	}
-	output.Show(loop.Line{At: time.Now(), Label: "loop を始めた", Rest: fmt.Sprintf(": scope %s · state dir %s · workflow %s", scopeKey, dir, abs)})
+	scope := scopeKey
+	var coordination loop.Coordination
+	if party != nil {
+		scope += " · loop " + party.LoopName()
+		coordination = party
+	}
+	output.Show(loop.Line{At: time.Now(), Label: "loop を始めた", Rest: fmt.Sprintf(": scope %s · state dir %s · workflow %s", scope, dir, abs)})
 	hookLock := &sync.Mutex{}
 	return loop.Run(loop.Options{
-		Load:       load,
-		Definition: def,
-		Precheck:   e.precheck,
-		Store:      func(def workflow.Definition) loop.Store { return e.places(def).Store() },
-		Workspaces: func(def workflow.Definition) loop.Workspaces { return e.workspaces(def, hookLock) },
+		Coordination:   coordination,
+		HeartbeatAfter: time.After,
+		Load:           load,
+		Definition:     def,
+		Precheck:       e.precheck,
+		Store:          func(def workflow.Definition) loop.Store { return e.places(def).Store() },
+		Workspaces:     func(def workflow.Definition) loop.Workspaces { return e.workspaces(def, hookLock) },
 		Launch: func(def workflow.Definition, job worker.Job, events chan<- worker.Event) loop.Worker {
 			return worker.Runner{Workspaces: e.workspaces(def, hookLock), Definition: def, StateDir: dir}.Start(job, events)
 		},
@@ -330,7 +344,43 @@ func (e environment) confirmLaunchable(def workflow.Definition, stderr io.Writer
 		fmt.Fprintln(stderr, err)
 		return failureExit(err)
 	}
+	if def.CoordinationRemote != "" {
+		if _, err := e.coordinationRemote(def).Confirm(); err != nil {
+			fmt.Fprintln(stderr, printable.Line(err.Error()))
+			return exitFailed
+		}
+	}
 	return 0
+}
+
+// coordinationRemote は workflow 定義の調停 remote (formats.md §12)。git は workflow 定義のある dir から撃ち、remote の URL と
+// 認証はその clone の設定をそのまま使う。
+func (e environment) coordinationRemote(def workflow.Definition) coord.Remote {
+	git, err := deps.Lookup("git", e.env)
+	if err != nil {
+		// 解決できない git は、撃ったときの失敗として名前のまま返す (起動時は依存 CLI の検査が先に落とす)
+		git = "git"
+	}
+	return coord.Remote{Name: def.CoordinationRemote, ScopeDir: state.DirName(places.ScopeKey(def)), Git: proc.Command{Path: git, Env: e.env, Dir: def.Dir, Timeout: commandTimeout}}
+}
+
+// join は、調停 remote を指した project で loop 名を決め、最初の生存報告を置く (formats.md §12 の起動時の確認)。指さない
+// project では nil。置けなければ stderr に理由を出して exit code を返す。
+func (e environment) join(def workflow.Definition, stderr io.Writer) (*coord.Party, int) {
+	if def.CoordinationRemote == "" {
+		return nil, 0
+	}
+	name, err := coord.NewLoopName()
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return nil, exitFailed
+	}
+	party := &coord.Party{Remote: e.coordinationRemote(def), Loop: name}
+	if err := party.Heartbeat(coord.HeartbeatInterval(def.Interval)); err != nil {
+		fmt.Fprintf(stderr, "調停 remote %s に生存報告を置けない: %s\n", def.CoordinationRemote, printable.Line(err.Error()))
+		return nil, exitFailed
+	}
+	return party, 0
 }
 
 // lockState は state dir を作って scope key の lock を take に取らせる (formats.md §6・§11)。loop (state.Lock) と単発起動

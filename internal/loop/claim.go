@@ -11,7 +11,7 @@ import (
 )
 
 // claim の遷移 (docs/design/statechart.puml の claim の 4 つの段階 Running・Stopping・AwaitingVerification・WaitingRetry)。
-// 入口は出来事をまとめた 6 つ (workerUnstopped・workerEnded・observed・stopRequested・backoffElapsed・loopEnded)。入口は claim の段階を
+// 入口は出来事をまとめた 7 つ (workerUnstopped・workerEnded・observed・stopRequested・backoffElapsed・takenOverBy・loopEnded)。入口は claim の段階を
 // 進め、書くログの行と loop がする I/O を effect で返す。I/O の実行と、claim の記録 (l.claims) からの削除は loop の apply
 // がする。打ち切った作業対象が解けるか (stillAbandoned) は claim の外に残す (打ち切った作業対象は claim を持たない)。
 
@@ -108,10 +108,15 @@ func (c *claim) workerEnded(ref target.Ref, result worker.Result) effect {
 		return effect{lines: []logLine{errorLine("走っていない claim の worker の終わりを受けた")}}
 	}
 	c.run, c.exited = nil, nil
-	if c.phase == phaseStopping && result.Stopped {
+	if c.phase == phaseStopping && (result.Stopped || c.takenOver) {
+		// 乗っ取られた worker は、止める前に終わっていても終わりを確かめない。乗っ取った loop が同じ作業対象を作業している
+		reason := Reason(c.stopReason)
+		if c.takenOver {
+			reason = reasonTakenOver
+		}
 		return effect{
-			removeWorkspace: c.stopReason == stoppedAtTerminal,
-			lines:           []logLine{c.endLine(ref, stopped, Reason(c.stopReason), result)},
+			removeWorkspace: c.stopReason == stoppedAtTerminal && result.Stopped,
+			lines:           []logLine{c.endLine(ref, stopped, reason, result)},
 			exit:            release,
 		}
 	}
@@ -243,6 +248,8 @@ const (
 	hindranceDefinitionUnavailable
 	// hindranceTriggerRemoved は起動した trigger が workflow 定義から消えた
 	hindranceTriggerRemoved
+	// hindranceNewerFormat は調停 remote に自分の知る版より新しい版の ref がある
+	hindranceNewerFormat
 )
 
 // backoffElapsed は再起動待ちの claim の backoff の明けを受ける。妨げが無ければ次の attempt を起動し、trigger が消えて
@@ -275,9 +282,36 @@ func (c *claim) backoffElapsed(ref target.Ref, h hindrance, item target.Item, en
 	return effect{}
 }
 
+// takenOverBy は、自分の着手宣言が乗っ取られた (sha が変わったか消えた) ことを受ける。走っている worker は止め、止めている
+// worker は終われば claim を解く。終わりを確かめ待ちと再起動待ちの claim はその場で解く (system.md §7 の調停 remote の突き合わせ)。
+func (c *claim) takenOverBy(ref target.Ref, by string) effect {
+	c.claimSHA, c.takenOver = "", true
+	line := logLine{
+		event: "taken_over", fields: map[string]any{"target": ref.String(), "trigger": c.trigger.Name, "by": by},
+		kind: LineError, label: "乗っ取られた", format: " %s (%s): %s",
+		args: []any{ref, c.trigger.Name, holderScreen(by)},
+	}
+	switch c.phase {
+	case phaseRunning:
+		c.phase, c.stopReason = phaseStopping, stoppedByTakeover
+		return effect{lines: []logLine{line}, stopWorker: true}
+	case phaseAwaitingVerification, phaseWaitingRetry:
+		return effect{lines: []logLine{line, c.releaseLine(ref, reasonTakenOver)}, exit: release}
+	}
+	return effect{lines: []logLine{line}}
+}
+
+// holderScreen は乗っ取られた着手宣言の今の持ち主を人が読む文。
+func holderScreen(by string) string {
+	if by == "" {
+		return "着手宣言が消えていた"
+	}
+	return "loop " + by + " が着手宣言を持っている"
+}
+
 // newClaim は候補になった作業対象に立てる claim。attempt 1 の worker が走っている段階で始まる。
-func newClaim(item target.Item, t trigger.Trigger, sessionID, workspaceRoot string) *claim {
-	return &claim{item: item, trigger: t, attempt: 1, sessionID: sessionID, workspaceRoot: workspaceRoot, phase: phaseRunning}
+func newClaim(item target.Item, t trigger.Trigger, sessionID, workspaceRoot, claimSHA string) *claim {
+	return &claim{item: item, trigger: t, attempt: 1, sessionID: sessionID, workspaceRoot: workspaceRoot, phase: phaseRunning, claimSHA: claimSHA}
 }
 
 // loopEnded は loop の終了を受ける。claim を持ったまま止まることを error の行に残す。

@@ -26,12 +26,19 @@ func Root(getenv func(string) string) string {
 
 var unsafeRune = regexp.MustCompile(`[^a-z0-9._-]`)
 
-// Dir は scope key の state dir。無害化した scope key に、scope key の sha256 の先頭 8 文字を足した名前にする。
-// hash を足すのは、無害化で別の scope key が同じ綴りになっても置き場を分けるため。
-func Dir(root, scopeKey string) string {
+// Sanitize は s を小文字にし、[a-z0-9._-] 以外の文字を _ に置き換える (formats.md §1 の無害化)。
+func Sanitize(s string) string { return unsafeRune.ReplaceAllString(strings.ToLower(s), "_") }
+
+// DirName は scope key の scope dir: 無害化した scope key に、scope key の sha256 の先頭 8 文字を足した名前。
+// hash を足すのは、無害化で別の scope key が同じ綴りになっても置き場を分けるため。state dir と調停 remote の ref (formats.md §12)
+// が同じ名前を使う。
+func DirName(scopeKey string) string {
 	sum := sha256.Sum256([]byte(scopeKey))
-	return filepath.Join(root, unsafeRune.ReplaceAllString(strings.ToLower(scopeKey), "_")+"-"+hex.EncodeToString(sum[:])[:8])
+	return Sanitize(scopeKey) + "-" + hex.EncodeToString(sum[:])[:8]
 }
+
+// Dir は scope key の state dir。
+func Dir(root, scopeKey string) string { return filepath.Join(root, DirName(scopeKey)) }
 
 // ErrAlreadyRunning は同じ scope key の loop か単発起動が走っていて lock を取れなかったこと。
 var ErrAlreadyRunning = errors.New("同じ scope key の loop か単発起動がもう走っている")
