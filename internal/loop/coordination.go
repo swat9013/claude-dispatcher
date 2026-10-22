@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sync/atomic"
 	"time"
 
 	"github.com/swat9013/claude-dispatcher/internal/coord"
@@ -45,12 +46,10 @@ type holder struct {
 	loop string
 	sha  string
 	dead bool
-	// takenByMe は、この tick の候補の起動で乗っ取ったか
-	takenByMe bool
 }
 
-// remote は調停 remote を指した loop の、調停の記憶。
-type remote struct {
+// mediation は調停 remote を指した loop の、調停の記憶。
+type mediation struct {
 	c Coordination
 	// seen は ref の名前ごとの直近の sha と、その sha を初めて見た時刻
 	seen map[string]sighting
@@ -67,61 +66,53 @@ type remote struct {
 	heartbeatError    string
 	// interval は生存報告の間隔。起動時の workflow 定義から決め、走っている間は変えない (system.md §9)
 	interval time.Duration
-	// results は生存報告の置き直しの結果。stopBeating は置き直しの goroutine を止めて終わりを待つ
+	// results は生存報告の置き直しの結果。dropped は results の満杯で捨てた結果の数。stopBeating は置き直しの goroutine を
+	// 止めて終わりを待つ
 	results     chan error
+	dropped     atomic.Int64
 	stopBeating func()
 }
 
 // startBeating は、生存報告を tick と別の goroutine で間隔ごとに置き直し始める。tick が長引いても置き直しを遅らせない
-// (system.md §9)。結果は results に送り、loop が読めないほど溜まれば捨てる (置き直し自体は止めない)。
-func (r *remote) startBeating(after func(time.Duration) <-chan time.Time) {
-	r.results = make(chan error, 16)
-	quit, done := make(chan struct{}), make(chan struct{})
-	go func() {
-		defer close(done)
-		for {
-			select {
-			case <-quit:
-				return
-			case <-after(r.interval):
-			}
-			err := r.c.Heartbeat(r.interval)
-			select {
-			case r.results <- err:
-			default:
-			}
+// (system.md §9)。結果は results に送り、loop が読めないほど溜まれば捨てて数える (置き直し自体は止めない)。
+func (m *mediation) startBeating(after func(time.Duration) <-chan time.Time) {
+	m.results = make(chan error, 16)
+	m.stopBeating = coord.KeepBeating(m.c.Heartbeat, m.interval, after, func(err error) {
+		select {
+		case m.results <- err:
+		default:
+			m.dropped.Add(1)
 		}
-	}()
-	r.stopBeating = func() {
-		close(quit)
-		<-done
-	}
+	})
 }
 
 // beats は生存報告の置き直しの結果が届く channel。調停 remote を指さない loop では nil (届かない)。
 func (l *loop) beats() <-chan error {
-	if l.remote == nil {
+	if l.mediation == nil {
 		return nil
 	}
-	return l.remote.results
+	return l.mediation.results
 }
 
 // beat は生存報告の置き直しの結果を受ける。落ちたら error の行を残して数え、続けて 2 回以上落ちていれば要対処に出す。
 func (l *loop) beat(err error) {
+	if n := l.mediation.dropped.Swap(0); n > 0 {
+		l.rec.error(target.Ref{}, fmt.Sprintf("生存報告の置き直しの結果 %d 件を読まずに捨てた", n))
+	}
 	if err != nil {
-		l.remote.heartbeatFailures++
-		l.remote.heartbeatError = oneLine(err)
-		l.rec.error(target.Ref{}, "生存報告を置けない: "+l.remote.heartbeatError)
+		l.mediation.heartbeatFailures++
+		l.mediation.heartbeatError = oneLine(err)
+		l.rec.error(target.Ref{}, "生存報告を置けない: "+l.mediation.heartbeatError)
 		return
 	}
-	l.remote.heartbeatFailures, l.remote.heartbeatError = 0, ""
+	l.mediation.heartbeatFailures, l.mediation.heartbeatError = 0, ""
 }
 
 // coordinate は調停 remote の突き合わせ (formats.md §12 の 1–5)。ref を読めなければ error を返す (その tick は掃除も起動も
 // しない)。
 func (l *loop) coordinate() error {
-	r := l.remote
-	v, err := r.c.Observe()
+	m := l.mediation
+	v, err := m.c.Observe()
 	if err != nil {
 		return err
 	}
@@ -129,88 +120,112 @@ func (l *loop) coordinate() error {
 		l.rec.error(target.Ref{}, oneLine(v.Unread))
 	}
 	now := l.o.Now()
-	current := map[string]sighting{}
-	// note は ref の sha を覚える。sha の commit message を初めて読めた tick なら、その message と true を返す (読めない
-	// 項目の error の行を、fetch が落ちた tick の後でも 1 回だけ書くため)
-	note := func(name, sha string) (coord.Message, bool) {
-		s, ok := r.seen[name]
-		if !ok || s.sha != sha {
-			s = sighting{sha: sha, since: now}
-		}
-		m, read := v.Messages[sha]
-		fresh := read && !s.checked
-		s.checked = s.checked || read
-		current[name] = s
-		return m, fresh
-	}
-	for _, ref := range sortedRefs(v.Claims) {
-		m, fresh := note(r.c.ClaimRef(ref), v.Claims[ref])
-		if fresh && m.Loop == "" {
-			l.rec.error(ref, "持ち主の loop を読めない着手宣言がある (この作業対象は起動しない): "+r.c.ClaimRef(ref))
-		}
-	}
-	for loop, sha := range v.Loops {
-		m, fresh := note(r.c.HeartbeatRef(loop), sha)
-		if fresh && !m.Newer() && m.Interval <= 0 && loop != r.c.LoopName() {
-			l.rec.error(target.Ref{}, fmt.Sprintf("間隔を読めない生存報告がある (loop %s の死を判定しない): %s", loop, r.c.HeartbeatRef(loop)))
-		}
-	}
-	r.seen = current
-
+	l.noteSightings(v, now)
 	l.detectTakeovers(v)
 	l.deleteStaleClaims(v)
-
-	r.newer = nil
-	for _, m := range v.Messages {
-		if m.Newer() {
-			found := &status.NewerFormat{}
-			if m.Format > 0 {
-				format := m.Format
-				found.Format = &format
-			}
-			r.newer = found
-			break
-		}
-	}
-	r.holders, r.deadLoops = map[target.Ref]*holder{}, map[string]string{}
-	for ref, sha := range v.Claims {
-		m, read := v.Messages[sha]
-		if read && m.Loop == r.c.LoopName() {
-			continue
-		}
-		// 持ち主を読めない着手宣言は、生きている loop のものとして扱う (起動しない・片付けない)
-		r.holders[ref] = &holder{loop: m.Loop, sha: sha}
-	}
-	if r.newer != nil {
+	m.newer = newerFormatIn(v)
+	m.holders = l.othersClaims(v)
+	m.deadLoops = map[string]string{}
+	if m.newer != nil {
 		// 読めない形の生存報告を死んだとみなさない
 		return nil
 	}
-	for loop, sha := range v.Loops {
-		m, read := v.Messages[sha]
-		if loop == r.c.LoopName() || !read || m.Interval <= 0 {
-			continue
+	l.judgeDeadLoops(v, now)
+	return nil
+}
+
+// noteSightings は ref ごとの sha と、その sha を初めて見た時刻を覚え直す。読めない項目の error の行は、sha の commit message を
+// 初めて読めた tick に 1 回だけ書く (fetch が落ちた tick の後でも)。
+func (l *loop) noteSightings(v coord.View, now time.Time) {
+	m := l.mediation
+	current := map[string]sighting{}
+	note := func(name, sha string) (coord.Message, bool) {
+		s, ok := m.seen[name]
+		if !ok || s.sha != sha {
+			s = sighting{sha: sha, since: now}
 		}
-		if now.Sub(r.seen[r.c.HeartbeatRef(loop)].since) >= 3*m.Interval {
-			r.deadLoops[loop] = sha
+		msg, read := v.Messages[sha]
+		fresh := read && !s.checked
+		s.checked = s.checked || read
+		current[name] = s
+		return msg, fresh
+	}
+	for _, ref := range sortedRefs(v.Claims) {
+		msg, fresh := note(m.c.ClaimRef(ref), v.Claims[ref])
+		if fresh && msg.Loop == "" {
+			l.rec.error(ref, "持ち主の loop を読めない着手宣言がある (この作業対象は起動しない): "+m.c.ClaimRef(ref))
 		}
 	}
-	for ref, h := range r.holders {
+	for loop, sha := range v.Loops {
+		msg, fresh := note(m.c.HeartbeatRef(loop), sha)
+		if fresh && !msg.Newer() && msg.Interval <= 0 && loop != m.c.LoopName() {
+			l.rec.error(target.Ref{}, fmt.Sprintf("間隔を読めない生存報告がある (loop %s の死を判定しない): %s", loop, m.c.HeartbeatRef(loop)))
+		}
+	}
+	m.seen = current
+}
+
+// newerFormatIn は、自分の知る版より新しい版の ref を見たなら要対処に出す形で返す。無ければ nil。
+func newerFormatIn(v coord.View) *status.NewerFormat {
+	msg, ok := v.Newer()
+	if !ok {
+		return nil
+	}
+	found := &status.NewerFormat{}
+	if msg.Format > 0 {
+		format := msg.Format
+		found.Format = &format
+	}
+	return found
+}
+
+// othersClaims は、他の loop の着手宣言を作業対象ごとに返す。持ち主を読めない着手宣言も、生きている loop のものとして含める
+// (起動しない・片付けない)。死んだかはまだ決めない。
+func (l *loop) othersClaims(v coord.View) map[target.Ref]*holder {
+	holders := map[target.Ref]*holder{}
+	for ref, sha := range v.Claims {
+		msg, read := v.Messages[sha]
+		if read && msg.Loop == l.mediation.c.LoopName() {
+			continue
+		}
+		holders[ref] = &holder{loop: msg.Loop, sha: sha}
+	}
+	return holders
+}
+
+// judgeDeadLoops は、生存報告が間隔の 3 倍新しくならない loop と、持ち主の生存報告が無いまま自分の間隔の 3 倍変わらない着手宣言の
+// 持ち主を死んだとみなす (formats.md §12 の 5)。
+func (l *loop) judgeDeadLoops(v coord.View, now time.Time) {
+	m := l.mediation
+	for loop, sha := range v.Loops {
+		msg, read := v.Messages[sha]
+		if loop == m.c.LoopName() || !read || msg.Interval <= 0 {
+			continue
+		}
+		if now.Sub(m.seen[m.c.HeartbeatRef(loop)].since) >= 3*msg.Interval {
+			m.deadLoops[loop] = sha
+		}
+	}
+	for ref, h := range m.holders {
 		if h.loop == "" {
 			continue
 		}
 		if _, alive := v.Loops[h.loop]; alive {
-			_, h.dead = r.deadLoops[h.loop]
+			_, h.dead = m.deadLoops[h.loop]
 			continue
 		}
-		// 持ち主の生存報告が無い着手宣言は、自分の生存報告の間隔の 3 倍変わらなければ持ち主を死んだとみなす
-		if now.Sub(r.seen[r.c.ClaimRef(ref)].since) >= 3*r.interval {
+		if now.Sub(m.seen[m.c.ClaimRef(ref)].since) >= 3*m.interval {
 			h.dead = true
-			if _, known := r.deadLoops[h.loop]; !known {
-				r.deadLoops[h.loop] = ""
+			if _, known := m.deadLoops[h.loop]; !known {
+				m.deadLoops[h.loop] = ""
 			}
 		}
 	}
-	return nil
+}
+
+// newerFormatSeen は、調停 remote に自分の知る版より新しい版の ref を直近の tick で見たか (その間は起動しない。formats.md §12)。
+func (l *loop) newerFormatSeen() bool {
+	return l.mediation != nil && l.mediation.newer != nil
 }
 
 // detectTakeovers は、自分の着手宣言の sha が変わったか消えた claim に乗っ取られたことを渡し、要対処に足す。
@@ -226,19 +241,19 @@ func (l *loop) detectTakeovers(v coord.View) {
 		}
 		by := ""
 		if ok {
-			by = "?"
+			by = status.UnknownHolder
 			if m, read := v.Messages[sha]; read && m.Loop != "" {
 				by = m.Loop
 			}
 		}
-		l.remote.takenOver = append(l.remote.takenOver, status.TakenOver{Target: ref.String(), By: by})
+		l.mediation.takenOver = append(l.mediation.takenOver, status.TakenOver{Target: ref.String(), By: by})
 		l.apply(ref, c, c.takenOverBy(ref, by))
 	}
 }
 
 // deleteStaleClaims は、自分の loop 名の着手宣言のうち claim の無い作業対象のもの (消し損ねた着手宣言) を消す。
 func (l *loop) deleteStaleClaims(v coord.View) {
-	r := l.remote
+	r := l.mediation
 	for _, ref := range sortedRefs(v.Claims) {
 		sha := v.Claims[ref]
 		if m, read := v.Messages[sha]; !read || m.Loop != r.c.LoopName() {
@@ -255,25 +270,25 @@ func (l *loop) deleteStaleClaims(v coord.View) {
 
 // heldByOther は、作業対象に他の生きている loop の着手宣言があるか (候補の定義。system.md §4)。
 func (l *loop) heldByOther(ref target.Ref) bool {
-	if l.remote == nil {
+	if l.mediation == nil {
 		return false
 	}
-	h, ok := l.remote.holders[ref]
+	h, ok := l.mediation.holders[ref]
 	return ok && !h.dead
 }
 
 // claimRemote は候補の着手宣言を置き、置いた sha を返す。持ち主の死んだ着手宣言は旧 sha を期待値にして乗っ取る。負けたら
 // claim_lost の行を、それ以外の失敗は error の行を残して false を返す。
 func (l *loop) claimRemote(ref target.Ref, triggerName string) (string, bool) {
-	if l.remote == nil {
+	if l.mediation == nil {
 		return "", true
 	}
 	expect, from := coord.Absent(), ""
-	h, held := l.remote.holders[ref]
+	h, held := l.mediation.holders[ref]
 	if held {
 		expect, from = coord.Holding(h.sha), h.loop
 	}
-	sha, err := l.remote.c.Claim(ref, expect)
+	sha, err := l.mediation.c.Claim(ref, expect)
 	switch {
 	case errors.Is(err, coord.ErrLost):
 		l.rec.event("claim_lost", map[string]any{"target": ref.String(), "trigger": triggerName},
@@ -284,7 +299,6 @@ func (l *loop) claimRemote(ref target.Ref, triggerName string) (string, bool) {
 		return "", false
 	}
 	if held {
-		h.takenByMe = true
 		l.rec.event("takeover", map[string]any{"target": ref.String(), "trigger": triggerName, "from": from},
 			LineNote, "乗っ取り", " %s (%s): 死んだ loop %s の着手宣言を乗っ取った", ref, triggerName, from)
 	}
@@ -294,7 +308,7 @@ func (l *loop) claimRemote(ref target.Ref, triggerName string) (string, bool) {
 // cleanupDeadLoops は、死んだ loop の着手宣言のうち乗っ取らなかったものと、死んだ loop の生存報告を消す (formats.md §12 の 7)。
 // 消すときの負けは読み飛ばす (他の loop が先に消したか乗っ取った)。
 func (l *loop) cleanupDeadLoops() {
-	r := l.remote
+	r := l.mediation
 	loops := make([]string, 0, len(r.deadLoops))
 	for loop := range r.deadLoops {
 		loops = append(loops, loop)
@@ -315,8 +329,10 @@ func (l *loop) cleanupDeadLoops() {
 		}
 		claims := 0
 		for _, ref := range sortedRefs(r.holders) {
-			// 生きている orphan の作業対象の着手宣言は消さない (orphan の claude が作業を続けている)
-			if h := r.holders[ref]; h.loop == loop && h.dead && !h.takenByMe && !l.orphans[ref] && remove(ref, r.c.ClaimRef(ref), h.sha) {
+			// この tick に乗っ取った (claim を立てた) 着手宣言と、生きている orphan の作業対象の着手宣言は消さない (orphan の
+			// claude が作業を続けている)
+			_, takenByMe := l.claims[ref]
+			if h := r.holders[ref]; h.loop == loop && h.dead && !takenByMe && !l.orphans[ref] && remove(ref, r.c.ClaimRef(ref), h.sha) {
 				claims++
 			}
 		}
@@ -345,10 +361,10 @@ func deletedScreen(heartbeat bool, claims int) string {
 
 // releaseRemote は claim を解いた作業対象の自分の着手宣言を消す。消せなければ error の行を残す (次の tick で消し直す)。
 func (l *loop) releaseRemote(ref target.Ref, c *claim) {
-	if l.remote == nil || c.claimSHA == "" {
+	if l.mediation == nil || c.claimSHA == "" {
 		return
 	}
-	if err := l.remote.c.Delete(l.remote.c.ClaimRef(ref), c.claimSHA); err != nil && !errors.Is(err, coord.ErrLost) {
+	if err := l.mediation.c.Delete(l.mediation.c.ClaimRef(ref), c.claimSHA); err != nil && !errors.Is(err, coord.ErrLost) {
 		l.rec.error(ref, "着手宣言を消せない (次の tick で消し直す): "+oneLine(err))
 	}
 	c.claimSHA = ""
@@ -356,14 +372,14 @@ func (l *loop) releaseRemote(ref target.Ref, c *claim) {
 
 // leaveRemote は loop が止まるときに、残っている自分の着手宣言と生存報告を消す。
 func (l *loop) leaveRemote() {
-	if l.remote == nil {
+	if l.mediation == nil {
 		return
 	}
-	l.remote.stopBeating()
+	l.mediation.stopBeating()
 	// 止めた後に届いていた置き直しの結果も数える
 	for drained := false; !drained; {
 		select {
-		case err := <-l.remote.results:
+		case err := <-l.mediation.results:
 			l.beat(err)
 		default:
 			drained = true
@@ -383,7 +399,7 @@ func (l *loop) leaveRemote() {
 		// 生存報告も消さずに途絶えさせる。消すと、持ち主の生存報告の無い着手宣言としてすぐに乗っ取られうる
 		return
 	}
-	if err := l.remote.c.Leave(); err != nil {
+	if err := l.mediation.c.Leave(); err != nil {
 		l.rec.error(target.Ref{}, "生存報告を消せない: "+oneLine(err))
 	}
 }

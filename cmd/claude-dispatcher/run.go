@@ -262,11 +262,9 @@ func claimOnce(party *coord.Party, ref target.Ref, stderr io.Writer) (string, in
 	if view.Unread != nil {
 		fmt.Fprintln(stderr, printable.Line(view.Unread.Error()))
 	}
-	for _, m := range view.Messages {
-		if m.Newer() {
-			fmt.Fprintln(stderr, "調停 remote に新しい版の ref があるので起動しない (dispatcher を上げる)")
-			return "", exitNotLaunched
-		}
+	if _, newer := view.Newer(); newer {
+		fmt.Fprintln(stderr, "調停 remote に新しい版の ref があるので起動しない (dispatcher を上げる)")
+		return "", exitNotLaunched
 	}
 	if sha, held := view.Claims[ref]; held {
 		fmt.Fprintf(stderr, "%s は loop %s が着手しているので起動しない\n", ref, view.Messages[sha].Loop)
@@ -286,26 +284,11 @@ func claimOnce(party *coord.Party, ref target.Ref, stderr io.Writer) (string, in
 
 // keepReporting は、単発起動が終わるまで生存報告を間隔ごとに置き直す。返した関数で止める (止まるまで待つ)。
 func keepReporting(party *coord.Party, interval time.Duration, stderr io.Writer) func() {
-	done, stopped := make(chan struct{}), make(chan struct{})
-	go func() {
-		defer close(stopped)
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-done:
-				return
-			case <-ticker.C:
-				if err := party.Heartbeat(interval); err != nil {
-					fmt.Fprintf(stderr, "生存報告を置けない: %s\n", printable.Line(err.Error()))
-				}
-			}
+	return coord.KeepBeating(party.Heartbeat, interval, time.After, func(err error) {
+		if err != nil {
+			fmt.Fprintf(stderr, "生存報告を置けない: %s\n", printable.Line(err.Error()))
 		}
-	}()
-	return func() {
-		close(done)
-		<-stopped
-	}
+	})
 }
 
 // leaveOnce は、単発起動が置いた着手宣言 (置けていれば) と生存報告を消す。消せなければ stderr に出す。

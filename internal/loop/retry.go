@@ -73,7 +73,7 @@ func (l *loop) retry(store Store, v *view) {
 			l.apply(ref, c, c.backoffElapsed(ref, hindranceTriggerRemoved, nil, l.env()))
 			continue
 		}
-		if l.remote != nil && v == outsideTick {
+		if l.mediation != nil && v == outsideTick {
 			// 調停 remote を指した loop は、乗っ取られたかを tick の突き合わせで確かめてから再起動する (system.md §7)
 			continue
 		}
@@ -96,7 +96,7 @@ func (l *loop) retry(store Store, v *view) {
 		} else if !l.restartable(c) {
 			// 事前検査に落ちている trigger は、直るまで attempt を進めずに待ち直す (tick が確かめ直す)
 			h = hindrancePrecheck
-		} else if l.remote != nil && l.remote.newer != nil {
+		} else if l.newerFormatSeen() {
 			// 調停 remote に新しい版の ref がある間は、attempt を進めずに待ち直す (formats.md §12)
 			h = hindranceNewerFormat
 		}

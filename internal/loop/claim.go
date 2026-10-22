@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/swat9013/claude-dispatcher/internal/status"
 	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/trigger"
 	"github.com/swat9013/claude-dispatcher/internal/worker"
@@ -289,7 +290,7 @@ func (c *claim) takenOverBy(ref target.Ref, by string) effect {
 	line := logLine{
 		event: "taken_over", fields: map[string]any{"target": ref.String(), "trigger": c.trigger.Name, "by": by},
 		kind: LineError, label: "乗っ取られた", format: " %s (%s): %s",
-		args: []any{ref, c.trigger.Name, holderScreen(by)},
+		args: []any{ref, c.trigger.Name, status.HolderText(by)},
 	}
 	switch c.phase {
 	case phaseRunning:
@@ -299,17 +300,6 @@ func (c *claim) takenOverBy(ref target.Ref, by string) effect {
 		return effect{lines: []logLine{line, c.releaseLine(ref, reasonTakenOver)}, exit: release}
 	}
 	return effect{lines: []logLine{line}}
-}
-
-// holderScreen は乗っ取られた着手宣言の今の持ち主を人が読む文。
-func holderScreen(by string) string {
-	switch by {
-	case "":
-		return "着手宣言が消えていた"
-	case "?":
-		return "持ち主を読めない着手宣言に置き換わっていた"
-	}
-	return "loop " + by + " が着手宣言を持っている"
 }
 
 // newClaim は候補になった作業対象に立てる claim。attempt 1 の worker が走っている段階で始まる。
