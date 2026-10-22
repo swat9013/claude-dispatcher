@@ -262,7 +262,7 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 	}
 	if opts.dryRun {
 		// 確認で読んだ open な一覧を snapshot に使い、一覧を 1 回だけ読む (formats.md §5)
-		store, err := e.places(def).ConfirmedStore()
+		store, err := e.places(def).ConfirmedStore(slowToStderr(def, stderr))
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return failureExit(err)
@@ -270,7 +270,17 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 		return dryRunOnce(store, def, stdout, stderr)
 	}
 
-	if code := e.confirmLaunchable(def, stderr); code != 0 {
+	// 起動時の確認の遅い一覧の行から stdout に書くので、その前に読み手の消えた pipe で死なないようにする
+	surviveClosedStdout()
+	// 端末なら画面を描き直し、そうでなければログの行を追記する (formats.md §6)。起動時の確認の遅い一覧も、tick と同じく
+	// この人が読む行に出す
+	var output loop.Output = loop.Appender{W: stdout}
+	var sc *screen
+	if f, ok := stdout.(*os.File); ok && isTerminal(f) {
+		sc = &screen{out: stdout, now: time.Now, loc: time.Local, display: func() status.Display { return display(f, e.getenv) }}
+		output = sc
+	}
+	if code := e.confirmLaunchable(def, stderr, loop.SlowToOutput(def, output, slowAfter, time.Now)); code != 0 {
 		return code
 	}
 	scopeKey, dir := e.stateDir(def)
@@ -290,13 +300,8 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 	if code != 0 {
 		return code
 	}
-	surviveClosedStdout()
 	publish := func(snap status.Snapshot) error { return status.Write(dir, snap) }
-	// 端末なら画面を描き直し、そうでなければログの行を追記する (formats.md §6)
-	var output loop.Output = loop.Appender{W: stdout}
-	if f, ok := stdout.(*os.File); ok && isTerminal(f) {
-		sc := &screen{out: stdout, now: time.Now, loc: time.Local, display: func() status.Display { return display(f, e.getenv) }}
-		output = sc
+	if sc != nil {
 		publish = func(snap status.Snapshot) error {
 			sc.showStatus(snap)
 			return status.Write(dir, snap)
@@ -335,13 +340,14 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 		Now:          time.Now,
 		After:        time.After,
 		Refresh:      time.Tick(time.Second),
-		SlowAfter:    time.After,
+		SlowAfter:    slowAfter,
 	})
 }
 
 // confirmLaunchable は起動時の検査のうち、依存 CLI の解決と置き場の確認を通す (formats.md §6)。loop と単発起動が使う。
-// 落ちたら stderr に理由を出して exit code を返す。
-func (e environment) confirmLaunchable(def workflow.Definition, stderr io.Writer) int {
+// 落ちたら stderr に理由を出して exit code を返す。確認が読む open な一覧が遅ければ slow で知らせる (formats.md §6 の
+// 「遅い一覧」)。
+func (e environment) confirmLaunchable(def workflow.Definition, stderr io.Writer, slow loop.SlowNotice) int {
 	// 起動時は人が画面の前にいるので、起動した後に落ちる前に依存 CLI を解決できることを確かめる (system.md §8)
 	for _, name := range places.RequiredCommands(def) {
 		if _, err := deps.Lookup(name, e.env); err != nil {
@@ -349,7 +355,7 @@ func (e environment) confirmLaunchable(def workflow.Definition, stderr io.Writer
 			return exitFailed
 		}
 	}
-	if err := e.places(def).Confirm(); err != nil {
+	if _, err := e.places(def).ConfirmedStore(slow); err != nil {
 		fmt.Fprintln(stderr, err)
 		return failureExit(err)
 	}
@@ -421,7 +427,6 @@ func (e environment) workspaces(def workflow.Definition, hookLock *sync.Mutex) w
 // 1 件ずつ読み直して、loop が起動する候補だけを 1 件 1 行で出す。候補を 1 件でも読み直せなければ、何も出さずに失敗する。
 // 何も書かない。
 func dryRunOnce(store loop.Store, def workflow.Definition, stdout, stderr io.Writer) int {
-	store.Slow = slowToStderr(def, stderr)
 	open, err := loop.OpenItems(store, def)
 	var nonFatal *target.NonFatal
 	switch {
@@ -449,10 +454,15 @@ func dryRunOnce(store loop.Store, def workflow.Definition, stdout, stderr io.Wri
 	return 0
 }
 
+// slowAfter は一覧の読み出しが遅いかを測る (起動時の確認・試運転・doctor・単発起動・loop の tick)。閾値は workflow 定義にも
+// 利用者の設定にも出さない (#374)。差し替えるのは black-box テスト用に build tag `blackbox` で build した binary だけ
+// (slow_blackbox.go)
+var slowAfter = time.After
+
 // slowToStderr は、一覧の読み出しが遅いことを読み終わる前に stderr へ 1 行で知らせる口 (formats.md §6 の「遅い一覧」)。
-// 試運転と doctor が使う。
+// 試運転・doctor・単発起動が使う。
 func slowToStderr(def workflow.Definition, stderr io.Writer) loop.SlowNotice {
-	return loop.SlowNotice{After: time.After, Notify: func(kind target.Kind) { fmt.Fprintln(stderr, loop.SlowListingLine(def, kind)) }}
+	return loop.SlowNotice{After: slowAfter, Notify: func(kind target.Kind) { fmt.Fprintln(stderr, loop.SlowListingLine(def, kind)) }}
 }
 
 // stopRequests は loop の停止要求 (SIGINT / SIGTERM / SIGHUP) を受ける channel を返す。

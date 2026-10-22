@@ -58,6 +58,8 @@ type Rule struct {
 	// ReleaseFile が空でなければ、その file が現れるまで終わらない (長く走る worker の代役)。
 	// 現れないまま ReleaseDeadline を過ぎたら ReleaseTimeoutExit で終わる
 	ReleaseFile string `json:"release_file,omitempty"`
+	// Delay は rule に当たってから Writes・応答・ReleaseFile の待ちより前に待つ時間 (読み出しの遅い置き場の代役)。JSON では ns
+	Delay time.Duration `json:"delay,omitempty"`
 }
 
 // FileWrite は stub が書く file 1 つ。

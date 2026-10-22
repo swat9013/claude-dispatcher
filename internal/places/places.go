@@ -63,60 +63,45 @@ func (p Places) separateCLs() (provider.CLStore, bool) {
 	return cl.Build(p.rt, provider.Setting{Place: place, Triggers: p.def.Triggers}).CLs, true
 }
 
-// Confirm は起動時の置き場の確認 (formats.md §6)。ConfirmedStore と同じ確認を通し、置き場は捨てる。loop と単発起動が使う。
-func (p Places) Confirm() error {
-	_, err := p.ConfirmedStore()
-	return err
-}
-
 // ConfirmedStore は起動時の置き場の確認 (formats.md §6) を ConfirmIssues・ConfirmCLs の順に通し、確認で読んだ open な一覧を
 // snapshot に使う置き場を返す (試運転。formats.md §5)。CL 置き場の補助の要求だけの失敗 (*target.NonFatal) は、一覧を読めて
-// いるので確認を落とさず、置き場の一覧とともに返す。作業対象の読み直しは、どの部品も置き場から読む。
-func (p Places) ConfirmedStore() (loop.Store, error) {
-	issues, err := p.confirmIssues()
+// いるので確認を落とさず、置き場の一覧とともに返す。作業対象の読み直しは、どの部品も置き場から読む。返す置き場の Slow は
+// slow で、確認が読まなかった種類の一覧を読むときに知らせる。
+func (p Places) ConfirmedStore(slow loop.SlowNotice) (loop.Store, error) {
+	issues, err := p.ConfirmIssues(slow)
 	if err != nil {
 		return loop.Store{}, err
 	}
-	cls, err := p.confirmCLs()
+	cls, err := p.ConfirmCLs(slow)
 	var nonFatal *target.NonFatal
 	if err != nil && !errors.As(err, &nonFatal) {
 		return loop.Store{}, err
 	}
-	return loop.Store{Issues: issues, CLs: cls}, nil
+	return loop.Store{Issues: issues, CLs: cls, Slow: slow}, nil
 }
 
-// ConfirmIssues は起動時の issue 置き場の確認 (formats.md §6)。確認の手順を持たない種類は何もしない。失敗は
-// *target.Failure か *target.UnknownNames。
-func (p Places) ConfirmIssues() error {
-	_, err := p.confirmIssues()
-	return err
-}
-
-// ConfirmCLs は起動時の cl: の CL 置き場の確認 (formats.md §6): open な一覧を 1 回読む。cl: が無ければ何もしない。補助の
-// 要求だけが落ちれば *target.NonFatal を返す。
-func (p Places) ConfirmCLs() error {
-	_, err := p.confirmCLs()
-	return err
-}
-
-// confirmIssues は issue 置き場の確認を通し、確認で読んだ open な一覧を持つ issue 置き場を返す。確認の手順を持たない種類は
-// 確かめず、tracker の部品のまま返す。
-func (p Places) confirmIssues() (provider.IssueStore, error) {
+// ConfirmIssues は起動時の issue 置き場の確認 (formats.md §6) を通し、確認で読んだ open な一覧を持つ issue 置き場を返す。
+// 確認の手順を持たない種類は確かめず、tracker の部品のまま返す。失敗は *target.Failure か *target.UnknownNames。確認が
+// 読む open な一覧が遅ければ slow で知らせる。
+func (p Places) ConfirmIssues(slow loop.SlowNotice) (provider.IssueStore, error) {
 	parts := p.trackerParts()
 	if parts.Confirm == nil {
 		return parts.Issues, nil
 	}
-	return parts.Confirm()
+	return parts.Confirm(func(read func()) { slow.Watch(target.KindIssue, read) })
 }
 
-// confirmCLs は cl: の CL 置き場の確認を通し、読んだ open な一覧を持つ CL 置き場を、一覧とともに返った失敗と一緒に返す。
-// cl: が無ければ確かめず、issue 置き場と同じ provider の部品を返す。
-func (p Places) confirmCLs() (provider.CLStore, error) {
+// ConfirmCLs は起動時の cl: の CL 置き場の確認 (formats.md §6): open な一覧を 1 回読み、読んだ一覧を持つ CL 置き場を、一覧と
+// ともに返った失敗と一緒に返す。補助の要求だけが落ちれば *target.NonFatal。cl: が無ければ確かめず、issue 置き場と同じ
+// provider の部品を返す。一覧の読み出しが遅ければ slow で知らせる。
+func (p Places) ConfirmCLs(slow loop.SlowNotice) (provider.CLStore, error) {
 	separate, ok := p.separateCLs()
 	if !ok {
 		return p.trackerParts().CLs, nil
 	}
-	open, err := separate.OpenCLs()
+	var open []target.Item
+	var err error
+	slow.Watch(target.KindCL, func() { open, err = separate.OpenCLs() })
 	return confirmedCLs{CLStore: separate, open: open, err: err}, err
 }
 

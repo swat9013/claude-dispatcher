@@ -51,7 +51,7 @@ func runOnce(args []string, stdout, stderr io.Writer) int {
 		}
 		return exitUsage
 	}
-	if code := e.confirmLaunchable(def, stderr); code != 0 {
+	if code := e.confirmLaunchable(def, stderr, slowToStderr(def, stderr)); code != 0 {
 		return code
 	}
 	t, ok := namedTrigger(def, triggerName)

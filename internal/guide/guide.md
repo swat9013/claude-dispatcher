@@ -67,7 +67,7 @@ workflow 定義に誤りがあれば、試運転・`loop` の起動・`doctor` �
 
 - loop を撃った端末には、`status` と同じ内容と直近のログを描き直し続ける。stdout が端末でなければ、ログの行と worker の活動を 1 行ずつ追記する
   - 直近のログは、tick・起動・終了・再起動・停止・error の行の直近 10 行。worker の最新の活動は `workers` の表の列で見る
-  - 置き場の一覧の読み出しが 15 秒を超えると、読み終わる前に `CL 置き場 acme/widgets の一覧の読み出しが 15 秒を超えた` のような行が出る。止まったのではなく、まだ読んでいる。試運転 (`loop --dry-run`) と `doctor` では同じ行が stderr に出る
+  - 置き場の一覧の読み出しが 15 秒を超えると、読み終わる前に `CL 置き場 acme/widgets の一覧の読み出しが 15 秒を超えた` のような行が出る。止まったのではなく、まだ読んでいる。loop の tick の読み出しでは、同じことが log.jsonl に `slow_listing` の行 (`kind`・`place`) でも残るので、stdout を読まない運用でも後から辿れる (起動時の確認の読み出しは残らない)。試運転 (`loop --dry-run`)・`doctor`・単発起動 (`run`) では同じ行が stderr に出る
   - 色は stdout が端末のときだけ付く。環境変数 `NO_COLOR` を設定すれば付かない (`status` も同じ)
 - 別の端末からは `claude-dispatcher status` で見る。loop が書き出す状態 file を描くだけで、何も書かず、tracker の CLI も撃たない
   - 見出しの 1 行目は loop が生きているか (`loop 稼働中` / `loop 停止待ち` / `loop なし`)、2 行目は次の tick・今の並列上限・直近の tick の結果
@@ -289,7 +289,7 @@ triggers:                    # 必須。1 つ以上
 - `status` と `type` の名前が実在するかは、`loop` の起動時・試運転・`doctor` で確かめる。tick の中では確かめない
   - status 名は `project = "<project key>" AND status = "<名前>"` の検索の件数を撃ち、JQL の失敗で見分ける。acli は project の status の一覧を返さないので、site の単位の検査にとどまる。他の project にだけある status 名は検査を通る
   - issue type 名は project の issue type (`acli jira project view --key <project key> --json` の `issueTypes`) と比べる
-- `blocked` を書いた trigger があると、tick ごとに open な一覧に加えて、依存を持つ open な issue を検索し (`issueLinkType = "is blocked by"`)、当たった issue を 1 件ずつ読み直して依存先の status の区分を見る
+- `blocked` を書いた trigger があると、tick ごとに open な一覧を読んだ後、その trigger のどれかで `blocked` 以外の条件をすべて満たす issue だけ依存先を読む。依存を持つ open な issue を検索し (`issueLinkType = "is blocked by"`)、そのうち当たった issue を 1 件ずつ読み直して依存先の status の区分を見る。当たる issue が 1 件も無い tick は、依存の検索も撃たない
 - 1 つの Jira project は 1 本の loop と 1 つの実装 repo で回す (同じ project の 2 本目の loop は起動時に止まる)。project key を改名したら、workflow 定義を書き換えて loop を起動し直す
 - acli は呼び出しごとに site を選べず、active な account の site を読む。`loop` の起動時・試運転・`doctor` で、acli の認証の site が `tracker.host` と違えば止まる (`acli jira auth switch --site <site>` で切り替える)
 - `jira` の issue と `cl:` の CL を、dispatcher は結び付けない。CL を merge しても、closing reference は置き場を跨げないので Jira の issue は終端にならない。status を動かすのは人か worker (action に書く)

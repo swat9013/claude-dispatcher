@@ -33,6 +33,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "stub %s: 応答 rule の無い呼び出し: %q\n", name, os.Args[1:])
 		os.Exit(stubwire.UnmatchedExit)
 	}
+	time.Sleep(r.Delay)
 	for _, w := range r.Writes {
 		if err := writeAtomically(w.Path, []byte(w.Content)); err != nil {
 			fail(name, err)

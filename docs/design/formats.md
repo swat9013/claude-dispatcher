@@ -167,6 +167,8 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 
 値のうち、列挙の値 (`event`・`result`・`outcome`・`reason`) は言語に依らない ASCII の token、自由文の値 (`error`・`failure` など) は人向けの日本語にする (ADR 0013)。
 
+人が読む行 (§6 の画面) にだけ出す知らせと、log.jsonl にも残す知らせは、後から辿る必要があるかで分ける。運用の目標や上限を超えた・失敗に至らない異常のように、いつ・どの置き場で起きたかを後から読む必要があるものは、event の行として log.jsonl にも残す。その場の進み具合を知らせるだけの行 (待っていることの表示など) は画面にだけ出す。
+
 | `event` | いつ | ほかの key |
 |---|---|---|
 | `loop_start` | loop を起動した (起動時の検査に通り、最初の tick の前。1 回の起動につき 1 行) | `version`・`commit` (loop を書いた binary の版と commit。値は `--version` (§8) と同じ)・`loop` (loop 名 (§12)。調停 remote を指した project だけ) |
@@ -187,6 +189,7 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 | `inherit` | 生きている orphan (§6) の作業対象に残った死んだ loop の着手宣言を、自分の名前に引き継いだ (§12。claim は立てない。この経路では `takeover` の行を書かない) | `target`・`from` (死んだ loop の loop 名) |
 | `taken_over` | 自分の着手宣言が乗っ取られていたのを見た (§12。走っている worker は止め、それ以外の claim は解く) | `target`・`trigger`・`by` (今の持ち主の loop 名。消えていたら空文字列、持ち主の commit message を読めなければ `?`) |
 | `dead_loop` | 他の loop を死んだとみなし、その生存報告と、乗っ取らなかった着手宣言を消した (§12。1 つの loop につき 1 行) | `loop` (死んだ loop の loop 名)・`refs` (消した ref の列) |
+| `slow_listing` | tick の open な一覧の読み出しが 15 秒を超えた (§6 の「遅い一覧」。読み出し 1 回につき 1 行。その tick の画面の行と同じときに書く。tick の読み出しでだけ書く。どの読み出しで書くかは §6 の「遅い一覧」) | `kind` (`issue` / `cl`。読んだ置き場の種類)・`place` (置き場。綴りは画面の行の `<置き場>` と同じ) |
 | `error` | 処理は続けるが、運用者が知るべき失敗 | `target` (あれば)・`error` |
 
 - `target` は、issue なら `issue#<番号>`、CL なら `cl#<番号>`
@@ -254,7 +257,7 @@ fix-ci	cl	#51	ログインの失敗を記録する
 - 列はタブで区切る: trigger の名前・作業対象の種類 (`issue` / `cl`)・参照・題名
 - 参照は tracker の綴りで書く: issue と GitHub の CL は `#<番号>`、GitLab の CL (merge request) は `!<番号>`、Jira の issue は key (`WIDGETS-123`)。GitLab では issue と merge request が別々に番号を振るので、同じ番号が両方にありうる
 - `jira` では、snapshot を作る前に issue 置き場を確かめる (§6 の「起動時の検査」の `jira` の行と同じもの)。続けて `cl:` の CL 置き場も確かめる (同じく §6)
-  - snapshot は、この確認で読んだ open な一覧をそのまま使い、snapshot のために読み直さない。issue 置き場の一覧は、確認が status 名と issue type 名を確かめる前に読んだもの。CL 置き場の一覧は、`on: cl` の trigger が無くても確認で読み、`on: cl` の trigger があれば snapshot にも使う。snapshot までに、issue 置き場と CL 置き場の open な一覧はそれぞれ 1 回だけ読む
+  - snapshot は、この確認で読んだ open な一覧をそのまま使い、snapshot のために読み直さない。issue 置き場の一覧は、確認が status 名と issue type 名を確かめる前に読んだもの。その間に status が変わって候補になった issue は試運転に出ないが、この遅れは受け入れ、確認の順は変えない。出した候補は上の読み直しを通るので誤らず、遅れの間に候補になった issue は次の試運転か loop の tick で出る。一覧の検索を確認の最後にずらすと、最初に落ちた検査で終わる規則 (§6) の下で失敗の分類と exit code が変わる。CL 置き場の一覧は、`on: cl` の trigger が無くても確認で読み、`on: cl` の trigger があれば snapshot にも使う。snapshot までに、issue 置き場と CL 置き場の open な一覧はそれぞれ 1 回だけ読む
   - 候補の読み直し (上) は、作業対象を読めずに終端かを見分けるために一覧を読み足すことがある (§6 の「作業対象の読み直しで issue が消えていたら」の `jira` の手順)
 - 題名の制御文字 (タブ・改行・ESC など) は空白に置き換える
 
@@ -325,8 +328,8 @@ claude-dispatcher loop [--max-concurrent <N>] [<workflow の path>]
 - `<置き場の名前>` は `issue 置き場` か `CL 置き場`。`<置き場>` は `doctor` の行 (§7.4) と同じ綴り
 - 1 回の読み出しにつき 1 行だけ出す。読み出しは止めず、読み出しの結果も exit code も変えない (観測を失敗にしない)
 - 閾値は 15 秒の固定値で、workflow 定義では変えられない
-- loop は人が読む行 (下の「画面」) に出す。log.jsonl (§4) には書かない。試運転 (§5) と `doctor` (§7.4) は stderr に出す
-- 掛けるのは tick の手順 3 の snapshot と、試運転・`doctor` が置き場を読む一覧の読み出し。`jira` の起動時の確認 (上) が読む一覧には掛けない
+- loop は (起動時の確認でも) 人が読む行 (下の「画面」) に出す。tick の読み出しでは、加えて log.jsonl (§4) に `slow_listing` の行を書く (§4 の冒頭の規則で、目標を超えた読み出しは後から辿る側に入る)。loop の起動時の確認の読み出しは、log.jsonl に書かない (起動時の確認は `loop.lock` を取って log.jsonl を開く前に読むので、書く先がまだ無い)。試運転 (§5)・`doctor` (§7.4)・単発起動 (§11) は stderr に出す
+- 掛けるのは tick の手順 3 の snapshot と、試運転・`doctor` が置き場を読む一覧の読み出しと、起動時の確認 (上。`jira` の issue 置き場の確認の手順 2 と、`cl:` の CL 置き場の確認) が読む open な一覧
 
 1. 突き合わせ: 走っている worker の作業対象を読み直し、終端 (issue の close、CL の merge か close) になっていれば worker を止め、`after_run` と `before_remove` を撃って workspace を消す。trigger から外れただけでは止めない
 2. 終わった worker のうち、作業対象を読み直せなかったものを読み直す
@@ -768,6 +771,7 @@ triggers:
    - `jira` は、続けて loop の起動時と同じ `cl:` の CL 置き場の確認 (§6) を通し、`ok   CL 置き場 <置き場>` か `NG   CL 置き場 <置き場>: <理由>` の行を出す。置き場は `cl.kind` が `github` なら `<owner>/<name>`、`gitlab` なら `<host>/<path>` で出す
    - `jira` は loop の起動時と同じ issue 置き場の確認 (§6) を通す。落ちたら理由を `NG` の行に出す (存在しない status 名と issue type 名は、1 つ 1 行で trigger と一緒に名指しする)
    - 観測の補助の要求が落ちたとき (§3) は `NG` にせず、`ok` の行の後ろに ` (補助の要求が落ちた: <理由>)` を足す
+   - `jira` の issue 置き場と `cl:` の CL 置き場は、確認 (§6) で読んだ open な一覧を使い回し、読み直さない。issue 置き場と CL 置き場の open な一覧は、それぞれ 1 回だけ読む
    - 一覧の読み出しが 15 秒を超えたら、読み終わる前に stderr に 1 行出す (§6 の「遅い一覧」)。stdout の行と exit は変えない
 3. tracker の CLI・`jira` では `cl.kind` の CLI・`claude.command` を解決できる。`on: cl` の trigger があるか `coordination.remote` を書いたなら git も (loop の起動時の検査と同じ。§6)
 4. 事前検査 (§2.9)。落ちた trigger ごとに `NG` の行
