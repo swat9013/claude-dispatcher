@@ -111,13 +111,14 @@ type Remote struct {
 	ScopeDir string
 	// Git は git の呼び出し口。Dir は workflow 定義のある dir
 	Git proc.Command
-	// ssh は、利用者が ssh の撃ち方を決めているかの判定。最初の git の呼び出しで 1 回だけ読んで持つ (値は run の間変わらない)
+	// ssh は、利用者が ssh の撃ち方を決めているかの判定。読めた判定を持ち、以後は読み直さない (値は run の間変わらない)
 	ssh *sshChoice
 }
 
 type sshChoice struct {
-	once sync.Once
-	set  bool
+	mu    sync.Mutex
+	known bool
+	set   bool
 }
 
 // NewRemote は調停 remote の口を作る。ssh の撃ち方の判定 (core.sshCommand の読み出し) は、この口とその写しの間で 1 回だけ撃つ。
@@ -145,30 +146,39 @@ func (r Remote) git(env ...string) proc.Command {
 	return git
 }
 
-// sshCommandIsSet は、NewRemote で作った口では判定を 1 回だけ撃って持ち、以後はそれを返す。
+// sshCommandIsSet は、NewRemote で作った口では読めた判定を持ち、以後はそれを返す。設定を読めなかったときの判定は持たず、
+// 次の呼び出しで読み直す (一時的な失敗で、run の間ずっと BatchMode を外さないため)。
 func (r Remote) sshCommandIsSet(git proc.Command) bool {
 	if r.ssh == nil {
-		return sshCommandIsSet(git)
+		set, _ := sshCommandIsSet(git)
+		return set
 	}
-	r.ssh.once.Do(func() { r.ssh.set = sshCommandIsSet(git) })
+	r.ssh.mu.Lock()
+	defer r.ssh.mu.Unlock()
+	if !r.ssh.known {
+		r.ssh.set, r.ssh.known = sshCommandIsSet(git)
+	}
 	return r.ssh.set
 }
 
 // sshCommandIsSet は、利用者が GIT_SSH_COMMAND・GIT_SSH・core.sshCommand で ssh の撃ち方を決めているかを返す。決めていれば
-// その設定を上書きしない。設定を読めなかったときも、上書きしないほうへ倒す。
-func sshCommandIsSet(git proc.Command) bool {
+// その設定を上書きしない。設定を読めなかったときも、上書きしないほうへ倒す。known は、判定が設定を読めた結果か。
+func sshCommandIsSet(git proc.Command) (set, known bool) {
 	for _, kv := range git.Env {
 		// GIT_SSH は GIT_SSH_COMMAND に負けるので、足すと利用者の wrapper を上書きする
 		if strings.HasPrefix(kv, "GIT_SSH_COMMAND=") || strings.HasPrefix(kv, "GIT_SSH=") {
-			return true
+			return true, true
 		}
 	}
 	value, err := git.Output("config", "--get", "core.sshCommand")
 	// 設定が無ければ git は exit 1 で何も出さない
 	if pe := (*proc.Error)(nil); errors.As(err, &pe) && pe.Exit == 1 {
-		return false
+		return false, true
 	}
-	return err != nil || strings.TrimSpace(value) != ""
+	if err != nil {
+		return true, false
+	}
+	return strings.TrimSpace(value) != "", true
 }
 
 // ClaimRef は作業対象の着手宣言の ref。

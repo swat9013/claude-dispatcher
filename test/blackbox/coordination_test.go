@@ -213,8 +213,8 @@ func TestRunReadsTheSSHCommandSettingAtMostOnce(t *testing.T) {
 			reads++
 		}
 	}
-	if reads > 1 {
-		t.Fatalf("core.sshCommand を %d 回読んだ。run の間 1 回までを期待", reads)
+	if reads != 1 {
+		t.Fatalf("core.sshCommand を %d 回読んだ。run の間 1 回を期待", reads)
 	}
 }
 

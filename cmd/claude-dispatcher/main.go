@@ -134,20 +134,20 @@ func usageError(stderr io.Writer, format string, args ...any) int {
 // environment は subcommand が共有する実行環境。env は撃つ依存 CLI の PATH を解決した後の env。
 type environment struct {
 	env []string
-	// remotes は作った調停 remote の口 (workflow 定義の dir と remote の名前ごと)。確認と生存報告で同じ口を使い、
+	// remotes は作った調停 remote の口 (workflow 定義の dir・remote の名前・scope ごと)。確認と生存報告で同じ口を使い、
 	// ssh の撃ち方の判定を run の間 1 回にする
-	remotes map[[2]string]coord.Remote
+	remotes map[[3]string]coord.Remote
 }
 
 // unresolvedEnvironment は PATH を書き換えない環境。依存 CLI を撃たない読み取り (workflow 定義・状態 file) に使う。
 func unresolvedEnvironment() environment {
-	return environment{env: os.Environ(), remotes: map[[2]string]coord.Remote{}}
+	return environment{env: os.Environ(), remotes: map[[3]string]coord.Remote{}}
 }
 
 // commandEnvironment は commands (撃つ依存 CLI) を PATH で解決できるようにした環境。
 func commandEnvironment(commands ...string) environment {
 	path := deps.ResolvePATH(os.Getenv("PATH"), os.Getenv("HOME"), commands)
-	return environment{env: deps.WithEnv(os.Environ(), map[string]string{"PATH": path}), remotes: map[[2]string]coord.Remote{}}
+	return environment{env: deps.WithEnv(os.Environ(), map[string]string{"PATH": path}), remotes: map[[3]string]coord.Remote{}}
 }
 
 // definitionEnvironment は、workflow 定義で loop・試運転・単発起動・doctor が撃ちうる依存 CLI (places.Commands) を PATH で解決
@@ -374,7 +374,7 @@ func (e environment) confirmLaunchable(def workflow.Definition, stderr io.Writer
 // coordinationRemote は workflow 定義の調停 remote (formats.md §12)。git は workflow 定義のある dir から撃ち、remote の URL と
 // 認証はその clone の設定をそのまま使う。
 func (e environment) coordinationRemote(def workflow.Definition) coord.Remote {
-	key := [2]string{def.Dir, def.CoordinationRemote}
+	key := [3]string{def.Dir, def.CoordinationRemote, places.ScopeKey(def)}
 	if r, ok := e.remotes[key]; ok {
 		return r
 	}
