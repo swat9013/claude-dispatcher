@@ -43,14 +43,19 @@ type SlowNotice struct {
 	Notify func(kind target.Kind)
 }
 
-// SlowListingLine は、kind の置き場の一覧の読み出しが SlowListing を超えたときに出す 1 行。置き場は doctor の行と同じ綴り。
-func SlowListingLine(def workflow.Definition, kind target.Kind) string {
-	name, place := "issue 置き場", def.Tracker.Place
+// PlaceLabel は kind の作業対象の置き場を人が読む行で指す綴り (`issue 置き場 <置き場>` か `CL 置き場 <置き場>`)。doctor の
+// 行と遅い一覧の行が使う (formats.md §6・§7.4)。
+func PlaceLabel(def workflow.Definition, kind target.Kind) string {
 	if kind == target.KindCL {
-		_, place = def.CLHost()
-		name = "CL 置き場"
+		_, place := def.CLHost()
+		return "CL 置き場 " + place.String()
 	}
-	return fmt.Sprintf("%s %s の一覧の読み出しが %d 秒を超えた", name, place, int(SlowListing/time.Second))
+	return "issue 置き場 " + def.Tracker.Place.String()
+}
+
+// SlowListingLine は、kind の置き場の一覧の読み出しが SlowListing を超えたときに出す 1 行。
+func SlowListingLine(def workflow.Definition, kind target.Kind) string {
+	return fmt.Sprintf("%s の一覧の読み出しが %d 秒を超えた", PlaceLabel(def, kind), int(SlowListing/time.Second))
 }
 
 // Open は種類の open な作業対象を、その種類の置き場の部品で全件読む。読み出しが SlowListing を超えたら、読み終わる前に

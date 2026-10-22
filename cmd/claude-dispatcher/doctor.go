@@ -11,7 +11,6 @@ import (
 	"github.com/swat9013/claude-dispatcher/internal/loop"
 	"github.com/swat9013/claude-dispatcher/internal/places"
 	"github.com/swat9013/claude-dispatcher/internal/printable"
-	"github.com/swat9013/claude-dispatcher/internal/provider"
 	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/workflow"
 )
@@ -72,7 +71,7 @@ func checkStore(e environment, def workflow.Definition, stdout, stderr io.Writer
 			}
 			return false
 		}
-		fmt.Fprintf(stdout, "NG   issue 置き場 %s: %s\n", def.Tracker.Place, printable.Line(err.Error()))
+		fmt.Fprintf(stdout, "NG   %s: %s\n", loop.PlaceLabel(def, target.KindIssue), printable.Line(err.Error()))
 		return false
 	}
 	store := e.places(def).Store()
@@ -84,30 +83,29 @@ func checkStore(e environment, def workflow.Definition, stdout, stderr io.Writer
 	} else {
 		_, err = loop.OpenItems(store, def)
 	}
-	return placeLine(stdout, "issue 置き場", def.Tracker.Place, err)
+	return placeLine(stdout, loop.PlaceLabel(def, target.KindIssue), err)
 }
 
 // checkCLPlace は cl: の CL 置き場を、loop の起動時と同じ確認 (formats.md §6) で読めるかを確かめる。cl: が無ければ何も出さない。
 func checkCLPlace(e environment, def workflow.Definition, stdout io.Writer) bool {
-	_, place, ok := def.SeparateCLHost()
-	if !ok {
+	if _, _, ok := def.SeparateCLHost(); !ok {
 		return true
 	}
-	return placeLine(stdout, "CL 置き場", place, e.places(def).ConfirmCLs())
+	return placeLine(stdout, loop.PlaceLabel(def, target.KindCL), e.places(def).ConfirmCLs())
 }
 
-// placeLine は置き場を読んだ結果 err を、name の置き場の 1 行に出す。処理を続けられる失敗 (*target.NonFatal) は、置き場を
-// 読めているので NG にせず、ok の行に理由を添える (formats.md §7.4)。
-func placeLine(stdout io.Writer, name string, place provider.Place, err error) bool {
+// placeLine は置き場を読んだ結果 err を、label (loop.PlaceLabel) の置き場の 1 行に出す。処理を続けられる失敗
+// (*target.NonFatal) は、置き場を読めているので NG にせず、ok の行に理由を添える (formats.md §7.4)。
+func placeLine(stdout io.Writer, label string, err error) bool {
 	var nonFatal *target.NonFatal
 	switch {
 	case errors.As(err, &nonFatal):
-		fmt.Fprintf(stdout, "ok   %s %s (補助の要求が落ちた: %s)\n", name, place, printable.Line(nonFatal.Err.Error()))
+		fmt.Fprintf(stdout, "ok   %s (補助の要求が落ちた: %s)\n", label, printable.Line(nonFatal.Err.Error()))
 	case err != nil:
-		fmt.Fprintf(stdout, "NG   %s %s: %s\n", name, place, printable.Line(err.Error()))
+		fmt.Fprintf(stdout, "NG   %s: %s\n", label, printable.Line(err.Error()))
 		return false
 	default:
-		fmt.Fprintf(stdout, "ok   %s %s\n", name, place)
+		fmt.Fprintf(stdout, "ok   %s\n", label)
 	}
 	return true
 }
