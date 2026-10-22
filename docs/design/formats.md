@@ -253,7 +253,7 @@ fix-ci	cl	#51	ログインの失敗を記録する
 - 列はタブで区切る: trigger の名前・作業対象の種類 (`issue` / `cl`)・参照・題名
 - 参照は tracker の綴りで書く: issue と GitHub の CL は `#<番号>`、GitLab の CL (merge request) は `!<番号>`、Jira の issue は key (`WIDGETS-123`)。GitLab では issue と merge request が別々に番号を振るので、同じ番号が両方にありうる
 - `jira` では、snapshot を作る前に issue 置き場を確かめる (§6 の「起動時の検査」の `jira` の行と同じもの)。続けて `cl:` の CL 置き場も確かめる (同じく §6)
-  - snapshot は、この確認で読んだ open な一覧をそのまま使い、snapshot のために読み直さない。issue 置き場の一覧は、確認が status 名と issue type 名を確かめる前に読んだもの。その間に status が変わって候補になった issue は試運転に出ないが、この数秒の遅れは受け入れ、確認の順は変えない。出した候補は起動の直前と同じく 1 件ずつ読み直すので誤らず、遅れの間に候補になった issue は次の試運転か loop の tick で出る。一覧の検索を確認の最後にずらすと、最初に落ちた検査で終わる規則 (§6) の下で失敗の分類と exit code が変わる。CL 置き場の一覧は、`on: cl` の trigger が無くても確認で読み、`on: cl` の trigger があれば snapshot にも使う。snapshot までに、issue 置き場と CL 置き場の open な一覧はそれぞれ 1 回だけ読む
+  - snapshot は、この確認で読んだ open な一覧をそのまま使い、snapshot のために読み直さない。issue 置き場の一覧は、確認が status 名と issue type 名を確かめる前に読んだもの。その間に status が変わって候補になった issue は試運転に出ないが、この遅れは受け入れ、確認の順は変えない。出した候補は上の読み直しを通るので誤らず、遅れの間に候補になった issue は次の試運転か loop の tick で出る。一覧の検索を確認の最後にずらすと、最初に落ちた検査で終わる規則 (§6) の下で失敗の分類と exit code が変わる。CL 置き場の一覧は、`on: cl` の trigger が無くても確認で読み、`on: cl` の trigger があれば snapshot にも使う。snapshot までに、issue 置き場と CL 置き場の open な一覧はそれぞれ 1 回だけ読む
   - 候補の読み直し (上) は、作業対象を読めずに終端かを見分けるために一覧を読み足すことがある (§6 の「作業対象の読み直しで issue が消えていたら」の `jira` の手順)
 - 題名の制御文字 (タブ・改行・ESC など) は空白に置き換える
 
