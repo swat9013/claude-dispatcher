@@ -8,12 +8,15 @@ func KeepBeating(heartbeat func(time.Duration) error, interval time.Duration, af
 	quit, done := make(chan struct{}), make(chan struct{})
 	go func() {
 		defer close(done)
+		// 次の待ちは置き直しを始める前に掛け、置き直しにかかった時間で間隔を延ばさない
+		next := after(interval)
 		for {
 			select {
 			case <-quit:
 				return
-			case <-after(interval):
+			case <-next:
 			}
+			next = after(interval)
 			report(heartbeat(interval))
 		}
 	}()

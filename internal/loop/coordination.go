@@ -95,15 +95,20 @@ func (l *loop) beats() <-chan error {
 
 // beat は生存報告の置き直しの結果を受ける。落ちたら error の行を残して数え、続けて 2 回以上落ちていれば要対処に出す。
 func (l *loop) beat(err error) {
-	if n := l.mediation.dropped.Swap(0); n > 0 {
-		l.rec.error(target.Ref{}, fmt.Sprintf("生存報告の置き直しの結果 %d 件を読まずに捨てた", n))
-	}
+	l.noteDropped()
 	if err != nil {
 		l.mediation.failures.Note(err)
 		l.rec.error(target.Ref{}, "生存報告を置けない: "+oneLine(err))
 		return
 	}
 	l.mediation.failures.Note(nil)
+}
+
+// noteDropped は、results の満杯で捨てた置き直しの結果があれば、その数を error の行に残す。
+func (l *loop) noteDropped() {
+	if n := l.mediation.dropped.Swap(0); n > 0 {
+		l.rec.error(target.Ref{}, fmt.Sprintf("生存報告の置き直しの結果 %d 件を読まずに捨てた", n))
+	}
 }
 
 // coordinate は調停 remote の突き合わせ (formats.md §12 の 1–5)。ref を読めなければ error を返す (その tick は掃除も起動も
@@ -384,6 +389,7 @@ func (l *loop) leaveRemote() {
 			drained = true
 		}
 	}
+	l.noteDropped()
 	claudeLeft := false
 	for _, ref := range sortedRefs(l.claims) {
 		// 止められない claude が生きている claim の着手宣言は残す。claude が作業を続けうるので、他のマシンの loop には、
