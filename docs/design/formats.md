@@ -249,6 +249,8 @@ fix-ci	cl	#51	ログインの失敗を記録する
 
 観測の補助の要求が落ちたとき (§3) は失敗にせず、候補を出し、stderr に理由を出して exit 0 で終わる。
 
+snapshot の一覧の読み出しが 15 秒を超えたら、読み終わる前に stderr に 1 行出す (§6 の「遅い一覧」)。
+
 失敗したら、stdout に何も出さず、stderr に理由を出して §3 の exit code で終わる。workflow 定義の誤りは 1 件 1 行で出し、後ろに案内を指す行を足す (§2.8)。
 
 ## 6. `loop`
@@ -296,6 +298,18 @@ claude-dispatcher loop [--max-concurrent <N>] [<workflow の path>]
 **tick の手順** (system.md §7):
 
 作業対象の読み直しと open な一覧は、issue なら issue 置き場から、CL なら CL 置き場から読む。open な一覧は trigger に現れる種類のものだけを読む (§2.4)。
+
+**遅い一覧**: 1 つの置き場の open な一覧を 1 回読むのに 15 秒を超えたら、読み終わるのを待たずに次の 1 行を出す。15 秒は、1 つの置き場の一覧を 1 回読む時間の目標でもある。
+
+```
+<置き場の名前> <置き場> の一覧の読み出しが 15 秒を超えた
+```
+
+- `<置き場の名前>` は `issue 置き場` か `CL 置き場`。`<置き場>` は `doctor` の行 (§7.4) と同じ綴り
+- 1 回の読み出しにつき 1 行だけ出す。読み出しは止めず、読み出しの結果も exit code も変えない (観測を失敗にしない)
+- 閾値は 15 秒の固定値で、workflow 定義では変えられない
+- loop は人が読む行 (下の「画面」) に出す。log.jsonl (§4) には書かない。試運転 (§5) と `doctor` (§7.4) は stderr に出す
+- 掛けるのは tick の手順 3 の snapshot と、試運転・`doctor` が置き場を読む一覧の読み出し。`jira` の起動時の確認 (上) が読む一覧には掛けない
 
 1. 突き合わせ: 走っている worker の作業対象を読み直し、終端 (issue の close、CL の merge か close) になっていれば worker を止め、`after_run` と `before_remove` を撃って workspace を消す。trigger から外れただけでは止めない
 2. 終わった worker のうち、作業対象を読み直せなかったものを読み直す
@@ -387,6 +401,7 @@ claude-dispatcher loop [--max-concurrent <N>] [<workflow の path>]
 <時刻> 打ち切り issue#42 (implement, attempt 3 回): label を外して trigger から外すと解ける (外してから 1 周期待つ)
 <時刻> 打ち切りを解いた issue#42 (implement)
 <時刻> error issue#42: <理由>
+<時刻> CL 置き場 acme/widgets の一覧の読み出しが 15 秒を超えた
 <時刻> 停止待ち: 走っている worker 1 本の終了を待つ (もう一度で止める)
 <時刻> loop を止めた (停止要求 SIGINT)
 ```
@@ -712,6 +727,7 @@ triggers:
    - `jira` は、続けて loop の起動時と同じ `cl:` の CL 置き場の確認 (§6) を通し、`ok   CL 置き場 <置き場>` か `NG   CL 置き場 <置き場>: <理由>` の行を出す。置き場は `cl.kind` が `github` なら `<owner>/<name>`、`gitlab` なら `<host>/<path>` で出す
    - `jira` は loop の起動時と同じ issue 置き場の確認 (§6) を通す。落ちたら理由を `NG` の行に出す (存在しない status 名と issue type 名は、1 つ 1 行で trigger と一緒に名指しする)
    - 観測の補助の要求が落ちたとき (§3) は `NG` にせず、`ok` の行の後ろに ` (補助の要求が落ちた: <理由>)` を足す
+   - 一覧の読み出しが 15 秒を超えたら、読み終わる前に stderr に 1 行出す (§6 の「遅い一覧」)。stdout の行と exit は変えない
 3. tracker の CLI・`jira` では `cl.kind` の CLI・`claude.command` を解決できる。`on: cl` の trigger があれば git も (loop の起動時の検査と同じ。§6)
 4. 事前検査 (§2.9)。落ちた trigger ごとに `NG` の行
 5. 利用者の約束に頼る宣言を `警告` の行に出す (system.md §11)
