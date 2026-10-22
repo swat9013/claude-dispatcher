@@ -306,7 +306,7 @@ claude-dispatcher loop [--max-concurrent <N>] [<workflow の path>]
 **tick**: 起動直後に 1 回撃ち、以後は tick の終了から `polling.interval` だけ待って次を撃つ。tick ごとに workflow 定義を読み直す。
 
 - 読み直した workflow 定義が検査に落ちたら、その tick は何も起動しない (#74 Q38)。周期は、最後に検査に通った版のものを使う
-- 読み直した workflow 定義の、起動時に固定する項目のどれかが起動時と違えば、その tick は何も起動しない。`error` の行は `workflow 定義の <項目> <今の値> が起動時の <起動時の値> と違う (loop を起動し直す)`。CL 置き場と `coordination.remote` の値は空になりうるので、Go の引用符付きの綴り (`"origin"`) で出す。項目と、起動時に固定する理由は次のとおり
+- 読み直した workflow 定義の、起動時に固定する項目のどれかが起動時と違えば、その tick を error で終え、何も起動しない (`tick` の行の `result` が `error`)。`error` は `workflow 定義の <項目> <今の値> が起動時の <起動時の値> と違う (loop を起動し直す)`。CL 置き場と `coordination.remote` の値は空になりうるので、Go の引用符付きの綴り (`"origin"`) で出す。項目と、起動時に固定する理由は次のとおり
   - scope key: lock は起動時の scope key で取っている
   - CL 置き場 (`jira` では `cl.kind`・`cl.host`・`cl.repo`。`github`・`gitlab` では issue 置き場と同じ場所なので、大文字と小文字以外の違いは scope key で先に止まる): claim している CL を、起動時と別の CL 置き場で読み直さない。scope key と同じく大文字と小文字を区別しない。`tracker.repo` (`github`・`gitlab`) か `cl.repo` (`jira`) の大文字と小文字だけを書き換えた版は同じ CL 置き場とみなし、tick を続ける
   - `coordination.remote` (足した・消した・名前を変えた): 調停 remote は起動時に解いて最初の生存報告を置いている
