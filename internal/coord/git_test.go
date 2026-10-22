@@ -2,6 +2,7 @@ package coord
 
 import (
 	"errors"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
@@ -190,6 +191,24 @@ func TestGitDecidesTheSSHCommandOnceAcrossCopies(t *testing.T) {
 
 	if env := copied.git().Env; !slices.Contains(env, batchSSH) {
 		t.Fatalf("env = %v, 写しが core.sshCommand を読み直した", env)
+	}
+}
+
+func TestGitRereadsTheSSHCommandAfterAFailedRead(t *testing.T) {
+	dir := t.TempDir()
+	// 1 回目の読み出しは exit 128 で失敗し、2 回目以降は設定が無い (exit 1)
+	stub := filepath.Join(dir, "git")
+	script := "#!/bin/sh\nif [ -e " + dir + "/failed ]; then exit 1; fi\ntouch " + dir + "/failed\nexit 128\n"
+	if err := os.WriteFile(stub, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r := NewRemote("origin", "scope", proc.Command{Path: stub, Dir: dir, Timeout: 30 * time.Second})
+
+	if env := r.git().Env; slices.Contains(env, batchSSH) {
+		t.Fatalf("env = %v, 読めなかったのに BatchMode を足した", env)
+	}
+	if env := r.git().Env; !slices.Contains(env, batchSSH) {
+		t.Fatalf("env = %v, 読めなかった判定を持ち続けた", env)
 	}
 }
 
