@@ -63,34 +63,61 @@ func (p Places) separateCLs() (provider.CLStore, bool) {
 	return cl.Build(p.rt, provider.Setting{Place: place, Triggers: p.def.Triggers}).CLs, true
 }
 
-// Confirm は起動時の置き場の確認 (formats.md §6): ConfirmIssues の後に ConfirmCLs。CL 置き場の補助の要求だけの失敗
-// (*target.NonFatal) は、一覧を読めているので確認を落とさない。
+// Confirm は起動時の置き場の確認 (formats.md §6)。ConfirmedStore と同じ確認を通し、置き場は捨てる。loop と単発起動が使う。
 func (p Places) Confirm() error {
 	_, err := p.ConfirmedStore()
 	return err
 }
 
-// ConfirmedStore は Confirm と同じ確認を通し、確認で読んだ open な一覧を snapshot に使う置き場を返す (試運転。formats.md
-// §5)。確認で一覧を読まない置き場の部品は Store と同じ。作業対象の読み直しは、どの部品も置き場から読む。失敗は Confirm と同じ。
+// ConfirmedStore は起動時の置き場の確認 (formats.md §6) を ConfirmIssues・ConfirmCLs の順に通し、確認で読んだ open な一覧を
+// snapshot に使う置き場を返す (試運転。formats.md §5)。CL 置き場の補助の要求だけの失敗 (*target.NonFatal) は、一覧を読めて
+// いるので確認を落とさず、置き場の一覧とともに返す。作業対象の読み直しは、どの部品も置き場から読む。
 func (p Places) ConfirmedStore() (loop.Store, error) {
+	issues, err := p.confirmIssues()
+	if err != nil {
+		return loop.Store{}, err
+	}
+	cls, err := p.confirmCLs()
+	var nonFatal *target.NonFatal
+	if err != nil && !errors.As(err, &nonFatal) {
+		return loop.Store{}, err
+	}
+	return loop.Store{Issues: issues, CLs: cls}, nil
+}
+
+// ConfirmIssues は起動時の issue 置き場の確認 (formats.md §6)。確認の手順を持たない種類は何もしない。失敗は
+// *target.Failure か *target.UnknownNames。
+func (p Places) ConfirmIssues() error {
+	_, err := p.confirmIssues()
+	return err
+}
+
+// ConfirmCLs は起動時の cl: の CL 置き場の確認 (formats.md §6): open な一覧を 1 回読む。cl: が無ければ何もしない。補助の
+// 要求だけが落ちれば *target.NonFatal を返す。
+func (p Places) ConfirmCLs() error {
+	_, err := p.confirmCLs()
+	return err
+}
+
+// confirmIssues は issue 置き場の確認を通し、確認で読んだ open な一覧を持つ issue 置き場を返す。確認の手順を持たない種類は
+// 確かめず、tracker の部品のまま返す。
+func (p Places) confirmIssues() (provider.IssueStore, error) {
 	parts := p.trackerParts()
-	store := loop.Store{Issues: parts.Issues, CLs: parts.CLs}
-	if parts.Confirm != nil {
-		issues, err := parts.Confirm()
-		if err != nil {
-			return loop.Store{}, err
-		}
-		store.Issues = issues
+	if parts.Confirm == nil {
+		return parts.Issues, nil
 	}
-	if separate, ok := p.separateCLs(); ok {
-		open, err := separate.OpenCLs()
-		var nonFatal *target.NonFatal
-		if err != nil && !errors.As(err, &nonFatal) {
-			return loop.Store{}, err
-		}
-		store.CLs = confirmedCLs{CLStore: separate, open: open, err: err}
+	return parts.Confirm()
+}
+
+// confirmCLs は cl: の CL 置き場の確認を通し、読んだ open な一覧を持つ CL 置き場を、一覧とともに返った失敗と一緒に返す。
+// cl: が無ければ確かめず、issue 置き場と同じ provider の部品を返す。
+func (p Places) confirmCLs() (provider.CLStore, error) {
+	separate, ok := p.separateCLs()
+	if !ok {
+		return p.trackerParts().CLs, nil
 	}
-	return store, nil
+	open, err := separate.OpenCLs()
+	return confirmedCLs{CLStore: separate, open: open, err: err}, err
 }
 
 // confirmedCLs は、CL 置き場の確認が読んだ open な一覧を持つ CL 置き場。OpenCLs は読み直さずに、一覧と補助の要求の失敗
@@ -103,27 +130,6 @@ type confirmedCLs struct {
 }
 
 func (c confirmedCLs) OpenCLs() ([]target.Item, error) { return c.open, c.err }
-
-// ConfirmIssues は起動時の issue 置き場の確認 (formats.md §6)。確認の手順を持たない種類は何もしない。失敗は
-// *target.Failure か *target.UnknownNames。
-func (p Places) ConfirmIssues() error {
-	if confirm := p.trackerParts().Confirm; confirm != nil {
-		_, err := confirm()
-		return err
-	}
-	return nil
-}
-
-// ConfirmCLs は起動時の cl: の CL 置き場の確認 (formats.md §6): open な一覧を 1 回読む。cl: が無ければ何もしない。補助の
-// 要求だけが落ちれば *target.NonFatal を返す。
-func (p Places) ConfirmCLs() error {
-	cls, ok := p.separateCLs()
-	if !ok {
-		return nil
-	}
-	_, err := cls.OpenCLs()
-	return err
-}
 
 // placeCommands は置き場の CLI: tracker の CLI と、cl: があれば CL 置き場の CLI。
 func placeCommands(def workflow.Definition) []string {
