@@ -330,6 +330,7 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 		Now:          time.Now,
 		After:        time.After,
 		Refresh:      time.Tick(time.Second),
+		SlowAfter:    time.After,
 	})
 }
 
@@ -415,6 +416,7 @@ func (e environment) workspaces(def workflow.Definition, hookLock *sync.Mutex) w
 // 1 件ずつ読み直して、loop が起動する候補だけを 1 件 1 行で出す。候補を 1 件でも読み直せなければ、何も出さずに失敗する。
 // 何も書かない。
 func dryRunOnce(store loop.Store, def workflow.Definition, stdout, stderr io.Writer) int {
+	store.Slow = slowToStderr(def, stderr)
 	open, err := loop.OpenItems(store, def)
 	var nonFatal *target.NonFatal
 	switch {
@@ -440,6 +442,12 @@ func dryRunOnce(store loop.Store, def workflow.Definition, stdout, stderr io.Wri
 	}
 	fmt.Fprint(stdout, lines.String())
 	return 0
+}
+
+// slowToStderr は、一覧の読み出しが遅いことを読み終わる前に stderr へ 1 行で知らせる口 (formats.md §6 の「遅い一覧」)。
+// 試運転と doctor が使う。
+func slowToStderr(def workflow.Definition, stderr io.Writer) loop.SlowNotice {
+	return loop.SlowNotice{After: time.After, Notify: func(kind target.Kind) { fmt.Fprintln(stderr, loop.SlowListingLine(def, kind)) }}
 }
 
 // stopRequests は loop の停止要求 (SIGINT / SIGTERM / SIGHUP) を受ける channel を返す。
