@@ -121,7 +121,7 @@ var identity = []string{
 func (r Remote) prefix() string { return "refs/dispatcher/" + r.ScopeDir + "/" }
 
 // git は認証の prompt を出させない git の呼び出し口。loop は無人で回るので、prompt は答えられずに上限時間まで止まる。
-// 利用者が ssh の撃ち方を決めていなければ、ssh の passphrase と host key の確認も出させない (system.md §4)。
+// 利用者が ssh の撃ち方を決めていなければ、ssh の passphrase と host key の確認も出させない (system.md §13)。
 func (r Remote) git(env ...string) proc.Command {
 	git := r.Git
 	git.Env = append(slices.Clone(git.Env), "GIT_TERMINAL_PROMPT=0")
