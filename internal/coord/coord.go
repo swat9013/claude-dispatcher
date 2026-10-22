@@ -150,20 +150,20 @@ func (r Remote) git(env ...string) proc.Command {
 // 次の呼び出しで読み直す (一時的な失敗で、run の間ずっと BatchMode を外さないため)。
 func (r Remote) sshCommandIsSet(git proc.Command) bool {
 	if r.ssh == nil {
-		set, _ := sshCommandIsSet(git)
+		set, _ := readSSHCommandSetting(git)
 		return set
 	}
 	r.ssh.mu.Lock()
 	defer r.ssh.mu.Unlock()
 	if !r.ssh.known {
-		r.ssh.set, r.ssh.known = sshCommandIsSet(git)
+		r.ssh.set, r.ssh.known = readSSHCommandSetting(git)
 	}
 	return r.ssh.set
 }
 
-// sshCommandIsSet は、利用者が GIT_SSH_COMMAND・GIT_SSH・core.sshCommand で ssh の撃ち方を決めているかを返す。決めていれば
+// readSSHCommandSetting は、利用者が GIT_SSH_COMMAND・GIT_SSH・core.sshCommand で ssh の撃ち方を決めているかを返す。決めていれば
 // その設定を上書きしない。設定を読めなかったときも、上書きしないほうへ倒す。known は、判定が設定を読めた結果か。
-func sshCommandIsSet(git proc.Command) (set, known bool) {
+func readSSHCommandSetting(git proc.Command) (set, known bool) {
 	for _, kv := range git.Env {
 		// GIT_SSH は GIT_SSH_COMMAND に負けるので、足すと利用者の wrapper を上書きする
 		if strings.HasPrefix(kv, "GIT_SSH_COMMAND=") || strings.HasPrefix(kv, "GIT_SSH=") {
