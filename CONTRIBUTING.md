@@ -120,4 +120,5 @@ claude-dispatcher-dev loop
 - 上の 1 行目と本文の規約は、自分で書く commit に掛ける。git と GitHub が作る merge commit (remote の branch の取り込み・main の取り込み・PR の merge) は既定の message のままにし、message を書き換えるために rebase・amend・force push をしない
 - PR 本文には、対応する issue への closing reference (`Closes #<n>`) を書く
 - PR 本文には、issue の確定事項に無く自律判断で決めたこと (何を決め、何を退けたか) と、残るリスクを節を分けて書く
+- 対話の session が出す PR も、ready にする前に差分のレビュー (`swat-skills:review-stage`) を通し、出力を PR に 1 回 1 コメントで投稿する。worker の PR (WORKFLOW.md「pull request の worker」) と同じ合格線で merge の判断に回すため
 - issue に `## 範囲` があり、そこに無い file を変えたときは、自律判断の節に file と理由を書く — レビューする人が、範囲の広がりを差分から探さずに読めるようにするため
