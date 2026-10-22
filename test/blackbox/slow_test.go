@@ -159,17 +159,29 @@ func TestLoopWritesTheSlowListingsOfTheStartupConfirmationRightAfterLoopStart(t 
 	loop.waitForOutput(loopStartedLine)
 	loop.waitForOutput(regexp.MustCompile(`tick ok`))
 
-	// tick の読み出しも遅いので、loop_start の直後の 2 行を起動時の確認の分として見る
+	// 最初の tick の読み出しも遅いので、loop_start から最初の tick の行までに、起動時の確認の 2 行 (issue・cl) と tick の 1 行 (issue) が並ぶ
 	lines := s.logLinesIn(s.jiraStateDir())
 	start := slices.IndexFunc(lines, func(l map[string]any) bool { return l["event"] == "loop_start" })
-	if start < 0 || len(lines) < start+3 {
-		t.Fatalf("log.jsonl = %v, want loop_start の後に 2 行", lines)
+	tick := slices.IndexFunc(lines, func(l map[string]any) bool { return l["event"] == "tick" })
+	if start < 0 || tick < start {
+		t.Fatalf("log.jsonl = %v, want loop_start の後に tick の行", lines)
 	}
-	want := []struct{ kind, place string }{{"issue", jiraSite + "/" + jiraKey}, {"cl", "acme/widgets"}}
+	var slow []map[string]any
+	for _, l := range lines[start+1 : tick] {
+		if l["event"] == "slow_listing" {
+			slow = append(slow, l)
+		}
+	}
+	if len(slow) != 3 || lines[start+1]["event"] != "slow_listing" {
+		t.Fatalf("loop_start から最初の tick までの行 = %v, want loop_start の直後から slow_listing 3 行 (起動時の確認 2 行・tick 1 行)", lines[start:tick+1])
+	}
+	issue := struct{ kind, place string }{"issue", jiraSite + "/" + jiraKey}
+	cl := struct{ kind, place string }{"cl", "acme/widgets"}
+	want := []struct{ kind, place string }{issue, cl, issue}
 	for i, w := range want {
-		got := lines[start+1+i]
+		got := slow[i]
 		if got["event"] != "slow_listing" || got["kind"] != w.kind || got["place"] != w.place {
-			t.Errorf("loop_start の %d 行後 = %v, want slow_listing (kind %s, place %s)", i+1, got, w.kind, w.place)
+			t.Errorf("%d 本目の slow_listing = %v, want kind %s, place %s", i+1, got, w.kind, w.place)
 		}
 	}
 }
