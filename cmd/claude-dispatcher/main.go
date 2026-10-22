@@ -355,7 +355,7 @@ func (e environment) confirmLaunchable(def workflow.Definition, stderr io.Writer
 			return exitFailed
 		}
 	}
-	if err := e.places(def).Confirm(slow); err != nil {
+	if _, err := e.places(def).ConfirmedStore(slow); err != nil {
 		fmt.Fprintln(stderr, err)
 		return failureExit(err)
 	}

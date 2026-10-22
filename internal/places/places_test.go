@@ -138,7 +138,7 @@ func TestConfirmOfJiraWithCLConfirmsBothTheIssuePlaceAndTheCLPlace(t *testing.T)
 		return nil, errors.New("gh を撃った")
 	}}
 
-	err := New(def, s.runtime(nil)).Confirm(loop.SlowNotice{})
+	_, err := New(def, s.runtime(nil)).ConfirmedStore(loop.SlowNotice{})
 
 	if err == nil || !strings.Contains(err.Error(), "gh を撃った") {
 		t.Fatalf("確認 = %v, want CL 置き場の失敗", err)
@@ -172,7 +172,7 @@ func TestConfirmOfJiraWithCLNotifiesSlowListingsBeforeTheyFinish(t *testing.T) {
 		close(notified[kind])
 	}}
 
-	if err := New(def, s.runtime(nil)).Confirm(slow); err != nil {
+	if _, err := New(def, s.runtime(nil)).ConfirmedStore(slow); err != nil {
 		t.Fatal(err)
 	}
 
