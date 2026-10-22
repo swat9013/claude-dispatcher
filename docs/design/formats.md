@@ -188,7 +188,7 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 | `takeover` | 死んだ loop の着手宣言を乗っ取って claim を立てた (§12。続けて `start` の行) | `target`・`trigger`・`from` (死んだ loop の loop 名) |
 | `taken_over` | 自分の着手宣言が乗っ取られていたのを見た (§12。走っている worker は止め、それ以外の claim は解く) | `target`・`trigger`・`by` (今の持ち主の loop 名。消えていたら空文字列、持ち主の commit message を読めなければ `?`) |
 | `dead_loop` | 他の loop を死んだとみなし、その生存報告と、乗っ取らなかった着手宣言を消した (§12。1 つの loop につき 1 行) | `loop` (死んだ loop の loop 名)・`refs` (消した ref の列) |
-| `slow_listing` | tick の open な一覧の読み出しが 15 秒を超えた (§6 の「遅い一覧」。読み出し 1 回につき 1 行。画面の行と同じときに書く) | `kind` (`issue` / `cl`。読んだ置き場の種類)・`place` (置き場。綴りは画面の行の `<置き場>` と同じ) |
+| `slow_listing` | tick の open な一覧の読み出しが 15 秒を超えた (§6 の「遅い一覧」。読み出し 1 回につき 1 行。その tick の画面の行と同じときに書く。loop の起動時の確認・試運転・`doctor`・単発起動の読み出しでは書かない) | `kind` (`issue` / `cl`。読んだ置き場の種類)・`place` (置き場。綴りは画面の行の `<置き場>` と同じ) |
 | `error` | 処理は続けるが、運用者が知るべき失敗 | `target` (あれば)・`error` |
 
 - `target` は、issue なら `issue#<番号>`、CL なら `cl#<番号>`
@@ -326,7 +326,7 @@ claude-dispatcher loop [--max-concurrent <N>] [<workflow の path>]
 - `<置き場の名前>` は `issue 置き場` か `CL 置き場`。`<置き場>` は `doctor` の行 (§7.4) と同じ綴り
 - 1 回の読み出しにつき 1 行だけ出す。読み出しは止めず、読み出しの結果も exit code も変えない (観測を失敗にしない)
 - 閾値は 15 秒の固定値で、workflow 定義では変えられない
-- loop は人が読む行 (下の「画面」) に出す。tick の読み出しでは、加えて log.jsonl (§4) に `slow_listing` の行を書く (§4 の冒頭の規則で、目標を超えた読み出しは後から辿る側に入る)。loop の起動時の確認の読み出しは、log.jsonl に書かない。試運転 (§5) と `doctor` (§7.4) は stderr に出す
+- loop は人が読む行 (下の「画面」) に出す。tick の読み出しでは、加えて log.jsonl (§4) に `slow_listing` の行を書く (§4 の冒頭の規則で、目標を超えた読み出しは後から辿る側に入る)。loop の起動時の確認の読み出しは、log.jsonl に書かない (起動時の確認は `loop.lock` を取って log.jsonl を開く前に読むので、書く先がまだ無い)。試運転 (§5) と `doctor` (§7.4) は stderr に出す
 - 掛けるのは tick の手順 3 の snapshot と、試運転・`doctor` が置き場を読む一覧の読み出しと、起動時の確認 (上。`jira` の issue 置き場の確認の手順 2 と、`cl:` の CL 置き場の確認) が読む open な一覧。loop の起動時の確認では、tick と同じく人が読む行に出す。単発起動 (§11) の起動時の確認では stderr に出す
 
 1. 突き合わせ: 走っている worker の作業対象を読み直し、終端 (issue の close、CL の merge か close) になっていれば worker を止め、`after_run` と `before_remove` を撃って workspace を消す。trigger から外れただけでは止めない
