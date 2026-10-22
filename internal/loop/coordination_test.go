@@ -227,7 +227,7 @@ func matchingStore(workflow.Definition) loop.Store {
 	}.store()
 }
 
-func TestADeadLoopsClaimIsKeptWhileAnOrphanWorksOnTheTarget(t *testing.T) {
+func TestADeadLoopsClaimIsInheritedWhileAnOrphanWorksOnTheTarget(t *testing.T) {
 	remote := newMemoryRemote()
 	old := remote.put(&issue42, coord.Message{Kind: coord.KindClaim, Format: coord.Format, Loop: "dead-00000002", Target: "issue#42"})
 	r := tickRig(6)
@@ -239,8 +239,40 @@ func TestADeadLoopsClaimIsKeptWhileAnOrphanWorksOnTheTarget(t *testing.T) {
 		Orphaned:       func(target.Ref) (bool, error) { return true, nil },
 	})
 
-	if remote.claims[issue42] != old || len(r.jobs) != 0 {
-		t.Fatalf("着手宣言 %q (起動 %d 回), want orphan が作業している間は死んだ loop の着手宣言 %s を消さない", remote.claims[issue42], len(r.jobs), old)
+	// 止まるときも orphan が生きているので、引き継いだ着手宣言を残す
+	if !slices.Equal(remote.claimed, []string{"issue#42 holding " + old}) || remote.messages[remote.claims[issue42]].Loop != me || len(r.jobs) != 0 {
+		t.Fatalf("着手宣言 %v (持ち主 %q、起動 %d 回), want 旧 sha からの置き換えで自分の名前に引き継ぎ、起動しない",
+			remote.claimed, remote.messages[remote.claims[issue42]].Loop, len(r.jobs))
+	}
+	if !strings.Contains(r.stdout.String(), "引き継ぎ issue#42") {
+		t.Fatalf("画面 = %q, want 引き継ぎの行", r.stdout.String())
+	}
+	if !strings.Contains(r.log.String(), `"event":"inherit"`) {
+		t.Fatalf("log = %q, want inherit の行", r.log.String())
+	}
+}
+
+func TestAnInheritedClaimIsDeletedWhenTheOrphanEnds(t *testing.T) {
+	remote := newMemoryRemote()
+	old := remote.put(&issue42, coord.Message{Kind: coord.KindClaim, Format: coord.Format, Loop: "dead-00000002", Target: "issue#42"})
+	r := tickRig(10)
+
+	r.run(t, loop.Options{
+		Definition: definition(time.Minute, 1), Coordination: remote, Store: matchingStore,
+		HeartbeatAfter: func(time.Duration) <-chan time.Time { return nil },
+		Workspaces:     func(workflow.Definition) loop.Workspaces { return listedWorkspaces{issue42} },
+		// orphan は、死んだ loop の判定 (間隔の 3 倍) より後の 7 tick 目の確かめで終わっている
+		Orphaned: func(target.Ref) (bool, error) { return remote.observed < 7, nil },
+	})
+
+	inherited := ""
+	for _, c := range remote.claimed {
+		if strings.HasPrefix(c, "issue#42 holding "+old) {
+			inherited = c
+		}
+	}
+	if inherited == "" || len(r.jobs) == 0 || remote.claimed[len(remote.claimed)-1] != "issue#42 absent" {
+		t.Fatalf("着手宣言 %v (起動 %d 回), want 引き継いだ後、orphan が終わった tick に消して、無いときだけ作るで起動する", remote.claimed, len(r.jobs))
 	}
 }
 
