@@ -13,7 +13,7 @@ import (
 
 // 段階 × 入口の組の表。docs/design/statechart.puml の claim の 4 つの段階 (Running・Stopping・AwaitingVerification・
 // WaitingRetry) から出る遷移と、その 4 段階で uncovered とした組を、statechart を見ながら手で 1 行ずつ写す。
-// 「候補になる」は claim の無い作業対象の出来事なので、claim の入口を持たない (4 段階ではどれも uncovered)。
+// 「候補になる」と「着手宣言に負けた」は claim の無い作業対象の出来事なので、claim の入口を持たない (4 段階ではどれも uncovered)。
 
 // claimIO は effect のうち loop がする I/O と出口。
 type claimIO struct {
@@ -67,6 +67,8 @@ var (
 	precheckFailed = claimEvent{"事前検査に落ちた", elapsed(hindrancePrecheck)}
 	noDefinition   = claimEvent{"workflow定義を採れない", elapsed(hindranceDefinitionUnavailable)}
 	triggerRemoved = claimEvent{"triggerの削除", elapsed(hindranceTriggerRemoved)}
+	newerFormat    = claimEvent{"新しい版のref", elapsed(hindranceNewerFormat)}
+	takenOver      = claimEvent{"乗っ取られた", func(c *claim, ref target.Ref, _ claimEnv) effect { return c.takenOverBy(ref, "other-1a2b3c4d") }}
 	loopEnded      = claimEvent{"loopの終了", loopEnd}
 )
 
@@ -89,7 +91,9 @@ func TestClaimTransitions(t *testing.T) {
 		{phaseRunning, 1, firstStop, phaseRunning, noIO},
 		{phaseRunning, 1, secondStop, phaseStopping, claimIO{stopWorker: true}},
 		{phaseRunning, 1, loopEnded, phaseRunning, noIO},
+		{phaseRunning, 1, takenOver, phaseStopping, claimIO{stopWorker: true}},
 		// uncovered
+		{phaseRunning, 1, newerFormat, phaseRunning, noIO},
 		{phaseRunning, 1, leftTrigger, phaseRunning, noIO},
 		{phaseRunning, 1, stillMatches, phaseRunning, noIO},
 		{phaseRunning, 1, undecided, phaseRunning, noIO},
@@ -110,7 +114,9 @@ func TestClaimTransitions(t *testing.T) {
 		{phaseStopping, 1, stall, phaseAwaitingVerification, claimIO{readItem: true}},
 		{phaseStopping, 1, timeLimit, phaseAwaitingVerification, claimIO{readItem: true}},
 		{phaseStopping, 1, loopEnded, phaseStopping, noIO},
+		{phaseStopping, 1, takenOver, phaseStopping, noIO},
 		// uncovered
+		{phaseStopping, 1, newerFormat, phaseStopping, noIO},
 		{phaseStopping, 1, terminal, phaseStopping, noIO},
 		{phaseStopping, 1, leftTrigger, phaseStopping, noIO},
 		{phaseStopping, 1, stillMatches, phaseStopping, noIO},
@@ -135,7 +141,9 @@ func TestClaimTransitions(t *testing.T) {
 		{phaseAwaitingVerification, 1, readFailure, phaseAwaitingVerification, noIO},
 		{phaseAwaitingVerification, 1, undecided, phaseAwaitingVerification, noIO},
 		{phaseAwaitingVerification, 1, loopEnded, phaseAwaitingVerification, noIO},
+		{phaseAwaitingVerification, 1, takenOver, phaseAwaitingVerification, claimIO{exit: release}},
 		// uncovered
+		{phaseAwaitingVerification, 1, newerFormat, phaseAwaitingVerification, noIO},
 		{phaseAwaitingVerification, 1, workerEnd, phaseAwaitingVerification, noIO},
 		{phaseAwaitingVerification, 1, unstoppable, phaseAwaitingVerification, noIO},
 		{phaseAwaitingVerification, 1, stall, phaseAwaitingVerification, noIO},
@@ -166,6 +174,8 @@ func TestClaimTransitions(t *testing.T) {
 		{phaseWaitingRetry, 1, leftTrigger, phaseWaitingRetry, claimIO{exit: release}},
 		{phaseWaitingRetry, 1, triggerRemoved, phaseWaitingRetry, claimIO{exit: release}},
 		{phaseWaitingRetry, 1, loopEnded, phaseWaitingRetry, noIO},
+		{phaseWaitingRetry, 1, newerFormat, phaseWaitingRetry, noIO},
+		{phaseWaitingRetry, 1, takenOver, phaseWaitingRetry, claimIO{exit: release}},
 		// uncovered
 		{phaseWaitingRetry, 1, workerEnd, phaseWaitingRetry, noIO},
 		{phaseWaitingRetry, 1, unstoppable, phaseWaitingRetry, noIO},
@@ -195,6 +205,25 @@ func TestClaimTransitions(t *testing.T) {
 			got := claimIO{stopWorker: e.stopWorker, startWorker: e.startWorker, removeWorkspace: e.removeWorkspace, readItem: e.readItem, exit: e.exit}
 			if got != tt.io {
 				t.Errorf("I/O = %+v, want %+v", got, tt.io)
+			}
+		})
+	}
+}
+
+// 止めている claim が乗っ取られていれば、worker がどう終わっても終わりを確かめずに claim を解く (statechart の
+// worker終了・stall上限・上限時間 の [乗っ取られた] の遷移)。
+func TestATakenOverWorkerIsReleasedHoweverItEnds(t *testing.T) {
+	ref := target.Ref{Kind: target.KindIssue, Number: 1}
+	env := claimEnv{now: time.Unix(0, 0), maxAttempts: 3, maxRetryBackoff: time.Minute, maxConcurrent: 1}
+	for _, end := range []claimEvent{workerEnd, stoppedEnd, stall, timeLimit} {
+		t.Run(end.name, func(t *testing.T) {
+			c := &claim{phase: phaseRunning, attempt: 1, trigger: trigger.Trigger{Name: "t"}, run: &FakeWorker{}, claimSHA: "abc"}
+			takenOver.fire(c, ref, env)
+
+			e := end.fire(c, ref, env)
+
+			if e.exit != release || e.readItem || e.removeWorkspace || c.claimSHA != "" {
+				t.Errorf("I/O = %+v・着手宣言 %q, want 確かめずに claim を解き、着手宣言を消さない", e, c.claimSHA)
 			}
 		})
 	}

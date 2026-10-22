@@ -117,6 +117,10 @@ func TestErrorsNameTheItem(t *testing.T) {
 		{"head の pattern の綴り", withTriggers("\n  - {name: f, on: cl, when: {head: \"[\"}, action: /f}"), []string{"triggers[0].when.head"}},
 		{"head と same_repo: false の併記", withTriggers("\n  - {name: f, on: cl, when: {head: a-*, same_repo: false}, action: /f}"), []string{"triggers[0].when", "same_repo"}},
 		{"CL の action の issue の変数", withTriggers("\n  - {name: f, on: cl, action: \"/f {{ .issue.number }}\"}"), []string{"triggers[0].action", "issue"}},
+		{"調停 remote の未知の key", strings.Replace(valid, "triggers:", "coordination:\n  remot: origin\ntriggers:", 1), []string{"coordination.remot"}},
+		{"調停 remote が空", strings.Replace(valid, "triggers:", "coordination:\n  remote: \"\"\ntriggers:", 1), []string{"coordination.remote"}},
+		{"調停 remote が - で始まる", strings.Replace(valid, "triggers:", "coordination:\n  remote: --upload-pack=x\ntriggers:", 1), []string{"coordination.remote"}},
+		{"調停 remote の綴り", strings.Replace(valid, "triggers:", "coordination:\n  remote: \"my remote\"\ntriggers:", 1), []string{"coordination.remote"}},
 		{"CL の trigger があるときの本文の issue の変数", withTriggers("\n  - {name: f, on: cl, action: /f}") + "{{ .issue.number }}\n", []string{"本文", "issue"}},
 	}
 	for _, c := range cases {
@@ -129,6 +133,28 @@ func TestErrorsNameTheItem(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestCoordinationRemoteIsRead(t *testing.T) {
+	def, err := load(t, strings.Replace(valid, "triggers:", "coordination:\n  remote: origin\ntriggers:", 1), nil)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if def.CoordinationRemote != "origin" {
+		t.Fatalf("調停 remote = %q", def.CoordinationRemote)
+	}
+}
+
+func TestCoordinationRemoteIsEmptyWhenOmitted(t *testing.T) {
+	def, err := load(t, valid, nil)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if def.CoordinationRemote != "" {
+		t.Fatalf("調停 remote = %q", def.CoordinationRemote)
 	}
 }
 

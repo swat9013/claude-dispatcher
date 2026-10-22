@@ -39,6 +39,31 @@ type Snapshot struct {
 	// Orphans は直近に確かめられた tick で生きていた orphan (前の loop が起動した claude。system.md §7)。key を足す前の版が
 	// 書いた状態 file を読むと nil
 	Orphans []Orphan `json:"orphans"`
+	// Loop は loop 名 (formats.md §12)。調停 remote を指した project だけ
+	Loop string `json:"loop,omitempty"`
+	// TakenOver は着手宣言を乗っ取られた作業対象。loop を起動し直すまで残す
+	TakenOver []TakenOver `json:"taken_over,omitempty"`
+	// HeartbeatFailures は生存報告の置き直しが 2 回以上続けて落ちている間だけ持つ
+	HeartbeatFailures *HeartbeatFailures `json:"heartbeat_failures,omitempty"`
+	// NewerFormat は直近の tick で、調停 remote に自分の知る版より新しい版の ref を見た間だけ持つ
+	NewerFormat *NewerFormat `json:"newer_format,omitempty"`
+}
+
+// TakenOver は着手宣言を乗っ取られた作業対象と、見たときの持ち主の loop 名 (消えていたら "")。
+type TakenOver struct {
+	Target string `json:"target"`
+	By     string `json:"by"`
+}
+
+// HeartbeatFailures は続けて落ちた生存報告の置き直しの回数と、直近の理由。
+type HeartbeatFailures struct {
+	Count int    `json:"count"`
+	Error string `json:"error"`
+}
+
+// NewerFormat は調停 remote に見た新しい版。版を読めなければ Format は nil。
+type NewerFormat struct {
+	Format *int `json:"format"`
 }
 
 // Orphan は claim の無い workspace で生きている、前の loop の claude の作業対象。
@@ -296,7 +321,8 @@ func elapsed(d time.Duration) string {
 	return fmt.Sprintf("%ds", s)
 }
 
-// needsAttention は要対処の行: 打ち切り・曖昧な CL・起動しない trigger・止められない worker・orphan。
+// needsAttention は要対処の行: 打ち切り・曖昧な CL・起動しない trigger・止められない worker・orphan・乗っ取られた・生存報告の
+// 失敗・新しい版の ref。
 func needsAttention(s Snapshot) [][]Span {
 	var lines [][]Span
 	for _, a := range s.Abandoned {
@@ -315,6 +341,26 @@ func needsAttention(s Snapshot) [][]Span {
 	}
 	for _, o := range s.Orphans {
 		lines = append(lines, []Span{{Yellow, "orphan"}, {Plain, fmt.Sprintf(" %s: 前の loop の claude がまだ動いている。終わるのを待つか、claude の pid (log.jsonl のこの作業対象の直近の start の行) を止める。止めても残れば、worker log (state_dir の %s) を開いている process を lsof で探して止める", o.Target, o.Log)}})
+	}
+	for _, o := range s.TakenOver {
+		holder := fmt.Sprintf("loop %s が着手宣言を持っている", o.By)
+		switch o.By {
+		case "":
+			holder = "着手宣言が消えていた"
+		case "?":
+			holder = "持ち主を読めない着手宣言に置き換わっていた"
+		}
+		lines = append(lines, []Span{{Yellow, "乗っ取られた"}, {Plain, fmt.Sprintf(" %s: %s。worker を止めた。止まる前に push された成果を確かめる", o.Target, holder)}})
+	}
+	if f := s.HeartbeatFailures; f != nil {
+		lines = append(lines, []Span{{Yellow, "生存報告"}, {Plain, fmt.Sprintf(" %d 回続けて置けない: %s。他のマシンの loop に死んだとみなされ、着手宣言を乗っ取られうる", f.Count, f.Error)}})
+	}
+	if n := s.NewerFormat; n != nil {
+		found := "版を読めない ref がある"
+		if n.Format != nil {
+			found = fmt.Sprintf("版 %d の ref がある", *n.Format)
+		}
+		lines = append(lines, []Span{{Red, "新しい版の ref"}, {Plain, fmt.Sprintf(" 調停 remote に%s: この scope では worker を起動しない。dispatcher を上げる", found)}})
 	}
 	return lines
 }

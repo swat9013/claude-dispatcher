@@ -89,6 +89,12 @@ func (l *loop) snapshot() status.Snapshot {
 	for _, p := range l.blocked {
 		s.Blocked = append(s.Blocked, status.Blocked{Trigger: p.Trigger, Error: p.Error})
 	}
+	if r := l.remote; r != nil {
+		s.Loop, s.TakenOver, s.NewerFormat = r.c.LoopName(), r.takenOver, r.newer
+		if r.heartbeatFailures >= 2 {
+			s.HeartbeatFailures = &status.HeartbeatFailures{Count: r.heartbeatFailures, Error: r.heartbeatError}
+		}
+	}
 	return s
 }
 

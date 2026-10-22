@@ -64,14 +64,15 @@ func loaderKeys() map[string]keyTable {
 		"labels": {"labels", labels}, "status": {"status", names}, "type": {"type", names},
 	}
 	top := keyTable{fields: c.topFields(def), nested: map[string]nestedTable{
-		"tracker":   {"tracker", keyTable{fields: c.trackerFields(&def.Tracker, &placeInput{})}},
-		"cl":        {"cl", keyTable{fields: c.clFields(&placeInput{})}},
-		"polling":   {"polling", keyTable{fields: c.pollingFields(&def.Interval)}},
-		"workspace": {"workspace", keyTable{fields: c.workspaceFields(def)}},
-		"hooks":     {"hooks", keyTable{fields: c.hooksFields(&def.Hooks)}},
-		"limits":    {"limits", keyTable{fields: c.limitsFields(def)}},
-		"claude":    {"claude", keyTable{fields: c.claudeFields(def)}},
-		"triggers":  {"triggers[]", keyTable{fields: c.triggerFields(&trigger.Trigger{}, map[string]bool{}, &deferredItems{})}},
+		"tracker":      {"tracker", keyTable{fields: c.trackerFields(&def.Tracker, &placeInput{})}},
+		"cl":           {"cl", keyTable{fields: c.clFields(&placeInput{})}},
+		"polling":      {"polling", keyTable{fields: c.pollingFields(&def.Interval)}},
+		"workspace":    {"workspace", keyTable{fields: c.workspaceFields(def)}},
+		"hooks":        {"hooks", keyTable{fields: c.hooksFields(&def.Hooks)}},
+		"limits":       {"limits", keyTable{fields: c.limitsFields(def)}},
+		"claude":       {"claude", keyTable{fields: c.claudeFields(def)}},
+		"coordination": {"coordination", keyTable{fields: c.coordinationFields(def)}},
+		"triggers":     {"triggers[]", keyTable{fields: c.triggerFields(&trigger.Trigger{}, map[string]bool{}, &deferredItems{})}},
 	}}
 	// when の中は on で表が変わるので、述語の表は when からの path で別に辿る
 	return map[string]keyTable{

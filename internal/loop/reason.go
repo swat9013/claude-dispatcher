@@ -24,6 +24,9 @@ const reasonUndecided Reason = "undecided"
 // 起動の直前の読み直しだけで使う理由
 const reasonEarlierTrigger Reason = "earlier_trigger"
 
+// 着手宣言が乗っ取られて worker を止めた・claim を解いた理由 (formats.md §12)
+const reasonTakenOver Reason = "taken_over"
+
 // screens は理由の token から人が読む行に出す文への対応 (formats.md §4 の reason の表)
 var screens = map[Reason]string{
 	reasonTerminal:       "終端",
@@ -33,6 +36,7 @@ var screens = map[Reason]string{
 	reasonTriggerRemoved: "trigger が workflow 定義から消えた",
 	reasonUndecided:      "当たるかをまだ決められない",
 	reasonEarlierTrigger: "宣言順で先の trigger に当たる",
+	reasonTakenOver:      "着手宣言が乗っ取られた",
 }
 
 // screen は理由を人が読む行に出す文。対応の無い理由は loop の誤りなので panic する。
