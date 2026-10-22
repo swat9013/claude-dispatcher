@@ -289,7 +289,7 @@ triggers:                    # 必須。1 つ以上
 - `status` と `type` の名前が実在するかは、`loop` の起動時・試運転・`doctor` で確かめる。tick の中では確かめない
   - status 名は `project = "<project key>" AND status = "<名前>"` の検索の件数を撃ち、JQL の失敗で見分ける。acli は project の status の一覧を返さないので、site の単位の検査にとどまる。他の project にだけある status 名は検査を通る
   - issue type 名は project の issue type (`acli jira project view --key <project key> --json` の `issueTypes`) と比べる
-- `blocked` を書いた trigger があると、tick ごとに open な一覧に加えて、依存を持つ open な issue を検索し (`issueLinkType = "is blocked by"`)、当たった issue を 1 件ずつ読み直して依存先の status の区分を見る
+- `blocked` を書いた trigger があると、tick ごとに open な一覧を読んだ後、その trigger のどれかで `blocked` 以外の条件をすべて満たす issue だけ依存先を読む。依存を持つ open な issue を検索し (`issueLinkType = "is blocked by"`)、そのうち当たった issue を 1 件ずつ読み直して依存先の status の区分を見る。当たる issue が 1 件も無い tick は、依存の検索も撃たない
 - 1 つの Jira project は 1 本の loop と 1 つの実装 repo で回す (同じ project の 2 本目の loop は起動時に止まる)。project key を改名したら、workflow 定義を書き換えて loop を起動し直す
 - acli は呼び出しごとに site を選べず、active な account の site を読む。`loop` の起動時・試運転・`doctor` で、acli の認証の site が `tracker.host` と違えば止まる (`acli jira auth switch --site <site>` で切り替える)
 - `jira` の issue と `cl:` の CL を、dispatcher は結び付けない。CL を merge しても、closing reference は置き場を跨げないので Jira の issue は終端にならない。status を動かすのは人か worker (action に書く)
