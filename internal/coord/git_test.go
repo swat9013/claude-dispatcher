@@ -31,7 +31,7 @@ func remoteForTest(t *testing.T) Remote {
 	}
 	// 利用者の git の設定に頼らないことを確かめるため、HOME と global の設定を空にする
 	env := []string{"HOME=" + root, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null"}
-	return Remote{Name: "origin", ScopeDir: "github.com_acme_widgets-1a2b3c4d", Git: proc.Command{Path: git, Dir: clone, Env: env, Timeout: 30 * time.Second}}
+	return NewRemote("origin", "github.com_acme_widgets-1a2b3c4d", proc.Command{Path: git, Dir: clone, Env: env, Timeout: 30 * time.Second})
 }
 
 func TestClaimIsCreatedOnlyWhenAbsent(t *testing.T) {
@@ -174,6 +174,22 @@ func TestGitDisablesTheSSHPromptWhenTheUserLeavesSSHUnset(t *testing.T) {
 
 	if env := r.git().Env; !slices.Contains(env, batchSSH) {
 		t.Fatalf("env = %v, %s を期待", env, batchSSH)
+	}
+}
+
+func TestGitDecidesTheSSHCommandOnceAcrossCopies(t *testing.T) {
+	r := remoteForTest(t)
+	copied := r
+	if env := r.git().Env; !slices.Contains(env, batchSSH) {
+		t.Fatalf("env = %v, %s を期待", env, batchSSH)
+	}
+	// 判定の後に設定を変えても読み直さない (読み直すなら BatchMode が消える)
+	if _, err := r.Git.Output("config", "core.sshCommand", "ssh -i key"); err != nil {
+		t.Fatal(err)
+	}
+
+	if env := copied.git().Env; !slices.Contains(env, batchSSH) {
+		t.Fatalf("env = %v, 写しが core.sshCommand を読み直した", env)
 	}
 }
 

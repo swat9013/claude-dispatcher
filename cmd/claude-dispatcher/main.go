@@ -134,17 +134,20 @@ func usageError(stderr io.Writer, format string, args ...any) int {
 // environment は subcommand が共有する実行環境。env は撃つ依存 CLI の PATH を解決した後の env。
 type environment struct {
 	env []string
+	// remotes は作った調停 remote の口 (workflow 定義の dir と remote の名前ごと)。確認と生存報告で同じ口を使い、
+	// ssh の撃ち方の判定を run の間 1 回にする
+	remotes map[[2]string]coord.Remote
 }
 
 // unresolvedEnvironment は PATH を書き換えない環境。依存 CLI を撃たない読み取り (workflow 定義・状態 file) に使う。
 func unresolvedEnvironment() environment {
-	return environment{env: os.Environ()}
+	return environment{env: os.Environ(), remotes: map[[2]string]coord.Remote{}}
 }
 
 // commandEnvironment は commands (撃つ依存 CLI) を PATH で解決できるようにした環境。
 func commandEnvironment(commands ...string) environment {
 	path := deps.ResolvePATH(os.Getenv("PATH"), os.Getenv("HOME"), commands)
-	return environment{env: deps.WithEnv(os.Environ(), map[string]string{"PATH": path})}
+	return environment{env: deps.WithEnv(os.Environ(), map[string]string{"PATH": path}), remotes: map[[2]string]coord.Remote{}}
 }
 
 // definitionEnvironment は、workflow 定義で loop・試運転・単発起動・doctor が撃ちうる依存 CLI (places.Commands) を PATH で解決
@@ -371,12 +374,20 @@ func (e environment) confirmLaunchable(def workflow.Definition, stderr io.Writer
 // coordinationRemote は workflow 定義の調停 remote (formats.md §12)。git は workflow 定義のある dir から撃ち、remote の URL と
 // 認証はその clone の設定をそのまま使う。
 func (e environment) coordinationRemote(def workflow.Definition) coord.Remote {
+	key := [2]string{def.Dir, def.CoordinationRemote}
+	if r, ok := e.remotes[key]; ok {
+		return r
+	}
 	git, err := deps.Lookup("git", e.env)
 	if err != nil {
 		// 解決できない git は、撃ったときの失敗として名前のまま返す (起動時は依存 CLI の検査が先に落とす)
 		git = "git"
 	}
-	return coord.Remote{Name: def.CoordinationRemote, ScopeDir: state.DirName(places.ScopeKey(def)), Git: proc.Command{Path: git, Env: e.env, Dir: def.Dir, Timeout: commandTimeout}}
+	r := coord.NewRemote(def.CoordinationRemote, state.DirName(places.ScopeKey(def)), proc.Command{Path: git, Env: e.env, Dir: def.Dir, Timeout: commandTimeout})
+	if e.remotes != nil {
+		e.remotes[key] = r
+	}
+	return r
 }
 
 // join は、調停 remote を指した project で loop 名を決め、最初の生存報告を置く (formats.md §12 の起動時の確認)。指さない

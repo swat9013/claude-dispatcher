@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/swat9013/claude-dispatcher/internal/proc"
@@ -110,6 +111,18 @@ type Remote struct {
 	ScopeDir string
 	// Git は git の呼び出し口。Dir は workflow 定義のある dir
 	Git proc.Command
+	// ssh は、利用者が ssh の撃ち方を決めているかの判定。最初の git の呼び出しで 1 回だけ読んで持つ (値は run の間変わらない)
+	ssh *sshChoice
+}
+
+type sshChoice struct {
+	once sync.Once
+	set  bool
+}
+
+// NewRemote は調停 remote の口を作る。ssh の撃ち方の判定 (core.sshCommand の読み出し) は、この口とその写しの間で 1 回だけ撃つ。
+func NewRemote(name, scopeDir string, git proc.Command) Remote {
+	return Remote{Name: name, ScopeDir: scopeDir, Git: git, ssh: &sshChoice{}}
 }
 
 // 作者と committer。利用者の git の設定に頼らない (formats.md §12)
@@ -125,11 +138,20 @@ func (r Remote) prefix() string { return "refs/dispatcher/" + r.ScopeDir + "/" }
 func (r Remote) git(env ...string) proc.Command {
 	git := r.Git
 	git.Env = append(slices.Clone(git.Env), "GIT_TERMINAL_PROMPT=0")
-	if !sshCommandIsSet(git) {
+	if !r.sshCommandIsSet(git) {
 		git.Env = append(git.Env, "GIT_SSH_COMMAND=ssh -o BatchMode=yes")
 	}
 	git.Env = append(git.Env, env...)
 	return git
+}
+
+// sshCommandIsSet は、NewRemote で作った口では判定を 1 回だけ撃って持ち、以後はそれを返す。
+func (r Remote) sshCommandIsSet(git proc.Command) bool {
+	if r.ssh == nil {
+		return sshCommandIsSet(git)
+	}
+	r.ssh.once.Do(func() { r.ssh.set = sshCommandIsSet(git) })
+	return r.ssh.set
 }
 
 // sshCommandIsSet は、利用者が GIT_SSH_COMMAND・GIT_SSH・core.sshCommand で ssh の撃ち方を決めているかを返す。決めていれば
