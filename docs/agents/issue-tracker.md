@@ -45,6 +45,7 @@ GitHub shares one number space across issues and PRs, so a bare `#42` may be eit
 - 判定条件が同じで対象だけ違う指摘は 1 件に束ね、対象を本文の checklist に並べる
 - 起票の前に、同じ指摘の issue を、open なものと、`docs/agents/triage-labels.md` の表で `wontfix` の役を持つ label で close したものから、題名と変更対象の file path の 2 通りで探す。当たった issue は本文を読み、判定条件と対象が同じかで同じ指摘かを決める。同じ指摘の issue があれば起票せず、open なら発端の issue と CL の番号があればコメントで足す
 - 本文に `## 範囲` の節を置き、変更してよい file と「範囲外で見つけた欠陥・指摘は `docs/agents/issue-tracker.md`「follow-up issue の起票」に従って扱う」を書く
+- `## 範囲` の変更してよい file には、直す箇所の呼び出し側と、その振る舞いを確かめる test (black-box を含む) の追従まで挙げる — 挙げないと、実装する worker は追従を範囲外として直せず、test が落ちたまま残るか follow-up の issue に回る
 - `## 範囲` の節の直前に、発端の issue (作業が担当している issue) を指す独立した 1 行 `発端: #<番号>` を置く。follow-up issue がどの作業から起票されたかを後から辿るための行で、着手可の判定には使わない。issue を介さず人が始めた作業には指す issue が無いので、行を置かない
 - 付ける label は triage 待ち (`docs/agents/triage-labels.md` の表で `needs-triage` の役を持つ label) だけにする。着手可は triage が付ける。着手可の label (`WORKFLOW.md` の trigger が当たる label) を付けると、dispatcher が worker 自身の起票を拾って作業を自己増殖させる
 
