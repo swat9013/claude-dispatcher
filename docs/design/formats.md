@@ -326,8 +326,8 @@ claude-dispatcher loop [--max-concurrent <N>] [<workflow の path>]
 - `<置き場の名前>` は `issue 置き場` か `CL 置き場`。`<置き場>` は `doctor` の行 (§7.4) と同じ綴り
 - 1 回の読み出しにつき 1 行だけ出す。読み出しは止めず、読み出しの結果も exit code も変えない (観測を失敗にしない)
 - 閾値は 15 秒の固定値で、workflow 定義では変えられない
-- loop は人が読む行 (下の「画面」) に出す。tick の読み出しでは、加えて log.jsonl (§4) に `slow_listing` の行を書く (§4 の冒頭の規則で、目標を超えた読み出しは後から辿る側に入る)。loop の起動時の確認の読み出しは、log.jsonl に書かない (起動時の確認は `loop.lock` を取って log.jsonl を開く前に読むので、書く先がまだ無い)。試運転 (§5) と `doctor` (§7.4) は stderr に出す
-- 掛けるのは tick の手順 3 の snapshot と、試運転・`doctor` が置き場を読む一覧の読み出しと、起動時の確認 (上。`jira` の issue 置き場の確認の手順 2 と、`cl:` の CL 置き場の確認) が読む open な一覧。loop の起動時の確認では、tick と同じく人が読む行に出す。単発起動 (§11) の起動時の確認では stderr に出す
+- loop は (起動時の確認でも) 人が読む行 (下の「画面」) に出す。tick の読み出しでは、加えて log.jsonl (§4) に `slow_listing` の行を書く (§4 の冒頭の規則で、目標を超えた読み出しは後から辿る側に入る)。loop の起動時の確認の読み出しは、log.jsonl に書かない (起動時の確認は `loop.lock` を取って log.jsonl を開く前に読むので、書く先がまだ無い)。試運転 (§5)・`doctor` (§7.4)・単発起動 (§11) は stderr に出す
+- 掛けるのは tick の手順 3 の snapshot と、試運転・`doctor` が置き場を読む一覧の読み出しと、起動時の確認 (上。`jira` の issue 置き場の確認の手順 2 と、`cl:` の CL 置き場の確認) が読む open な一覧
 
 1. 突き合わせ: 走っている worker の作業対象を読み直し、終端 (issue の close、CL の merge か close) になっていれば worker を止め、`after_run` と `before_remove` を撃って workspace を消す。trigger から外れただけでは止めない
 2. 終わった worker のうち、作業対象を読み直せなかったものを読み直す

@@ -37,7 +37,7 @@ type Store struct {
 const SlowListing = 15 * time.Second
 
 // SlowNotice は、一覧の読み出しが SlowListing を超えたことを、読み終わる前に 1 回だけ知らせる口。After か Notify が nil
-// なら知らせない。Notify は見張りの goroutine で呼び、Open は Notify が終わるまで返らない。
+// なら知らせない。Notify は見張りの goroutine で呼び、Watch (Open も Watch を通る) は Notify が終わるまで返らない。
 type SlowNotice struct {
 	// After は d 後に届く channel を返す (time.After。テストは差し替える)
 	After  func(d time.Duration) <-chan time.Time
@@ -61,6 +61,13 @@ func placeOf(def workflow.Definition, kind target.Kind) string {
 		return place.String()
 	}
 	return def.Tracker.Place.String()
+}
+
+// SlowToOutput は、遅い一覧の行を人が読む行 out に出す口 (formats.md §6 の「遅い一覧」)。
+func SlowToOutput(def workflow.Definition, out Output, after func(time.Duration) <-chan time.Time, now func() time.Time) SlowNotice {
+	return SlowNotice{After: after, Notify: func(kind target.Kind) {
+		out.Show(Line{At: now(), Kind: LineNote, Label: SlowListingLine(def, kind)})
+	}}
 }
 
 // SlowListingLine は、kind の置き場の一覧の読み出しが SlowListing を超えたときに出す 1 行。

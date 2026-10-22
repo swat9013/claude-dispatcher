@@ -270,6 +270,8 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 		return dryRunOnce(store, def, stdout, stderr)
 	}
 
+	// 起動時の確認の遅い一覧の行から stdout に書くので、その前に読み手の消えた pipe で死なないようにする
+	surviveClosedStdout()
 	// 端末なら画面を描き直し、そうでなければログの行を追記する (formats.md §6)。起動時の確認の遅い一覧も、tick と同じく
 	// この人が読む行に出す
 	var output loop.Output = loop.Appender{W: stdout}
@@ -278,10 +280,7 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 		sc = &screen{out: stdout, now: time.Now, loc: time.Local, display: func() status.Display { return display(f, e.getenv) }}
 		output = sc
 	}
-	slow := loop.SlowNotice{After: slowAfter, Notify: func(kind target.Kind) {
-		output.Show(loop.Line{At: time.Now(), Kind: loop.LineNote, Label: loop.SlowListingLine(def, kind)})
-	}}
-	if code := e.confirmLaunchable(def, stderr, slow); code != 0 {
+	if code := e.confirmLaunchable(def, stderr, loop.SlowToOutput(def, output, slowAfter, time.Now)); code != 0 {
 		return code
 	}
 	scopeKey, dir := e.stateDir(def)
@@ -301,7 +300,6 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 	if code != 0 {
 		return code
 	}
-	surviveClosedStdout()
 	publish := func(snap status.Snapshot) error { return status.Write(dir, snap) }
 	if sc != nil {
 		publish = func(snap status.Snapshot) error {
