@@ -183,7 +183,7 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 | `orphan_end` | 前の tick まで生きていた orphan が終わったのを見た (1 行) | `target` |
 | `claim_lost` | 着手宣言の push に負けて、claim を立てずに起動しなかった (§12。tick ごとに、候補 1 件につき 1 行) | `target`・`trigger` |
 | `takeover` | 死んだ loop の着手宣言を乗っ取って claim を立てた (§12。続けて `start` の行) | `target`・`trigger`・`from` (死んだ loop の loop 名) |
-| `taken_over` | 自分の着手宣言が乗っ取られていたのを見た (§12。走っている worker は止め、それ以外の claim は解く) | `target`・`trigger`・`by` (今の持ち主の loop 名。消えていたら空文字列) |
+| `taken_over` | 自分の着手宣言が乗っ取られていたのを見た (§12。走っている worker は止め、それ以外の claim は解く) | `target`・`trigger`・`by` (今の持ち主の loop 名。消えていたら空文字列、持ち主の commit message を読めなければ `?`) |
 | `dead_loop` | 他の loop を死んだとみなし、その生存報告と、乗っ取らなかった着手宣言を消した (§12。1 つの loop につき 1 行) | `loop` (死んだ loop の loop 名)・`refs` (消した ref の列) |
 | `error` | 処理は続けるが、運用者が知るべき失敗 | `target` (あれば)・`error` |
 
@@ -300,6 +300,7 @@ claude-dispatcher loop [--max-concurrent <N>] [<workflow の path>]
 
 - 読み直した workflow 定義が検査に落ちたら、その tick は何も起動しない (#74 Q38)。周期は、最後に検査に通った版のものを使う
 - 読み直した workflow 定義の scope key が起動時と違えば、その tick は何も起動しない (lock は起動時の scope key で取っている)
+- 読み直した workflow 定義の `coordination.remote` が起動時と違っても (足した・消した・名前を変えた)、その tick は何も起動しない。調停 remote は起動時に解いて最初の生存報告を置いているので、変えるなら loop を起動し直す
 - 読み直した workflow 定義の CL 置き場 (`jira` では `cl.kind`・`cl.host`・`cl.repo`。`github`・`gitlab` では issue 置き場と同じ場所なので、大文字と小文字以外の違いは上の scope key の規則で先に止まる) が起動時と違っても、その tick は何も起動しない。claim している CL を、起動時と別の CL 置き場で読み直さないため。比べるときは scope key と同じく大文字と小文字を区別しない。`tracker.repo` (`github`・`gitlab`) か `cl.repo` (`jira`) の大文字と小文字だけを書き換えた版は同じ CL 置き場とみなし、tick を続ける
 
 **tick の手順** (system.md §7):
@@ -341,6 +342,7 @@ claude-dispatcher loop [--max-concurrent <N>] [<workflow の path>]
 - 再起動は、そのときの workflow 定義 (trigger・本文・hooks・`claude`・`limits`) で行う。workspace の root だけは、最初に起動したときのものを使う (session は workspace の path ごとに保存されるので)
 - 前の attempt で claude を起動できていなければ (hook・描画・起動の失敗)、session はまだ無いので `--session-id` で始める
 - 停止要求を受けた後に失敗した attempt は、再起動を予定しない
+- 調停 remote (§12) を指した project では、再起動は tick の中でだけ試みる (乗っ取られたかを tick の突き合わせで確かめてから起動するため)。tick の外で backoff が明けても次の tick まで待つ
 - 調停 remote (§12) に自分の知る版より新しい版の ref がある間は、attempt を進めずに待ち直す。着手宣言は claim を持つ間のものをそのまま使い、push し直さない
 - 打ち切りは作業対象ごとに memory に持つ。打ち切った作業対象は、どの trigger に当たっても起動しない。loop を起動し直すと消える
 - 打ち切りを解くには、label を外して打ち切ったときの trigger から外し、1 周期待ってから付け直す (外してから付け直すまでが 1 周期に収まると、外れたのを観測できない)。`status` (§7) の打ち切りの行にこの手順を出す
@@ -606,7 +608,7 @@ orphan issue#45: 前の loop の claude がまだ動いている。終わるの�
   - 経過は、段階が `running`・`stopping`・`unstopped` の claim の、今の attempt の起動からの時間 (`45s`・`5m10s`・`1h02m05s`)。`waiting_retry` の claim は `<時刻> に再起動`。停止要求の後に失敗した claim は再起動を予定しないので空
   - 活動は §6 の要約
 - `要対処 <n>`: 打ち切り・曖昧な CL・起動しない trigger・止められない worker (段階が `unstopped` の claim)・orphan・乗っ取られた・生存報告の失敗・新しい版の ref を 1 件 1 行で並べる。1 件も無ければセクションごと出さない
-  - `乗っ取られた <作業対象>: loop <by> が着手宣言を持っている。worker を止めた。止まる前に push された成果を確かめる` (`by` が空なら `着手宣言が消えていた。worker を止めた。…`)
+  - `乗っ取られた <作業対象>: loop <by> が着手宣言を持っている。worker を止めた。止まる前に push された成果を確かめる` (`by` が空なら `着手宣言が消えていた。…`、`?` なら `持ち主を読めない着手宣言に置き換わっていた。…`)
   - `生存報告 <count> 回続けて置けない: <error>。他のマシンの loop に死んだとみなされ、着手宣言を乗っ取られうる`
   - `新しい版の ref 調停 remote に版 <format> の ref がある: この scope では worker を起動しない。dispatcher を上げる` (版を読めなければ `版を読めない ref がある`)
 - 時刻は端末の local time の `HH:MM:SS`
@@ -932,7 +934,7 @@ seq: 17
 
 **起動時の調停 remote の確認** (loop の起動時 (§6)・単発起動 (§11)・`doctor` (§7.4)):
 
-1. `git remote get-url <coordination.remote>` が通る。落ちたら `調停 remote <名前> を解けない: <理由>` (exit 1)
+1. `git remote get-url <coordination.remote>` と `git remote get-url --push <coordination.remote>` が通り、同じ URL を返す。落ちたら `調停 remote <名前> を解けない: <理由>`、違えば `調停 remote <名前> の読む URL と書く URL が違う: <URL> と <URL>` (exit 1)
 2. `git ls-remote <remote> refs/dispatcher/<scope dir>/*` が通る。落ちたら `調停 remote <名前> を読めない: <理由>` (exit 1)
 
 loop と単発起動は、続けて lock を取った後に最初の生存報告を置く。落ちたら `調停 remote <名前> に生存報告を置けない: <理由>` (exit 1)。
@@ -945,8 +947,8 @@ loop と単発起動は、続けて lock を取った後に最初の生存報告
 4. 自分の知る版より新しい版の ref があれば、その tick は候補を起動せず、再起動を待ち直させ、5 を撃たない。要対処に出す
 5. 生存報告ごとに、sha が変わったのを最後に見た時刻 (初めて見た時刻を含む) から、その報告の `interval` の 3 倍が過ぎていれば、その loop を死んだとみなす。持ち主の生存報告が無い着手宣言は、着手宣言の sha を初めて見た時刻から、自分の生存報告の間隔の 3 倍が過ぎていれば、持ち主を死んだとみなす。時刻は loop 自身の時計で数える
 6. 候補の起動 (§6 の手順 7) で、作業対象に生きている他の loop の着手宣言があれば起動しない。死んだ loop の着手宣言があれば、旧 sha を期待値にして乗っ取る (勝てば `takeover` の行)
-7. 候補の起動の後、死んだ loop の着手宣言のうち乗っ取らなかったものと、死んだ loop の生存報告を消し、`dead_loop` の行を書く。消すときの負けは行を書かずに読み飛ばす (他の loop が先に消したか乗っ取った)
+7. 候補の起動の後、死んだ loop の着手宣言のうち乗っ取らなかったもの (生きている orphan の作業対象のものを除く) と、死んだ loop の生存報告を消し、`dead_loop` の行を書く。消すときの負けは行を書かずに読み飛ばす (他の loop が先に消したか乗っ取った)
 
-**生存報告の置き直し**: 起動時に置き、以後は間隔 (`polling.interval` と 1 分の長いほう) ごとに置き直す。tick とは別の時計で数える。2 回以上続けて落ちたら、状態 file の `heartbeat_failures` (§7.1) に出し、要対処に並べる。落ちるたびに `error` の行を書く。
+**生存報告の置き直し**: 起動時に置き、以後は間隔 (`polling.interval` と 1 分の長いほう。起動時の workflow 定義の値) ごとに置き直す。tick とは別の goroutine と時計で置き直す。2 回以上続けて落ちたら、状態 file の `heartbeat_failures` (§7.1) に出し、要対処に並べる。落ちるたびに `error` の行を書く。
 
-**後片付け**: claim を解いたとき (`completed`・`stopped` の `end`・`release`・`abandon`) に、乗っ取られていなければ着手宣言を消す。loop が止まるとき (と単発起動が終わるとき) に、残っている自分の着手宣言と生存報告を消す。消せなければ `error` の行を残す。
+**後片付け**: claim を解いたとき (`completed`・`stopped` の `end`・`release`・`abandon`) に、乗っ取られていなければ着手宣言を消す。loop が止まるとき (と単発起動が終わるとき) に、残っている自分の着手宣言と生存報告を消す。止められない claude が生きている claim の着手宣言は消さない。消せなければ `error` の行を残す。loop が起動時の確認の後に起動を失敗させたときも、置いた生存報告を消す。
