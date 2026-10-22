@@ -50,15 +50,17 @@ const (
 // usage の形式は formats.md §10。Usage 節の command の代わりに flag を書く形と Options 節は引数の宣言 (args.go) から生成し、
 // Usage 節の run の形・Commands・Arguments は手で書く
 var usage = "Usage: claude-dispatcher <command> [options] [WORKFLOW]\n" +
-	"       claude-dispatcher run TRIGGER TARGET [WORKFLOW]\n" + usageForms() + `
+	"       claude-dispatcher run TRIGGER TARGET [WORKFLOW]\n" +
+	"       claude-dispatcher max-concurrent N [WORKFLOW]\n" + usageForms() + `
 Commands:
-  loop      前面で tick を回し続け、止めるまで戻らない (Ctrl+C で止める)
-  status    loop の今の状態を描く。何も書かず、tracker の CLI も撃たない
-  paths     state dir・log・状態 file・workspace の置き場を出す
-  setup     cwd に WORKFLOW.md の雛形を書く。既にある file は上書きしない
-  doctor    workflow 定義・issue 置き場・依存 CLI・事前検査を確かめる
-  run       TRIGGER と TARGET を指名して worker を 1 回だけ起動し、完了したかを exit code で返す
-  guide     導入の流れ・回し方・WORKFLOW.md の書き方の案内を出す
+  loop            前面で tick を回し続け、止めるまで戻らない (Ctrl+C で止める)
+  status          loop の今の状態を描く。何も書かず、tracker の CLI も撃たない
+  paths           state dir・log・状態 file・workspace の置き場を出す
+  setup           cwd に WORKFLOW.md の雛形を書く。既にある file は上書きしない
+  doctor          workflow 定義・issue 置き場・依存 CLI・事前検査を確かめる
+  run             TRIGGER と TARGET を指名して worker を 1 回だけ起動し、完了したかを exit code で返す
+  max-concurrent  走っている loop の並列上限を N にする。次の tick から効く
+  guide           導入の流れ・回し方・WORKFLOW.md の書き方の案内を出す
 
 Options:
 ` + options() + `
@@ -66,6 +68,7 @@ Arguments:
   WORKFLOW   workflow 定義の path。省くと cwd の WORKFLOW.md (guide では受けない)
   TRIGGER    (run) workflow 定義の trigger の名前
   TARGET     (run) 作業対象。issue#<番号> か cl#<番号>
+  N          (max-concurrent) 並列上限。1 以上の整数
 
 ` + "`WORKFLOW.md` の書き方と導入の流れは `claude-dispatcher guide` を参照\n"
 
@@ -108,6 +111,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runGuide(args[1:], stdout, stderr)
 	case "run":
 		return runOnce(args[1:], stdout, stderr)
+	case "max-concurrent":
+		return runMaxConcurrent(args[1:], stdout, stderr)
 	}
 	return usageError(stderr, "未知の subcommand: %s", args[0])
 }
@@ -233,7 +238,7 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 		return exitFailed
 	}
 	// workflow 定義は PATH を使わずに読めるので、撃つ依存 CLI が決まる前の環境で読む
-	// --max-concurrent は読み直すたびに limits.max_concurrent を上書きし、loop が止まるまで変わらない (system.md §8)
+	// 並列上限は workflow 定義に書けないので、--max-concurrent を渡したらその値にする (省けば Load の既定の 1。system.md §8)
 	load := func() (workflow.Definition, error) {
 		def, err := workflow.Load(abs, unresolvedEnvironment().getenv)
 		if err == nil && opts.maxConcurrent != 0 {
@@ -275,6 +280,24 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 		return code
 	}
 	defer lock.Close()
+	// 前の loop が max-concurrent で渡した値を継がない (formats.md §6 の起動時の検査)
+	if err := state.RemoveMaxConcurrent(dir); err != nil {
+		fmt.Fprintln(stderr, err)
+		return exitFailed
+	}
+	// tick ごとの読み直しでは、max-concurrent で渡した値を --max-concurrent より優先する。読めなければ workflow 定義を採れない
+	// tick と同じく、その tick は起動しない (system.md §7 の手順 2)
+	reload := func() (workflow.Definition, error) {
+		def, err := load()
+		if err != nil {
+			return def, err
+		}
+		n, ok, err := state.ReadMaxConcurrent(dir)
+		if ok {
+			def.MaxConcurrent = n
+		}
+		return def, err
+	}
 	logFile, err := os.OpenFile(filepath.Join(dir, state.LogFile), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		fmt.Fprintf(stderr, "log.jsonl を開けない: %v\n", err)
@@ -309,7 +332,7 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 	return loop.Run(loop.Options{
 		Coordination:   coordination,
 		HeartbeatAfter: time.After,
-		Load:           load,
+		Load:           reload,
 		Definition:     def,
 		Precheck:       e.precheck,
 		Store:          func(def workflow.Definition) loop.Store { return e.places(def).Store() },
@@ -474,7 +497,7 @@ func workflowArg(command string, argv []string, stderr io.Writer) (string, bool)
 	return a.workflowPath, true
 }
 
-// loadForReading は、status と paths のために workflow 定義を読む。誤りなら stderr に出して exit code を返す。
+// loadForReading は、status と paths と max-concurrent のために workflow 定義を読む。誤りなら stderr に出して exit code を返す。
 func loadForReading(e environment, path string, stderr io.Writer) (workflow.Definition, int) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
@@ -520,6 +543,40 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 	fmt.Fprint(stdout, status.Render(snap, status.Liveness(alive), time.Now(), time.Local, d))
+	return 0
+}
+
+// runMaxConcurrent は `max-concurrent <N> [<workflow の path>]` を撃つ (formats.md §13)。走っている loop の state dir に並列上限
+// を書く。loop が立っていなければ書かない (次に起動する loop は起動時に消すので効かない)。tracker の CLI は撃たない。
+func runMaxConcurrent(args []string, stdout, stderr io.Writer) int {
+	a, err := commandSpecOf("max-concurrent").parse(args)
+	if err != nil {
+		return usageError(stderr, "%v", err)
+	}
+	if err := positiveInt("N")(a.operands[0]); err != nil {
+		return usageError(stderr, "%v", err)
+	}
+	n, _ := strconv.Atoi(a.operands[0])
+	e := unresolvedEnvironment()
+	def, code := loadForReading(e, a.workflowPath, stderr)
+	if code != 0 {
+		return code
+	}
+	scopeKey, dir := e.stateDir(def)
+	alive, err := state.Alive(dir)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return exitFailed
+	}
+	if !alive {
+		fmt.Fprintf(stderr, "loop が立っていない: %s\n", scopeKey)
+		return exitFailed
+	}
+	if err := state.WriteMaxConcurrent(dir, n); err != nil {
+		fmt.Fprintln(stderr, err)
+		return exitFailed
+	}
+	fmt.Fprintf(stdout, "並列上限を %d にした: 次の tick から効く (%s)\n", n, scopeKey)
 	return 0
 }
 

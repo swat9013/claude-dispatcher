@@ -101,7 +101,7 @@ func TestErrorsNameTheItem(t *testing.T) {
 		{"周期の下限の外", strings.Replace(valid, "triggers:", "polling:\n  interval: 999ms\ntriggers:", 1), []string{"polling.interval"}},
 		{"周期の上限の外", strings.Replace(valid, "triggers:", "polling:\n  interval: 24h1s\ntriggers:", 1), []string{"polling.interval"}},
 		{"周期の綴り", strings.Replace(valid, "triggers:", "polling:\n  interval: soon\ntriggers:", 1), []string{"polling.interval"}},
-		{"並列上限が 0", strings.Replace(valid, "triggers:", "limits:\n  max_concurrent: 0\ntriggers:", 1), []string{"limits.max_concurrent"}},
+		{"並列上限は workflow 定義に書けない", strings.Replace(valid, "triggers:", "limits:\n  max_concurrent: 3\ntriggers:", 1), []string{"limits.max_concurrent"}},
 		{"hooks の未知の key", strings.Replace(valid, "triggers:", "hooks:\n  after_start: x\ntriggers:", 1), []string{"hooks.after_start"}},
 		{"hooks の timeout の綴り", strings.Replace(valid, "triggers:", "hooks:\n  timeout: soon\ntriggers:", 1), []string{"hooks.timeout"}},
 		{"claude の args の型", strings.Replace(valid, "triggers:", "claude:\n  args: --verbose\ntriggers:", 1), []string{"claude.args"}},
@@ -197,7 +197,6 @@ hooks:
   before_remove: echo remove
   timeout: 5s
 limits:
-  max_concurrent: 3
   max_attempts: 5
   max_retry_backoff: 30s
   stall_timeout: 0s
@@ -213,7 +212,7 @@ triggers:`, 1)
 		t.Fatal(err)
 	}
 	want := workflow.Hooks{AfterCreate: "echo created", BeforeRun: "echo run", AfterRun: "echo ran", BeforeRemove: "echo remove", Timeout: 5 * time.Second}
-	if def.WorkspaceRoot != filepath.Join(def.Dir, "work") || def.Hooks != want || def.MaxConcurrent != 3 ||
+	if def.WorkspaceRoot != filepath.Join(def.Dir, "work") || def.Hooks != want ||
 		def.MaxAttempts != 5 || def.MaxRetryBackoff != 30*time.Second || def.StallTimeout != 0 || def.RunTimeout != 2*time.Hour ||
 		def.Claude.Command != "my-claude" || strings.Join(def.Claude.Args, " ") != "--permission-mode auto" ||
 		def.Triggers[0].Action != "/implement\n" {

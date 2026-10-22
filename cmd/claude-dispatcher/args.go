@@ -34,7 +34,7 @@ type commandSpec struct {
 	flags []flagSpec
 	// arguments は flag 以外の引数の受け方
 	arguments arguments
-	// operands は WORKFLOW の前に必ず書く位置引数の usage 上の綴り (run の TRIGGER・TARGET)。workflowArgument に限る
+	// operands は WORKFLOW の前に必ず書く位置引数の usage 上の綴り (run の TRIGGER・TARGET、max-concurrent の N)。workflowArgument に限る
 	operands []string
 	// required は必ず付ける flag の名前
 	required []string
@@ -59,7 +59,7 @@ const (
 var commandSpecs = []commandSpec{
 	{name: "loop", arguments: workflowArgument, flags: []flagSpec{
 		{name: "--dry-run", help: "起動するはずの作業対象と trigger を示す。何も起動せず、何も書かない"},
-		{name: "--max-concurrent", value: "<N>", help: "limits.max_concurrent を上書きする並列上限 (1 以上の整数)", check: positiveInt("--max-concurrent")},
+		{name: "--max-concurrent", value: "<N>", help: "起動時の並列上限 (1 以上の整数)。省けば 1", check: positiveInt("--max-concurrent")},
 	}},
 	{name: "status", arguments: workflowArgument},
 	{name: "paths", arguments: workflowArgument, required: []string{"--json"}, flags: []flagSpec{
@@ -72,6 +72,7 @@ var commandSpecs = []commandSpec{
 	}},
 	{name: "doctor", arguments: workflowArgument},
 	{name: "run", arguments: workflowArgument, operands: []string{"TRIGGER", "TARGET"}},
+	{name: "max-concurrent", arguments: workflowArgument, operands: []string{"N"}},
 	{name: "guide", arguments: noArguments},
 }
 
@@ -234,7 +235,7 @@ func positiveInt(name string) func(string) error {
 	}
 }
 
-// usageForms は usage の Usage 節の 3 行目からの (2 行目は main.go が手で書く run の形)、command の代わりに flag を書く形。1 行目と桁を揃える字下げで始める。
+// usageForms は usage の Usage 節の 4 行目からの (2・3 行目は main.go が手で書く run と max-concurrent の形)、command の代わりに flag を書く形。1 行目と桁を揃える字下げで始める。
 func usageForms() string {
 	var b strings.Builder
 	for _, g := range globalFlags {

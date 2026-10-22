@@ -410,6 +410,10 @@ func (l *loop) tick() {
 		l.tickFailed(fmt.Sprintf("workflow 定義の coordination.remote %q が起動時の %q と違う (loop を起動し直す)", remote, start))
 		return
 	}
+	if def.MaxConcurrent != l.def.MaxConcurrent {
+		// max-concurrent で渡した値を採った。採った値は tick の行と状態 file にも出る (formats.md §6)
+		l.rec.human(LineNote, "並列上限を変えた", ": %d → %d", l.def.MaxConcurrent, def.MaxConcurrent)
+	}
 	l.def, l.blocked = def, l.o.Precheck(def)
 	if l.remote != nil {
 		if err := l.coordinate(); err != nil {

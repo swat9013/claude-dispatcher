@@ -34,7 +34,8 @@ type Definition struct {
 	// WorkspaceRoot は workspace を置く dir の絶対 path
 	WorkspaceRoot string
 	Hooks         Hooks
-	// MaxConcurrent は同時に走らせる worker の上限
+	// MaxConcurrent は並列上限。workflow 定義には書けず (書けば未知の key)、Load は既定の 1 を入れる。loop が --max-concurrent
+	// と max-concurrent の値で上書きする (system.md §8)
 	MaxConcurrent int
 	// MaxAttempts は作業対象 1 件の attempt の上限、MaxRetryBackoff は backoff の上限
 	MaxAttempts     int
@@ -452,11 +453,6 @@ func (c *checker) workspaceFields(def *Definition) map[string]field {
 // limitsFields は limits の表。
 func (c *checker) limitsFields(def *Definition) map[string]field {
 	return map[string]field{
-		"max_concurrent": {read: func(_, n *yaml.Node, path string) {
-			if v, ok := c.positive(n, path); ok {
-				def.MaxConcurrent = v
-			}
-		}},
 		"max_attempts": {read: func(_, n *yaml.Node, path string) {
 			if v, ok := c.positive(n, path); ok {
 				def.MaxAttempts = v

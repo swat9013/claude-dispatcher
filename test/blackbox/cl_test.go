@@ -225,11 +225,13 @@ func (s *sandbox) branchOf(name string) {
 	s.respond("git", stubwire.Rule{ArgsPrefix: []string{"symbolic-ref"}, Stdout: name + "\n"})
 }
 
-// issueAndCLWorkflow は、issue 側の trigger implement と CL 側の trigger fix を持つ workflow 定義。並列上限は 3。
+// issueAndCLLimit は issueAndCLWorkflow の loop に渡す並列上限
+var issueAndCLLimit = []string{"--max-concurrent", "3"}
+
+// issueAndCLWorkflow は、issue 側の trigger implement と CL 側の trigger fix を持つ workflow 定義。loop は並列上限 3
+// (issueAndCLLimit) で起動する。
 func (s *sandbox) issueAndCLWorkflow() string {
-	return strings.Replace(s.clWorkflow("{}"), "triggers:\n", `limits:
-  max_concurrent: 3
-triggers:
+	return strings.Replace(s.clWorkflow("{}"), "triggers:\n", `triggers:
   - name: implement
     on: issue
     when: {labels: {all: [ready-for-agent]}}
@@ -245,7 +247,7 @@ func TestCLWhoseBranchIsCheckedOutInAClaimedWorkspaceIsNotLaunched(t *testing.T)
 	s.setIssues(readyIssue(7))
 	s.branchOf("worktree-issue-7")
 	s.onClaude(stubwire.Rule{ReleaseFile: s.releaseFile()})
-	s.startLoop()
+	s.startLoop(issueAndCLLimit...)
 	waitStart(t, s, "issue#7", 1)
 
 	s.setStore([]issue{readyIssue(7)}, []cl{{number: 20, head: "worktree-issue-7"}, {number: 21, head: "worktree-issue-8"}})
@@ -263,7 +265,7 @@ func TestForkCLWithTheSameBranchNameAsAClaimedWorkspaceIsLaunched(t *testing.T) 
 	s.setIssues(readyIssue(7))
 	s.branchOf("worktree-issue-7")
 	s.onClaude(stubwire.Rule{ReleaseFile: s.releaseFile()})
-	s.startLoop()
+	s.startLoop(issueAndCLLimit...)
 	waitStart(t, s, "issue#7", 1)
 
 	s.setStore([]issue{readyIssue(7)}, []cl{{number: 20, head: "worktree-issue-7", fork: true}})
@@ -278,7 +280,7 @@ func TestCLWhoseBranchIsCheckedOutInAWorkspaceWaitingToRetryIsNotLaunched(t *tes
 	s.setIssues(readyIssue(7))
 	s.branchOf("worktree-issue-7")
 	s.onClaude(stubwire.Rule{})
-	s.startLoop()
+	s.startLoop(issueAndCLLimit...)
 	s.waitEvents("retry", 1)
 
 	s.setStore([]issue{readyIssue(7)}, []cl{{number: 20, head: "worktree-issue-7"}, {number: 21, head: "worktree-issue-8"}})
@@ -296,7 +298,7 @@ func TestCLsAreNotLaunchedWhileTheBranchOfAClaimedWorkspaceCannotBeRead(t *testi
 	s.setIssues(readyIssue(7))
 	s.respond("git", stubwire.Rule{ArgsPrefix: []string{"symbolic-ref"}, Stderr: "fatal: bad object HEAD", Exit: 128})
 	s.onClaude(stubwire.Rule{ReleaseFile: s.releaseFile()})
-	s.startLoop()
+	s.startLoop(issueAndCLLimit...)
 	waitStart(t, s, "issue#7", 1)
 
 	s.setStore([]issue{readyIssue(7)}, []cl{{number: 21, head: "worktree-issue-8"}})

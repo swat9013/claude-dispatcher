@@ -128,6 +128,25 @@ func TestSubcommandsOtherThanLoopRejectTheConcurrencyLimitFlag(t *testing.T) {
 	}
 }
 
+func TestMaxConcurrentRejectsAMalformedLimit(t *testing.T) {
+	for _, args := range [][]string{
+		{"0"},
+		{"-1"},
+		{"two"},
+		{},
+		{"2", "WORKFLOW.md", "extra"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			s := newSandbox(t)
+
+			r := s.run(append([]string{"max-concurrent"}, args...)...)
+
+			assertExit(t, r, 2)
+			s.assertNoGh("引数が誤っているのに")
+		})
+	}
+}
+
 func TestLoopRejectsAMalformedConcurrencyLimitFlag(t *testing.T) {
 	for _, args := range [][]string{
 		{"--max-concurrent", "0"},
