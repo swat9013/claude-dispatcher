@@ -180,7 +180,12 @@ func TestATickWhoseListingTakesOverFifteenSecondsWritesASlowListingEventToTheLog
 	if len(slow) != 1 || slow[0]["kind"] != "issue" || slow[0]["place"] != "acme/widgets" {
 		t.Fatalf("log.jsonl:\n%s\nwant slow_listing (kind issue, place acme/widgets) の行 1 本", r.log.String())
 	}
+}
+
+func TestASlowListingDoesNotChangeTheResultOfTheTick(t *testing.T) {
+	r := slowTick(t)
+
 	if ticks := r.logEvents(t, "tick"); len(ticks) != 1 || ticks[0]["result"] != "ok" {
-		t.Fatalf("log.jsonl:\n%s\nwant tick ok の行 1 本 (読み出しの結果は変わらない)", r.log.String())
+		t.Fatalf("log.jsonl:\n%s\nwant tick ok の行 1 本", r.log.String())
 	}
 }
