@@ -129,12 +129,6 @@ func (l *loop) coordinate() error {
 	now := l.o.Now()
 	l.noteSightings(v, now)
 	l.detectTakeovers(v)
-	for ref, sha := range m.inherited {
-		if v.Claims[ref] != sha {
-			// 引き継いだ着手宣言が置き換わったか消えた。claim が無いので止める worker は無く、忘れるだけ
-			delete(m.inherited, ref)
-		}
-	}
 	l.deleteStaleClaims(v)
 	m.newer = newerFormatIn(v)
 	m.holders = l.othersClaims(v)
@@ -267,6 +261,12 @@ func (l *loop) detectTakeovers(v coord.View) {
 // deleteStaleClaims は、自分の loop 名の着手宣言のうち claim の無い作業対象のもの (消し損ねた着手宣言) を消す。
 func (l *loop) deleteStaleClaims(v coord.View) {
 	r := l.mediation
+	for ref, sha := range r.inherited {
+		if v.Claims[ref] != sha {
+			// 引き継いだ着手宣言が置き換わったか消えた。claim が無いので止める worker は無く、忘れるだけ
+			delete(r.inherited, ref)
+		}
+	}
 	for _, ref := range sortedRefs(v.Claims) {
 		sha := v.Claims[ref]
 		if m, read := v.Messages[sha]; !read || m.Loop != r.c.LoopName() {
@@ -500,7 +500,10 @@ func (l *loop) leaveRemote() {
 	// orphan のために引き継いだ着手宣言は、直近の tick で orphan が終わっていたものを消し、生きていたものは残す (orphan が
 	// 作業を続けうる)
 	l.releaseInherited()
-	claudeLeft = claudeLeft || len(l.mediation.inherited) > 0
+	for _, ref := range sortedRefs(l.mediation.inherited) {
+		claudeLeft = true
+		l.rec.error(ref, "orphan のために引き継いだ着手宣言を残して止まる (orphan の claude が作業を続けうる)")
+	}
 	if claudeLeft {
 		// 生存報告も消さずに途絶えさせる。消すと、持ち主の生存報告の無い着手宣言としてすぐに乗っ取られうる
 		return

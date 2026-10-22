@@ -70,7 +70,7 @@ entity に付けた印は、その entity の正本がどこにあるかを表�
    4. `issue#47` が当たったままなら、B は旧 sha を期待値にした置き換えで着手宣言を乗っ取り、claim (attempt 1) を立てる。attempt は A の数を引き継がない。B は A の生存報告を消す
    5. 別の場合: A は network が切れていただけで生きていた。network が戻った A は、自分の着手宣言の sha が変わったのを見て、`issue#47` の worker を止めて claim を解き、要対処に出す。A は B の着手宣言を消さない
 
-4 シナリオとも、図の多重度 (作業対象 1 ─ 0..1 claim / 0..1 打ち切り / 0..1 workspace) と集約の境界 (loop の記憶は loop と共に消え、workspace と調停 remote の ref は残る) のまま表せる。起動は claim (loop 集約) と workspace を続けて作るが、両者をまたぐ不変条件は無い (シナリオ 3 のとおり、claim の無い workspace は普通に在る)。そのため、2 つを別々の集約のままにしておける。orphan の生死 (シナリオ 3 の 4・5) は図の entity でも集約でもなく、kernel が持つ worker log の flock にある。図には、候補の定義式と workspace の不変条件の注記にだけ現れる。
+4 シナリオとも、図の多重度 (作業対象 1 ─ 0..1 claim / 0..1 打ち切り / 0..1 workspace) と集約の境界 (loop の記憶は loop と共に消え、workspace と調停 remote の ref は残る) のまま表せる。起動は claim (loop 集約) と workspace を続けて作るが、両者をまたぐ不変条件は無い (シナリオ 3 のとおり、claim の無い workspace は普通に在る)。そのため、2 つを別々の集約のままにしておける。orphan の生死 (シナリオ 3 の 4・5) は図の entity でも集約でもなく、kernel が持つ worker log の flock にある。図には、候補の定義式と workspace の不変条件の注記にだけ現れる。シナリオ 3 の 4 の、orphan のために引き継いだ着手宣言は claim を持たないので、図の Claim 1 ─ 0..1 着手宣言の多重度には当たらない (図は ADR 0027 の前のまま。直すのは follow-up)。
 
 ## claim の状態機械図
 
