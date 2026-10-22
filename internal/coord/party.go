@@ -36,6 +36,16 @@ type View struct {
 	Unread error
 }
 
+// Newer は、自分の知る版より新しい版 (版を読めないものを含む) の commit message があればそれを返す。
+func (v View) Newer() (Message, bool) {
+	for _, m := range v.Messages {
+		if m.Newer() {
+			return m, true
+		}
+	}
+	return Message{}, false
+}
+
 // LoopName は自分の loop 名。
 func (p *Party) LoopName() string { return p.Loop }
 

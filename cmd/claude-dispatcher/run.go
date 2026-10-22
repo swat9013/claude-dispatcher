@@ -109,7 +109,7 @@ func runOnce(args []string, stdout, stderr io.Writer) int {
 		if claimSHA, code = claimOnce(party, ref, stderr); code != 0 {
 			return code
 		}
-		stop := keepReporting(party, coord.HeartbeatInterval(def.Interval), stderr)
+		stop := keepReporting(party.Heartbeat, coord.HeartbeatInterval(def.Interval), time.After, stderr)
 		defer stop()
 	}
 	sessionID, err := worker.NewSessionID()
@@ -282,9 +282,10 @@ func claimOnce(party *coord.Party, ref target.Ref, stderr io.Writer) (string, in
 	return sha, 0
 }
 
-// keepReporting は、単発起動が終わるまで生存報告を間隔ごとに置き直す。返した関数で止める (止まるまで待つ)。
-func keepReporting(party *coord.Party, interval time.Duration, stderr io.Writer) func() {
-	return coord.KeepBeating(party.Heartbeat, interval, time.After, func(err error) {
+// keepReporting は、単発起動が終わるまで生存報告を間隔ごとに置き直す。after は待つ時計 (本番は time.After)。返した関数で
+// 止める (止まるまで待つ)。
+func keepReporting(heartbeat func(time.Duration) error, interval time.Duration, after func(time.Duration) <-chan time.Time, stderr io.Writer) func() {
+	return coord.KeepBeating(heartbeat, interval, after, func(err error) {
 		if err != nil {
 			fmt.Fprintf(stderr, "生存報告を置けない: %s\n", printable.Line(err.Error()))
 		}

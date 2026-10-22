@@ -61,9 +61,8 @@ type mediation struct {
 	newer *status.NewerFormat
 	// takenOver は乗っ取られた作業対象。loop を起動し直すまで残す
 	takenOver []status.TakenOver
-	// heartbeatFailures と heartbeatError は続けて落ちた生存報告の置き直しの回数と直近の理由
-	heartbeatFailures int
-	heartbeatError    string
+	// failures は続けて落ちた生存報告の置き直しの回数と直近の理由
+	failures coord.Failures
 	// interval は生存報告の間隔。起動時の workflow 定義から決め、走っている間は変えない (system.md §9)
 	interval time.Duration
 	// results は生存報告の置き直しの結果。dropped は results の満杯で捨てた結果の数。stopBeating は置き直しの goroutine を
@@ -100,12 +99,11 @@ func (l *loop) beat(err error) {
 		l.rec.error(target.Ref{}, fmt.Sprintf("生存報告の置き直しの結果 %d 件を読まずに捨てた", n))
 	}
 	if err != nil {
-		l.mediation.heartbeatFailures++
-		l.mediation.heartbeatError = oneLine(err)
-		l.rec.error(target.Ref{}, "生存報告を置けない: "+l.mediation.heartbeatError)
+		l.mediation.failures.Note(err)
+		l.rec.error(target.Ref{}, "生存報告を置けない: "+oneLine(err))
 		return
 	}
-	l.mediation.heartbeatFailures, l.mediation.heartbeatError = 0, ""
+	l.mediation.failures.Note(nil)
 }
 
 // coordinate は調停 remote の突き合わせ (formats.md §12 の 1–5)。ref を読めなければ error を返す (その tick は掃除も起動も
@@ -329,10 +327,11 @@ func (l *loop) cleanupDeadLoops() {
 		}
 		claims := 0
 		for _, ref := range sortedRefs(r.holders) {
-			// この tick に乗っ取った (claim を立てた) 着手宣言と、生きている orphan の作業対象の着手宣言は消さない (orphan の
-			// claude が作業を続けている)
-			_, takenByMe := l.claims[ref]
-			if h := r.holders[ref]; h.loop == loop && h.dead && !takenByMe && !l.orphans[ref] && remove(ref, r.c.ClaimRef(ref), h.sha) {
+			// 自分が着手宣言を置いて claim している (この tick の候補の起動で乗っ取った) 作業対象と、生きている orphan の作業対象の
+			// 着手宣言は消さない (orphan の claude が作業を続けている)
+			c, claimed := l.claims[ref]
+			mine := claimed && c.claimSHA != ""
+			if h := r.holders[ref]; h.loop == loop && h.dead && !mine && !l.orphans[ref] && remove(ref, r.c.ClaimRef(ref), h.sha) {
 				claims++
 			}
 		}

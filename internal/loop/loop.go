@@ -274,10 +274,7 @@ type loop struct {
 }
 
 // fixedAtStartChanged は、起動時に固定する項目 (formats.md §6) のうち def で起動時と変わったものがあれば、その tick の error の
-// 文を返す。変わらなければ ""。
-//   - scope key: lock を起動時の scope key で取っている
-//   - CL 置き場: claim している CL を、起動時と別の CL 置き場で読み直さない。scope key と同じく大文字と小文字は区別しない
-//   - coordination.remote: 起動時に解いて最初の生存報告を置いている。別の remote を読み書きしない
+// 文を返す。変わらなければ ""。項目ごとの固定する理由は formats.md §6。
 func (l *loop) fixedAtStartChanged(def workflow.Definition) string {
 	start := l.o.Definition
 	key, place, startPlace := l.o.ScopeKeyOf(def), def.CLPlace(), start.CLPlace()
