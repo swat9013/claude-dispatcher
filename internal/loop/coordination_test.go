@@ -198,8 +198,8 @@ func TestAClaimWithoutItsOwnersHeartbeatIsKeptForLessThanThreeOwnIntervals(t *te
 
 	r := coordinatedRun(t, remote, 3, nil)
 
-	if len(r.jobs) != 0 {
-		t.Fatalf("2 分の時点で %d 回起動した, want 自分の生存報告の間隔 (1 分) の 3 倍まで待つ", len(r.jobs))
+	if len(r.jobs) != 0 || len(remote.claimed) != 0 {
+		t.Fatalf("2 分の時点で起動 %d 回・着手宣言 %v, want 自分の生存報告の間隔 (1 分) の 3 倍まで待つ", len(r.jobs), remote.claimed)
 	}
 }
 
@@ -446,7 +446,7 @@ func TestALoopLeavingAnUnstoppedClaudeKeepsItsClaimAndHeartbeat(t *testing.T) {
 
 var issue7 = target.Ref{Kind: target.KindIssue, Number: 7}
 
-func TestAStaleClaimOfMyOwnWithoutAClaimIsDeleted(t *testing.T) {
+func TestALeftoverClaimRefOfMyOwnIsDeleted(t *testing.T) {
 	remote := newMemoryRemote()
 	stale := remote.put(&issue7, coord.Message{Kind: coord.KindClaim, Format: coord.Format, Loop: me, Target: "issue#7"})
 
@@ -460,7 +460,7 @@ func TestAStaleClaimOfMyOwnWithoutAClaimIsDeleted(t *testing.T) {
 	}
 }
 
-func TestAStaleClaimOfMyOwnThatCannotBeDeletedLeavesAnErrorLine(t *testing.T) {
+func TestALeftoverClaimRefOfMyOwnThatCannotBeDeletedLeavesAnErrorLine(t *testing.T) {
 	remote := newMemoryRemote()
 	remote.put(&issue7, coord.Message{Kind: coord.KindClaim, Format: coord.Format, Loop: me, Target: "issue#7"})
 	remote.deleteErr = errors.New("push が落ちた")
@@ -537,28 +537,37 @@ func TestALoopWithACoordinationRemoteDoesNotRelaunchOutsideATick(t *testing.T) {
 	def.MaxAttempts = 2
 	r := newRig()
 	r.script = func(worker.Job) workerScript { return exits(1) }
-	wakes := 0
+	wakes, periods := 0, 0
 	r.timer = func(kind timerKind, _ time.Duration) timing {
 		if kind == periodTimer {
-			// 周期 (1 分) より先に backoff (10 秒) の wake が明ける。次の tick を迎えずに止める
-			return timing{fate: stopsTheLoop}
+			// 周期 (1 分) より先に backoff (10 秒) の wake が明ける。2 回目の tick の後で止める
+			if periods++; periods >= 2 {
+				return timing{fate: stopsTheLoop}
+			}
+			return timing{fate: fires}
 		}
 		if wakes++; wakes > 3 {
 			return timing{fate: neverFires}
 		}
 		return timing{fate: fires}
 	}
+	// launchesAtTick は tick ごとの、その tick が workflow 定義を読んだ時点 (再起動を試みる前) の起動の数
+	var launchesAtTick []int
 
 	r.run(t, loop.Options{
 		Definition: def, Coordination: remote, Store: matchingStore,
+		Load: func() (workflow.Definition, error) {
+			launchesAtTick = append(launchesAtTick, len(r.jobs))
+			return def, nil
+		},
 		HeartbeatAfter: func(time.Duration) <-chan time.Time { return nil },
 	})
 
 	if wakes == 0 {
 		t.Fatal("backoff の wake を置いていない")
 	}
-	if len(r.jobs) != 1 {
-		t.Fatalf("起動 %d 回, want 乗っ取りを tick の突き合わせで確かめるまで再起動しない (1 回)", len(r.jobs))
+	if len(launchesAtTick) < 2 || launchesAtTick[1] != 1 || len(r.jobs) != 2 {
+		t.Fatalf("tick ごとの起動の数 %v・起動 %d 回, want wake では再起動せず (2 回目の tick の前は 1 回)、2 回目の tick で再起動する", launchesAtTick, len(r.jobs))
 	}
 }
 
@@ -579,6 +588,8 @@ func (b beatSignal) Heartbeat(time.Duration) error {
 func TestHeartbeatIsRenewedWhileATickIsStillRunning(t *testing.T) {
 	remote := beatSignal{newMemoryRemote(), make(chan struct{}, 1)}
 	var first atomic.Bool
+	// inTick は tick が一覧の読み出しに入ったときに閉じる。置き直しの時計はそれまで明けない
+	inTick := make(chan struct{})
 	renewedDuringTick := false
 	r := tickRig(1)
 
@@ -589,12 +600,16 @@ func TestHeartbeatIsRenewedWhileATickIsStillRunning(t *testing.T) {
 				return nil
 			}
 			fired := make(chan time.Time, 1)
-			fired <- rigStart
+			go func() {
+				<-inTick
+				fired <- rigStart
+			}()
 			return fired
 		},
 		Store: func(workflow.Definition) loop.Store {
 			return memoryStore{observe: func() ([]target.Item, error) {
-				// 一覧の読み出しが長引いている間に、置き直しが届くか
+				close(inTick)
+				// 一覧の読み出しが長引いている間に、置き直しが届くか (届かなければ 5 秒で諦めて落とす)
 				select {
 				case <-remote.beats:
 					renewedDuringTick = true
