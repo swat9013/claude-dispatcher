@@ -28,7 +28,7 @@ claude-dispatcher は、tracker (GitHub・GitLab・Jira Cloud) の issue と CL 
    - origin の host が `github.com` なら GitHub の雛形で、`tracker.repo` は `gh repo view` が返す repo で埋まる
    - それ以外の host なら GitLab の雛形で、`tracker.host` と `tracker.repo` は `glab repo view` が返す project の web の host と path で埋まる
    - Jira を issue 置き場にするなら `claude-dispatcher setup --kind jira --host <site> --repo <key>` (`<key>` は Jira の project key)。CL 置き場 (`cl:`) は、origin の host で GitHub か GitLab を決め、上と同じ手順で埋まる
-2. **自分の project に合わせて書く**: trigger の述語・action・hooks・並列上限を直し、repo に commit する。書ける項目は下の「workflow 定義の書き方」
+2. **自分の project に合わせて書く**: trigger の述語・action・hooks を直し、repo に commit する。書ける項目は下の「workflow 定義の書き方」
    - worker が作業を終えたら作業対象を trigger から外すよう、action か本文 (共通 prompt) に書く (下の「action が守る約束」)
    - workspace の置き場 (`workspace.root`) が clone の中なら、`.gitignore` に足す。既定の `.claude-dispatcher/workspaces` は clone の中に入る。`setup` は `.gitignore` を書かない
    - **チームで分担するなら、調停 remote を宣言する**: 同じ issue 置き場を複数のマシンの loop で分け合うなら、`WORKFLOW.md` に `coordination.remote: origin` (clone の git remote の名前) を書いて commit する。書かなければ 1 台で回す
@@ -56,7 +56,9 @@ workflow 定義に誤りがあれば、試運転・`loop` の起動・`doctor` �
   - 戻るのを待つ撃ち方 (tool の呼び出しの中で終わりを待つなど) はしない。端末で撃つか background の process として撃ち、様子は下の `status` で見る
 - 起動時に workflow 定義の検査と事前検査を通す。落ちれば誤りを名指しして起動しない
 - tick ごとに workflow 定義を読み直す。読み直した定義が検査に落ちた tick と、事前検査に落ちた trigger は、何も起動しない
-- `claude-dispatcher loop --max-concurrent <N>` で、その loop だけ並列上限を `limits.max_concurrent` から変えられる (1 以上の整数)。渡した値は loop を止めるまで変わらず、`WORKFLOW.md` の `limits.max_concurrent` を直しても効かない。変えるなら loop を撃ち直す
+- `claude-dispatcher loop --max-concurrent <N>` で、その loop の並列上限 (同時に走らせる worker の上限) を決める (1 以上の整数。省けば 1)。並列上限は loop を回すマシンで決まる値なので、`WORKFLOW.md` には書かない (書くと未知の key として検査に落ちる)
+  - loop を回したまま変えるなら、別の端末で `claude-dispatcher max-concurrent <N>` を撃つ。次の tick から効き、loop を止めるまで続く。走っている worker の数より下げても、走っている worker は止めず、空きが出るまで新しい起動を待つ。loop が立っていなければ何も書かずに exit 1 で終わる
+  - loop を起動し直すと、`max-concurrent` で変えた値は消え、`--max-concurrent` の値 (省けば 1) から始まる
 - 同じ issue 置き場の loop は、同じマシンで 1 本しか起動できない (2 本目と、`run` が走っている間の loop は exit 3 で止まる)。マシンを跨いで分け合うなら `coordination.remote` を書く (上の「導入の流れ」の 2)。書かなければマシンを跨いだ排他は持たないので、1 つの issue 置き場は 1 台から回す
 - `coordination.remote` を書いた project では、loop の起動時に調停 remote を解いて読めて、生存報告を置けることを確かめる。落ちれば exit 1 で起動しない
 - loop は自分では起き直さない。端末を閉じた・マシンを再起動した・binary を入れ替えた (走っている loop は起動した時点の binary で回り続ける) ときは、同じコマンドを撃ち直す
@@ -68,7 +70,7 @@ workflow 定義に誤りがあれば、試運転・`loop` の起動・`doctor` �
   - 置き場の一覧の読み出しが 15 秒を超えると、読み終わる前に `CL 置き場 acme/widgets の一覧の読み出しが 15 秒を超えた` のような行が出る。止まったのではなく、まだ読んでいる。試運転 (`loop --dry-run`) と `doctor` では同じ行が stderr に出る
   - 色は stdout が端末のときだけ付く。環境変数 `NO_COLOR` を設定すれば付かない (`status` も同じ)
 - 別の端末からは `claude-dispatcher status` で見る。loop が書き出す状態 file を描くだけで、何も書かず、tracker の CLI も撃たない
-  - 見出しの 1 行目は loop が生きているか (`loop 稼働中` / `loop 停止待ち` / `loop なし`)、2 行目は次の tick と直近の tick の結果
+  - 見出しの 1 行目は loop が生きているか (`loop 稼働中` / `loop 停止待ち` / `loop なし`)、2 行目は次の tick・今の並列上限・直近の tick の結果
   - loop が止まった後 (`loop なし`) は見出しだけを描き、止められない worker も描かない。loop が止まった後に残った claude の pid と workspace は、log.jsonl の `error` の行 `claude を止められないまま止まる (pid <pid>, workspace <path>)` で読む
   - `workers` に走っている worker と再起動待ちを (段階・経過・最新の活動を含む)、`要対処` に打ち切り・曖昧な CL・事前検査に落ちた trigger・止められない worker (SIGKILL を送れず claude が終わっていない。段階は `unstopped` で、pid と workspace の path を出す)・orphan (前の loop が止まった後も動いている claude。終わるまでその作業対象では起動しない) を解き方とともに並べる。`coordination.remote` を書いた project では、乗っ取られた作業対象 (worker を止めたので、止まる前に push された成果を確かめる)・続けて落ちている生存報告・新しい版の ref (dispatcher を上げる) も並べる
 - 置き場は `claude-dispatcher paths --json` で引く。何も書かず、tracker の CLI も撃たない
@@ -148,7 +150,6 @@ hooks:                       # 任意。どれも省ける
   before_remove: git -C "$CLAUDE_DISPATCHER_CLONE" worktree remove --force "$CLAUDE_DISPATCHER_WORKSPACE"
   timeout: 60s
 limits:
-  max_concurrent: 1          # 任意。並列上限。既定 1
   max_attempts: 3            # 任意。作業対象 1 件の attempt の上限。既定 3
   max_retry_backoff: 5m      # 任意。backoff の上限。既定 5m
   stall_timeout: 15m         # 任意。worker の progress が途絶えてから止めるまで。既定 15m。0 で無効
@@ -201,7 +202,6 @@ triggers:                    # 必須。1 つ以上
 | `hooks.after_run` | 文字列 | worker が終わった後 (止めたときも) に毎回撃つ。失敗は log に残して続ける。作業対象を跨いで並列に走りうる (clone を触るなら、hook の中で排他する) |
 | `hooks.before_remove` | 文字列 | workspace を消す前に撃つ。失敗は log に残して続ける。`after_create` と合わせて、作業対象を跨いで直列に撃つ |
 | `hooks.timeout` | 文字列 | hook 1 回の上限時間。既定 60s。超えたら process group ごと止め、失敗として扱う |
-| `limits.max_concurrent` | 整数 | 同時に走らせる worker の上限。1 以上。既定 1。`loop --max-concurrent` で loop ごとに上書きできる (上の「回す」) |
 | `limits.max_attempts` | 整数 | 作業対象 1 件の attempt の上限。1 以上。既定 3。上限の attempt が失敗したら打ち切る |
 | `limits.max_retry_backoff` | 文字列 | backoff の上限。Go の duration の綴りで、0 より長い。既定 5m |
 | `limits.stall_timeout` | 文字列 | worker の stream (stdout の stream-json) に progress (heartbeat (`tool_progress`)・rate limit の通知・読めない行を除いた行) が書かれなくなってから、止めて失敗とするまでの時間。既定 15m。`0s` で無効。claude が行を書かない区間 (長い build や test などの tool の実行・API の retry の backoff・compaction) より長くする |
@@ -343,7 +343,7 @@ triggers:                    # 必須。1 つ以上
 
 - 作業対象ごとに trigger を宣言順に評価し、最初に当たった 1 つだけを採る。issue には `on: issue` の trigger だけを、CL には `on: cl` の trigger だけを当てる
 - 候補は、trigger の宣言順を先に、同じ trigger の中では作業対象の作成日時の古い順に並べる。作成日時が同じなら番号の小さい順。`jira` では、作成日時の代わりに番号の小さい順 (acli の一覧は作成日時を返さない)
-- 空いている並列の枠 (`limits.max_concurrent` (`loop --max-concurrent` を渡したならその値) から、走っている worker と再起動待ちの数を引いた分) だけ、候補を先頭から起動する。起動の直前に作業対象を読み直し、終端になっているか trigger から外れていれば起動しない
+- 空いている並列の枠 (並列上限 (`max-concurrent` で変えたならその値、変えていなければ `loop --max-concurrent` の値。省けば 1) から、走っている worker と再起動待ちの数を引いた分) だけ、候補を先頭から起動する。起動の直前に作業対象を読み直し、終端になっているか trigger から外れていれば起動しない
 - **曖昧な CL** (同じ repo の同じ head branch から、open な CL が 2 本以上ある) には、CL 側の trigger を当てない。fork の head branch は、fork ごとに別の branch として数える (fork は GitHub では head の repo の名前、GitLab では `source_project_id` で見分ける)。head の repo が消えた fork の CL (GitHub の `headRepository` が null、GitLab の `source_project_id` が null) は、どの fork の branch か分からないので、曖昧さを数えるときに数えない
 - loop は、worker を割り当てている作業対象 (worker が走っている・止めている・終わりを確かめ待ち・再起動待ちのどれか) の workspace で checkout されている branch を head に持つ、同じ repo の CL にも CL 側の trigger を当てない。issue の worker が CL を開いた後も作業を続けている間に、同じ branch へ CL の worker を重ねないため。試運転はこの除外を掛けない
 - open な一覧は、trigger に現れる種類のものだけを読む (`on: cl` の trigger が 1 つも無ければ CL の一覧を読まず、`on: issue` の trigger が無ければ issue の一覧を読まない)
