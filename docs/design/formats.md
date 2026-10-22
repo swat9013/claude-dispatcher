@@ -19,6 +19,7 @@ macOS でも XDG に揃える (`~/Library` は使わない)。scope key ごと�
   alive.lock                          loop の生死を status に見せる flock の対象 (§6、§7.2)
   log.jsonl                           tick と worker の起動・終わり方の行 (§4)
   status.json                         loop の今の状態 (状態 file、§7)。loop が書き換え、status が読む
+  max_concurrent                      max-concurrent が渡した並列上限 (§13)。max-concurrent が書き、loop が tick ごとに読む。loop が起動時に消す
   prompts/<作業対象>.md               描画した共通 prompt。worker に --append-system-prompt-file で渡す
   workers/<作業対象>.log              worker の stdout (stream-json)。attempt を跨いで追記する。claude の生死を見せる flock の対象 (§6 の「orphan」)
   workers/<作業対象>.stderr.log       worker の stderr。attempt を跨いで追記する
@@ -136,7 +137,7 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 | exit | 意味 |
 |---|---|
 | 0 | 成功 |
-| 1 | 観測できなかった (置き場の CLI を起動できない・rate limit・読み切れない・その他の置き場の CLI の失敗) / 調停 remote (§12) を解けない・読めない・生存報告を置けない / 想定外の失敗 |
+| 1 | 観測できなかった (置き場の CLI を起動できない・rate limit・読み切れない・その他の置き場の CLI の失敗) / 調停 remote (§12) を解けない・読めない・生存報告を置けない / `max-concurrent` (§13) を撃った scope key の loop が立っていない / 想定外の失敗 |
 | 2 | 引数の誤り / workflow 定義の誤り (§2.8) / issue 置き場か `cl:` の CL 置き場が見えない (綴りの誤りか、権限が無い) / `jira` の起動時の確認 (§6) で、acli の認証の site が `tracker.host` と違うか読めない・status 名か issue type 名が実在しない |
 | 3 | 同じ scope key の loop か単発起動が走っている (§6・§11) |
 | 4 | 置き場の CLI (issue 置き場か CL 置き場の CLI。`github` なら gh、`gitlab` なら glab、`jira` なら acli) の認証が通らない |
@@ -189,11 +190,11 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 
 - `target` は、issue なら `issue#<番号>`、CL なら `cl#<番号>`
 - `tick` の行の起動の判定に使った値は、§6 の tick の手順 7 (候補の起動) の判定のもの
-  - `running`・`waiting_retry`: その tick で候補の起動を始める前の、走っている worker と再起動待ちの claim の数 (手順 7 が `limits.max_concurrent` から引く数)
+  - `running`・`waiting_retry`: その tick で候補の起動を始める前の、走っている worker と再起動待ちの claim の数 (手順 7 が並列上限から引く数)
   - `orphans`: その tick で生きていると見た orphan の数。これも手順 7 が引く。orphan を確かめられない tick は `result` が `error` で、この key を載せない
-  - `max_concurrent`: `loop` に `--max-concurrent` (§6) を渡したならその値、渡さなければその tick で読み直した workflow 定義の `limits.max_concurrent`
+  - `max_concurrent`: その tick が採った並列上限。`max-concurrent` (§13) で渡した値があればその値、無ければ `loop` の `--max-concurrent` (§6) の値、それも無ければ 1
   - 手順 7 は、`running`・`waiting_retry`・`orphans`・その tick で起動した数 (`launched` の数) の和が `max_concurrent` に達したところで候補の起動をやめる
-- `wait_slot` の行の `max_concurrent` は、空きの判定に使った値。`--max-concurrent` を渡したならその値、渡さなければ loop が直近に読めた版の workflow 定義の `limits.max_concurrent` (`wait_slot` は tick の外でも書かれ、読み直しに落ちた tick は前の版を使い続ける)
+- `wait_slot` の行の `max_concurrent` は、空きの判定に使った値。直近に読めた tick が採った並列上限 (`tick` の行の `max_concurrent` と同じ決め方)。`wait_slot` は tick の外でも書かれ、§13 の値を読めなかった tick の後も前の値を使い続ける
 - `outcome`
 
 | 値 | 意味 |
@@ -240,7 +241,7 @@ claude-dispatcher loop --dry-run [--max-concurrent <N>] [<workflow の path>]
 
 workflow 定義を読んで検査し、事前検査 (§2.9) を通し、snapshot を作って trigger を評価し、起動するはずの作業対象を示して終わる。**何も書かない** (state dir を作らず、lock も取らない)。調停 remote (§12) も読みも書きもしないので、他のマシンの loop が持つ作業対象も示しうる。
 
-候補は、loop の起動の直前と同じ読み直し (§6 の tick の手順 7) を 1 件ずつ掛け、loop が起動しない候補は出さない (open な一覧の検索は、書き込みの直後に古い結果を返しうるため)。読み直しで起動しない理由は §6 と同じで、出さなかったことはどこにも示さない。候補が `limits.max_concurrent` より多くても、どれも読み直す。候補を 1 件でも読み直せなければ、open な一覧を読めなかったときと同じく失敗する (下)。
+候補は、loop の起動の直前と同じ読み直し (§6 の tick の手順 7) を 1 件ずつ掛け、loop が起動しない候補は出さない (open な一覧の検索は、書き込みの直後に古い結果を返しうるため)。読み直しで起動しない理由は §6 と同じで、出さなかったことはどこにも示さない。候補が並列上限より多くても、どれも読み直す。候補を 1 件でも読み直せなければ、open な一覧を読めなかったときと同じく失敗する (下)。
 
 成功したら、読み直した候補を 1 件 1 行で、評価の順 (§2.4) に stdout へ出す。題名は読み直した作業対象のもの。候補が無ければ何も出さない。
 
@@ -270,9 +271,9 @@ claude-dispatcher loop [--max-concurrent <N>] [<workflow の path>]
 
 実装 repo の clone を cwd にして撃つ。
 
-- `--max-concurrent <N>` は、workflow 定義の `limits.max_concurrent` を上書きする並列上限 (`system.md` §8)。`--max-concurrent 3` の形でも `--max-concurrent=3` の形でも書ける。値が無い (flag の直後が `-` で始まるときを含む)・値が空・2 回書いた・1 以上の整数でないときは引数の誤り (exit 2)
-  - 渡した値は loop が止まるまで変わらない。tick ごとに workflow 定義を読み直しても、`limits.max_concurrent` は効かない
-  - 本節と §4 の `limits.max_concurrent` は、`--max-concurrent` を渡した loop ではその値と読み替える
+- `--max-concurrent <N>` は、loop の起動時の並列上限 (`system.md` §8)。省けば 1。`--max-concurrent 3` の形でも `--max-concurrent=3` の形でも書ける。値が無い (flag の直後が `-` で始まるときを含む)・値が空・2 回書いた・1 以上の整数でないときは引数の誤り (exit 2)
+  - 走っている間は `max-concurrent` (§13) で変えられる。`max-concurrent` で渡した値は、この引数より優先する
+  - 本節と §4 の並列上限は、`max-concurrent` で渡した値があればその値、無ければこの引数の値 (省けば 1)
 
 **起動時の検査** (落ちたら stderr に理由を出して終わる):
 
@@ -287,6 +288,7 @@ claude-dispatcher loop [--max-concurrent <N>] [<workflow の path>]
 | 調停 remote を指した project だけ: 調停 remote の確認 (§12) | 1 |
 | state dir を作れる | 1 |
 | 同じ scope key の loop が走っていない (`loop.lock` を取れる) | 3 |
+| state dir の `max_concurrent` (§13) が無いか、消せる (前の loop が残した値を継がない) | 1 |
 | 調停 remote を指した project だけ: 最初の生存報告を置ける (§12) | 1 |
 
 - よく使われる置き場は、workflow 定義が撃つ依存 CLI (`tracker.kind` の CLI・`cl.kind` の CLI・claude・git) のどれかが PATH に無いときだけ PATH の前に足す。使わない置き場の CLI が無いことでは PATH を書き換えない (worker と hooks は loop の PATH を継ぐので、足すと worker が撃つ git などが入れ替わりうる)
@@ -327,6 +329,7 @@ claude-dispatcher loop [--max-concurrent <N>] [<workflow の path>]
 1. 突き合わせ: 走っている worker の作業対象を読み直し、終端 (issue の close、CL の merge か close) になっていれば worker を止め、`after_run` と `before_remove` を撃って workspace を消す。trigger から外れただけでは止めない
 2. 終わった worker のうち、作業対象を読み直せなかったものを読み直す
 3. workflow 定義を読み直し、事前検査 (§2.9) を通して snapshot を作る。事前検査に落ちた trigger は、手順 6 で再起動せず、手順 7 の評価から外す
+   - state dir の `max_concurrent` (§13) があれば読み、その tick の並列上限にする。読めない・1 以上の整数でなければ、その tick を error で終える (`tick` の行の `result` が `error`)。起動 (再起動を含む) をしない。読んだ値が前の tick の並列上限と違えば、人が読む行に `並列上限を変えた` (下の「画面」) を出す
    - 調停 remote を指した project では、続けて調停 remote の突き合わせ (§12) を撃つ。ref を読めなければ、その tick を error で終える (`tick` の行の `result` が `error`)。掃除も起動 (再起動を含む) もしない
 4. 掃除: workspace root の下の `issue-<番号>` と `cl-<番号>` のうち claim が無いものの orphan を確かめ (下の「orphan」)、orphan が生きておらず open な一覧にも無いものを読み直し、終端になっていれば `before_remove` を撃って消す。起動の直後の tick が起動時の掃除を兼ね、以後の tick が、claim を解いた後に終端になったものと消し損ねたものを拾う
 5. 打ち切りを解く: 打ち切った作業対象のうち、終端になったか、打ち切ったときの trigger の述語に当たらなくなったもの (その trigger が workflow 定義から消えたものを含む) の打ち切りを解く。conflict を計算中の CL は、外れたとは数えない
@@ -334,7 +337,7 @@ claude-dispatcher loop [--max-concurrent <N>] [<workflow の path>]
    - snapshot に無いか、snapshot で当たらなくなって見えるものは、置き場から 1 件読み直して確かめてから解く (open な一覧の検索は、書き込みの直後に古い結果を返しうるため)。読み直しても当たったままなら解かない。読み直せなければ error の行を残して解かず、次の tick で確かめ直す
    - snapshot で当たったままのものは読み直さない
 6. 再起動: backoff の明けた再起動待ちの claim を、次の「再起動」の規則で起動する
-7. trigger を評価し (§2.4)、候補のうち claim も打ち切りもされておらず orphan も生きていないものを、`limits.max_concurrent` から走っている worker と再起動待ちの claim と生きている orphan を引いた数だけ起動する (確かめ待ちの claim と、事前検査に落ちた trigger の再起動待ちの claim は数えない)
+7. trigger を評価し (§2.4)、候補のうち claim も打ち切りもされておらず orphan も生きていないものを、並列上限から走っている worker と再起動待ちの claim と生きている orphan を引いた数だけ起動する (確かめ待ちの claim と、事前検査に落ちた trigger の再起動待ちの claim は数えない)
    - 起動の直前に、候補を 1 件ずつ読み直す (open な一覧の検索は、書き込みの直後に古い結果を返しうるため)。tracker の種類を問わず読み直す。次のときはその tick では起動せず、起動しなかった分の空きを次の候補に回す。次の tick で候補になれば試み直す
      - 当たるかをまだ決められない (conflict を計算中の CL。§2.3)・終端になっている・起動しようとした trigger から外れている・宣言順で先の trigger に当たるようになっている。log.jsonl に `recheck_skip` の行 (§4) を書き、人が読む行に `読み直しで起動せず` を出す
      - 読み直せない。error の行を残す
@@ -348,12 +351,12 @@ claude-dispatcher loop [--max-concurrent <N>] [<workflow の path>]
 - `failed` の後、attempt が `limits.max_attempts` に達していれば打ち切る。達していなければ、`min(10s × 2^(attempt−1), limits.max_retry_backoff)` の後に再起動を予定する
 - backoff が明けたら、tick を待たずに再起動を試みる (tick の途中なら、その tick の手順 6 で試みる)。明けたときに起動できなかった claim は、下のとおり次の tick か worker が終わったときに試み直し、tick の外で試み直し続けない
   - 事前検査 (§2.9) に落ちた trigger の claim は、attempt を進めずに待ち直す (tick の手順 3)。tick の外で試みるときも事前検査は撃ち直さず、直近の tick の結果を使う。直近の tick の後に先頭の skill が消えても、次の tick が事前検査に落とすまでは再起動する
-  - 走っている worker が `limits.max_concurrent` に達していれば、attempt を進めずに待ち直す。worker が終わって空きが出たときに試み直す
+  - 走っている worker が並列上限に達していれば、attempt を進めずに待ち直す。worker が終わって空きが出たときに試み直す
   - 起動した trigger が workflow 定義から消えていれば、claim を解く (`release`)
   - 作業対象を置き場から 1 件読み直す。tick の中で試みるときも、tick の open な一覧は使わない (一覧の検索は、書き込みの直後に古い結果を返しうるため)。終端なら `before_remove` を撃って workspace を消し、終端か起動した trigger から外れていれば、claim を解く (`release`)。読み直せなければ次の tick で試み直す
   - 読み直しで確かめるのは、終端か、起動した trigger から外れたか (と、下の当たるかをまだ決められないか) だけ。宣言順で先の trigger に当たるようになったかは確かめない (再起動は同じ trigger で続ける。system.md §7)。起動の直前の読み直し (tick の手順 7) と違って `recheck_skip` の行は書かず、claim を解くときは `release` の行で残す
   - CL は、tick の中でだけ再起動を試みる (曖昧さと branch は tick が読んだ一覧で確かめるため)。tick の一覧で曖昧な CL に見えるか、head branch を別の claim の workspace が checkout しているか、その branch を読めなければ、attempt を進めずに次の tick で試み直す
-    - 曖昧に見えても claim は解かない。曖昧さは一覧でしか決まらず、1 件の読み直しでは確かめられないので、古い一覧で曖昧に見えただけで解けてしまうため (解けると、次の tick で attempt 1 から数え直して起動しうる)。曖昧な間も claim は再起動待ちとして `limits.max_concurrent` の枠を 1 つ使う。曖昧な CL は状態 file の `ambiguous` (§7.1) に出て、人が片方を close すれば解ける
+    - 曖昧に見えても claim は解かない。曖昧さは一覧でしか決まらず、1 件の読み直しでは確かめられないので、古い一覧で曖昧に見えただけで解けてしまうため (解けると、次の tick で attempt 1 から数え直して起動しうる)。曖昧な間も claim は再起動待ちとして並列上限の枠を 1 つ使う。曖昧な CL は状態 file の `ambiguous` (§7.1) に出て、人が片方を close すれば解ける
   - 当たるかをまだ決められなければ (conflict を計算中の CL。§2.3)、attempt を進めずに次の tick で試み直す
   - 当たったままなら、attempt を 1 つ進め、同じ trigger・同じ session id・同じ workspace で起動する
 - 再起動は、そのときの workflow 定義 (trigger・本文・hooks・`claude`・`limits`) で行う。workspace の root だけは、最初に起動したときのものを使う (session は workspace の path ごとに保存されるので)
@@ -415,6 +418,7 @@ claude-dispatcher loop [--max-concurrent <N>] [<workflow の path>]
 <時刻> 再起動を予定 issue#42 (implement, attempt 2, 10s 後)
 <時刻> 再起動せずに解いた issue#42 (implement): trigger から外れた
 <時刻> 再起動を待つ issue#42 (implement, attempt 2): 並列上限 1 に空きが出るまで待つ
+<時刻> 並列上限を変えた: 3 → 5
 <時刻> 打ち切り issue#42 (implement, attempt 3 回): label を外して trigger から外すと解ける (外してから 1 周期待つ)
 <時刻> 打ち切りを解いた issue#42 (implement)
 <時刻> error issue#42: <理由>
@@ -433,7 +437,7 @@ claude-dispatcher loop [--max-concurrent <N>] [<workflow の path>]
 
 ```
 ● loop 停止待ち  github.com/acme/widgets · v0.3.0
-次の tick なし · 直近の tick 00:05:00 ok · 候補 1
+次の tick なし · 並列上限 1 · 直近の tick 00:05:00 ok · 候補 1
 走っている worker 1 本の終了を待っている。もう一度 Ctrl+C で worker を止めて終える
 
 workers 1 ────────────────────────────────────────────
@@ -552,6 +556,7 @@ loop の今の状態を、表示のためだけに書き出す (system.md §9)�
   "updated_at": "2026-10-01T00:05:00Z",
   "stopping": false,
   "next_tick_at": "2026-10-01T00:10:00Z",
+  "max_concurrent": 3,
   "last_tick": {"at": "2026-10-01T00:05:00Z", "result": "ok", "candidates": 1},
   "workers": [
     {"target": "issue#42", "trigger": "implement", "attempt": 1, "session_id": "<uuid>", "phase": "running",
@@ -573,6 +578,7 @@ loop の今の状態を、表示のためだけに書き出す (system.md §9)�
 | `version`・`commit` | 状態 file を書いた loop の binary の版と commit。値は `--version` (§8) と同じ。この 2 つを足す前の版が書いた状態 file には無い |
 | `stopping` | 停止要求を受けて、worker の終了を待っている |
 | `next_tick_at` | 次の tick の予定。停止要求の後は `null` |
+| `max_concurrent` | 直近の tick が採った並列上限 (§6 の tick の手順 3)。最初の tick の前は起動時の値 (`--max-concurrent`。省けば 1)。この key を足す前の版が書いた状態 file には無い |
 | `last_tick` | 直近の tick。`result` が `error` なら `error` に理由 (事前検査の失敗 — workflow 定義の誤り・scope key の食い違い・観測の失敗 — を含む)。まだ tick が無ければ `null` |
 | `workers[].phase` | `running` (走っている) / `stopping` (止めている) / `unstopped` (SIGKILL を送れず claude が終わっていない。claude が終わるまで終わりを待たず、確かめも再起動も workspace の削除もしない) / `verifying` (終わり方を確かめ待ち) / `waiting_retry` (再起動待ち) |
 | `workers[].pid`・`workers[].workspace` | `unstopped` の claim の claude の pid と workspace の path。ほかの段階では無い |
@@ -598,7 +604,7 @@ claude-dispatcher status [<workflow の path>]
 
 ```
 ● loop 稼働中  github.com/acme/widgets · v0.3.0
-次の tick 00:10:00 · 直近の tick 00:05:00 ok · 候補 1
+次の tick 00:10:00 · 並列上限 3 · 直近の tick 00:05:00 ok · 候補 1
 
 workers 3 ────────────────────────────────────────────
 作業対象  trigger    attempt  段階           経過               活動
@@ -615,7 +621,7 @@ orphan issue#45: 前の loop の claude がまだ動いている。終わるの�
 ```
 
 - 見出しは 2 行。1 行目は loop の状態と scope key と版: loop が生きていれば `● loop 稼働中` (停止要求の後は `● loop 停止待ち`)、`alive.lock` を取れれば `○ loop なし`。版は scope key に続けて ` · <version>` (状態 file の `version`) を出す。commit は出さない (状態 file と log.jsonl で読める)。`○ loop なし` のとき (状態 file の版は止まった loop のもの) と、状態 file に `version` が無いとき (版を足す前の版が書いた状態 file) は出さない
-- 2 行目は `次の tick <時刻>` (停止要求の後は `次の tick なし`)・`直近の tick <時刻> ok · 候補 <n>` を ` · ` で繋ぐ。直近の tick が error なら `直近の tick <時刻> error: <理由>`。`loop なし` のときは次の tick の欄を出さない。出す欄が無ければ 2 行目を出さない
+- 2 行目は `次の tick <時刻>` (停止要求の後は `次の tick なし`)・`並列上限 <n>` (状態 file の `max_concurrent`)・`直近の tick <時刻> ok · 候補 <n>` を ` · ` で繋ぐ。直近の tick が error なら `直近の tick <時刻> error: <理由>`。`loop なし` のときは次の tick と並列上限の欄を出さない。状態 file に `max_concurrent` が無ければ (足す前の版が書いた状態 file) 並列上限の欄を出さない。出す欄が無ければ 2 行目を出さない
 - `loop なし` のときは見出しだけを出す (状態 file が残っていても、worker と打ち切りは loop の memory と一緒に消えている)。段階が `unstopped` の claim も描かない: 状態 file は止まった loop が最後に書いた記録で、その後に claude が終わったかを `status` は確かめられない (生死を確かめられるのは worker log の flock だけで、§6 の orphan)。終わった claude の pid を今のものとして描くと、古い状態を今のものと読ませる。残った claude の pid と workspace は、log.jsonl の §6 の `error` の行 (`claude を止められないまま止まる`) で読む
 - 状態 file が無ければ、見出しの 2 行目は `記録なし`
 - 見出しの後に空行を挟み、セクションを空行で区切って並べる。セクションの 1 行目はセクション名と件数の後に罫線を引く
@@ -708,8 +714,6 @@ polling:
 hooks:
   after_create: git -C "$CLAUDE_DISPATCHER_CLONE" worktree add --detach "$CLAUDE_DISPATCHER_WORKSPACE"
   before_remove: git -C "$CLAUDE_DISPATCHER_CLONE" worktree remove --force "$CLAUDE_DISPATCHER_WORKSPACE"
-limits:
-  max_concurrent: 1
 claude:
   args: [--permission-mode, auto, --disallowedTools, "ScheduleWakeup,CronCreate,CronList,CronDelete,Monitor"]
 triggers:
@@ -832,10 +836,10 @@ claude-dispatcher help
 使い方の一覧を stdout に出す。引数が無いときは同じ一覧だけを、引数の誤りのときは誤りの行の後ろに同じ一覧を、stderr に出す。
 
 - 節を `Usage:` → `Commands:` → `Options:` → `Arguments:` の順に並べ、節の間を空行で区切る。主流の CLI help と同じ節の並び (見出しの綴りは tool ごとに違う) にし、一覧として流し読みできるようにする
-- `Usage:` は撃ち方の形を 1 つにつき 1 行で並べる: command を取る形 (`<command> [options] [WORKFLOW]`)・単発起動 (`run TRIGGER TARGET [WORKFLOW]`)・`-h | --help | help`・`--version`。2 行目からは `claude-dispatcher` の桁を 1 行目に揃える
+- `Usage:` は撃ち方の形を 1 つにつき 1 行で並べる: command を取る形 (`<command> [options] [WORKFLOW]`)・単発起動 (`run TRIGGER TARGET [WORKFLOW]`)・並列上限の変更 (`max-concurrent N [WORKFLOW]`)・`-h | --help | help`・`--version`。2 行目からは `claude-dispatcher` の桁を 1 行目に揃える
 - `Commands:` は subcommand 1 つにつき 1 行で、名前と 1 行の説明を桁を揃えて並べる。行は 2 桁の字下げで始める
 - `Options:` は受けるすべての flag (`-h, --help`・`--version` を含む) を 1 つにつき 1 行で並べる。subcommand に限る flag は、説明の頭に `(<subcommand>)` を書く。command の代わりにだけ書ける flag (`-h, --help`・`--version`) は、説明の頭に `(command の代わり)` を書く
-- `Arguments:` は位置引数を並べる。workflow 定義の path は `WORKFLOW` と書き、省いたときの既定 (cwd の `WORKFLOW.md`) を説明に書く。`run` (§11) の位置引数 `TRIGGER`・`TARGET` も並べ、説明の頭に `(run)` を書く
+- `Arguments:` は位置引数を並べる。workflow 定義の path は `WORKFLOW` と書き、省いたときの既定 (cwd の `WORKFLOW.md`) を説明に書く。`run` (§11) の位置引数 `TRIGGER`・`TARGET` も並べ、説明の頭に `(run)` を書く。`max-concurrent` (§13) の位置引数 `N` も並べ、説明の頭に `(max-concurrent)` を書く
 - usage の placeholder は ASCII で空白を含めない (`<site>`・`<key>`・`WORKFLOW`)。引数がいくつかを一目で読めるようにする
 - 最後の行は案内 (§9) を指す
 
@@ -971,3 +975,20 @@ loop と単発起動は、続けて lock を取った後に最初の生存報告
 **生存報告の置き直し**: 起動時に置き、以後は間隔 (`polling.interval` と 1 分の長いほう。起動時の workflow 定義の値) ごとに置き直す。tick とは別の goroutine と時計で置き直す。2 回以上続けて落ちたら、状態 file の `heartbeat_failures` (§7.1) に出し、要対処に並べる。落ちるたびに `error` の行を書く。
 
 **後片付け**: claim を解いたとき (`completed`・`stopped` の `end`・`release`・`abandon`) に、乗っ取られていなければ着手宣言を消す。loop が止まるとき (と単発起動が終わるとき) に、残っている自分の着手宣言と生存報告を消す。止められない claude が生きている claim があれば、その着手宣言と自分の生存報告を消さない (生存報告を途絶えさせ、他の loop には間隔の 3 倍を待ってから死を判定させる)。消せなければ `error` の行を残す。loop が起動時の確認の後に起動を失敗させたときも、置いた生存報告を消す。
+
+## 13. 並列上限の変更 (`max-concurrent`)
+
+```
+claude-dispatcher max-concurrent <N> [<workflow の path>]
+```
+
+走っている loop の並列上限を、loop を止めずに変える (system.md §8)。workflow 定義を読んで scope key を決め、その state dir の `max_concurrent` (§1) に `<N>` を書く。tracker の CLI は撃たない。
+
+- `<N>` は 1 以上の整数。`<N>` が無い・1 以上の整数でない・位置引数が 3 つ以上のときは引数の誤り (exit 2)。flag は受けない
+- 書く前に、`status` (§7.2) と同じく `alive.lock` (§6) で loop が生きているかを確かめる。`alive.lock` を取れれば (loop が立っていない)、書かずに stderr に `loop が立っていない: <scope key>` を出して exit 1。書いても、次に起動する loop は起動時にこの file を消す (§6 の起動時の検査) ので効かない
+- `max_concurrent` は 10 進の整数と改行の 1 行。同じ dir の一時 file に書いてから rename する (loop に書きかけを見せない)
+- 書けたら stdout に `並列上限を <N> にした: 次の tick から効く (<scope key>)` を出す
+- loop は次の tick の手順 3 (§6) でこの file を読み、loop が止まるまで `--max-concurrent` より優先する。走っている worker の数より下げても、走っている worker は止めない (空きが出るまで新しい起動と再起動を待つ)
+- 同じ値を続けて撃っても終状態は変わらない。元の値 (`--max-concurrent` か 1) へ戻す操作は持たないので、戻すなら戻したい値を撃つ
+
+exit: 0 = 書けた / 2 = 引数・workflow 定義の誤り / 1 = loop が立っていない・`alive.lock` を読めない・file を書けない、または workflow 定義の path を解決できない。

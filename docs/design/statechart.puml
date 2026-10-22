@@ -89,7 +89,7 @@ Abandoned --> [*] : loopの終了
 ' uncovered: NoClaim x 曖昧なCL — 曖昧な CL は CL 側の trigger の対象から外すので、候補にならない (§6)
 ' uncovered: NoClaim x branchの重なり — 重なる CL は起動しないので claim は立たない (§6)
 ' uncovered: NoClaim x 事前検査に落ちた — 落ちた trigger は評価から外すので、その trigger では候補にならない (§7 の tick の手順 2)
-' uncovered: NoClaim x workflow定義を採れない — その tick は何も起動しないので、claim は立たない (読めない・文法に合わない: §7 の tick の手順 2。scope key が変わった: §9)
+' uncovered: NoClaim x workflow定義を採れない — その tick は何も起動しないので、claim は立たない (読めない・文法に合わない・subcommand で渡した並列上限が読めない: §7 の tick の手順 2。scope key が変わった: §9)
 ' uncovered: NoClaim x 停止要求1回目 — claim が無いので変わる記憶が無い。以後は起動しない (候補になる の条件)
 ' uncovered: NoClaim x 停止要求2回目 — claim が無いので止める worker が無い
 ' uncovered: NoClaim x 先のtriggerに当たる — その tick では起動せず、次の tick の評価が先の trigger で拾う (§7 の tick の手順 5)
