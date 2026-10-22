@@ -27,6 +27,8 @@ type Error struct {
 	Exit int
 	// Stderr は CLI が出した stderr の全体。失敗の分類はこれを読む
 	Stderr string
+	// Stdout は exit 0 以外で終わった CLI が出した stdout の全体 (`git push --porcelain` は結果の行を stdout に出す)
+	Stdout string
 	// Summary は空でなければ、エラー文に Stderr の代わりに載せる。stderr を読んだ呼び出し側が、本文を除いて短くしたもの
 	Summary string
 }
@@ -88,7 +90,7 @@ func (c Command) OutputWithInput(input string, args ...string) (string, error) {
 		return "", &Error{Name: name, Args: args, Exit: -1, Stderr: msg}
 	}
 	if err != nil {
-		return "", &Error{Name: name, Args: args, Exit: cmd.ProcessState.ExitCode(), Stderr: stderr.String()}
+		return "", &Error{Name: name, Args: args, Exit: cmd.ProcessState.ExitCode(), Stderr: stderr.String(), Stdout: stdout.String()}
 	}
 	return stdout.String(), nil
 }

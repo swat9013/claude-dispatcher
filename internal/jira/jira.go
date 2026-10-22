@@ -79,15 +79,14 @@ func ScopeKey(p Project) string { return strings.ToLower(p.String()) }
 type Store struct {
 	acli    Runner
 	project Project
-	// blockers は open な一覧で依存先 (blocked) を読むか。どれかの trigger が blocked を書いているときだけ読む
-	// (依存を持つ issue 1 件ごとに読み直しが要るので、要るときだけ撃つ)
-	blockers bool
+	// readsBlockers は、open な一覧で依存先 (blocked) を読み足す issue か (依存を持つ issue 1 件ごとに読み直しが要るので、
+	// blocked が trigger の評価を変えうる issue だけ読む)
+	readsBlockers func(target.Issue) bool
 }
 
-// NewStore は triggers を評価するための issue 置き場の部品を組み立てる。
-func NewStore(acli Runner, project Project, triggers []trigger.Trigger) Store {
-	blockers := slices.ContainsFunc(triggers, func(t trigger.Trigger) bool { return t.Issue.Blocked != nil })
-	return Store{acli: acli, project: project, blockers: blockers}
+// NewStore は project を acli で読む部品。readsBlockers は、open な一覧で依存先を読み足す issue の判定 (system.md §13)。
+func NewStore(acli Runner, project Project, readsBlockers func(target.Issue) bool) Store {
+	return Store{acli: acli, project: project, readsBlockers: readsBlockers}
 }
 
 // OpenIssues は open な issue を全件読む。失敗は *target.Failure。
@@ -179,34 +178,46 @@ func (s Store) openJQL() string {
 	return s.projectJQL() + " AND statusCategory != Done"
 }
 
-// normalizeWithBlockers は open な一覧の検索の結果 nodes を正規化して返す。blocked の述語があれば依存先の数を acli で読み足す。失敗は分類前の error。
+// normalizeWithBlockers は open な一覧の検索の結果 nodes を正規化して返す。依存先を読み足す issue があれば、その依存先の数を acli で読み足す。失敗は分類前の error。
 func (s Store) normalizeWithBlockers(nodes []issueJSON) ([]target.Issue, error) {
-	blocked := map[string]int{}
-	if s.blockers {
-		var err error
-		if blocked, err = s.openBlockers(); err != nil {
-			return nil, err
-		}
-	}
 	issues := make([]target.Issue, 0, len(nodes))
+	var reads []string
 	for _, n := range nodes {
 		number, ok := s.number(n.Key)
 		if !ok {
 			return nil, fmt.Errorf("open な一覧に project %s でない key %q がある (project key を改名したなら tracker.repo を書き換えて loop を起動し直す)", s.project.Key, n.Key)
 		}
-		issues = append(issues, s.normalize(n, number, blocked[n.Key]))
+		issue := s.normalize(n, number, 0)
+		if s.readsBlockers(issue) {
+			reads = append(reads, n.Key)
+		}
+		issues = append(issues, issue)
+	}
+	if len(reads) == 0 {
+		return issues, nil
+	}
+	blocked, err := s.openBlockers(reads)
+	if err != nil {
+		return nil, err
+	}
+	for i := range issues {
+		issues[i].OpenBlockers = blocked[issues[i].Key]
 	}
 	return issues, nil
 }
 
-// openBlockers は、依存を持つ open な issue を検索で絞り、1 件ずつ読み直して未解決の依存先の数を返す (key ごと)。
-func (s Store) openBlockers() (map[string]int, error) {
+// openBlockers は、依存を持つ open な issue を検索で絞り、そのうち keys の issue だけを 1 件ずつ読み直して未解決の依存先の
+// 数を返す (key ごと)。
+func (s Store) openBlockers(keys []string) (map[string]int, error) {
 	nodes, err := s.search(s.openJQL() + ` AND issueLinkType = "is blocked by"`)
 	if err != nil {
 		return nil, err
 	}
 	counts := map[string]int{}
 	for _, n := range nodes {
+		if !slices.Contains(keys, n.Key) {
+			continue
+		}
 		viewed, err := s.view(n.Key)
 		if err != nil {
 			return nil, err

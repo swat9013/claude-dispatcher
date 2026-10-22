@@ -288,6 +288,27 @@ func TestJiraBlockersAreNotReadWithoutABlockedPredicate(t *testing.T) {
 	}
 }
 
+func TestJiraBlockersAreReadOnlyForIssuesMatchingTheOtherConditionsOfABlockedTrigger(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflowWithCommands(jiraWorkflowWithTriggers(`
+  - {name: unblock, on: issue, when: {blocked: true, labels: {all: [Backend]}}, action: /unblock}`))
+	unlabeled := readyJiraIssue(10)
+	unlabeled.blockers = []bool{false}
+	backend := readyJiraIssue(11)
+	backend.blockers, backend.labels = []bool{false}, []string{"Backend"}
+	s.setJiraPlaces(unlabeled, backend)
+
+	assertCandidates(t, s.dryRun(), jiraCandidate("unblock", 11))
+
+	// WIDGETS-10 は blocked 以外の条件 (label) で外れるので、依存先を読まない。どの trigger にも当たらないので、候補の
+	// 読み直しでも view を撃たない
+	for _, c := range s.calls("acli") {
+		if slices.Contains(c.Argv, "view") && slices.Contains(c.Argv, unlabeled.key()) {
+			t.Fatalf("blocked 以外の条件で外れる issue の依存先を読んだ: %q", c.Argv[1:])
+		}
+	}
+}
+
 func TestJiraUnknownStatusAndTypeNamesAreNamedBeforeObserving(t *testing.T) {
 	for _, args := range [][]string{{"loop", "--dry-run"}, {"loop"}} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
