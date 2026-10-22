@@ -137,7 +137,7 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 | exit | 意味 |
 |---|---|
 | 0 | 成功 |
-| 1 | 観測できなかった (置き場の CLI を起動できない・rate limit・読み切れない・その他の置き場の CLI の失敗) / 調停 remote (§12) を解けない・読めない・生存報告を置けない / `max-concurrent` (§13) を撃った scope key の loop が立っていない / 想定外の失敗 |
+| 1 | 観測できなかった (置き場の CLI を起動できない・rate limit・読み切れない・その他の置き場の CLI の失敗) / 調停 remote (§12) を解けない・読めない・生存報告を置けない / `max-concurrent` (§13) を撃った scope key の loop が立っていないか、`max_concurrent` を読まない版 / 想定外の失敗 |
 | 2 | 引数の誤り / workflow 定義の誤り (§2.8) / issue 置き場か `cl:` の CL 置き場が見えない (綴りの誤りか、権限が無い) / `jira` の起動時の確認 (§6) で、acli の認証の site が `tracker.host` と違うか読めない・status 名か issue type 名が実在しない |
 | 3 | 同じ scope key の loop か単発起動が走っている (§6・§11) |
 | 4 | 置き場の CLI (issue 置き場か CL 置き場の CLI。`github` なら gh、`gitlab` なら glab、`jira` なら acli) の認証が通らない |
@@ -288,7 +288,7 @@ claude-dispatcher loop [--max-concurrent <N>] [<workflow の path>]
 | 調停 remote を指した project だけ: 調停 remote の確認 (§12) | 1 |
 | state dir を作れる | 1 |
 | 同じ scope key の loop が走っていない (`loop.lock` を取れる) | 3 |
-| state dir の `max_concurrent` (§13) が無いか、消せる (前の loop が残した値を継がない) | 1 |
+| state dir の `max_concurrent` (§13) が無いか、消せる (前の loop が残した値を継がない。`loop.lock` を取った後、`alive.lock` を取る前に消す。`alive.lock` を取った後に消すと、その間に撃った `max-concurrent` が loop を生きていると見て書き、成功を返した値を loop が消す) | 1 |
 | 調停 remote を指した project だけ: 最初の生存報告を置ける (§12) | 1 |
 
 - よく使われる置き場は、workflow 定義が撃つ依存 CLI (`tracker.kind` の CLI・`cl.kind` の CLI・claude・git) のどれかが PATH に無いときだけ PATH の前に足す。使わない置き場の CLI が無いことでは PATH を書き換えない (worker と hooks は loop の PATH を継ぐので、足すと worker が撃つ git などが入れ替わりうる)
@@ -986,9 +986,10 @@ claude-dispatcher max-concurrent <N> [<workflow の path>]
 
 - `<N>` は 1 以上の整数。`<N>` が無い・1 以上の整数でない・位置引数が 3 つ以上のときは引数の誤り (exit 2)。flag は受けない
 - 書く前に、`status` (§7.2) と同じく `alive.lock` (§6) で loop が生きているかを確かめる。`alive.lock` を取れれば (loop が立っていない)、書かずに stderr に `loop が立っていない: <scope key>` を出して exit 1。書いても、次に起動する loop は起動時にこの file を消す (§6 の起動時の検査) ので効かない
-- `max_concurrent` は 10 進の整数と改行の 1 行。同じ dir の一時 file に書いてから rename する (loop に書きかけを見せない)
+- loop が生きていても、状態 file (§7.1) に `max_concurrent` が無ければ (この file を読まない版の loop か、状態 file をまだ書いていない loop)、書かずに stderr に `この loop は max-concurrent を読まない: <scope key> (この版の binary で loop を起動し直す)` を出して exit 1。走っている loop は起動した時点の binary で回り続けるので、binary を入れ替えた後に撃つと、書いても効かない値に成功を返すことになる
+- `max_concurrent` は 10 進の整数と改行の 1 行。呼び出しごとに名前の違う一時 file を同じ dir に作って書いてから rename する (loop に書きかけを見せず、同時に撃った呼び出しが一時 file を取り合わない)。書けなければ一時 file を消す
 - 書けたら stdout に `並列上限を <N> にした: 次の tick から効く (<scope key>)` を出す
 - loop は次の tick の手順 3 (§6) でこの file を読み、loop が止まるまで `--max-concurrent` より優先する。走っている worker の数より下げても、走っている worker は止めない (空きが出るまで新しい起動と再起動を待つ)
 - 同じ値を続けて撃っても終状態は変わらない。元の値 (`--max-concurrent` か 1) へ戻す操作は持たないので、戻すなら戻したい値を撃つ
 
-exit: 0 = 書けた / 2 = 引数・workflow 定義の誤り / 1 = loop が立っていない・`alive.lock` を読めない・file を書けない、または workflow 定義の path を解決できない。
+exit: 0 = 書けた / 2 = 引数・workflow 定義の誤り / 1 = loop が立っていない・loop が `max_concurrent` を読まない版・`alive.lock` か状態 file を読めない・file を書けない、または workflow 定義の path を解決できない。
