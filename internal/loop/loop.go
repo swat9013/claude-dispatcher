@@ -123,6 +123,8 @@ type Worker interface {
 type Options struct {
 	// Load は workflow 定義を読み直す
 	Load func() (workflow.Definition, error)
+	// MaxConcurrent は max-concurrent で渡した並列上限を読む。渡されていなければ ok が false。nil なら渡されていないとみなす
+	MaxConcurrent func() (n int, ok bool, err error)
 	// Definition は起動時に検査に通った workflow 定義
 	Definition workflow.Definition
 	// Precheck は workflow 定義の事前検査 (formats.md §2.9)。落ちた trigger は起動しない
@@ -394,6 +396,18 @@ func (l *loop) tick() {
 	if err != nil {
 		l.tickFailed("workflow 定義の誤り: " + oneLine(err))
 		return
+	}
+	if l.o.MaxConcurrent != nil {
+		// max-concurrent で渡した値は --max-concurrent より優先する。読めなければ、workflow 定義を採れない tick と同じく
+		// 何も起動しない (system.md §7 の手順 2)
+		n, ok, err := l.o.MaxConcurrent()
+		if err != nil {
+			l.tickFailed(oneLine(err))
+			return
+		}
+		if ok {
+			def.MaxConcurrent = n
+		}
 	}
 	if key := l.o.ScopeKeyOf(def); key != l.o.ScopeKey {
 		// 別の置き場を指す版は採らない。この tick は掃除も起動もせず、次の tick の突き合わせは採っていた版の置き場を読む

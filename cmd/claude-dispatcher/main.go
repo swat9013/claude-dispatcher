@@ -285,19 +285,6 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return exitFailed
 	}
-	// tick ごとの読み直しでは、max-concurrent で渡した値を --max-concurrent より優先する。読めなければ workflow 定義を採れない
-	// tick と同じく、その tick は起動しない (system.md §7 の手順 2)
-	reload := func() (workflow.Definition, error) {
-		def, err := load()
-		if err != nil {
-			return def, err
-		}
-		n, ok, err := state.ReadMaxConcurrent(dir)
-		if ok {
-			def.MaxConcurrent = n
-		}
-		return def, err
-	}
 	logFile, err := os.OpenFile(filepath.Join(dir, state.LogFile), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		fmt.Fprintf(stderr, "log.jsonl を開けない: %v\n", err)
@@ -332,7 +319,8 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 	return loop.Run(loop.Options{
 		Coordination:   coordination,
 		HeartbeatAfter: time.After,
-		Load:           reload,
+		Load:           load,
+		MaxConcurrent:  func() (int, bool, error) { return state.ReadMaxConcurrent(dir) },
 		Definition:     def,
 		Precheck:       e.precheck,
 		Store:          func(def workflow.Definition) loop.Store { return e.places(def).Store() },

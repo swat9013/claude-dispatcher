@@ -10,7 +10,8 @@ import (
 
 // 失敗の扱い (system.md §7、formats.md §6 の再起動): 失敗した worker の次の attempt を backoff の後に起動し、attempt の上限で
 // 打ち切る。再起動と打ち切りは loop の memory だけに持つ。attempt の上限・backoff の上限・並列上限は、そのときの workflow
-// 定義から読む (並列上限は、loop の引数 --max-concurrent で上書きされていればその値。system.md §8)。
+// 定義から読む (並列上限は workflow 定義に書けず、max-concurrent で渡した値、無ければ loop の引数 --max-concurrent の値。
+// system.md §8)。
 
 // baseBackoff は 1 回目の失敗の後の backoff
 const baseBackoff = 10 * time.Second

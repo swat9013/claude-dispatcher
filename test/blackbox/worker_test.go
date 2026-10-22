@@ -521,8 +521,9 @@ func TestUnreadableMaxConcurrentStopsLaunchingInThatTick(t *testing.T) {
 	mustWrite(t, filepath.Join(s.defaultStateDir(), "max_concurrent"), "many\n")
 
 	ticks := s.waitEvents("tick", len(s.events("tick"))+2)
-	if tick := ticks[len(ticks)-1]; tick["result"] != "error" || !strings.Contains(tick["error"].(string), "max_concurrent") {
-		t.Fatalf("書き換えた後の tick の行 = %v, want max_concurrent を名指しした error", tick)
+	if tick := ticks[len(ticks)-1]; tick["result"] != "error" || !strings.HasPrefix(tick["error"].(string), "max-concurrent で渡した並列上限") ||
+		!strings.Contains(tick["error"].(string), "max_concurrent") {
+		t.Fatalf("書き換えた後の tick の行 = %v, want workflow 定義でなく max_concurrent を名指しした error", tick)
 	}
 	if starts := s.events("start"); len(starts) != 1 {
 		t.Fatalf("start の行 = %v, want 読めない間は起動しない", starts)
