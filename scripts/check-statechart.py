@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# vendor 元: swat9013/swat-skills の skills/design/sud-design/scripts/check-statechart.py (commit 8678b5e7164e27766c5455f90564e1853f1773c4)。
+# vendor 元: swat9013/swat-skills の skills/design/sud-design/scripts/check-statechart.py (commit ccb0486ce8f7b007495ef3e27017d1dbbb3c484a)。
 # 版はこの file の commit で固定する。直すなら vendor 元を直してから写し、上の commit を書き換える (CONTRIBUTING.md の「gate」)。
 # 元の shebang (uv run --script) は外し、標準ライブラリだけで動くので python3 (3.11 以上) で撃つ。test は scripts/checkstatechart
 # 以下は vendor 元の 6 行目以降をそのまま写したもの。
@@ -36,11 +36,13 @@
     state "表示名" as StateD
     ' uncovered: StateB x event2 — <未定義にする理由>
 
-例はすべて `@startuml` 〜 `@enduml` の中に書く。矢印には方向語と `[色・線種]` を足してよい
+例はすべて `@startuml` 〜 `@enduml` の中に書く。矢印には方向語 (`up` / `down` / `left` / `right`
+と、その略記 `u` / `d` / `l` / `r` / `do` / `le` / `ri`) と `[色・線種]` を足してよい
 (`StateA -[#red,dashed]left-> StateB : event3`)。図に描かれない行は数えない: `@startuml` 〜
-`@enduml` の外、block comment (`/' ... '/`) の中、複数行 note (`note left of X` / `note as N` /
-`note on link` 〜 `end note`) の中、複数行の見出し類 (`legend` 〜 `endlegend` など) の中、
-`[hidden]` を付けた矢印の線 (両端の状態は数える)。
+`@enduml` の外、block comment (`/' ... '/`) の中 (1 行で閉じた comment の後ろは数える)、
+複数行 note (`note left of X` / `note as N` / `note on link` 〜 `end note`) の中、複数行の見出し類
+(`legend` 〜 `endlegend`・`right header` 〜 `endheader` など) の中、`[hidden]` を付けた矢印の線
+(両端の状態は数える)。
 
 イベント名は遷移ラベルの `[guard]` / `/ action` より前の部分。guard はイベント名の直後の
 `[...]` で、中に `/` や入れ子の `[...]` を含んでよい。ラベル無しの状態間遷移と guard だけの
@@ -60,11 +62,13 @@ invariant は上の 1〜6 (2 は「遷移が実在する組合せへの宣言」
 11. 矢印を含むのに対応記法の遷移として読めない行は違反 (黙って飛ばさない)
 12. 図に描かれない行 (上の「数えない」行) の遷移は数えない
 
-と、検査不能で落とす (何も検査せずに通さない) 次の 3 つ:
+と、検査不能で落とす (何も検査せずに通さない) 次の 4 つ:
 
 7. 図が読めない (不在・UTF-8 でない) と exit 1
 8. 状態が 1 つも読み取れないと exit 1
 9. 初期遷移 `[*] --> <state>` が無いと exit 1
+13. 複合状態 (`state X {`。keyword の大文字小文字・stereotype・色指定・行末の comment を問わない) が
+    あると exit 1 (平坦に読むと入れ子の `[*]` が初期遷移に数えられる)。`state X : 説明 {` は状態の説明文
 """
 
 from __future__ import annotations
@@ -79,12 +83,21 @@ from pathlib import Path
 # 矢印の中の方向語と `[色・線種]` は描画だけを変えるので、どの順でも読み飛ばす。
 TRANSITION = re.compile(
     r"^\s*(?P<src>\[\*\]|[\w.]+)\s*"
-    r"(?P<arrow>-+(?:(?:up|down|left|right|u|d|l|r)|\[[^\]]*\])*-*>)\s*"
+    r"(?P<arrow>-+(?:(?:up|down|left|right|do|le|ri|u|d|l|r)|\[[^\]]*\])*-*>)\s*"
     r"(?P<dst>\[\*\]|[\w.]+)\s*"
     r"(?::\s*(?P<label>.+?))?\s*$"
 )
-# `state "表示名" as X` / `state X` の宣言行。`state X {` (複合状態) は対象外なので拾わない。
-STATE_DECL = re.compile(r'^\s*state\s+(?:"[^"]*"\s+as\s+)?(?P<name>[\w.]+)\s*$')
+# `state "表示名" as X` / `state X` / `state X : 説明` の宣言行 (keyword の大文字小文字は問わない)。
+# `state X {` (複合状態) は対象外なので拾わない。
+STATE_DECL = re.compile(
+    r'^\s*state\s+(?:"[^"]*"\s+as\s+)?(?P<name>[\w.]+)\s*(?::.*)?$', re.IGNORECASE
+)
+# 複合状態の開始 (`state X {` / `State "表示名" as X <<s>> #pink;line:red { /' 注記`)。平坦に読むと
+# 入れ子の `[*]` が図全体の初期遷移に数えられるので、読まずに検査不能で落とす。`state X : 説明 {` は説明文。
+COMPOSITE_START = re.compile(
+    r"""^\s*state\s+(?:"[^"]*"\s+as\s+)?[\w.]+(?:\s*<<[^>]*>>|\s*#[^\s{]+)*\s*\{\s*(?:/'.*)?$""",
+    re.IGNORECASE,
+)
 # `' uncovered: <state> x <event> — <理由>` の宣言行。理由は必須。
 UNCOVERED_DECL = re.compile(
     r"^\s*'\s*uncovered:\s*(?P<state>[\w.]+)\s+x\s+(?P<event>\S+)\s+[—-]\s+(?P<reason>\S.*)$"
@@ -94,19 +107,27 @@ UNCOVERED_PREFIX = re.compile(r"^\s*'\s*uncovered:")
 # 上の TRANSITION に合わなかった行が矢印 (`->` / `..>` / `==>` / `<-` 等) を含むかの検出。
 # 黙って飛ばすと網羅検査を素通りする。`:` より後 (ラベル・note の本文・状態の説明文) は見ない。
 ARROW = re.compile(r"[-.=]>|<[-.=]")
-# 矢印を含んでも遷移ではない行 (1 行の見出し類と note。本文に矢印を書いてよい)。
+# 見出し類の前に置ける位置の語。置けるのは header と footer だけ (`left legend` は構文エラー)。
+HEADING_POSITION_PREFIX = r"(?:(?:left|right|center)\s+(?=header|footer))?"
+# 矢印を含んでも遷移ではない行 (1 行の見出し類と note。本文に矢印を書いてよい)。keyword の直後に
+# 状態名の文字 (`[\w.]`) か矢印が続く行 (`Title.Screen <-- Menu` / `note <-- B`) は、keyword を
+# 名前にした状態の遷移なので当てない。本文が `<b>` などの書式で始まる行 (`title <b>A -> B</b>`) は当てる。
 NON_TRANSITION_KEYWORD = re.compile(
-    r"^\s*(?:title|caption|header|footer|legend|[rh]?note)\b", re.IGNORECASE
+    rf"^\s*{HEADING_POSITION_PREFIX}"
+    r"(?:title|caption|header|footer|legend|[rh]?note)(?![\w.])(?!\s*(?:[-.=]+>|<[-.=]))",
+    re.IGNORECASE,
 )
 # 複数行 note の開始 (render-puml.py と同じく `:` を持たない note 行)。`note "本文" as N` は 1 行で
-# 閉じ、`note --> B` は `note` という状態の遷移なので当たらない。
+# 閉じ、`note --> B` と `note.x --> B` は状態の遷移なので当たらない。
 NOTE_BLOCK_START = re.compile(
-    r'^\s*(?:r|h)?note\b(?![^:]*:)(?!\s+"[^"]*"\s+as\b)(?!\s*[-.=<])', re.IGNORECASE
+    r'^\s*(?:r|h)?note(?![\w.])(?![^:]*:)(?!\s+"[^"]*"\s+as\b)(?!\s*[-.=<])', re.IGNORECASE
 )
 NOTE_BLOCK_END = re.compile(r"^\s*end\s*(?:r|h)?note\b", re.IGNORECASE)
-# 複数行の見出し類 (`legend right` 〜 `endlegend` など。本文を持たない開始行) と、その終了。
+# 複数行の見出し類 (`legend right` / `right header` 〜 `endlegend` / `endheader` など。本文を持たない
+# 開始行) と、その終了。
 HEADING_BLOCK_START = re.compile(
-    r"^\s*(?P<kind>title|caption|header|footer|legend)(?:\s+(?:left|right|center|top|bottom))*\s*$",
+    rf"^\s*{HEADING_POSITION_PREFIX}"
+    r"(?P<kind>title|caption|header|footer|legend)(?:\s+(?:left|right|center|top|bottom))*\s*$",
     re.IGNORECASE,
 )
 # 初期状態と final state の両方を表す擬似状態 (`[*] --> A` は初期遷移、`A --> [*]` は final の宣言)。
@@ -174,8 +195,15 @@ def drawn_lines(text: str):
             in_block_comment = not line.endswith("'/")
             continue
         if line.startswith("/'"):
-            in_block_comment = "'/" not in line[2:]
-            continue
+            close = line.find("'/", 2)
+            if close < 0:
+                in_block_comment = True
+                continue
+            # 1 行で閉じた comment の後ろは描かれる (`/' m '/ A --> C : e`)。
+            raw = line[close + 2 :]
+            line = raw.strip()
+            if not line:
+                continue
         if NOTE_BLOCK_START.match(raw):
             block_end = NOTE_BLOCK_END
             continue
@@ -203,6 +231,12 @@ def parse_statechart(path: Path, text: str) -> Statechart:
             )
             continue
         if line.startswith("'"):
+            continue
+        if COMPOSITE_START.match(raw):
+            chart.problems.append(
+                f"[statechart unsupported composite] {path}:{lineno} — 複合状態は対象外で検査できない "
+                f"(状態を平坦に並べて描く。対応記法は --help): {line!r}"
+            )
             continue
         state_decl = STATE_DECL.match(raw)
         if state_decl:
