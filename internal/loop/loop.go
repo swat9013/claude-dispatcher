@@ -54,7 +54,7 @@ func PlaceLabel(def workflow.Definition, kind target.Kind) string {
 	return "issue 置き場 " + def.Tracker.Place.String()
 }
 
-// SlowToOutput は、遅い一覧の行を人が読む行 out に出す口 (formats.md §6 の「遅い一覧」)。tick と loop の起動時の確認が使う。
+// SlowToOutput は、遅い一覧の行を人が読む行 out に出す口 (formats.md §6 の「遅い一覧」)。
 func SlowToOutput(def workflow.Definition, out Output, after func(time.Duration) <-chan time.Time, now func() time.Time) SlowNotice {
 	return SlowNotice{After: after, Notify: func(kind target.Kind) {
 		out.Show(Line{At: now(), Kind: LineNote, Label: SlowListingLine(def, kind)})
