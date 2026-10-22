@@ -128,17 +128,11 @@ func nameMatches(anyOf, noneOf []string, name string) bool {
 // NeedsBlocked は、issue の依存先 (blocked) が triggers の評価を変えうるかの判定を返す: blocked を条件に書いた issue の
 // trigger のどれかで、blocked 以外の条件をすべて満たす issue (system.md §7 の手順 3)。
 func NeedsBlocked(triggers []Trigger) func(target.Issue) bool {
-	var others []IssuePredicate
-	for _, t := range triggers {
-		if t.On == target.KindIssue && t.Issue.Blocked != nil {
-			p := t.Issue
-			p.Blocked = nil
-			others = append(others, p)
-		}
-	}
-	return func(issue target.Issue) bool {
-		return slices.ContainsFunc(others, func(p IssuePredicate) bool { return p.Matches(issue) })
-	}
+	return needsHeavy[target.Issue](triggers, func(t Trigger) (IssuePredicate, bool) {
+		p := t.Issue
+		p.Blocked = nil
+		return p, t.On == target.KindIssue && t.Issue.Blocked != nil
+	})
 }
 
 // CLPredicate は CL 側の述語。CL の状態の語彙と絞り込みを、すべて AND で評価する。書かれていない条件は何にでも当たる。
@@ -186,16 +180,24 @@ func (p CLPredicate) Matches(cl target.CL) bool {
 // NeedsReviewUnresolved は、CL の review_unresolved が triggers の評価を変えうるかの判定を返す: review_unresolved を条件に
 // 書いた cl の trigger のどれかで、review_unresolved 以外の条件をすべて満たす CL (system.md §7 の手順 3)。
 func NeedsReviewUnresolved(triggers []Trigger) func(target.CL) bool {
-	var others []CLPredicate
+	return needsHeavy[target.CL](triggers, func(t Trigger) (CLPredicate, bool) {
+		p := t.CL
+		p.ReviewUnresolved = nil
+		return p, t.On == target.KindCL && t.CL.ReviewUnresolved != nil
+	})
+}
+
+// needsHeavy は、重い項目を条件に書いた trigger のどれかで、その項目以外の条件をすべて満たす作業対象かの判定を返す
+// (system.md §7 の手順 3)。without は trigger の述語からその項目を外したものと、trigger がその項目を条件に書いたかを返す。
+func needsHeavy[I any, P interface{ Matches(I) bool }](triggers []Trigger, without func(Trigger) (P, bool)) func(I) bool {
+	var others []P
 	for _, t := range triggers {
-		if t.On == target.KindCL && t.CL.ReviewUnresolved != nil {
-			p := t.CL
-			p.ReviewUnresolved = nil
+		if p, writes := without(t); writes {
 			others = append(others, p)
 		}
 	}
-	return func(cl target.CL) bool {
-		return slices.ContainsFunc(others, func(p CLPredicate) bool { return p.Matches(cl) })
+	return func(item I) bool {
+		return slices.ContainsFunc(others, func(p P) bool { return p.Matches(item) })
 	}
 }
 
