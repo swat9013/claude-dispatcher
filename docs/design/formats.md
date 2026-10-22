@@ -306,7 +306,7 @@ claude-dispatcher loop [--max-concurrent <N>] [<workflow の path>]
 **tick**: 起動直後に 1 回撃ち、以後は tick の終了から `polling.interval` だけ待って次を撃つ。tick ごとに workflow 定義を読み直す。
 
 - 読み直した workflow 定義が検査に落ちたら、その tick は何も起動しない (#74 Q38)。周期は、最後に検査に通った版のものを使う
-- 読み直した workflow 定義の、起動時に固定する項目のどれかが起動時と違えば、その tick は何も起動しない。`error` の行は `workflow 定義の <項目> <今の値> が起動時の <起動時の値> と違う (loop を起動し直す)`。項目と、起動時に固定する理由は次のとおり
+- 読み直した workflow 定義の、起動時に固定する項目のどれかが起動時と違えば、その tick は何も起動しない。`error` の行は `workflow 定義の <項目> <今の値> が起動時の <起動時の値> と違う (loop を起動し直す)`。CL 置き場と `coordination.remote` の値は空になりうるので、Go の引用符付きの綴り (`"origin"`) で出す。項目と、起動時に固定する理由は次のとおり
   - scope key: lock は起動時の scope key で取っている
   - CL 置き場 (`jira` では `cl.kind`・`cl.host`・`cl.repo`。`github`・`gitlab` では issue 置き場と同じ場所なので、大文字と小文字以外の違いは scope key で先に止まる): claim している CL を、起動時と別の CL 置き場で読み直さない。scope key と同じく大文字と小文字を区別しない。`tracker.repo` (`github`・`gitlab`) か `cl.repo` (`jira`) の大文字と小文字だけを書き換えた版は同じ CL 置き場とみなし、tick を続ける
   - `coordination.remote` (足した・消した・名前を変えた): 調停 remote は起動時に解いて最初の生存報告を置いている
@@ -363,7 +363,7 @@ claude-dispatcher loop [--max-concurrent <N>] [<workflow の path>]
 - 再起動は、そのときの workflow 定義 (trigger・本文・hooks・`claude`・`limits`) で行う。workspace の root だけは、最初に起動したときのものを使う (session は workspace の path ごとに保存されるので)
 - 前の attempt で claude を起動できていなければ (hook・描画・起動の失敗)、session はまだ無いので `--session-id` で始める
 - 停止要求を受けた後に失敗した attempt は、再起動を予定しない
-- 調停 remote (§12) を指した project では、再起動は tick の中でだけ試みる (乗っ取られたかを tick の突き合わせで確かめてから起動するため)。tick の外で backoff が明けても次の tick まで待つ
+- 調停 remote (§12) を指した project では、tick の外で backoff が明けても `start` の行は次の tick まで書かない (再起動は tick の中だけ。system.md §7)
 - 調停 remote (§12) に自分の知る版より新しい版の ref がある間は、attempt を進めずに待ち直す。着手宣言は claim を持つ間のものをそのまま使い、push し直さない
 - 打ち切りは作業対象ごとに memory に持つ。打ち切った作業対象は、どの trigger に当たっても起動しない。loop を起動し直すと消える
 - 打ち切りを解くには、label を外して打ち切ったときの trigger から外し、1 周期待ってから付け直す (外してから付け直すまでが 1 周期に収まると、外れたのを観測できない)。`status` (§7) の打ち切りの行にこの手順を出す
@@ -975,7 +975,7 @@ loop と単発起動は、続けて lock を取った後に最初の生存報告
 
 **生存報告の置き直し** (いつ置き直すかは system.md §9): 落ちるたびに `error` の行 (`生存報告を置けない: <理由>`) を書く。2 回以上続けて落ちたら、状態 file の `heartbeat_failures` (§7.1) に出し、要対処に並べる。置き直しの結果を loop が受け取る前に溜まりすぎて捨てたら、次に結果を受けたときに `error` の行 (`生存報告の置き直しの結果 <N> 件を読まずに捨てた`) を書く。
 
-**後片付け** (何をいつ消し、何を残すかは system.md §7・§9): 着手宣言か生存報告を消せなければ `error` の行を残す。loop が起動時の確認の後に起動を失敗させたときも、置いた生存報告を消す。
+**後片付け** (何をいつ消し、何を残すかは system.md §4・§7・§9): 着手宣言か生存報告を消せなければ `error` の行を残す。
 
 ## 13. 並列上限の変更 (`max-concurrent`)
 
