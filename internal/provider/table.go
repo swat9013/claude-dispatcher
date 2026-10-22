@@ -7,6 +7,7 @@ import (
 	"github.com/swat9013/claude-dispatcher/internal/gitlab"
 	"github.com/swat9013/claude-dispatcher/internal/jira"
 	"github.com/swat9013/claude-dispatcher/internal/scaffold"
+	"github.com/swat9013/claude-dispatcher/internal/trigger"
 )
 
 // statusAndType は github と gitlab が status と type を支えない理由
@@ -102,7 +103,7 @@ var providers = []Provider{
 			},
 		},
 		Build: func(rt Runtime, s Setting) Parts {
-			store := gitlab.NewStore(rt.runner(glabCommand, gitlab.Exec{Env: rt.Env, Timeout: rt.Timeout}), s.Place.value.(gitlab.Project))
+			store := gitlab.NewStore(rt.runner(glabCommand, gitlab.Exec{Env: rt.Env, Timeout: rt.Timeout}), s.Place.value.(gitlab.Project), trigger.NeedsReviewUnresolved(s.Triggers))
 			return Parts{Issues: store, CLs: store}
 		},
 		Setup: Setup{

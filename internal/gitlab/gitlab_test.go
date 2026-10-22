@@ -72,6 +72,9 @@ func (r recording) Run(args ...string) ([]byte, error) {
 
 var project = gitlab.Project{Host: "gitlab.example.com", Path: "acme/sub/widgets"}
 
+// everyCL は、どの CL も open な一覧で discussion を読み足す判定
+func everyCL(target.CL) bool { return true }
+
 const issuesEndpoint = "projects/acme%2Fsub%2Fwidgets/issues"
 
 // nonMember は作者 (user 1) が project の member でないことを返す応答
@@ -89,7 +92,7 @@ func TestOpenIssuesReadsBothSpellingsOfThePaginatedOutput(t *testing.T) {
 		"1 つの配列に結合する":    "[" + issueJSON(1) + "," + issueJSON(2) + "," + issueJSON(3) + "]",
 	} {
 		t.Run(name, func(t *testing.T) {
-			store := gitlab.NewStore(glab{issuesEndpoint + "?": {stdout: stdout}, nonMember: notFound}, project)
+			store := gitlab.NewStore(glab{issuesEndpoint + "?": {stdout: stdout}, nonMember: notFound}, project, everyCL)
 
 			items, err := store.OpenIssues()
 
@@ -101,7 +104,7 @@ func TestOpenIssuesReadsBothSpellingsOfThePaginatedOutput(t *testing.T) {
 }
 
 func TestIssueThatIsGoneIsReadAsClosed(t *testing.T) {
-	store := gitlab.NewStore(glab{issuesEndpoint + "/7": notFound}, project)
+	store := gitlab.NewStore(glab{issuesEndpoint + "/7": notFound}, project, everyCL)
 
 	item, err := store.ReadIssue(7)
 
@@ -111,7 +114,7 @@ func TestIssueThatIsGoneIsReadAsClosed(t *testing.T) {
 }
 
 func TestHTMLNotFoundFromInFrontOfGitLabDoesNotReadTheIssueAsGone(t *testing.T) {
-	store := gitlab.NewStore(glab{issuesEndpoint + "/7": {stderr: "glab: HTTP 404\n"}}, project)
+	store := gitlab.NewStore(glab{issuesEndpoint + "/7": {stderr: "glab: HTTP 404\n"}}, project, everyCL)
 
 	_, err := store.ReadIssue(7)
 
@@ -122,7 +125,7 @@ func TestHTMLNotFoundFromInFrontOfGitLabDoesNotReadTheIssueAsGone(t *testing.T) 
 }
 
 func TestIssueOfAProjectThatIsNotVisibleFailsAsNotVisible(t *testing.T) {
-	store := gitlab.NewStore(glab{issuesEndpoint + "/7": {stderr: "glab: 404 Project Not Found (HTTP 404)"}}, project)
+	store := gitlab.NewStore(glab{issuesEndpoint + "/7": {stderr: "glab: 404 Project Not Found (HTTP 404)"}}, project, everyCL)
 
 	_, err := store.ReadIssue(7)
 
@@ -174,7 +177,7 @@ func assertLacks(t *testing.T, text string, bodies ...string) {
 func TestForbiddenObservationIsUnavailableWithAShortReasonInsteadOfTheStderr(t *testing.T) {
 	for name, stderr := range map[string]string{"proxy の HTML": apiForbiddenByProxy, "GitLab の JSON": apiForbiddenByGitLab} {
 		t.Run(name, func(t *testing.T) {
-			store := gitlab.NewStore(glab{issuesEndpoint + "/7": {stderr: stderr}}, project)
+			store := gitlab.NewStore(glab{issuesEndpoint + "/7": {stderr: stderr}}, project, everyCL)
 
 			_, err := store.ReadIssue(7)
 
@@ -238,7 +241,7 @@ func TestOtherFailuresKeepTheirKindAndTheStderr(t *testing.T) {
 		"glab: HTTP 429\n": target.Unavailable,
 	} {
 		t.Run(strings.TrimSpace(stderr), func(t *testing.T) {
-			store := gitlab.NewStore(glab{issuesEndpoint + "/7": {stderr: stderr}}, project)
+			store := gitlab.NewStore(glab{issuesEndpoint + "/7": {stderr: stderr}}, project, everyCL)
 
 			_, err := store.ReadIssue(7)
 
@@ -261,7 +264,7 @@ func TestRepoViewFailureOtherThanForbiddenKeepsTheStderrEvenIfTheBodyMentions403
 }
 
 func TestAuthorWhoIsNotAMemberIsNotACollaborator(t *testing.T) {
-	store := gitlab.NewStore(glab{issuesEndpoint + "/7": {stdout: issueJSON(7)}, nonMember: notFound}, project)
+	store := gitlab.NewStore(glab{issuesEndpoint + "/7": {stdout: issueJSON(7)}, nonMember: notFound}, project, everyCL)
 
 	item, err := store.ReadIssue(7)
 

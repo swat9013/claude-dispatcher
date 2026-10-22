@@ -166,6 +166,46 @@ func TestEachCLFilterNarrowsTheCLsItMatches(t *testing.T) {
 	}
 }
 
+func TestReviewUnresolvedIsNeededOnlyForCLsMatchingTheOtherConditionsOfATriggerThatWritesIt(t *testing.T) {
+	cases := []struct {
+		name     string
+		triggers []trigger.Trigger
+		needed   []target.CL
+		unneeded []target.CL
+	}{
+		{"review_unresolved を書いた trigger が無ければ要らない",
+			[]trigger.Trigger{{On: target.KindCL, CL: trigger.CLPredicate{Draft: no()}}, {On: target.KindIssue}},
+			nil, []target.CL{{}}},
+		{"ほかの条件をすべて満たす CL にだけ要る",
+			[]trigger.Trigger{{On: target.KindCL, CL: trigger.CLPredicate{ReviewUnresolved: yes(), Draft: no()}}},
+			[]target.CL{{}}, []target.CL{{Draft: true}}},
+		{"review_unresolved: false の trigger でも要る",
+			[]trigger.Trigger{{On: target.KindCL, CL: trigger.CLPredicate{ReviewUnresolved: no(), Draft: yes()}}},
+			[]target.CL{{Draft: true}}, []target.CL{{}}},
+		{"どれか 1 つの trigger の条件を満たせば要る",
+			[]trigger.Trigger{
+				{On: target.KindCL, CL: trigger.CLPredicate{ReviewUnresolved: yes(), Draft: yes()}},
+				{On: target.KindCL, CL: trigger.CLPredicate{ReviewUnresolved: yes(), CIFailed: yes()}},
+			},
+			[]target.CL{{Draft: true}, {CIFailed: true}}, []target.CL{{}}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			needs := trigger.NeedsReviewUnresolved(c.triggers)
+			for _, cl := range c.needed {
+				if !needs(cl) {
+					t.Errorf("%+v に要らないとした", cl)
+				}
+			}
+			for _, cl := range c.unneeded {
+				if needs(cl) {
+					t.Errorf("%+v に要るとした", cl)
+				}
+			}
+		})
+	}
+}
+
 func TestIssueTriggerDoesNotMatchACL(t *testing.T) {
 	issueTrigger := trigger.Trigger{Name: "i", On: target.KindIssue}
 

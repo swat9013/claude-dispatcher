@@ -167,6 +167,22 @@ func (p CLPredicate) Matches(cl target.CL) bool {
 	return true
 }
 
+// NeedsReviewUnresolved は、CL の review_unresolved が triggers の評価を変えうるかの判定を返す: review_unresolved を条件に
+// 書いた cl の trigger のどれかで、review_unresolved 以外の条件をすべて満たす CL (system.md §7 の手順 3)。
+func NeedsReviewUnresolved(triggers []Trigger) func(target.CL) bool {
+	var others []CLPredicate
+	for _, t := range triggers {
+		if t.On == target.KindCL && t.CL.ReviewUnresolved != nil {
+			p := t.CL
+			p.ReviewUnresolved = nil
+			others = append(others, p)
+		}
+	}
+	return func(cl target.CL) bool {
+		return slices.ContainsFunc(others, func(p CLPredicate) bool { return p.Matches(cl) })
+	}
+}
+
 // state は真偽の条件 want に、作業対象の状態 got が当たるか。条件が無ければ当たる。
 func state(want *bool, got bool) bool { return want == nil || *want == got }
 

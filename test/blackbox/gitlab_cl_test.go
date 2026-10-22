@@ -22,6 +22,8 @@ const (
 	gitlabOpenMRsQuery = "query OpenMergeRequests("
 	// gitlabReadMRQuery は merge request 1 本を読み直す GraphQL の問い合わせの書き出し
 	gitlabReadMRQuery = "query MergeRequest("
+	// gitlabDiscussionsQuery は merge request 1 本の discussion を読む GraphQL の問い合わせの書き出し
+	gitlabDiscussionsQuery = "query MergeRequestDiscussions("
 	// developerID・reporterID は discussion の書き手の user id (access level は Developer・Reporter)
 	developerID = 501
 	reporterID  = 502
@@ -90,8 +92,27 @@ func (m glMR) json() map[string]any {
 		"approved":        m.approved,
 		"headPipeline":    pipeline,
 		"author":          map[string]any{"id": userGID(author)},
-		"discussions":     map[string]any{"pageInfo": map[string]any{"hasNextPage": false, "endCursor": nil}, "nodes": m.discussionsJSON()},
+		"discussions":     m.discussionsPage(),
 	}
+}
+
+// listJSON は一覧の 1 本。一覧は discussion を返さず、解決できる数と解決済みの数を返す。
+func (m glMR) listJSON() map[string]any {
+	node := m.json()
+	delete(node, "discussions")
+	resolved := 0
+	for _, d := range m.discussionsJSON() {
+		if d["resolved"].(bool) {
+			resolved++
+		}
+	}
+	node["resolvableDiscussionsCount"], node["resolvedDiscussionsCount"] = len(m.discussions), resolved
+	return node
+}
+
+// discussionsPage は discussion の 1 page (続きは無い)。
+func (m glMR) discussionsPage() map[string]any {
+	return map[string]any{"pageInfo": map[string]any{"hasNextPage": false, "endCursor": nil}, "nodes": m.discussionsJSON()}
 }
 
 // userGID は user の GraphQL の global ID。
@@ -128,18 +149,21 @@ func glabStoreRules(issues []glIssue, mrs []glMR) []stubwire.Rule {
 	}
 	nodes := []map[string]any{}
 	for _, m := range mrs {
-		nodes = append(nodes, m.json())
+		nodes = append(nodes, m.listJSON())
 	}
 	page := map[string]any{"data": map[string]any{"project": map[string]any{"mergeRequests": map[string]any{
 		"pageInfo": map[string]any{"hasNextPage": false, "endCursor": nil}, "nodes": nodes}}}}
 	rules := []stubwire.Rule{
 		{ArgsPrefix: glabAPI("graphql"), ArgsContain: []string{gitlabOpenMRsQuery}, Stdout: marshal(page)},
 	}
-	// 起動の直前の読み直し。変数 `iid=1` は `iid=12` の部分文字列なので、iid の大きい順に並べて先に当てる
+	// 起動の直前の読み直しと、一覧で読み足す discussion。変数 `iid=1` は `iid=12` の部分文字列なので、iid の大きい順に並べて
+	// 先に当てる
 	byIIDDesc := slices.SortedFunc(slices.Values(mrs), func(a, b glMR) int { return b.iid - a.iid })
 	for _, m := range byIIDDesc {
 		single := map[string]any{"data": map[string]any{"project": map[string]any{"mergeRequest": m.json()}}}
 		rules = append(rules, stubwire.Rule{ArgsPrefix: glabAPI("graphql"), ArgsContain: []string{gitlabReadMRQuery, "iid=" + strconv.Itoa(m.iid)}, Stdout: marshal(single)})
+		discussions := map[string]any{"data": map[string]any{"project": map[string]any{"mergeRequest": map[string]any{"discussions": m.discussionsPage()}}}}
+		rules = append(rules, stubwire.Rule{ArgsPrefix: glabAPI("graphql"), ArgsContain: []string{gitlabDiscussionsQuery, "iid=" + strconv.Itoa(m.iid)}, Stdout: marshal(discussions)})
 	}
 	rules = append(rules, []stubwire.Rule{
 		{ArgsPrefix: glabAPI(), ArgsContain: []string{gitlabProject + "/members/all?"},

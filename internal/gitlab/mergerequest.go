@@ -16,24 +16,25 @@ import (
 // connectionSize は GraphQL の connection を 1 往復で読む件数 (GitLab の上限)。REST の一覧の 1 page と、id で絞る件数にも使う
 const connectionSize = 100
 
-// mergeRequestPageSize は open な merge request の一覧を 1 往復で読む本数。1 本ごとに discussion を connectionSize 本まで
-// 読むので、page を大きくすると GitLab の問い合わせの時間の上限 (既定 30 秒) に届く。open な merge request が 100 本を超える
-// self-managed の GitLab で、100 本と 50 本の page は時間切れで落ちた。20 本の page は通ったが最も遅い page が 19 秒で上限に
-// 近く、10 本の page は最も遅い page が 12 秒だった
-const mergeRequestPageSize = 10
-
 // discussionFields は discussion 1 本のうち読むもの。書き手と system note かは最初の note で決まるので、note は先頭だけを読む
 const discussionFields = `
         resolvable resolved
         notes(first: 1) { nodes { system maxAccessLevelOfAuthor } }`
 
-// mergeRequestFields は merge request 1 本のうち読むもの。discussion は最初の connectionSize 本を読み、続きは
-// discussionsQuery で読み足す。
-var mergeRequestFields = fmt.Sprintf(`
+// listFields は open な一覧で merge request 1 本のうち読むもの。discussion は読まず、解決できる数と解決済みの数だけを読む。
+// discussion は 1 本ごとに往復が要るほど重い: 一覧と同じ問い合わせで読むと、open な merge request が 100 本を超える
+// self-managed の GitLab で 10 本の page でも 1 page 最大 10 秒・193 本で 79 秒かかり、page を大きくすると問い合わせの時間の
+// 上限 (既定 30 秒) に届いた。discussion を抜けば 100 本の page で 193 本を 4 秒で読めた
+const listFields = `
       iid title webUrl state createdAt draft sourceBranch sourceProjectId targetProjectId mergeStatusEnum approved
+      resolvableDiscussionsCount resolvedDiscussionsCount
       labels { pageInfo { hasNextPage } nodes { title } }
       headPipeline { status }
-      author { id }
+      author { id }`
+
+// mergeRequestFields は merge request 1 本を読み直すときに読むもの。discussion は最初の connectionSize 本を読み、続きは
+// discussionsQuery で読み足す。
+var mergeRequestFields = listFields + fmt.Sprintf(`
       discussions(first: %[1]d) { pageInfo { hasNextPage endCursor } nodes {`+discussionFields+` } }`, connectionSize)
 
 // 問い合わせの operation 名は、どの問い合わせを撃ったかを glab の argv から読めるように付ける
@@ -43,11 +44,11 @@ query OpenMergeRequests($fullPath: ID!, $after: String) {
   project(fullPath: $fullPath) {
     mergeRequests(state: opened, sort: CREATED_ASC, first: %d, after: $after) {
       pageInfo { hasNextPage endCursor }
-      nodes {`+mergeRequestFields+`
+      nodes {`+listFields+`
       }
     }
   }
-}`, mergeRequestPageSize)
+}`, connectionSize)
 
 	mergeRequestQuery = `
 query MergeRequest($fullPath: ID!, $iid: String!) {
@@ -72,7 +73,7 @@ type pageInfo struct {
 	EndCursor   string
 }
 
-// mergeRequestNode は mergeRequestFields の応答。
+// mergeRequestNode は listFields (一覧) か mergeRequestFields (読み直し) の応答。一覧の応答では Discussions が空。
 type mergeRequestNode struct {
 	IID          string
 	Title        string
@@ -86,7 +87,10 @@ type mergeRequestNode struct {
 	TargetProjectID int
 	MergeStatusEnum string
 	Approved        bool
-	Labels          struct {
+	// ResolvableDiscussionsCount と ResolvedDiscussionsCount は解決できる discussion の数と、そのうち解決済みの数
+	ResolvableDiscussionsCount int
+	ResolvedDiscussionsCount   int
+	Labels                     struct {
 		PageInfo pageInfo
 		Nodes    []struct{ Title string }
 	}
@@ -190,6 +194,19 @@ func (s Store) openMergeRequests() ([]target.CL, error) {
 	if err != nil {
 		return nil, err
 	}
+	// 一覧は discussion を読まないので、cl.review_unresolved は偽のまま。未解決の discussion があり、review_unresolved が
+	// trigger の評価を変えうる CL だけ discussion を読み足して写し直す (system.md §7 の手順 3)
+	for i := range nodes {
+		if nodes[i].ResolvableDiscussionsCount <= nodes[i].ResolvedDiscussionsCount || !s.readsDiscussions(cls[i]) {
+			continue
+		}
+		if err := s.readDiscussions(&nodes[i], ""); err != nil {
+			return nil, err
+		}
+		if cls[i], err = s.normalizeMergeRequest(nodes[i], cls[i].AuthorIsCollaborator); err != nil {
+			return nil, err
+		}
+	}
 	if err := s.requestRecheck(cls); err != nil {
 		return cls, &target.NonFatal{Place: s.project.String(), Err: err}
 	}
@@ -219,12 +236,15 @@ func (s Store) mergeRequest(iid int) (target.CL, error) {
 	return cls[0], nil
 }
 
-// readCLs は open な merge request の discussion の続きと作者の access level を読み足し、CL の形に写す。
+// readCLs は open な merge request の、読んだ discussion の page の続きと作者の access level を読み足し、CL の形に写す。
+// 一覧の merge request は discussion を読んでいないので、続きも読まない。
 func (s Store) readCLs(nodes []mergeRequestNode) ([]target.CL, error) {
 	authors := make([]int, len(nodes))
 	for i := range nodes {
-		if err := s.readRemainingDiscussions(&nodes[i]); err != nil {
-			return nil, err
+		if page := nodes[i].Discussions.PageInfo; page.HasNextPage {
+			if err := s.readDiscussions(&nodes[i], page.EndCursor); err != nil {
+				return nil, err
+			}
 		}
 		author, err := s.authorID(nodes[i])
 		if err != nil {
@@ -247,15 +267,16 @@ func (s Store) readCLs(nodes []mergeRequestNode) ([]target.CL, error) {
 	return cls, nil
 }
 
-// readRemainingDiscussions は、最初の page に収まらなかった discussion を読み足す。
-func (s Store) readRemainingDiscussions(n *mergeRequestNode) error {
-	for n.Discussions.PageInfo.HasNextPage {
+// readDiscussions は merge request n の discussion を、cursor after の続きから最後の page まで読み足す。after が空なら最初の
+// page から読む (空の変数は渡さず、null になる)。
+func (s Store) readDiscussions(n *mergeRequestNode, after string) error {
+	for {
 		var data struct {
 			Project *struct {
 				MergeRequest *struct{ Discussions discussionConnection }
 			}
 		}
-		if err := s.graphql(discussionsQuery, &data, variable{"iid", n.IID}, variable{"after", n.Discussions.PageInfo.EndCursor}); err != nil {
+		if err := s.graphql(discussionsQuery, &data, variable{"iid", n.IID}, variable{"after", after}); err != nil {
 			return err
 		}
 		if data.Project == nil {
@@ -268,8 +289,11 @@ func (s Store) readRemainingDiscussions(n *mergeRequestNode) error {
 		next := data.Project.MergeRequest.Discussions
 		n.Discussions.Nodes = append(n.Discussions.Nodes, next.Nodes...)
 		n.Discussions.PageInfo = next.PageInfo
+		if !next.PageInfo.HasNextPage {
+			return nil
+		}
+		after = next.PageInfo.EndCursor
 	}
-	return nil
 }
 
 // authorID は merge request の作者の user id。作者が読めない (null) なら 0。
