@@ -203,7 +203,7 @@ func TestEveryGitCallToTheCoordinationRemoteDisablesTheTerminalPrompt(t *testing
 }
 
 // assertEveryGitCallDisablesTheTerminalPrompt は、git の stub が受けた呼び出しが 1 回以上あり、どれも
-// GIT_TERMINAL_PROMPT=0 を付けていることを確かめる。
+// GIT_TERMINAL_PROMPT=0 と BatchMode の ssh を付けていることを確かめる。
 func (s *sandbox) assertEveryGitCallDisablesTheTerminalPrompt() {
 	s.t.Helper()
 	calls := s.calls("git")
@@ -216,7 +216,7 @@ func (s *sandbox) assertEveryGitCallDisablesTheTerminalPrompt() {
 		}
 		// 利用者が ssh の撃ち方を決めていない sandbox では、ssh の prompt も止める。その判定に撃つ config は ssh を撃たない
 		if c.Argv[1] != "config" && c.Env["GIT_SSH_COMMAND"] != "ssh -o BatchMode=yes" {
-			t.Fatalf("BatchMode の ssh の無い git の呼び出し: %v (env %v)", c.Argv[1:], c.Env)
+			s.t.Fatalf("BatchMode の ssh の無い git の呼び出し: %v (env %v)", c.Argv[1:], c.Env)
 		}
 	}
 }
