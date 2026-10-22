@@ -184,6 +184,7 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 | `orphan_end` | 前の tick まで生きていた orphan が終わったのを見た (1 行) | `target` |
 | `claim_lost` | 着手宣言の push に負けて、claim を立てずに起動しなかった (§12。tick ごとに、候補 1 件につき 1 行) | `target`・`trigger` |
 | `takeover` | 死んだ loop の着手宣言を乗っ取って claim を立てた (§12。続けて `start` の行) | `target`・`trigger`・`from` (死んだ loop の loop 名) |
+| `inherit` | 生きている orphan (§6) の作業対象に残った死んだ loop の着手宣言を、自分の名前に引き継いだ (§12。claim は立てない。既存の `takeover` の行は claim を立てたときだけ書き、この経路では書かない) | `target`・`from` (死んだ loop の loop 名) |
 | `taken_over` | 自分の着手宣言が乗っ取られていたのを見た (§12。走っている worker は止め、それ以外の claim は解く) | `target`・`trigger`・`by` (今の持ち主の loop 名。消えていたら空文字列、持ち主の commit message を読めなければ `?`) |
 | `dead_loop` | 他の loop を死んだとみなし、その生存報告と、乗っ取らなかった着手宣言を消した (§12。1 つの loop につき 1 行) | `loop` (死んだ loop の loop 名)・`refs` (消した ref の列) |
 | `error` | 処理は続けるが、運用者が知るべき失敗 | `target` (あれば)・`error` |
@@ -428,6 +429,7 @@ claude-dispatcher loop [--max-concurrent <N>] [<workflow の path>]
 <時刻> 着手宣言に負けた issue#42 (implement): 他の loop が先に着手した
 <時刻> 乗っ取り issue#42 (implement): 死んだ loop host-1a2b3c4d の着手宣言を乗っ取った
 <時刻> 乗っ取られた issue#42 (implement): loop host-5e6f7a8b が着手宣言を持っている
+<時刻> 引き継ぎ issue#46: orphan の claude が動いているので、死んだ loop host-1a2b3c4d の着手宣言を引き継いだ
 <時刻> 死んだ loop host-1a2b3c4d: 生存報告と着手宣言 1 本を消した
 <時刻> loop を止めた (停止要求 SIGINT)
 ```
@@ -967,11 +969,12 @@ loop と単発起動は、続けて lock を取った後に最初の生存報告
 
 1. ref を読み、新しく見た sha の commit message を読む。ref を読めなければ tick を error で終える。commit message を読めない sha は `error` の行を残し、その tick は持ち主を知らないものとして扱う (その作業対象は起動しない・持ち主を死んだとみなさない)
 2. 自分が置いた着手宣言が、sha が違うか消えていれば `taken_over` の行を書き、その claim に「乗っ取られた」を渡す (走っている worker は止め、ほかの claim は `release` の行で解く。`reason` は `taken_over`)。要対処に出す
-3. 自分の loop 名の着手宣言のうち、claim の無い作業対象のものを消す
+3. 自分の loop 名の着手宣言のうち、claim の無い作業対象のものを消す (8 で引き継いだ着手宣言は除く。その sha が変わったか消えていれば、引き継いだ記憶を忘れるだけで行は書かない)
 4. 自分の知る版より新しい版の ref があれば、その tick は候補を起動せず、再起動を待ち直させ、5 を撃たない。要対処に出す
 5. 生存報告ごとに、sha が変わったのを最後に見た時刻 (初めて見た時刻を含む) から、その報告の `interval` の 3 倍が過ぎていれば、その loop を死んだとみなす。持ち主の生存報告が無い着手宣言は、着手宣言の sha を初めて見た時刻から、自分の生存報告の間隔の 3 倍が過ぎていれば、持ち主を死んだとみなす。時刻は loop 自身の時計で数える
 6. 候補の起動 (§6 の手順 7) で、作業対象に生きている他の loop の着手宣言があれば起動しない。死んだ loop の着手宣言があれば、旧 sha を期待値にして乗っ取る (勝てば `takeover` の行)
 7. 候補の起動の後、死んだ loop の ref を消し (消す ref は system.md §7)、`dead_loop` の行を書く。消すときの負けは行を書かずに読み飛ばす (他の loop が先に消したか乗っ取った)
+8. 7 で、生きている orphan (§6 の「orphan」) の作業対象の死んだ loop の着手宣言は消さず、旧 sha を期待値にした置き換えで自分の loop 名に引き継ぎ、`inherit` の行を書く (ADR 0027)。負けは行を書かずに読み飛ばす。引き継いだ着手宣言は、その orphan が終わった tick に、手順 4 の orphan の確かめの後、候補の起動の前に消す。loop が止まるときに orphan がまだ生きていれば、止められない claude を残して止まるときと同じく、着手宣言も生存報告も消さない
 
 **生存報告の置き直し** (いつ置き直すかは system.md §9): 落ちるたびに `error` の行 (`生存報告を置けない: <理由>`) を書く。2 回以上続けて落ちたら、状態 file の `heartbeat_failures` (§7.1) に出し、要対処に並べる。置き直しの結果を loop が受け取る前に溜まりすぎて捨てたら、次に結果を受けたときに `error` の行 (`生存報告の置き直しの結果 <N> 件を読まずに捨てた`) を書く。
 

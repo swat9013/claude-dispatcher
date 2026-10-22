@@ -34,7 +34,7 @@ claude-dispatcher は、tracker (GitHub・GitLab・Jira Cloud) の issue と CL 
    - **チームで分担するなら、調停 remote を宣言する**: 同じ issue 置き場を複数のマシンの loop で分け合うなら、`WORKFLOW.md` に `coordination.remote: origin` (clone の git remote の名前) を書いて commit する。書かなければ 1 台で回す
      - loop は、その remote の `refs/dispatcher/` の下に、作業対象ごとの着手宣言と loop ごとの生存報告を置き合い、先に置けた loop だけが worker を起動する。branch・CL・tracker には書かない
      - loop を回す各マシンの clone から、その remote へ push できる必要がある (認証は clone の git の設定をそのまま使う)。読む URL と書く URL が 1 本ずつの同じ URL の remote を指す (`pushurl` を別の repo に向けた remote や、URL が複数の remote は起動時に落ちる。その clone では別の remote 名を足して指す)。ssh の remote は、passphrase や host key の確認を出さない ssh (`ssh -o BatchMode=yes`) で撃つので、agent か鍵の設定で prompt なしに通るようにしておく。`core.sshCommand` か `GIT_SSH_COMMAND` を設定していれば、dispatcher は何も足さずにその設定を使う。push は `--no-verify` で撃つので、実装 repo の pre-push hook は通らない
-     - 落ちたマシンの作業対象は、生存報告の間隔 (`polling.interval` と 1 分の長いほう) の 3 倍の後に、生きている loop が拾い直す。network が切れたマシンの worker は、戻ったときに乗っ取られていれば止まり、`要対処` に出る
+     - 落ちたマシンの作業対象は、生存報告の間隔 (`polling.interval` と 1 分の長いほう) の 3 倍の後に、生きている loop が拾い直す。ただし落ちた loop の claude (orphan) がまだ動いている作業対象は、同じマシンで loop を起動し直せば、その loop が着手宣言を引き継いで守る。起動し直さない間は、別のマシンが拾い直して作業が重なりうる。network が切れたマシンの worker は、戻ったときに乗っ取られていれば止まり、`要対処` に出る
      - attempt と打ち切りはマシンごとに数える。あるマシンで打ち切った作業対象を、別のマシンが拾い直しうる
      - 版はチームで揃えて上げる。新しい版の loop が置いた ref を見た古い版の loop は、worker を起動せずに `要対処` に出す
      - 試運転 (`loop --dry-run`) は調停 remote を読まないので、他のマシンが作業している作業対象も示しうる。`doctor` は調停 remote を読めるかを確かめる (push は撃たない)
