@@ -188,7 +188,7 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 | `takeover` | 死んだ loop の着手宣言を乗っ取って claim を立てた (§12。続けて `start` の行) | `target`・`trigger`・`from` (死んだ loop の loop 名) |
 | `taken_over` | 自分の着手宣言が乗っ取られていたのを見た (§12。走っている worker は止め、それ以外の claim は解く) | `target`・`trigger`・`by` (今の持ち主の loop 名。消えていたら空文字列、持ち主の commit message を読めなければ `?`) |
 | `dead_loop` | 他の loop を死んだとみなし、その生存報告と、乗っ取らなかった着手宣言を消した (§12。1 つの loop につき 1 行) | `loop` (死んだ loop の loop 名)・`refs` (消した ref の列) |
-| `slow_listing` | tick の open な一覧の読み出しが 15 秒を超えた (§6 の「遅い一覧」。読み出し 1 回につき 1 行。その tick の画面の行と同じときに書く。loop の起動時の確認・試運転・`doctor`・単発起動の読み出しでは書かない) | `kind` (`issue` / `cl`。読んだ置き場の種類)・`place` (置き場。綴りは画面の行の `<置き場>` と同じ) |
+| `slow_listing` | tick の open な一覧の読み出しが 15 秒を超えた (§6 の「遅い一覧」。読み出し 1 回につき 1 行。その tick の画面の行と同じときに書く。tick の読み出しでだけ書く。どの読み出しで書くかは §6 の「遅い一覧」) | `kind` (`issue` / `cl`。読んだ置き場の種類)・`place` (置き場。綴りは画面の行の `<置き場>` と同じ) |
 | `error` | 処理は続けるが、運用者が知るべき失敗 | `target` (あれば)・`error` |
 
 - `target` は、issue なら `issue#<番号>`、CL なら `cl#<番号>`
