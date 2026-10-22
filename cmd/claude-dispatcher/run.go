@@ -51,7 +51,9 @@ func runOnce(args []string, stdout, stderr io.Writer) int {
 		}
 		return exitUsage
 	}
-	if code := e.confirmLaunchable(def, stderr, slowToStderr(def, stderr)); code != 0 {
+	// 調停 remote の口は確認と生存報告で共有し、ssh の撃ち方の判定を run の間 1 回にする
+	remote := e.coordinationRemote(def)
+	if code := e.confirmLaunchable(def, remote, stderr, slowToStderr(def, stderr)); code != 0 {
 		return code
 	}
 	t, ok := namedTrigger(def, triggerName)
@@ -91,7 +93,7 @@ func runOnce(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "%s は %s に当たっていないので起動しない (%s)\n", ref, t.Name, observationText(observed))
 		return exitNotLaunched
 	}
-	party, code := e.join(def, stderr)
+	party, code := e.join(def, remote, stderr)
 	if code != 0 {
 		return code
 	}
