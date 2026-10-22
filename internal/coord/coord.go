@@ -121,7 +121,7 @@ type sshChoice struct {
 	set   bool
 }
 
-// NewRemote は調停 remote の口を作る。ssh の撃ち方の判定 (core.sshCommand の読み出し) は、この口とその写しの間で 1 回だけ撃つ。
+// NewRemote は調停 remote の口を作る。ssh の撃ち方の判定 (core.sshCommand の読み出し) は、読めたらこの口とその写しの間で持ち、以後は読み直さない。
 func NewRemote(name, scopeDir string, git proc.Command) Remote {
 	return Remote{Name: name, ScopeDir: scopeDir, Git: git, ssh: &sshChoice{}}
 }
