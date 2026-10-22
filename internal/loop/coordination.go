@@ -263,7 +263,11 @@ func (l *loop) deleteStaleClaims(v coord.View) {
 	r := l.mediation
 	for ref, sha := range r.inherited {
 		if v.Claims[ref] != sha {
-			// 引き継いだ着手宣言が置き換わったか消えた。claim が無いので止める worker は無く、忘れるだけ
+			// 引き継いだ着手宣言が置き換わったか消えた。claim が無いので止める worker は無く、忘れる。orphan はまだ動きうるので、
+			// 置き換わったなら二重実行になりうることを残す
+			if _, held := v.Claims[ref]; held {
+				l.rec.error(ref, "orphan のために引き継いだ着手宣言が置き換わった (orphan の claude と二重に動きうる)")
+			}
 			delete(r.inherited, ref)
 		}
 	}
@@ -502,7 +506,11 @@ func (l *loop) leaveRemote() {
 	l.releaseInherited()
 	for _, ref := range sortedRefs(l.mediation.inherited) {
 		claudeLeft = true
-		l.rec.error(ref, "orphan のために引き継いだ着手宣言を残して止まる (orphan の claude が作業を続けうる)")
+		reason := "orphan の claude が作業を続けうる"
+		if !l.orphans[ref] {
+			reason = "orphan は終わったが消せなかった"
+		}
+		l.rec.error(ref, "orphan のために引き継いだ着手宣言を残して止まる ("+reason+")")
 	}
 	if claudeLeft {
 		// 生存報告も消さずに途絶えさせる。消すと、持ち主の生存報告の無い着手宣言としてすぐに乗っ取られうる
