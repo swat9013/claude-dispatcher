@@ -520,10 +520,10 @@ func (l *loop) leaveRemote() {
 	// 作業を続けうる)
 	l.releaseInherited()
 	for _, ref := range sortedRefs(l.mediation.inherited) {
-		claudeLeft = true
-		reason := "orphan の claude が作業を続けうる"
-		if !l.orphans[ref] {
-			reason = "orphan は終わったが消せなかった"
+		reason := "orphan は終わったが消せなかった"
+		if l.orphans[ref] {
+			// orphan が作業を続けうる間だけ、生存報告も残す
+			claudeLeft, reason = true, "orphan の claude が作業を続けうる"
 		}
 		l.rec.error(ref, "orphan のために引き継いだ着手宣言を残して止まる ("+reason+")")
 	}
