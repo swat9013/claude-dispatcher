@@ -202,7 +202,7 @@ func TestEveryGitCallToTheCoordinationRemoteDisablesTheTerminalPrompt(t *testing
 	s.assertEveryGitCallDisablesTheTerminalPrompt()
 }
 
-func TestRunReadsTheSSHCommandSettingAtMostOnce(t *testing.T) {
+func TestRunReadsTheSSHCommandSettingOnce(t *testing.T) {
 	s := newSandbox(t)
 
 	s.runOneWorker()
