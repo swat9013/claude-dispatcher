@@ -274,6 +274,14 @@ func (l *loop) deleteStaleClaims(v coord.View) {
 		if r.inherited[ref] == sha {
 			continue
 		}
+		if l.orphans[ref] {
+			// 引き継ぎの push が結果の分からない失敗をしたが、remote には届いていた。orphan が生きているので引き継いだものとして覚える
+			if r.inherited == nil {
+				r.inherited = map[target.Ref]string{}
+			}
+			r.inherited[ref] = sha
+			continue
+		}
 		if err := r.c.Delete(r.c.ClaimRef(ref), sha); err != nil && !errors.Is(err, coord.ErrLost) {
 			l.rec.error(ref, "消し損ねた自分の着手宣言を消せない: "+oneLine(err))
 		}
@@ -284,6 +292,10 @@ func (l *loop) deleteStaleClaims(v coord.View) {
 func (l *loop) heldByOther(ref target.Ref) bool {
 	if l.mediation == nil {
 		return false
+	}
+	if _, inherited := l.mediation.inherited[ref]; inherited {
+		// 消し損ねた引き継いだ着手宣言が残っている。消し直すまで起動しない (自分の着手宣言に負けて claim_lost と書かないため)
+		return true
 	}
 	h, ok := l.mediation.holders[ref]
 	return ok && !h.dead
@@ -450,7 +462,9 @@ func (l *loop) leaveRemote() {
 			l.releaseRemote(ref, c)
 		}
 	}
-	// orphan のために引き継いだ着手宣言も、orphan が作業を続けうるので残す
+	// orphan のために引き継いだ着手宣言は、直近の tick で orphan が終わっていたものを消し、生きていたものは残す (orphan が
+	// 作業を続けうる)
+	l.releaseInherited()
 	claudeLeft = claudeLeft || len(l.mediation.inherited) > 0
 	if claudeLeft {
 		// 生存報告も消さずに途絶えさせる。消すと、持ち主の生存報告の無い着手宣言としてすぐに乗っ取られうる
