@@ -37,10 +37,11 @@ type Call struct {
 	Env  map[string]string `json:"env"`
 }
 
-// RecordedEnv は Call に残す env。token の受け渡しと置き場の解決を assert するためのもの。
+// RecordedEnv は Call に残す env。token の受け渡し・置き場の解決・git に prompt を出させないことを assert するためのもの。
 var RecordedEnv = []string{
 	"GH_TOKEN", "GITHUB_TOKEN", "GITLAB_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN",
 	"HOME", "PATH", "XDG_CONFIG_HOME", "XDG_STATE_HOME",
+	"GIT_TERMINAL_PROMPT",
 }
 
 // Rule は応答 1 つ。ArgsPrefix と ArgsContain の両方に当たった呼び出しに応答する。

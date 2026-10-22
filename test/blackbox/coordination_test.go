@@ -161,6 +161,31 @@ func TestLoopWithACoordinationRemoteClaimsBeforeLaunchingAndDeletesItsRefs(t *te
 	}
 }
 
+func TestEveryGitCallToTheCoordinationRemoteDisablesTheTerminalPrompt(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflowWithCommands(s.workerWorkflow(coordinated))
+	s.setIssues(readyIssue(42))
+	done := readyIssue(42)
+	done.labels = nil
+	s.onClaude(stubwire.Rule{Writes: []stubwire.FileWrite{s.ghResponses(done)}})
+	s.respondAll("git", s.claimingRemote(42))
+
+	loop := s.startLoop()
+	s.waitEvents("end", 1)
+	loop.signal(syscall.SIGINT)
+	assertExit(t, loop.wait(), 0)
+
+	calls := s.calls("git")
+	if len(calls) == 0 {
+		t.Fatal("git を撃っていない")
+	}
+	for _, c := range calls {
+		if c.Env["GIT_TERMINAL_PROMPT"] != "0" {
+			t.Fatalf("GIT_TERMINAL_PROMPT=0 の無い git の呼び出し: %v (env %v)", c.Argv[1:], c.Env)
+		}
+	}
+}
+
 func TestLoopThatLosesTheClaimDoesNotLaunchAndOnlyLogsIt(t *testing.T) {
 	s := newSandbox(t)
 	s.writeWorkflowWithCommands(s.workerWorkflow(coordinated))
