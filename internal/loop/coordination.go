@@ -62,7 +62,7 @@ type mediation struct {
 	// takenOver は乗っ取られた作業対象。loop を起動し直すまで残す
 	takenOver []status.TakenOver
 	// failures は続けて落ちた生存報告の置き直しの回数と直近の理由
-	failures coord.Failures
+	failures heartbeatFailures
 	// interval は生存報告の間隔。起動時の workflow 定義から決め、走っている間は変えない (system.md §9)
 	interval time.Duration
 	// results は生存報告の置き直しの結果。dropped は results の満杯で捨てた結果の数。stopBeating は置き直しの goroutine を
@@ -70,6 +70,21 @@ type mediation struct {
 	results     chan error
 	dropped     atomic.Int64
 	stopBeating func()
+}
+
+// heartbeatFailures は生存報告の置き直しが続けて落ちた回数と、直近の理由 (状態 file の heartbeat_failures の元)。
+type heartbeatFailures struct {
+	count int
+	last  error
+}
+
+// note は置き直しの結果を数える。落ちていれば続けて落ちた回数を足し、通っていれば 0 に戻す。
+func (f *heartbeatFailures) note(err error) {
+	if err != nil {
+		f.count, f.last = f.count+1, err
+		return
+	}
+	f.count, f.last = 0, nil
 }
 
 // startBeating は、生存報告を tick と別の goroutine で間隔ごとに置き直し始める。tick が長引いても置き直しを遅らせない
@@ -97,11 +112,11 @@ func (l *loop) beats() <-chan error {
 func (l *loop) beat(err error) {
 	l.noteDropped()
 	if err != nil {
-		l.mediation.failures.Note(err)
+		l.mediation.failures.note(err)
 		l.rec.error(target.Ref{}, "生存報告を置けない: "+oneLine(err))
 		return
 	}
-	l.mediation.failures.Note(nil)
+	l.mediation.failures.note(nil)
 }
 
 // noteDropped は、results の満杯で捨てた置き直しの結果があれば、その数を error の行に残す。
@@ -332,10 +347,10 @@ func (l *loop) cleanupDeadLoops() {
 		}
 		claims := 0
 		for _, ref := range sortedRefs(r.holders) {
-			// 自分が着手宣言を置いて claim している (この tick の候補の起動で乗っ取った) 作業対象と、生きている orphan の作業対象の
-			// 着手宣言は消さない (orphan の claude が作業を続けている)
+			// 自分が着手宣言を置いて claim している (この tick の候補の起動で乗っ取った) 作業対象と、自分の claude か生きている
+			// orphan の claude が作業を続けている作業対象の着手宣言は消さない
 			c, claimed := l.claims[ref]
-			mine := claimed && c.claimSHA != ""
+			mine := claimed && (c.claimSHA != "" || c.claudeAlive())
 			if h := r.holders[ref]; h.loop == loop && h.dead && !mine && !l.orphans[ref] && remove(ref, r.c.ClaimRef(ref), h.sha) {
 				claims++
 			}

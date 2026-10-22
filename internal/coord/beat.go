@@ -25,18 +25,3 @@ func KeepBeating(heartbeat func(time.Duration) error, interval time.Duration, af
 		<-done
 	}
 }
-
-// Failures は生存報告の置き直しが続けて落ちた回数と、直近の理由 (状態 file の heartbeat_failures の元)。単発起動は数を出す先が無いので数えない。
-type Failures struct {
-	Count int
-	Last  error
-}
-
-// Note は置き直しの結果を数える。落ちていれば続けて落ちた回数を足し、通っていれば 0 に戻す。
-func (f *Failures) Note(err error) {
-	if err != nil {
-		f.Count, f.Last = f.Count+1, err
-		return
-	}
-	f.Count, f.Last = 0, nil
-}
