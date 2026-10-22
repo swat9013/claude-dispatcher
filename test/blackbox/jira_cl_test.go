@@ -53,10 +53,12 @@ func TestJiraDryRunReadsEachOpenListOnlyOnceForTheConfirmationAndTheSnapshot(t *
 	}
 }
 
-func TestJiraDryRunReadsTheGitLabCLHostListOnlyOnce(t *testing.T) {
+func TestJiraDryRunReadsTheGitLabCLHostListOnlyOnceEvenWhenTheRecheckRequestFails(t *testing.T) {
 	s := newSandbox(t)
+	unchecked := readyMR(1)
+	unchecked.mergeStatus = "UNCHECKED"
 
-	r := s.dryRunJiraWithGitLabCLHost(readyMR(1))
+	r := s.dryRunJiraWithGitLabCLHost(unchecked, recheckRequestFails)
 
 	assertCandidates(t, r, mrCandidate("t", 1))
 	if n := s.countCalls("glab", func(arg string) bool { return strings.Contains(arg, gitlabOpenMRsQuery) }); n != 1 {
@@ -69,13 +71,16 @@ func TestJiraDryRunStillNamesTheFailedRecheckRequestOfTheConfirmedCLList(t *test
 	unchecked := readyMR(1)
 	unchecked.mergeStatus = "UNCHECKED"
 
-	r := s.dryRunJiraWithGitLabCLHost(unchecked, stubwire.Rule{ArgsPrefix: glabAPI(), ArgsContain: []string{"with_merge_status_recheck=true"}, Stderr: "glab: HTTP 502\n", Exit: 1})
+	r := s.dryRunJiraWithGitLabCLHost(unchecked, recheckRequestFails)
 
 	assertCandidates(t, r, mrCandidate("t", 1))
 	if !strings.Contains(r.stderr, "補助の要求が落ちた") {
 		t.Fatalf("stderr に計算し直しの求めの失敗が無い:\n%s", r.stderr)
 	}
 }
+
+// recheckRequestFails は、glab の merge request の計算し直しの求め (補助の要求) を落とす応答。
+var recheckRequestFails = stubwire.Rule{ArgsPrefix: glabAPI(), ArgsContain: []string{"with_merge_status_recheck=true"}, Stderr: "glab: HTTP 502\n", Exit: 1}
 
 // dryRunJiraWithGitLabCLHost は、cl: に GitLab を置き、どの merge request にも当たる trigger 1 つの jira の workflow 定義で、
 // glab が mr を返すときの試運転を撃つ。rules は glab の既定の応答より先に当てる応答。

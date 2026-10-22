@@ -114,7 +114,7 @@ func (c Confirmed) OpenIssues() ([]target.Item, error) {
 
 // openItems は open な一覧の検索の結果を正規化して作業対象にする。失敗は *target.Failure。
 func (s Store) openItems(nodes []issueJSON) ([]target.Item, error) {
-	issues, err := s.normalizeOpen(nodes)
+	issues, err := s.normalizeWithBlockers(nodes)
 	if err != nil {
 		return nil, s.fail(s.classify(err, target.Unavailable), err)
 	}
@@ -179,8 +179,8 @@ func (s Store) openJQL() string {
 	return s.projectJQL() + " AND statusCategory != Done"
 }
 
-// normalizeOpen は open な一覧の検索の結果 nodes を正規化して返す。依存先の数は読み足す。失敗は分類前の error。
-func (s Store) normalizeOpen(nodes []issueJSON) ([]target.Issue, error) {
+// normalizeWithBlockers は open な一覧の検索の結果 nodes を正規化して返す。blocked の述語があれば依存先の数を acli で読み足す。失敗は分類前の error。
+func (s Store) normalizeWithBlockers(nodes []issueJSON) ([]target.Issue, error) {
 	blocked := map[string]int{}
 	if s.blockers {
 		var err error
