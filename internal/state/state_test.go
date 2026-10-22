@@ -174,7 +174,7 @@ func TestConcurrentWritesOfMaxConcurrentLeaveOneOfTheWrittenLimits(t *testing.T)
 	}
 }
 
-func TestLockDiscardsTheLimitLeftByThePreviousLoopBeforeTheLoopLooksAlive(t *testing.T) {
+func TestLockDiscardsTheLimitLeftByThePreviousLoop(t *testing.T) {
 	dir := t.TempDir()
 	if err := state.WriteMaxConcurrent(dir, 5); err != nil {
 		t.Fatal(err)

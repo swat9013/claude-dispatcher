@@ -12,6 +12,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/swat9013/claude-dispatcher/test/blackbox/stubwire"
 )
@@ -514,6 +515,33 @@ func TestMaxConcurrentFailsForALoopThatDoesNotReadIt(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "max_concurrent")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("読まない版の loop なのに max_concurrent を書いた (%v)", err)
+	}
+}
+
+func TestMaxConcurrentFailsForAStoppingLoop(t *testing.T) {
+	// 停止待ちの loop は tick を回さないので、書いても読まれない
+	s := newSandbox(t)
+	s.writeWorkflowWithCommands(s.workerWorkflow(""))
+	s.setIssues(readyIssue(42))
+	s.onClaude(stubwire.Rule{ReleaseFile: s.releaseFile()})
+	loop := s.startLoop()
+	s.waitEvents("start", 1)
+	loop.signal(syscall.SIGINT)
+	loop.waitForOutput(regexp.MustCompile(`停止待ち`))
+
+	var r runResult
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); {
+		if r = s.run("max-concurrent", "2"); strings.Contains(r.stderr, "loop は停止待ち") {
+			break
+		}
+	}
+
+	assertExit(t, r, 1)
+	if !strings.Contains(r.stderr, "loop は停止待ち: github.com/acme/widgets") {
+		t.Fatalf("stderr = %q, want 停止待ちであること", r.stderr)
+	}
+	if _, err := os.Stat(filepath.Join(s.defaultStateDir(), "max_concurrent")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("停止待ちの loop なのに max_concurrent を書いた (%v)", err)
 	}
 }
 

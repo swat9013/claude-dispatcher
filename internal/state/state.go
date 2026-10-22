@@ -66,8 +66,9 @@ func (h *Held) Close() error {
 	return errors.Join(err, h.lock.Close())
 }
 
-// Lock は state dir を作り、loop の生存期間の lock (loop.lock と alive.lock) を取る。間に前の loop の並列上限を消す。返した lock を閉じると外れる — loop が
+// Lock は state dir を作り、loop の生存期間の lock (loop.lock と alive.lock) を取る。返した lock を閉じると外れる — loop が
 // 終わるまで開いておく。flock は process が消えれば外れるので、落ちた loop の lock が次の起動を塞ぐことはない。
+// loop.lock を取った後、alive.lock を取る前に、前の loop が max-concurrent で渡した並列上限を消す。
 func Lock(dir, scopeKey string) (*Held, error) {
 	lock, err := lockScope(dir, scopeKey)
 	if err != nil {
@@ -168,8 +169,9 @@ func WriteMaxConcurrent(dir string, n int) error {
 	if err != nil {
 		return fmt.Errorf("並列上限を書けない: %w", err)
 	}
+	// CreateTemp は 0600 で作るので、state dir の他の file と同じ 0644 に揃える
 	_, err = tmp.WriteString(strconv.Itoa(n) + "\n")
-	err = errors.Join(err, tmp.Close())
+	err = errors.Join(err, tmp.Chmod(0o644), tmp.Close())
 	if err == nil {
 		err = os.Rename(tmp.Name(), filepath.Join(dir, MaxConcurrentFile))
 	}

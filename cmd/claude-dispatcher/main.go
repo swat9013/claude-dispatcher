@@ -554,15 +554,22 @@ func runMaxConcurrent(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "loop が立っていない: %s\n", scopeKey)
 		return exitFailed
 	}
-	// 走っている loop は起動した時点の binary で回るので、max_concurrent を読まない版の loop に書いても効かない。読む版の
-	// loop は状態 file に max_concurrent を書く (formats.md §13)
-	snap, _, err := status.Read(dir)
-	if err != nil {
+	// 書いても次の tick で読まれない loop には書かない (formats.md §13)。読む版の loop は状態 file に max_concurrent を書く
+	snap, found, err := status.Read(dir)
+	switch {
+	case err != nil:
 		fmt.Fprintln(stderr, err)
 		return exitFailed
-	}
-	if snap.MaxConcurrent == 0 {
+	case !found:
+		fmt.Fprintf(stderr, "loop の状態 file がまだ無い: %s (起動した直後なら少し待って撃ち直す)\n", scopeKey)
+		return exitFailed
+	case snap.MaxConcurrent == 0:
+		// 走っている loop は起動した時点の binary で回るので、binary を入れ替える前の版の loop は読まない
 		fmt.Fprintf(stderr, "この loop は max-concurrent を読まない: %s (この版の binary で loop を起動し直す)\n", scopeKey)
+		return exitFailed
+	case snap.Stopping:
+		// 停止待ちの loop は tick を回さない
+		fmt.Fprintf(stderr, "loop は停止待ち: %s\n", scopeKey)
 		return exitFailed
 	}
 	if err := state.WriteMaxConcurrent(dir, n); err != nil {
