@@ -64,7 +64,7 @@ func (p Places) separateCLs() (provider.CLStore, bool) {
 }
 
 // ConfirmedStore は起動時の置き場の確認 (formats.md §6) を ConfirmIssues・ConfirmCLs の順に通し、確認で読んだ open な一覧を
-// snapshot に使う置き場を返す (試運転。formats.md §5)。loop と単発起動の確認もこれを通し、置き場は捨てる。CL 置き場の補助の要求だけの失敗 (*target.NonFatal) は、一覧を読めて
+// snapshot に使う置き場を返す (試運転。formats.md §5)。CL 置き場の補助の要求だけの失敗 (*target.NonFatal) は、一覧を読めて
 // いるので確認を落とさず、置き場の一覧とともに返す。作業対象の読み直しは、どの部品も置き場から読む。返す置き場の Slow は
 // slow で、確認が読まなかった種類の一覧を読むときに知らせる。
 func (p Places) ConfirmedStore(slow loop.SlowNotice) (loop.Store, error) {
