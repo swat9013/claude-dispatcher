@@ -211,7 +211,8 @@ func TestClaimTransitions(t *testing.T) {
 }
 
 // 止めている claim が乗っ取られていれば、worker がどう終わっても終わりを確かめずに claim を解く (statechart の
-// worker終了・stall上限・上限時間 の [乗っ取られた] の遷移)。
+// worker終了・stall上限・上限時間 の [乗っ取られた] の遷移)。乗っ取られた着手宣言を消さないことは、調停 remote の fake の
+// Delete の呼び出しで TestATakenOverWorkerIsStoppedAndItsClaimIsNotDeleted が確かめる。
 func TestATakenOverWorkerIsReleasedHoweverItEnds(t *testing.T) {
 	ref := target.Ref{Kind: target.KindIssue, Number: 1}
 	env := claimEnv{now: time.Unix(0, 0), maxAttempts: 3, maxRetryBackoff: time.Minute, maxConcurrent: 1}
@@ -222,8 +223,8 @@ func TestATakenOverWorkerIsReleasedHoweverItEnds(t *testing.T) {
 
 			e := end.fire(c, ref, env)
 
-			if e.exit != release || e.readItem || e.removeWorkspace || c.claimSHA != "" {
-				t.Errorf("I/O = %+v・着手宣言 %q, want 確かめずに claim を解き、着手宣言を消さない", e, c.claimSHA)
+			if e.exit != release || e.readItem || e.removeWorkspace {
+				t.Errorf("I/O = %+v, want 確かめずに claim を解く", e)
 			}
 		})
 	}

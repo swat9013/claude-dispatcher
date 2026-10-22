@@ -180,6 +180,7 @@ func TestGitDisablesTheSSHPromptWhenTheUserLeavesSSHUnset(t *testing.T) {
 func TestGitKeepsTheUsersSSHCommand(t *testing.T) {
 	for name, set := range map[string]func(t *testing.T, r *Remote){
 		"GIT_SSH_COMMAND": func(t *testing.T, r *Remote) { r.Git.Env = append(r.Git.Env, "GIT_SSH_COMMAND=ssh -i key") },
+		"GIT_SSH":         func(t *testing.T, r *Remote) { r.Git.Env = append(r.Git.Env, "GIT_SSH=/bin/ssh-wrapper") },
 		"core.sshCommand": func(t *testing.T, r *Remote) {
 			if _, err := r.Git.Output("config", "core.sshCommand", "ssh -i key"); err != nil {
 				t.Fatal(err)
