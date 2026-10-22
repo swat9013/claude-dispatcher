@@ -67,7 +67,7 @@ workflow 定義に誤りがあれば、試運転・`loop` の起動・`doctor` �
 
 - loop を撃った端末には、`status` と同じ内容と直近のログを描き直し続ける。stdout が端末でなければ、ログの行と worker の活動を 1 行ずつ追記する
   - 直近のログは、tick・起動・終了・再起動・停止・error の行の直近 10 行。worker の最新の活動は `workers` の表の列で見る
-  - 置き場の一覧の読み出しが 15 秒を超えると、読み終わる前に `CL 置き場 acme/widgets の一覧の読み出しが 15 秒を超えた` のような行が出る。止まったのではなく、まだ読んでいる。試運転 (`loop --dry-run`) と `doctor` では同じ行が stderr に出る
+  - 置き場の一覧の読み出しが 15 秒を超えると、読み終わる前に `CL 置き場 acme/widgets の一覧の読み出しが 15 秒を超えた` のような行が出る。止まったのではなく、まだ読んでいる。試運転 (`loop --dry-run`)・`doctor`・単発起動 (`run`) では同じ行が stderr に出る
   - 色は stdout が端末のときだけ付く。環境変数 `NO_COLOR` を設定すれば付かない (`status` も同じ)
 - 別の端末からは `claude-dispatcher status` で見る。loop が書き出す状態 file を描くだけで、何も書かず、tracker の CLI も撃たない
   - 見出しの 1 行目は loop が生きているか (`loop 稼働中` / `loop 停止待ち` / `loop なし`)、2 行目は次の tick・今の並列上限・直近の tick の結果
