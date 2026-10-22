@@ -23,8 +23,10 @@ const (
 	claimSHA     = "c1a1c1a1c1a1c1a1c1a1c1a1c1a1c1a1c1a1c1a1"
 	heartbeatSHA = "beadbeadbeadbeadbeadbeadbeadbeadbeadbead"
 	otherSHA     = "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e"
-	otherLoop    = "other-host-1a2b3c4d"
-	originURL    = "git@github.com:acme/widgets.git"
+	// otherHeartbeatSHA は他の loop の生存報告の sha。自分の生存報告 (heartbeatSHA) と取り違えないよう別の値にする
+	otherHeartbeatSHA = "beadbeadbeadbeadbeadbeadbeadbeadbeadbea0"
+	otherLoop         = "other-host-1a2b3c4d"
+	originURL         = "git@github.com:acme/widgets.git"
 )
 
 // coordinated は coordination.remote: origin を書いた workflow 定義の extra (workerWorkflow の hooks の後に足す)。
@@ -123,8 +125,9 @@ func (s *sandbox) pushed(want ...string) bool {
 
 var loopNamePattern = regexp.MustCompile(`^[a-z0-9._-]+-[0-9a-f]{8}$`)
 
-func TestLoopWithACoordinationRemoteClaimsBeforeLaunchingAndDeletesItsRefs(t *testing.T) {
-	s := newSandbox(t)
+// runOneWorker は、issue 42 に worker を 1 回起動して終える loop を調停 remote を指して回し、止めた後の loop 名を返す。
+func (s *sandbox) runOneWorker() string {
+	s.t.Helper()
 	s.writeWorkflowWithCommands(s.workerWorkflow(coordinated))
 	s.setIssues(readyIssue(42))
 	done := readyIssue(42)
@@ -135,6 +138,20 @@ func TestLoopWithACoordinationRemoteClaimsBeforeLaunchingAndDeletesItsRefs(t *te
 	loop := s.startLoop()
 	s.waitEvents("end", 1)
 	loop.signal(syscall.SIGINT)
+	assertExit(s.t, loop.wait(), 0)
+
+	name, _ := s.events("loop_start")[0]["loop"].(string)
+	return name
+}
+
+func TestLoopNameIsTheSanitizedHostnameAndEightHex(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflowWithCommands(s.workerWorkflow(coordinated))
+	s.respondAll("git", s.gitRules(nil))
+
+	loop := s.startLoop()
+	s.waitEvents("loop_start", 1)
+	loop.signal(syscall.SIGINT)
 	assertExit(t, loop.wait(), 0)
 
 	name, _ := s.events("loop_start")[0]["loop"].(string)
@@ -142,6 +159,13 @@ func TestLoopWithACoordinationRemoteClaimsBeforeLaunchingAndDeletesItsRefs(t *te
 	if !loopNamePattern.MatchString(name) || !strings.HasPrefix(name, strings.ToLower(strings.Split(host, ".")[0])) {
 		t.Fatalf("loop 名 = %q, want <hostname を無害化したもの>-<乱数 8 hex>", name)
 	}
+}
+
+func TestLoopWithACoordinationRemoteClaimsBeforeLaunchingAndDeletesItsRefs(t *testing.T) {
+	s := newSandbox(t)
+
+	name := s.runOneWorker()
+
 	claim, heartbeat := s.claimRefOf(42), s.refPrefix()+"loops/"+name
 	for _, want := range [][]string{
 		{"origin", "+" + heartbeatSHA + ":" + heartbeat},
@@ -154,9 +178,39 @@ func TestLoopWithACoordinationRemoteClaimsBeforeLaunchingAndDeletesItsRefs(t *te
 		}
 	}
 	s.assertEveryPushSkipsHooks()
+}
+
+func TestLoopCallsGitFromTheCloneOfTheWorkflowDefinition(t *testing.T) {
+	s := newSandbox(t)
+
+	s.runOneWorker()
+
 	for _, c := range s.calls("git") {
 		if c.Cwd != s.clone {
 			t.Fatalf("git を %s で撃った, want workflow 定義のある clone %s", c.Cwd, s.clone)
+		}
+	}
+}
+
+func TestEveryGitCallToTheCoordinationRemoteDisablesTheTerminalPrompt(t *testing.T) {
+	s := newSandbox(t)
+
+	s.runOneWorker()
+
+	s.assertEveryGitCallDisablesTheTerminalPrompt()
+}
+
+// assertEveryGitCallDisablesTheTerminalPrompt は、git の stub が受けた呼び出しが 1 回以上あり、どれも
+// GIT_TERMINAL_PROMPT=0 を付けていることを確かめる。
+func (s *sandbox) assertEveryGitCallDisablesTheTerminalPrompt() {
+	s.t.Helper()
+	calls := s.calls("git")
+	if len(calls) == 0 {
+		s.t.Fatal("git を撃っていない")
+	}
+	for _, c := range calls {
+		if c.Env["GIT_TERMINAL_PROMPT"] != "0" {
+			s.t.Fatalf("GIT_TERMINAL_PROMPT=0 の無い git の呼び出し: %v (env %v)", c.Argv[1:], c.Env)
 		}
 	}
 }
@@ -193,7 +247,7 @@ func TestLoopDoesNotLaunchATargetClaimedByAnotherLiveLoop(t *testing.T) {
 	s.setIssues(readyIssue(42))
 	s.respondAll("git", s.gitRules([]remoteRef{
 		{s.claimRefOf(42), otherSHA, "claude-dispatcher claim\n\nformat: 1\nloop: " + otherLoop + "\ntarget: issue#42\n"},
-		{s.refPrefix() + "loops/" + otherLoop, heartbeatSHA[:39] + "0", "claude-dispatcher heartbeat\n\nformat: 1\nloop: " + otherLoop + "\ninterval: 1m0s\nseq: 1\n"},
+		{s.refPrefix() + "loops/" + otherLoop, otherHeartbeatSHA, "claude-dispatcher heartbeat\n\nformat: 1\nloop: " + otherLoop + "\ninterval: 1m0s\nseq: 1\n"},
 	}))
 
 	s.startLoop()
@@ -377,6 +431,7 @@ func TestRunWithACoordinationRemotePutsAndDeletesItsClaimAndHeartbeat(t *testing
 		t.Fatalf("生存報告の push = %d 回, want 置くのと消すので 2 回:\n%v", heartbeats, s.pushes())
 	}
 	s.assertEveryPushSkipsHooks()
+	s.assertEveryGitCallDisablesTheTerminalPrompt()
 }
 
 func TestRunDoesNotLaunchATargetClaimedByAnotherLoop(t *testing.T) {
@@ -398,25 +453,113 @@ func TestRunDoesNotLaunchATargetClaimedByAnotherLoop(t *testing.T) {
 	}
 }
 
-func TestDoctorChecksTheCoordinationRemoteWithoutPushing(t *testing.T) {
+func TestDoctorShowsAReadableCoordinationRemoteWithoutPushing(t *testing.T) {
 	s := newSandbox(t)
 	s.writeWorkflowWithCommands(s.workerWorkflow(coordinated))
 	s.respondAll("git", s.gitRules(nil))
 
-	ok := s.run("doctor")
-	s.respondAll("git", s.gitRules(nil, stubwire.Rule{ArgsPrefix: []string{"ls-remote"}, Exit: 128, Stderr: "fatal: unable to access\n"}))
-	ng := s.run("doctor")
+	r := s.run("doctor")
 
-	assertExit(t, ok, 0)
-	if !strings.Contains(ok.stdout, "ok   調停 remote origin ("+originURL+")\n") {
-		t.Fatalf("stdout = %q", ok.stdout)
-	}
-	assertExit(t, ng, 1)
-	if !strings.Contains(ng.stdout, "NG   調停 remote origin を読めない: ") {
-		t.Fatalf("stdout = %q", ng.stdout)
+	assertExit(t, r, 0)
+	if !strings.Contains(r.stdout, "ok   調停 remote origin ("+originURL+")\n") {
+		t.Fatalf("stdout = %q", r.stdout)
 	}
 	if pushes := s.pushes(); len(pushes) != 0 {
 		t.Fatalf("doctor が push を撃った: %v", pushes)
+	}
+	s.assertEveryGitCallDisablesTheTerminalPrompt()
+}
+
+func TestDoctorFailsOnAnUnreadableCoordinationRemoteWithoutPushing(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflowWithCommands(s.workerWorkflow(coordinated))
+	s.respondAll("git", s.gitRules(nil, stubwire.Rule{ArgsPrefix: []string{"ls-remote"}, Exit: 128, Stderr: "fatal: unable to access\n"}))
+
+	r := s.run("doctor")
+
+	assertExit(t, r, 1)
+	if !strings.Contains(r.stdout, "NG   調停 remote origin を読めない: ") {
+		t.Fatalf("stdout = %q", r.stdout)
+	}
+	if pushes := s.pushes(); len(pushes) != 0 {
+		t.Fatalf("doctor が push を撃った: %v", pushes)
+	}
+}
+
+func TestRunThatLosesTheClaimDoesNotLaunch(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflowWithCommands(s.workerWorkflow(coordinated))
+	s.setIssues(readyIssue(42))
+	claim := s.claimRefOf(42)
+	s.respondAll("git", s.gitRules(nil, stubwire.Rule{ArgsPrefix: []string{"push"}, ArgsContain: []string{claimSHA + ":" + claim}, Exit: 1,
+		Stdout: "To origin\n!\t" + claimSHA + ":" + claim + "\t[remote rejected] (cannot lock ref '" + claim + "': reference already exists)\nDone\n",
+		Stderr: "error: failed to push some refs to 'origin'\n"}))
+
+	r := s.run("run", "implement", "issue#42")
+
+	assertExit(t, r, 5)
+	if !strings.Contains(r.stderr, "issue#42 は他の loop が先に着手したので起動しない") {
+		t.Fatalf("stderr = %q", r.stderr)
+	}
+	if calls := s.calls("claude"); len(calls) != 0 {
+		t.Fatalf("worker を起動した: %v", calls)
+	}
+}
+
+func TestRunDoesNotLaunchWhileARefOfANewerFormatIsOnTheRemote(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflowWithCommands(s.workerWorkflow(coordinated))
+	s.setIssues(readyIssue(42))
+	s.respondAll("git", s.gitRules([]remoteRef{
+		{s.refPrefix() + "loops/" + otherLoop, otherSHA, "claude-dispatcher heartbeat\n\nformat: 2\nloop: " + otherLoop + "\ninterval: 1m0s\n"},
+	}))
+
+	r := s.run("run", "implement", "issue#42")
+
+	assertExit(t, r, 5)
+	if !strings.Contains(r.stderr, "調停 remote に新しい版の ref があるので起動しない (dispatcher を上げる)") {
+		t.Fatalf("stderr = %q", r.stderr)
+	}
+	if calls := s.calls("claude"); len(calls) != 0 {
+		t.Fatalf("worker を起動した: %v", calls)
+	}
+}
+
+func TestLoopThatFailsToTakeTheLockPutsNoHeartbeat(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflowWithCommands(s.workerWorkflow(coordinated))
+	s.respondAll("git", s.gitRules(nil))
+	first := s.startLoop()
+	s.waitEvents("loop_start", 1)
+	before := len(s.pushes())
+
+	second := s.run("loop")
+
+	assertExit(t, second, 3)
+	if after := len(s.pushes()); after != before {
+		t.Fatalf("lock を取れずに失敗する起動が push した: %v", s.pushes()[before:])
+	}
+	first.signal(syscall.SIGINT)
+	assertExit(t, first.wait(), 0)
+}
+
+func TestLoopThatCannotOpenItsLogPutsNoHeartbeat(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflowWithCommands(s.workerWorkflow(coordinated))
+	s.respondAll("git", s.gitRules(nil))
+	// log.jsonl の置き場を dir で塞ぐ
+	if err := os.MkdirAll(filepath.Join(s.defaultStateDir(), "log.jsonl"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	r := s.run("loop")
+
+	assertExit(t, r, 1)
+	if !strings.Contains(r.stderr, "log.jsonl を開けない") {
+		t.Fatalf("stderr = %q", r.stderr)
+	}
+	if pushes := s.pushes(); len(pushes) != 0 {
+		t.Fatalf("log.jsonl を開けずに失敗する起動が push した: %v", pushes)
 	}
 }
 
