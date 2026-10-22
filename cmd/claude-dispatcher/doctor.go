@@ -39,7 +39,10 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	e := definitionEnvironment(def)
 	fmt.Fprintf(stdout, "ok   workflow 定義 %s\n", abs)
 	failed := !checkStore(e, def, stdout, stderr)
-	for _, check := range []func(environment, workflow.Definition, io.Writer) bool{checkCLPlace, checkCommands, checkPrecheck, checkCoordination} {
+	if !checkCLPlace(e, def, stdout, stderr) {
+		failed = true
+	}
+	for _, check := range []func(environment, workflow.Definition, io.Writer) bool{checkCommands, checkPrecheck, checkCoordination} {
 		if !check(e, def, stdout) {
 			failed = true
 		}
@@ -61,9 +64,12 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 
 // checkStore は issue 置き場を読めるかを確かめる。確認の手順を持つ種類は loop の起動時と同じ確認 (formats.md §6) を通し、
 // workflow 定義が書いた名前のうち実在しないものを 1 つ 1 行で名指しする。cl: の CL 置き場は checkCLPlace が確かめる。
-// 一覧の読み出しが遅ければ、読み終わる前に stderr に 1 行出す (formats.md §7.4)。
+// 確認で読んだ open な一覧を使い回し、置き場ごとに 1 回だけ読む。一覧の読み出しが遅ければ、読み終わる前に stderr に 1 行
+// 出す (formats.md §7.4)。
 func checkStore(e environment, def workflow.Definition, stdout, stderr io.Writer) bool {
-	if err := e.places(def).ConfirmIssues(); err != nil {
+	slow := slowToStderr(def, stderr)
+	issues, err := e.places(def).ConfirmIssues(slow)
+	if err != nil {
 		var unknown *target.UnknownNames
 		if errors.As(err, &unknown) {
 			for _, p := range unknown.Problems {
@@ -75,8 +81,7 @@ func checkStore(e environment, def workflow.Definition, stdout, stderr io.Writer
 		return false
 	}
 	store := e.places(def).Store()
-	store.Slow = slowToStderr(def, stderr)
-	var err error
+	store.Issues, store.Slow = issues, slow
 	if _, _, separate := def.SeparateCLHost(); separate {
 		// CL は別の置き場にあり、checkCLPlace の行で確かめる
 		_, err = store.Open(target.KindIssue)
@@ -87,11 +92,13 @@ func checkStore(e environment, def workflow.Definition, stdout, stderr io.Writer
 }
 
 // checkCLPlace は cl: の CL 置き場を、loop の起動時と同じ確認 (formats.md §6) で読めるかを確かめる。cl: が無ければ何も出さない。
-func checkCLPlace(e environment, def workflow.Definition, stdout io.Writer) bool {
+// 一覧の読み出しが遅ければ、読み終わる前に stderr に 1 行出す (formats.md §7.4)。
+func checkCLPlace(e environment, def workflow.Definition, stdout, stderr io.Writer) bool {
 	if _, _, ok := def.SeparateCLHost(); !ok {
 		return true
 	}
-	return placeLine(stdout, loop.PlaceLabel(def, target.KindCL), e.places(def).ConfirmCLs())
+	_, err := e.places(def).ConfirmCLs(slowToStderr(def, stderr))
+	return placeLine(stdout, loop.PlaceLabel(def, target.KindCL), err)
 }
 
 // placeLine は置き場を読んだ結果 err を、label (loop.PlaceLabel) の置き場の 1 行に出す。処理を続けられる失敗

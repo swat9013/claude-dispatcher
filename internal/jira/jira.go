@@ -414,8 +414,8 @@ func appendNames(names []Name, triggerName string, lists ...[]string) []Name {
 
 // Confirm は起動時の issue 置き場の確認 (formats.md §6): acli の認証の site・open な一覧・status 名・issue type 名の順に
 // 確かめ、最初に落ちたもので返す。通れば、確かめるときに読んだ open な一覧を持つ issue 置き場を返す。失敗は
-// *target.Failure (認証・見えない・その他) か *target.UnknownNames。
-func (s Store) Confirm(names Names) (Confirmed, error) {
+// *target.Failure (認証・見えない・その他) か *target.UnknownNames。open な一覧の読み出しは watch で包んで呼ぶ。
+func (s Store) Confirm(names Names, watch func(read func())) (Confirmed, error) {
 	out, err := s.authStatus()
 	if err != nil {
 		var failed *proc.Error
@@ -431,7 +431,8 @@ func (s Store) Confirm(names Names) (Confirmed, error) {
 	if site := string(m[1]); !strings.EqualFold(site, s.project.Site) {
 		return Confirmed{}, s.fail(target.NotVisible, fmt.Errorf("acli の認証の site %s が tracker.host %s と違う (acli jira auth switch --site %s で切り替える)", site, s.project.Site, s.project.Site))
 	}
-	open, err := s.search(s.openJQL())
+	var open []issueJSON
+	watch(func() { open, err = s.search(s.openJQL()) })
 	if err != nil {
 		return Confirmed{}, s.fail(s.classify(err, target.NotVisible), err)
 	}

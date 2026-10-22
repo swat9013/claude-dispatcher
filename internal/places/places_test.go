@@ -7,8 +7,11 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/swat9013/claude-dispatcher/internal/loop"
 	"github.com/swat9013/claude-dispatcher/internal/provider"
+	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/workflow"
 )
 
@@ -135,7 +138,7 @@ func TestConfirmOfJiraWithCLConfirmsBothTheIssuePlaceAndTheCLPlace(t *testing.T)
 		return nil, errors.New("gh を撃った")
 	}}
 
-	err := New(def, s.runtime(nil)).Confirm()
+	err := New(def, s.runtime(nil)).Confirm(loop.SlowNotice{})
 
 	if err == nil || !strings.Contains(err.Error(), "gh を撃った") {
 		t.Fatalf("確認 = %v, want CL 置き場の失敗", err)
@@ -143,6 +146,38 @@ func TestConfirmOfJiraWithCLConfirmsBothTheIssuePlaceAndTheCLPlace(t *testing.T)
 	if !slices.ContainsFunc(s.calls, func(c string) bool { return strings.HasPrefix(c, "acli jira workitem search") }) ||
 		!slices.ContainsFunc(s.calls, func(c string) bool { return strings.HasPrefix(c, "gh ") }) {
 		t.Fatalf("撃った CLI = %v, want acli の検索と gh の両方", s.calls)
+	}
+}
+
+func TestConfirmOfJiraWithCLNotifiesSlowListingsBeforeTheyFinish(t *testing.T) {
+	def := load(t, jiraWithCL)
+	notified := map[target.Kind]chan struct{}{target.KindIssue: make(chan struct{}), target.KindCL: make(chan struct{})}
+	// 一覧の読み出しは、その置き場の遅い一覧の知らせが出るまで返らない (知らせが読み終わる前に出ることを確かめる)
+	s := &stub{reply: func(command string, args []string) ([]byte, error) {
+		switch {
+		case command == "acli" && slices.Contains(args, "auth"):
+			return []byte("Site: acme.atlassian.net\n"), nil
+		case command == "acli":
+			<-notified[target.KindIssue]
+			return []byte("[]"), nil
+		}
+		<-notified[target.KindCL]
+		return []byte("[]"), nil
+	}}
+	fired := make(chan time.Time)
+	close(fired)
+	var kinds []target.Kind
+	slow := loop.SlowNotice{After: func(time.Duration) <-chan time.Time { return fired }, Notify: func(kind target.Kind) {
+		kinds = append(kinds, kind)
+		close(notified[kind])
+	}}
+
+	if err := New(def, s.runtime(nil)).Confirm(slow); err != nil {
+		t.Fatal(err)
+	}
+
+	if !slices.Equal(kinds, []target.Kind{target.KindIssue, target.KindCL}) {
+		t.Fatalf("知らせた置き場 = %v, want issue 置き場と CL 置き場を 1 回ずつ", kinds)
 	}
 }
 

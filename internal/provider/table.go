@@ -142,8 +142,8 @@ var providers = []Provider{
 		},
 		Build: func(rt Runtime, s Setting) Parts {
 			store := jira.NewStore(rt.runner(acliCommand, jira.Exec{Env: rt.Env, Timeout: rt.Timeout}), s.Place.value.(jira.Project), trigger.NeedsBlocked(s.Triggers))
-			confirm := func() (IssueStore, error) {
-				confirmed, err := store.Confirm(jira.NamesOf(s.Triggers))
+			confirm := func(watch func(read func())) (IssueStore, error) {
+				confirmed, err := store.Confirm(jira.NamesOf(s.Triggers), watch)
 				if err != nil {
 					return nil, err
 				}

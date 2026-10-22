@@ -37,7 +37,7 @@ type Store struct {
 const SlowListing = 15 * time.Second
 
 // SlowNotice は、一覧の読み出しが SlowListing を超えたことを、読み終わる前に 1 回だけ知らせる口。After か Notify が nil
-// なら知らせない。Notify は見張りの goroutine で呼び、Open は Notify が終わるまで返らない。
+// なら知らせない。Notify は見張りの goroutine で呼び、Watch (Open も Watch を通る) は Notify が終わるまで返らない。
 type SlowNotice struct {
 	// After は d 後に届く channel を返す (time.After。テストは差し替える)
 	After  func(d time.Duration) <-chan time.Time
@@ -52,6 +52,13 @@ func PlaceLabel(def workflow.Definition, kind target.Kind) string {
 		return "CL 置き場 " + place.String()
 	}
 	return "issue 置き場 " + def.Tracker.Place.String()
+}
+
+// SlowToOutput は、遅い一覧の行を人が読む行 out に出す口 (formats.md §6 の「遅い一覧」)。
+func SlowToOutput(def workflow.Definition, out Output, after func(time.Duration) <-chan time.Time, now func() time.Time) SlowNotice {
+	return SlowNotice{After: after, Notify: func(kind target.Kind) {
+		out.Show(Line{At: now(), Kind: LineNote, Label: SlowListingLine(def, kind)})
+	}}
 }
 
 // SlowListingLine は、kind の置き場の一覧の読み出しが SlowListing を超えたときに出す 1 行。
@@ -71,17 +78,27 @@ func (s Store) Open(kind target.Kind) ([]target.Item, error) {
 	default:
 		return nil, fmt.Errorf("未知の作業対象の種類 %q", kind)
 	}
-	if s.Slow.After == nil || s.Slow.Notify == nil {
-		return read()
+	var items []target.Item
+	var err error
+	s.Slow.Watch(kind, func() { items, err = read() })
+	return items, err
+}
+
+// Watch は read を呼び、read が SlowListing を超えたら、終わる前に kind の置き場の知らせを 1 回出す。After か Notify が nil
+// なら read を呼ぶだけ。知らせても read は止めない。
+func (n SlowNotice) Watch(kind target.Kind, read func()) {
+	if n.After == nil || n.Notify == nil {
+		read()
+		return
 	}
 	// 読み出しは呼んだ goroutine のまま撃ち (panic も呼んだ側で起きる)、見張りだけを別の goroutine に置く。見張りが
-	// 終わるまで返らないので、知らせの行は Open の後に呼んだ側が出す行と並ばない
+	// 終わるまで返らないので、知らせの行は Watch の後に呼んだ側が出す行と並ばない
 	finished, watching := make(chan struct{}), make(chan struct{})
 	go func() {
 		defer close(watching)
 		select {
-		case <-s.Slow.After(SlowListing):
-			s.Slow.Notify(kind)
+		case <-n.After(SlowListing):
+			n.Notify(kind)
 		case <-finished:
 		}
 	}()
@@ -89,7 +106,7 @@ func (s Store) Open(kind target.Kind) ([]target.Item, error) {
 		close(finished)
 		<-watching
 	}()
-	return read()
+	read()
 }
 
 // Read は作業対象 1 件を、その種類の置き場の部品で読み直す。終端になっているか消えていれば Terminal。
@@ -437,7 +454,7 @@ func (l *loop) tick() {
 		}
 	}
 	store := l.o.Store(def)
-	store.Slow = SlowNotice{After: l.o.SlowAfter, Notify: func(kind target.Kind) { l.rec.human(LineNote, SlowListingLine(def, kind), "") }}
+	store.Slow = SlowToOutput(def, l.rec.output, l.o.SlowAfter, l.rec.now)
 	open, err := OpenItems(store, def)
 	var nonFatal *target.NonFatal
 	switch {
