@@ -44,24 +44,46 @@ func placeOf(kind provider.Kind, host, repo string) provider.Place {
 // neverFiringTimer は明けない channel を返す After。
 func neverFiringTimer(time.Duration) <-chan time.Time { return make(chan time.Time) }
 
-func TestAListingThatTakesOverFifteenSecondsIsAnnouncedOnceBeforeItEndsAndKeepsItsResult(t *testing.T) {
+// slowCLs は、一覧が 15 秒を超える CL 置き場。一覧は知らせが届くまで返らないので、知らせは読み終わる前に届いている。
+// 知らせた種類を announced に、測った時間を waited に残す。
+func slowCLs(announced *[]target.Kind, waited *[]time.Duration) loop.Store {
 	release := make(chan struct{})
-	var waited []time.Duration
-	var announced []target.Kind
-	store := loop.Store{Issues: issuesOnly{}, CLs: heldCLs{release: release}, Slow: loop.SlowNotice{
-		After: firedTimer(&waited),
-		// 一覧はこの知らせが閉じるまで返らないので、知らせは読み終わる前に届いている
-		Notify: func(kind target.Kind) { announced = append(announced, kind); close(release) },
+	return loop.Store{Issues: issuesOnly{}, CLs: heldCLs{release: release}, Slow: loop.SlowNotice{
+		After:  firedTimer(waited),
+		Notify: func(kind target.Kind) { *announced = append(*announced, kind); close(release) },
 	}}
+}
+
+func TestAListingThatTakesOverFifteenSecondsIsAnnouncedOnceBeforeItEnds(t *testing.T) {
+	var announced []target.Kind
+	store := slowCLs(&announced, new([]time.Duration))
+
+	_, _ = store.Open(target.KindCL)
+
+	if !slices.Equal(announced, []target.Kind{target.KindCL}) {
+		t.Fatalf("知らせ = %v, want CL の 1 回", announced)
+	}
+}
+
+func TestTheThresholdOfASlowListingIsFifteenSeconds(t *testing.T) {
+	var waited []time.Duration
+	store := slowCLs(new([]target.Kind), &waited)
+
+	_, _ = store.Open(target.KindCL)
+
+	if !slices.Equal(waited, []time.Duration{15 * time.Second}) {
+		t.Fatalf("測った時間 = %v, want 15 秒", waited)
+	}
+}
+
+func TestAnAnnouncedListingKeepsItsItemsAndItsFailure(t *testing.T) {
+	store := slowCLs(new([]target.Kind), new([]time.Duration))
 
 	open, err := store.Open(target.KindCL)
 
 	var nonFatal *target.NonFatal
-	if !slices.Equal(announced, []target.Kind{target.KindCL}) || !slices.Equal(waited, []time.Duration{15 * time.Second}) {
-		t.Errorf("知らせ = %v, 測った時間 = %v, want CL の 1 回と 15 秒", announced, waited)
-	}
 	if len(open) != 1 || !errors.As(err, &nonFatal) {
-		t.Errorf("Open = %v, %v, want 知らせの無いときと同じ CL 1 件と処理を続けられる失敗", open, err)
+		t.Fatalf("Open = %v, %v, want 知らせの無いときと同じ CL 1 件と処理を続けられる失敗", open, err)
 	}
 }
 
@@ -118,34 +140,46 @@ func (a announcingOutput) Show(l loop.Line) {
 	}
 }
 
-func TestATickWhoseListingTakesOverFifteenSecondsShowsALineBeforeTheTickLine(t *testing.T) {
+// slowTick は、issue の一覧が遅い一覧の行が出るまで返らない tick を 1 回回した rig。
+func slowTick(t *testing.T) *rig {
+	t.Helper()
 	r := newRig()
 	r.timer = periodsThenStop(0)
 	seen := make(chan struct{})
-	var waited []time.Duration
 	held := memoryStore{
-		// 一覧は遅い一覧の行が出るまで返らない
 		observe: func() ([]target.Item, error) { <-seen; return []target.Item{readyIssue(1)}, nil },
 		reread:  func(target.Ref) (target.Item, error) { return readyIssue(1), nil },
 	}
 	def := workflow.Definition{Tracker: workflow.Tracker{Kind: provider.GitHub, Place: placeOf(provider.GitHub, "", "acme/widgets")}, Interval: time.Minute, MaxConcurrent: 1, MaxAttempts: 1, Triggers: []trigger.Trigger{readyTrigger}}
-
 	r.run(t, loop.Options{
 		Definition: def,
 		Store:      func(workflow.Definition) loop.Store { return held.store() },
 		Output:     announcingOutput{next: loop.Appender{W: &r.stdout}, seen: seen},
-		SlowAfter:  firedTimer(&waited),
+		SlowAfter:  firedTimer(new([]time.Duration)),
 	})
+	return r
+}
+
+func TestATickWhoseListingTakesOverFifteenSecondsShowsALineBeforeTheTickLine(t *testing.T) {
+	r := slowTick(t)
 
 	lines := strings.Split(strings.TrimSpace(r.stdout.String()), "\n")
 	slow := slices.IndexFunc(lines, func(l string) bool {
 		return strings.HasSuffix(l, " issue 置き場 acme/widgets の一覧の読み出しが 15 秒を超えた")
 	})
 	tick := slices.IndexFunc(lines, func(l string) bool { return strings.Contains(l, "tick ok") })
-	if slow < 0 || tick < slow || !slices.Equal(waited, []time.Duration{15 * time.Second}) {
-		t.Errorf("測った時間 %v, 出力:\n%s", waited, r.stdout.String())
+	if slow < 0 || tick < slow {
+		t.Fatalf("出力:\n%s", r.stdout.String())
 	}
-	if ticks := r.logEvents(t, "tick"); len(ticks) != 1 || ticks[0]["result"] != "ok" || strings.Contains(r.log.String(), "15 秒") {
-		t.Errorf("log.jsonl:\n%s\nwant 遅い一覧を書かず、tick は ok", r.log.String())
+}
+
+func TestTheSlowListingLineOfATickIsNotWrittenToTheLog(t *testing.T) {
+	r := slowTick(t)
+
+	if ticks := r.logEvents(t, "tick"); len(ticks) != 1 || ticks[0]["result"] != "ok" {
+		t.Fatalf("log.jsonl:\n%s\nwant tick ok の行 1 本 (log に書いた tick で確かめる)", r.log.String())
+	}
+	if strings.Contains(r.log.String(), "15 秒") {
+		t.Fatalf("log.jsonl:\n%s", r.log.String())
 	}
 }

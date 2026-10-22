@@ -36,7 +36,7 @@ type Store struct {
 const SlowListing = 15 * time.Second
 
 // SlowNotice は、一覧の読み出しが SlowListing を超えたことを、読み終わる前に 1 回だけ知らせる口。After か Notify が nil
-// なら知らせない。Notify は Open を呼んだ goroutine で呼ぶ。
+// なら知らせない。Notify は見張りの goroutine で呼び、Open は Notify が終わるまで返らない。
 type SlowNotice struct {
 	// After は d 後に届く channel を返す (time.After。テストは差し替える)
 	After  func(d time.Duration) <-chan time.Time
@@ -73,24 +73,22 @@ func (s Store) Open(kind target.Kind) ([]target.Item, error) {
 	if s.Slow.After == nil || s.Slow.Notify == nil {
 		return read()
 	}
-	type listing struct {
-		items []target.Item
-		err   error
-	}
-	done := make(chan listing, 1)
+	// 読み出しは呼んだ goroutine のまま撃ち (panic も呼んだ側で起きる)、見張りだけを別の goroutine に置く。見張りが
+	// 終わるまで返らないので、知らせの行は Open の後に呼んだ側が出す行と並ばない
+	finished, watching := make(chan struct{}), make(chan struct{})
 	go func() {
-		items, err := read()
-		done <- listing{items, err}
+		defer close(watching)
+		select {
+		case <-s.Slow.After(SlowListing):
+			s.Slow.Notify(kind)
+		case <-finished:
+		}
 	}()
-	select {
-	case l := <-done:
-		return l.items, l.err
-	case <-s.Slow.After(SlowListing):
-	}
-	// 知らせは呼んだ goroutine で出す (loop の画面の描き直しと並ばない)
-	s.Slow.Notify(kind)
-	l := <-done
-	return l.items, l.err
+	defer func() {
+		close(finished)
+		<-watching
+	}()
+	return read()
 }
 
 // Read は作業対象 1 件を、その種類の置き場の部品で読み直す。終端になっているか消えていれば Terminal。
