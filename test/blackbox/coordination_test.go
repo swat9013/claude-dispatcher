@@ -148,9 +148,15 @@ func (s *sandbox) runOneWorker() string {
 
 func TestLoopNameIsTheSanitizedHostnameAndEightHex(t *testing.T) {
 	s := newSandbox(t)
+	s.writeWorkflowWithCommands(s.workerWorkflow(coordinated))
+	s.respondAll("git", s.gitRules(nil))
 
-	name := s.runOneWorker()
+	loop := s.startLoop()
+	s.waitEvents("loop_start", 1)
+	loop.signal(syscall.SIGINT)
+	assertExit(t, loop.wait(), 0)
 
+	name, _ := s.events("loop_start")[0]["loop"].(string)
 	host, _ := os.Hostname()
 	if !loopNamePattern.MatchString(name) || !strings.HasPrefix(name, strings.ToLower(strings.Split(host, ".")[0])) {
 		t.Fatalf("loop 名 = %q, want <hostname を無害化したもの>-<乱数 8 hex>", name)
@@ -193,17 +199,24 @@ func TestEveryGitCallToTheCoordinationRemoteDisablesTheTerminalPrompt(t *testing
 
 	s.runOneWorker()
 
+	s.assertEveryGitCallDisablesTheTerminalPrompt()
+}
+
+// assertEveryGitCallDisablesTheTerminalPrompt は、git の stub が受けた呼び出しが 1 回以上あり、どれも
+// GIT_TERMINAL_PROMPT=0 と BatchMode の ssh を付けていることを確かめる。
+func (s *sandbox) assertEveryGitCallDisablesTheTerminalPrompt() {
+	s.t.Helper()
 	calls := s.calls("git")
 	if len(calls) == 0 {
-		t.Fatal("git を撃っていない")
+		s.t.Fatal("git を撃っていない")
 	}
 	for _, c := range calls {
 		if c.Env["GIT_TERMINAL_PROMPT"] != "0" {
-			t.Fatalf("GIT_TERMINAL_PROMPT=0 の無い git の呼び出し: %v (env %v)", c.Argv[1:], c.Env)
+			s.t.Fatalf("GIT_TERMINAL_PROMPT=0 の無い git の呼び出し: %v (env %v)", c.Argv[1:], c.Env)
 		}
 		// 利用者が ssh の撃ち方を決めていない sandbox では、ssh の prompt も止める。その判定に撃つ config は ssh を撃たない
 		if c.Argv[1] != "config" && c.Env["GIT_SSH_COMMAND"] != "ssh -o BatchMode=yes" {
-			t.Fatalf("BatchMode の ssh の無い git の呼び出し: %v (env %v)", c.Argv[1:], c.Env)
+			s.t.Fatalf("BatchMode の ssh の無い git の呼び出し: %v (env %v)", c.Argv[1:], c.Env)
 		}
 	}
 }
@@ -424,6 +437,7 @@ func TestRunWithACoordinationRemotePutsAndDeletesItsClaimAndHeartbeat(t *testing
 		t.Fatalf("生存報告の push = %d 回, want 置くのと消すので 2 回:\n%v", heartbeats, s.pushes())
 	}
 	s.assertEveryPushSkipsHooks()
+	s.assertEveryGitCallDisablesTheTerminalPrompt()
 }
 
 func TestRunDoesNotLaunchATargetClaimedByAnotherLoop(t *testing.T) {
@@ -459,6 +473,7 @@ func TestDoctorShowsAReadableCoordinationRemoteWithoutPushing(t *testing.T) {
 	if pushes := s.pushes(); len(pushes) != 0 {
 		t.Fatalf("doctor が push を撃った: %v", pushes)
 	}
+	s.assertEveryGitCallDisablesTheTerminalPrompt()
 }
 
 func TestDoctorFailsOnAnUnreadableCoordinationRemoteWithoutPushing(t *testing.T) {
@@ -532,6 +547,26 @@ func TestLoopThatFailsToTakeTheLockPutsNoHeartbeat(t *testing.T) {
 	}
 	first.signal(syscall.SIGINT)
 	assertExit(t, first.wait(), 0)
+}
+
+func TestLoopThatCannotOpenItsLogPutsNoHeartbeat(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflowWithCommands(s.workerWorkflow(coordinated))
+	s.respondAll("git", s.gitRules(nil))
+	// log.jsonl の置き場を dir で塞ぐ
+	if err := os.MkdirAll(filepath.Join(s.defaultStateDir(), "log.jsonl"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	r := s.run("loop")
+
+	assertExit(t, r, 1)
+	if !strings.Contains(r.stderr, "log.jsonl を開けない") {
+		t.Fatalf("stderr = %q", r.stderr)
+	}
+	if pushes := s.pushes(); len(pushes) != 0 {
+		t.Fatalf("log.jsonl を開けずに失敗する起動が push した: %v", pushes)
+	}
 }
 
 // statusJSON は状態 file の中身 (空白を詰めた JSON)。無ければ ""。
