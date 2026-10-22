@@ -20,6 +20,8 @@ issue を起票するとき・triage や深掘りで分けるかを問われた�
 - 同じ関数か、[`docs/design/`](../design/README.md) の正本の同じ箇所を直す条件同士は、同じ issue に残す。分けると、同じ箇所の書き換えが PR の間で conflict する
 - 他の条件を示す手段 (例: 振る舞いを示す test の仕組み) にすぎない条件は、示す先の条件と同じ issue に残す。手段だけを先に着地させても、示す対象が無く単独では価値が出ない
 - 直す code と正本の箇所が他の条件と重ならず、単独で着地して価値が出る条件だけを、別の issue に出す
+- 人の資格情報で実機の外部 store (tracker・CL host) の振る舞いを確かめる条件は、上の 3 項より優先して別の issue に出す。worker は人の資格情報を持たないので、同じ issue に置くと worker がその issue を完了できない。label は `docs/agents/triage-labels.md` の表で `ready-for-human` の役を持つ label にする (実装中に worker が分けるときは、「follow-up issue の起票」の label・発端の行・重複の探し方に従い、`## 範囲` には変更する file が無いと書く)。確認の issue の本文には、確かめる前提を置いた ADR を挙げる
+- 確認の issue を実装の issue の blocker (native issue dependencies。使えなければ `Blocked by:` の行) に挙げるのは、実装が外部 store の種類で分岐し、確認の結果で分岐先が決まるときだけにする。それ以外は、確かめていない store が残っていても実装を先に進め、前提が崩れたら、確認の issue に挙げた ADR を見直す issue を起票する
 
 ## Pull requests as a triage surface
 
