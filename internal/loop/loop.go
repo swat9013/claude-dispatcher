@@ -71,17 +71,27 @@ func (s Store) Open(kind target.Kind) ([]target.Item, error) {
 	default:
 		return nil, fmt.Errorf("未知の作業対象の種類 %q", kind)
 	}
-	if s.Slow.After == nil || s.Slow.Notify == nil {
-		return read()
+	var items []target.Item
+	var err error
+	s.Slow.Watch(kind, func() { items, err = read() })
+	return items, err
+}
+
+// Watch は read を呼び、read が SlowListing を超えたら、終わる前に kind の置き場の知らせを 1 回出す。After か Notify が nil
+// なら read を呼ぶだけ。知らせても read は止めない。
+func (n SlowNotice) Watch(kind target.Kind, read func()) {
+	if n.After == nil || n.Notify == nil {
+		read()
+		return
 	}
 	// 読み出しは呼んだ goroutine のまま撃ち (panic も呼んだ側で起きる)、見張りだけを別の goroutine に置く。見張りが
-	// 終わるまで返らないので、知らせの行は Open の後に呼んだ側が出す行と並ばない
+	// 終わるまで返らないので、知らせの行は Watch の後に呼んだ側が出す行と並ばない
 	finished, watching := make(chan struct{}), make(chan struct{})
 	go func() {
 		defer close(watching)
 		select {
-		case <-s.Slow.After(SlowListing):
-			s.Slow.Notify(kind)
+		case <-n.After(SlowListing):
+			n.Notify(kind)
 		case <-finished:
 		}
 	}()
@@ -89,7 +99,7 @@ func (s Store) Open(kind target.Kind) ([]target.Item, error) {
 		close(finished)
 		<-watching
 	}()
-	return read()
+	read()
 }
 
 // Read は作業対象 1 件を、その種類の置き場の部品で読み直す。終端になっているか消えていれば Terminal。

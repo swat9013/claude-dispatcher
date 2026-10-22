@@ -342,8 +342,8 @@ type Parts struct {
 	CLs CLStore
 	// Confirm は起動時の issue 置き場の確認 (formats.md §6)。確認の手順を持たない種類は nil。通れば、確かめるときに読んだ
 	// open な一覧を OpenIssues で返す issue 置き場を返す (試運転が snapshot に使う。formats.md §5)。失敗は *target.Failure
-	// か *target.UnknownNames
-	Confirm func() (IssueStore, error)
+	// か *target.UnknownNames。watch は open な一覧の読み出し read を包んで呼ぶ (遅い一覧の知らせ。formats.md §6)
+	Confirm func(watch func(read func())) (IssueStore, error)
 }
 
 // Setup は setup が雛形を書くための宣言。宣言は表 (providers) だけが書き、外からは method で読む。

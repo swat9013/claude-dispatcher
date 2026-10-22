@@ -53,6 +53,26 @@ func TestJiraDryRunReadsEachOpenListOnlyOnceForTheConfirmationAndTheSnapshot(t *
 	}
 }
 
+func TestJiraDoctorReadsEachOpenListOnlyOnceForTheConfirmationAndTheCheck(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflowWithCommands(jiraFixCI)
+	s.setJiraPlaces(readyJiraIssue(42))
+	s.setStore(nil, []cl{failingCL(7)})
+
+	r := s.run("doctor")
+
+	assertExit(t, r, 0)
+	if !strings.Contains(r.stdout, "ok   issue 置き場 ") || !strings.Contains(r.stdout, "ok   CL 置き場 acme/widgets\n") {
+		t.Fatalf("stdout:\n%s", r.stdout)
+	}
+	if n := s.countCalls("acli", func(arg string) bool { return arg == jiraOpenJQL }); n != 1 {
+		t.Fatalf("issue 置き場の open な一覧を %d 回読んだ (1 回のはず)", n)
+	}
+	if n := s.countCalls("gh", func(arg string) bool { return strings.Contains(arg, clListQuery) }); n != 1 {
+		t.Fatalf("CL 置き場の open な一覧を %d 回読んだ (1 回のはず)", n)
+	}
+}
+
 func TestJiraDryRunReadsTheGitLabCLHostListOnlyOnceEvenWhenTheRecheckRequestFails(t *testing.T) {
 	s := newSandbox(t)
 	unchecked := readyMR(1)
