@@ -188,11 +188,12 @@ func NeedsReviewUnresolved(triggers []Trigger) func(target.CL) bool {
 }
 
 // needsHeavy は、重い項目を条件に書いた trigger のどれかで、その項目以外の条件をすべて満たす作業対象かの判定を返す
-// (system.md §7 の手順 3)。without は trigger の述語からその項目を外したものと、trigger がその項目を条件に書いたかを返す。
-func needsHeavy[I any, P interface{ Matches(I) bool }](triggers []Trigger, without func(Trigger) (P, bool)) func(I) bool {
+// (system.md §7 の手順 3)。withoutHeavy は、trigger の述語からその項目を外したもの (others) と、trigger がその項目を
+// 条件に書いたか (writes) を返す。writes が false の trigger は判定に数えない。
+func needsHeavy[I any, P interface{ Matches(I) bool }](triggers []Trigger, withoutHeavy func(Trigger) (others P, writes bool)) func(I) bool {
 	var others []P
 	for _, t := range triggers {
-		if p, writes := without(t); writes {
+		if p, writes := withoutHeavy(t); writes {
 			others = append(others, p)
 		}
 	}

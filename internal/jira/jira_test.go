@@ -8,8 +8,8 @@ import (
 	"github.com/swat9013/claude-dispatcher/internal/target"
 )
 
-// noIssue は、どの issue も open な一覧で依存先を読み足さない判定
-func noIssue(target.Issue) bool { return false }
+// neverReadsBlockers は、どの issue の依存先も読み足さない判定
+func neverReadsBlockers(target.Issue) bool { return false }
 
 // fakeAcli は撃たれた argv を残し、auth status にだけ site を返して他は空の一覧で応える。
 type fakeAcli struct {
@@ -29,7 +29,7 @@ func (f *fakeAcli) Run(args ...string) ([]byte, error) {
 
 func TestStatusNameAndProjectKeyAreQuotedAsJQLStrings(t *testing.T) {
 	acli := &fakeAcli{}
-	store := jira.NewStore(acli, jira.Project{Site: "acme.atlassian.net", Key: "SET"}, noIssue)
+	store := jira.NewStore(acli, jira.Project{Site: "acme.atlassian.net", Key: "SET"}, neverReadsBlockers)
 
 	err := store.Confirm(jira.Names{Statuses: []jira.Name{{Trigger: "t", Value: `Say "hi" \ bye`}}})
 
