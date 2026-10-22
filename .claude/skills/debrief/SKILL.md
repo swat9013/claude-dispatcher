@@ -92,7 +92,7 @@ jq -r 'select(.event=="recheck_skip" or .event=="tick") | [.ts, .event, (.target
 
 `recheck_skip` は tick ごとに書かれる。同じ組の件数が多く、最初と最後の `ts` の間が周期の何倍にも及べば、その見送りが続いている。続く原因の推定は確度「解釈」とする。`terminal`・`left_trigger` が続けば open な一覧の検索が古い結果を返し続けている、`undecided` が続けば CL の conflict の計算が終わらない、`earlier_trigger` が続けば先の trigger でも起動されていない (その作業対象の claim・打ち切り・`blocked` を見る) 候補になる。
 
-`running`・`waiting_retry`・`max_concurrent` の欄が空の行は、この 3 つの key を書かない古い版の log。その行に限り、その時刻に走っていた attempt (start と end の間) を数え、並列上限は `git -C <WORKFLOW.md の dir> log -p -- WORKFLOW.md` の変更時刻と照らして決める (この読み方は古い版の log 専用。その版では並列上限が WORKFLOW.md の `limits.max_concurrent` で決まり、tick ごとに読み直された。根拠は ADR 0019 の Context。今の並列上限は formats.md §6 のとおり workflow 定義では決まらない。ADR 0024)。
+`running`・`waiting_retry`・`max_concurrent` の欄が空の行は、この 3 つの key を書かない古い版の log。その行に限り、その時刻に走っていた attempt (start と end の間) を数え、並列上限は `git -C <WORKFLOW.md の dir> log -p -- WORKFLOW.md` の変更時刻と照らして決める (この読み方は古い版の log 専用。その版では並列上限が WORKFLOW.md の `limits.max_concurrent` で決まり、tick ごとに読み直された。根拠は ADR 0019 の Context。今の並列上限は formats.md §6 のとおり workflow 定義では決まらない)。
 
 **3. 時間**
 
