@@ -125,6 +125,22 @@ func nameMatches(anyOf, noneOf []string, name string) bool {
 	return (len(anyOf) == 0 || slices.ContainsFunc(anyOf, is)) && !slices.ContainsFunc(noneOf, is)
 }
 
+// NeedsBlocked は、issue の依存先 (blocked) が triggers の評価を変えうるかの判定を返す: blocked を条件に書いた issue の
+// trigger のどれかで、blocked 以外の条件をすべて満たす issue (system.md §7 の手順 3)。
+func NeedsBlocked(triggers []Trigger) func(target.Issue) bool {
+	var others []IssuePredicate
+	for _, t := range triggers {
+		if t.On == target.KindIssue && t.Issue.Blocked != nil {
+			p := t.Issue
+			p.Blocked = nil
+			others = append(others, p)
+		}
+	}
+	return func(issue target.Issue) bool {
+		return slices.ContainsFunc(others, func(p IssuePredicate) bool { return p.Matches(issue) })
+	}
+}
+
 // CLPredicate は CL 側の述語。CL の状態の語彙と絞り込みを、すべて AND で評価する。書かれていない条件は何にでも当たる。
 // 語彙の条件は nil でなければ、その状態の CL (true) / その状態でない CL (false) に当たる。
 type CLPredicate struct {
