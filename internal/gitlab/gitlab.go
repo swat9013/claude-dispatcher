@@ -116,13 +116,13 @@ func ScopeKey(p Project) string { return strings.ToLower(p.String()) }
 type Store struct {
 	glab    Runner
 	project Project
-	// needsReview は、open な一覧で discussion を読み足す CL か (cl.review_unresolved が trigger の評価を変えうるか)
-	needsReview func(target.CL) bool
+	// readsDiscussions は、open な一覧で discussion を読み足す CL か (cl.review_unresolved が trigger の評価を変えうるか)
+	readsDiscussions func(target.CL) bool
 }
 
-// NewStore は project を glab で読む部品。needsReview は、open な一覧で discussion を読み足す CL の判定 (system.md §13)。
-func NewStore(glab Runner, project Project, needsReview func(target.CL) bool) Store {
-	return Store{glab: glab, project: project, needsReview: needsReview}
+// NewStore は project を glab で読む部品。readsDiscussions は、open な一覧で discussion を読み足す CL の判定 (system.md §13)。
+func NewStore(glab Runner, project Project, readsDiscussions func(target.CL) bool) Store {
+	return Store{glab: glab, project: project, readsDiscussions: readsDiscussions}
 }
 
 // OpenIssues は open な issue を全件読む。失敗は *target.Failure。

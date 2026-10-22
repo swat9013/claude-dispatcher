@@ -338,36 +338,49 @@ func discussionsPage(t *testing.T, ds ...discussion) response {
 		"project": map[string]any{"mergeRequest": map[string]any{"discussions": page}}}})}
 }
 
-func TestOpenMergeRequestsReadDiscussionsOnlyOfThoseWithUnresolvedOnesThatTheTriggersNeed(t *testing.T) {
-	needed, notNeeded, allResolved := openMR(1), openMR(2), openMR(3)
-	needed.discussions = []discussion{{authorID: 5, access: "Developer"}}
-	notNeeded.discussions = []discussion{{authorID: 5, access: "Developer"}}
-	allResolved.discussions = []discussion{{authorID: 5, access: "Developer", resolved: true}}
+// openWithUnresolved は、Developer が書いた未解決の discussion を 1 本持つ merge request 1 を、判定 readsDiscussions で一覧から
+// 読む。discussion の読み出しを撃てば応答する。CL と、撃った discussion の読み出しの数を返す。
+func openWithUnresolved(t *testing.T, readsDiscussions func(target.CL) bool, resolved bool) (target.CL, int) {
+	t.Helper()
+	m := openMR(1)
+	m.discussions = []discussion{{authorID: 5, access: "Developer", resolved: resolved}}
 	var endpoints []string
 	g := recording{glab{
-		openMergeRequests: listPage(t, "", needed, notNeeded, allResolved),
-		"graphql:MergeRequestDiscussions?" + fullPath + "&iid=1": discussionsPage(t, needed.discussions...),
+		openMergeRequests: listPage(t, "", m),
+		"graphql:MergeRequestDiscussions?" + fullPath + "&iid=1": discussionsPage(t, m.discussions...),
 		membersEndpoint: members(t, map[int]int{1: 30}),
 	}, &endpoints}
-	needsReview := func(cl target.CL) bool { return cl.Number != 2 }
 
-	items, err := gitlab.NewStore(g, project, needsReview).OpenCLs()
+	items, err := gitlab.NewStore(g, project, readsDiscussions).OpenCLs()
 
 	if err != nil {
 		t.Fatal(err)
 	}
-	var unresolved []bool
-	for _, item := range items {
-		unresolved = append(unresolved, item.(target.CL).ReviewUnresolved)
+	reads := slices.DeleteFunc(endpoints, func(e string) bool { return !strings.HasPrefix(e, "graphql:MergeRequestDiscussions?") })
+	return items[0].(target.CL), len(reads)
+}
+
+func TestOpenMergeRequestReadsTheDiscussionsWhenItHasUnresolvedOnesThatTheTriggersNeed(t *testing.T) {
+	cl, reads := openWithUnresolved(t, everyCL, false)
+
+	if !cl.ReviewUnresolved || reads != 1 {
+		t.Fatalf("ReviewUnresolved = %v, discussion の読み出し = %d 回", cl.ReviewUnresolved, reads)
 	}
-	var discussionReads []string
-	for _, e := range endpoints {
-		if strings.HasPrefix(e, "graphql:MergeRequestDiscussions?") {
-			discussionReads = append(discussionReads, e)
-		}
+}
+
+func TestOpenMergeRequestDoesNotReadTheDiscussionsThatNoTriggerNeeds(t *testing.T) {
+	cl, reads := openWithUnresolved(t, func(target.CL) bool { return false }, false)
+
+	if cl.ReviewUnresolved || reads != 0 {
+		t.Fatalf("ReviewUnresolved = %v, discussion の読み出し = %d 回", cl.ReviewUnresolved, reads)
 	}
-	if !slices.Equal(unresolved, []bool{true, false, false}) || len(discussionReads) != 1 {
-		t.Fatalf("ReviewUnresolved = %v, discussion の読み出し = %q", unresolved, discussionReads)
+}
+
+func TestOpenMergeRequestWithoutUnresolvedDiscussionsDoesNotReadThem(t *testing.T) {
+	cl, reads := openWithUnresolved(t, everyCL, true)
+
+	if cl.ReviewUnresolved || reads != 0 {
+		t.Fatalf("ReviewUnresolved = %v, discussion の読み出し = %d 回", cl.ReviewUnresolved, reads)
 	}
 }
 

@@ -73,7 +73,7 @@ type pageInfo struct {
 	EndCursor   string
 }
 
-// mergeRequestNode は mergeRequestFields の応答。
+// mergeRequestNode は listFields (一覧) か mergeRequestFields (読み直し) の応答。一覧の応答では Discussions が空。
 type mergeRequestNode struct {
 	IID          string
 	Title        string
@@ -195,16 +195,15 @@ func (s Store) openMergeRequests() ([]target.CL, error) {
 		return nil, err
 	}
 	// 一覧は discussion を読まないので、cl.review_unresolved は偽のまま。未解決の discussion があり、review_unresolved が
-	// trigger の評価を変えうる CL だけ discussion を読み足す (system.md §6 の手順 3)
+	// trigger の評価を変えうる CL だけ discussion を読み足して写し直す (system.md §7 の手順 3)
 	for i := range nodes {
-		if nodes[i].ResolvableDiscussionsCount <= nodes[i].ResolvedDiscussionsCount || !s.needsReview(cls[i]) {
+		if nodes[i].ResolvableDiscussionsCount <= nodes[i].ResolvedDiscussionsCount || !s.readsDiscussions(cls[i]) {
 			continue
 		}
-		nodes[i].Discussions.PageInfo = pageInfo{HasNextPage: true}
-		if err := s.readRemainingDiscussions(&nodes[i]); err != nil {
+		if err := s.readDiscussions(&nodes[i], ""); err != nil {
 			return nil, err
 		}
-		if cls[i].ReviewUnresolved, err = s.reviewUnresolvedOf(nodes[i]); err != nil {
+		if cls[i], err = s.normalizeMergeRequest(nodes[i], cls[i].AuthorIsCollaborator); err != nil {
 			return nil, err
 		}
 	}
@@ -237,12 +236,15 @@ func (s Store) mergeRequest(iid int) (target.CL, error) {
 	return cls[0], nil
 }
 
-// readCLs は open な merge request の discussion の続きと作者の access level を読み足し、CL の形に写す。
+// readCLs は open な merge request の、読んだ discussion の page の続きと作者の access level を読み足し、CL の形に写す。
+// 一覧の merge request は discussion を読んでいないので、続きも読まない。
 func (s Store) readCLs(nodes []mergeRequestNode) ([]target.CL, error) {
 	authors := make([]int, len(nodes))
 	for i := range nodes {
-		if err := s.readRemainingDiscussions(&nodes[i]); err != nil {
-			return nil, err
+		if page := nodes[i].Discussions.PageInfo; page.HasNextPage {
+			if err := s.readDiscussions(&nodes[i], page.EndCursor); err != nil {
+				return nil, err
+			}
 		}
 		author, err := s.authorID(nodes[i])
 		if err != nil {
@@ -265,15 +267,16 @@ func (s Store) readCLs(nodes []mergeRequestNode) ([]target.CL, error) {
 	return cls, nil
 }
 
-// readRemainingDiscussions は、読んだ page の続きの discussion を読み足す。page の endCursor が空なら最初の page から読む。
-func (s Store) readRemainingDiscussions(n *mergeRequestNode) error {
-	for n.Discussions.PageInfo.HasNextPage {
+// readDiscussions は merge request n の discussion を、cursor after の続きから最後の page まで読み足す。after が空なら最初の
+// page から読む (空の変数は渡さず、null になる)。
+func (s Store) readDiscussions(n *mergeRequestNode, after string) error {
+	for {
 		var data struct {
 			Project *struct {
 				MergeRequest *struct{ Discussions discussionConnection }
 			}
 		}
-		if err := s.graphql(discussionsQuery, &data, variable{"iid", n.IID}, variable{"after", n.Discussions.PageInfo.EndCursor}); err != nil {
+		if err := s.graphql(discussionsQuery, &data, variable{"iid", n.IID}, variable{"after", after}); err != nil {
 			return err
 		}
 		if data.Project == nil {
@@ -286,8 +289,11 @@ func (s Store) readRemainingDiscussions(n *mergeRequestNode) error {
 		next := data.Project.MergeRequest.Discussions
 		n.Discussions.Nodes = append(n.Discussions.Nodes, next.Nodes...)
 		n.Discussions.PageInfo = next.PageInfo
+		if !next.PageInfo.HasNextPage {
+			return nil
+		}
+		after = next.PageInfo.EndCursor
 	}
-	return nil
 }
 
 // authorID は merge request の作者の user id。作者が読めない (null) なら 0。
@@ -379,9 +385,9 @@ func (s Store) normalizeMergeRequest(n mergeRequestNode, authorIsCollaborator bo
 	if !ok {
 		return target.CL{}, s.fail(target.Unavailable, fmt.Errorf("merge request !%d の mergeStatusEnum %q を読めない", iid, n.MergeStatusEnum))
 	}
-	reviewUnresolved, err := s.reviewUnresolvedOf(n)
+	reviewUnresolved, err := reviewUnresolved(n.Discussions.Nodes)
 	if err != nil {
-		return target.CL{}, err
+		return target.CL{}, s.fail(target.Unavailable, fmt.Errorf("merge request !%d の %w", iid, err))
 	}
 	labels := make([]string, len(n.Labels.Nodes))
 	for i, l := range n.Labels.Nodes {
@@ -428,15 +434,6 @@ var mergeability = map[string]target.Mergeability{
 var accessLevels = map[string]int{
 	"Minimal Access": 5, "Guest": 10, "Planner": 15, "Reporter": 20, "Security Manager": 25, "Developer": developerAccess,
 	"Maintainer": 40, "Owner": 50,
-}
-
-// reviewUnresolvedOf は、読んだ discussion から merge request n の cl.review_unresolved を決める。失敗は *target.Failure。
-func (s Store) reviewUnresolvedOf(n mergeRequestNode) (bool, error) {
-	unresolved, err := reviewUnresolved(n.Discussions.Nodes)
-	if err != nil {
-		return false, s.fail(target.Unavailable, fmt.Errorf("merge request !%s の %w", n.IID, err))
-	}
-	return unresolved, nil
 }
 
 // reviewUnresolved は、collaborator が書いた未解決の discussion が 1 本以上あるか (cl.review_unresolved)。discussion の書き手は
