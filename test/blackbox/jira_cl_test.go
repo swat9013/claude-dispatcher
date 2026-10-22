@@ -2,6 +2,7 @@ package blackbox_test
 
 import (
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -33,6 +34,57 @@ func TestJiraWithAGitHubCLHostRunsCLTriggersOnTheGitHubCLs(t *testing.T) {
 
 	assertCandidates(t, r, jiraCandidate("implement", 42), clCandidate("fix-ci", 7))
 	s.assertAcliOnlyReads()
+}
+
+func TestJiraDryRunReadsEachOpenListOnlyOnceForTheConfirmationAndTheSnapshot(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflowWithCommands(jiraFixCI)
+	s.setJiraPlaces(readyJiraIssue(42))
+	s.setStore(nil, []cl{failingCL(7)})
+
+	r := s.dryRun()
+
+	assertCandidates(t, r, jiraCandidate("implement", 42), clCandidate("fix-ci", 7))
+	// 候補の読み直しは workitem view と pullRequest(number:) を撃つので、一覧の数には入らない。stub は一覧を 1 page で返す
+	if n := s.countCalls("acli", func(arg string) bool { return arg == jiraOpenJQL }); n != 1 {
+		t.Fatalf("issue 置き場の open な一覧を %d 回読んだ (1 回のはず)", n)
+	}
+	if n := s.countCalls("gh", func(arg string) bool { return strings.Contains(arg, clListQuery) }); n != 1 {
+		t.Fatalf("CL 置き場の open な一覧を %d 回読んだ (1 回のはず)", n)
+	}
+}
+
+func TestJiraDryRunWithAGitLabCLHostStillNamesTheFailedRecheckRequestOfTheConfirmedList(t *testing.T) {
+	s := newSandbox(t)
+	gitlabCL := "cl:\n  kind: gitlab\n  host: " + gitlabHost + "\n  repo: " + gitlabRepo + "\n"
+	s.writeWorkflowWithCommands("---\n" + jiraTracker + gitlabCL + "triggers:\n  - {name: t, on: cl, action: /t}\n---\n共通 prompt\n")
+	s.setJiraPlaces()
+	unchecked := readyMR(1)
+	unchecked.mergeStatus = "UNCHECKED"
+	recheckFails := stubwire.Rule{ArgsPrefix: glabAPI(), ArgsContain: []string{"with_merge_status_recheck=true"}, Stderr: "glab: HTTP 502\n", Exit: 1}
+	s.respondAll("glab", append([]stubwire.Rule{recheckFails}, glabStoreRules(nil, []glMR{unchecked})...))
+
+	r := s.dryRun()
+
+	assertCandidates(t, r, mrCandidate("t", 1))
+	if !strings.Contains(r.stderr, "補助の要求が落ちた") {
+		t.Fatalf("stderr に計算し直しの求めの失敗が無い:\n%s", r.stderr)
+	}
+	if n := s.countCalls("glab", func(arg string) bool { return strings.Contains(arg, gitlabOpenMRsQuery) }); n != 1 {
+		t.Fatalf("CL 置き場の open な一覧を %d 回読んだ (1 回のはず)", n)
+	}
+}
+
+// countCalls は name の CLI の呼び出しのうち、match に当たる argument を持つものの数。
+func (s *sandbox) countCalls(name string, match func(arg string) bool) int {
+	s.t.Helper()
+	n := 0
+	for _, c := range s.calls(name) {
+		if slices.ContainsFunc(c.Argv, match) {
+			n++
+		}
+	}
+	return n
 }
 
 func TestJiraConfirmsTheCLHostEvenWithoutCLTriggers(t *testing.T) {

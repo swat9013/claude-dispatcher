@@ -66,22 +66,50 @@ func (p Places) separateCLs() (provider.CLStore, bool) {
 // Confirm は起動時の置き場の確認 (formats.md §6): ConfirmIssues の後に ConfirmCLs。CL 置き場の補助の要求だけの失敗
 // (*target.NonFatal) は、一覧を読めているので確認を落とさない。
 func (p Places) Confirm() error {
-	if err := p.ConfirmIssues(); err != nil {
-		return err
-	}
-	err := p.ConfirmCLs()
-	var nonFatal *target.NonFatal
-	if errors.As(err, &nonFatal) {
-		return nil
-	}
+	_, err := p.ConfirmedStore()
 	return err
 }
+
+// ConfirmedStore は Confirm と同じ確認を通し、確認で読んだ open な一覧を snapshot に使う置き場を返す (試運転。formats.md
+// §5)。確認で一覧を読まない置き場の部品は Store と同じ。作業対象の読み直しは、どの部品も置き場から読む。失敗は Confirm と同じ。
+func (p Places) ConfirmedStore() (loop.Store, error) {
+	parts := p.trackerParts()
+	store := loop.Store{Issues: parts.Issues, CLs: parts.CLs}
+	if parts.Confirm != nil {
+		issues, err := parts.Confirm()
+		if err != nil {
+			return loop.Store{}, err
+		}
+		store.Issues = issues
+	}
+	if separate, ok := p.separateCLs(); ok {
+		open, err := separate.OpenCLs()
+		var nonFatal *target.NonFatal
+		if err != nil && !errors.As(err, &nonFatal) {
+			return loop.Store{}, err
+		}
+		store.CLs = confirmedCLs{CLStore: separate, open: open, err: err}
+	}
+	return store, nil
+}
+
+// confirmedCLs は、CL 置き場の確認が読んだ open な一覧を持つ CL 置き場。OpenCLs は読み直さずに、一覧と補助の要求の失敗
+// (*target.NonFatal) をそのまま返す。ReadCL は置き場から読み直す。
+type confirmedCLs struct {
+	provider.CLStore
+	open []target.Item
+	// err は一覧とともに返った補助の要求の失敗。無ければ nil
+	err error
+}
+
+func (c confirmedCLs) OpenCLs() ([]target.Item, error) { return c.open, c.err }
 
 // ConfirmIssues は起動時の issue 置き場の確認 (formats.md §6)。確認の手順を持たない種類は何もしない。失敗は
 // *target.Failure か *target.UnknownNames。
 func (p Places) ConfirmIssues() error {
 	if confirm := p.trackerParts().Confirm; confirm != nil {
-		return confirm()
+		_, err := confirm()
+		return err
 	}
 	return nil
 }

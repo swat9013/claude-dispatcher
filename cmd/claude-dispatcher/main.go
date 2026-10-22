@@ -255,11 +255,13 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 	if opts.dryRun {
-		if err := e.places(def).Confirm(); err != nil {
+		// 確認で読んだ open な一覧を snapshot に使い、一覧を 1 回だけ読む (formats.md §5)
+		store, err := e.places(def).ConfirmedStore()
+		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return failureExit(err)
 		}
-		return dryRunOnce(e, def, stdout, stderr)
+		return dryRunOnce(store, def, stdout, stderr)
 	}
 
 	if code := e.confirmLaunchable(def, stderr); code != 0 {
@@ -358,10 +360,10 @@ func (e environment) workspaces(def workflow.Definition, hookLock *sync.Mutex) w
 	}}
 }
 
-// dryRunOnce は試運転 (formats.md §5): snapshot を作って trigger を評価し、候補を loop の起動の直前と同じく 1 件ずつ
-// 読み直して、loop が起動する候補だけを 1 件 1 行で出す。候補を 1 件でも読み直せなければ、何も出さずに失敗する。何も書かない。
-func dryRunOnce(e environment, def workflow.Definition, stdout, stderr io.Writer) int {
-	store := e.places(def).Store()
+// dryRunOnce は試運転 (formats.md §5): store から snapshot を作って trigger を評価し、候補を loop の起動の直前と同じく
+// 1 件ずつ読み直して、loop が起動する候補だけを 1 件 1 行で出す。候補を 1 件でも読み直せなければ、何も出さずに失敗する。
+// 何も書かない。
+func dryRunOnce(store loop.Store, def workflow.Definition, stdout, stderr io.Writer) int {
 	open, err := loop.OpenItems(store, def)
 	var nonFatal *target.NonFatal
 	switch {

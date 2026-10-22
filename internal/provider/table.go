@@ -142,7 +142,14 @@ var providers = []Provider{
 		},
 		Build: func(rt Runtime, s Setting) Parts {
 			store := jira.NewStore(rt.runner(acliCommand, jira.Exec{Env: rt.Env, Timeout: rt.Timeout}), s.Place.value.(jira.Project), s.Triggers)
-			return Parts{Issues: store, Confirm: func() error { return store.Confirm(jira.NamesOf(s.Triggers)) }}
+			confirm := func() (IssueStore, error) {
+				confirmed, err := store.Confirm(jira.NamesOf(s.Triggers))
+				if err != nil {
+					return nil, err
+				}
+				return confirmed, nil
+			}
+			return Parts{Issues: store, Confirm: confirm}
 		},
 		Setup: Setup{
 			flags: "--host <site> と --repo <key>",

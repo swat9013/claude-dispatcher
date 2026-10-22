@@ -27,7 +27,7 @@ func TestStatusNameAndProjectKeyAreQuotedAsJQLStrings(t *testing.T) {
 	acli := &fakeAcli{}
 	store := jira.NewStore(acli, jira.Project{Site: "acme.atlassian.net", Key: "SET"}, nil)
 
-	err := store.Confirm(jira.Names{Statuses: []jira.Name{{Trigger: "t", Value: `Say "hi" \ bye`}}})
+	_, err := store.Confirm(jira.Names{Statuses: []jira.Name{{Trigger: "t", Value: `Say "hi" \ bye`}}})
 
 	if err != nil {
 		t.Fatal(err)

@@ -340,9 +340,10 @@ type Parts struct {
 	Issues IssueStore
 	// CLs は CL 置き場の部品。CL 置き場の役割を持たない種類は nil
 	CLs CLStore
-	// Confirm は起動時の issue 置き場の確認 (formats.md §6)。確認の手順を持たない種類は nil。失敗は *target.Failure か
-	// *target.UnknownNames
-	Confirm func() error
+	// Confirm は起動時の issue 置き場の確認 (formats.md §6)。確認の手順を持たない種類は nil。通れば、確かめるときに読んだ
+	// open な一覧を OpenIssues で返す issue 置き場を返す (試運転が snapshot に使う。formats.md §5)。失敗は *target.Failure
+	// か *target.UnknownNames
+	Confirm func() (IssueStore, error)
 }
 
 // Setup は setup が雛形を書くための宣言。宣言は表 (providers) だけが書き、外からは method で読む。

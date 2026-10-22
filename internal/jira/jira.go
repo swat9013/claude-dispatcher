@@ -92,7 +92,29 @@ func NewStore(acli Runner, project Project, triggers []trigger.Trigger) Store {
 
 // OpenIssues は open な issue を全件読む。失敗は *target.Failure。
 func (s Store) OpenIssues() ([]target.Item, error) {
-	issues, err := s.openIssues()
+	nodes, err := s.search(s.openJQL())
+	if err != nil {
+		return nil, s.fail(s.classify(err, target.Unavailable), err)
+	}
+	return s.openItems(nodes)
+}
+
+// Confirmed は、起動時の確認 (Store.Confirm) が読んだ open な一覧を持つ issue 置き場。OpenIssues はその一覧を検索し直さずに
+// 使い、ReadIssue は Store のまま置き場から読み直す。試運転が snapshot に使う (formats.md §5)。
+type Confirmed struct {
+	Store
+	// open は確認が読んだ open な一覧の検索の結果
+	open []issueJSON
+}
+
+// OpenIssues は確認が読んだ open な一覧を作業対象にする。依存先は Store.OpenIssues と同じく読む。失敗は *target.Failure。
+func (c Confirmed) OpenIssues() ([]target.Item, error) {
+	return c.openItems(c.open)
+}
+
+// openItems は open な一覧の検索の結果を正規化して作業対象にする。失敗は *target.Failure。
+func (s Store) openItems(nodes []issueJSON) ([]target.Item, error) {
+	issues, err := s.openIssues(nodes)
 	if err != nil {
 		return nil, s.fail(s.classify(err, target.Unavailable), err)
 	}
@@ -157,14 +179,11 @@ func (s Store) openJQL() string {
 	return s.projectJQL() + " AND statusCategory != Done"
 }
 
-// openIssues は project の open な issue を全件読み、正規化して返す。失敗は分類前の error。
-func (s Store) openIssues() ([]target.Issue, error) {
-	nodes, err := s.search(s.openJQL())
-	if err != nil {
-		return nil, err
-	}
+// openIssues は open な一覧の検索の結果 nodes を正規化して返す。依存先の数は読み足す。失敗は分類前の error。
+func (s Store) openIssues(nodes []issueJSON) ([]target.Issue, error) {
 	blocked := map[string]int{}
 	if s.blockers {
+		var err error
 		if blocked, err = s.openBlockers(); err != nil {
 			return nil, err
 		}
@@ -383,25 +402,27 @@ func appendNames(names []Name, triggerName string, lists ...[]string) []Name {
 }
 
 // Confirm は起動時の issue 置き場の確認 (formats.md §6): acli の認証の site・open な一覧・status 名・issue type 名の順に
-// 確かめ、最初に落ちたもので返す。失敗は *target.Failure (認証・見えない・その他) か *target.UnknownNames。
-func (s Store) Confirm(names Names) error {
+// 確かめ、最初に落ちたもので返す。通れば、確かめるときに読んだ open な一覧を持つ issue 置き場を返す。失敗は
+// *target.Failure (認証・見えない・その他) か *target.UnknownNames。
+func (s Store) Confirm(names Names) (Confirmed, error) {
 	out, err := s.authStatus()
 	if err != nil {
 		var failed *proc.Error
 		if errors.As(err, &failed) {
-			return s.fail(target.Auth, err)
+			return Confirmed{}, s.fail(target.Auth, err)
 		}
-		return s.fail(target.Unavailable, err)
+		return Confirmed{}, s.fail(target.Unavailable, err)
 	}
 	m := siteLine.FindSubmatch(out)
 	if m == nil {
-		return s.fail(target.NotVisible, errors.New("acli jira auth status の出力から認証の site を読めない"))
+		return Confirmed{}, s.fail(target.NotVisible, errors.New("acli jira auth status の出力から認証の site を読めない"))
 	}
 	if site := string(m[1]); !strings.EqualFold(site, s.project.Site) {
-		return s.fail(target.NotVisible, fmt.Errorf("acli の認証の site %s が tracker.host %s と違う (acli jira auth switch --site %s で切り替える)", site, s.project.Site, s.project.Site))
+		return Confirmed{}, s.fail(target.NotVisible, fmt.Errorf("acli の認証の site %s が tracker.host %s と違う (acli jira auth switch --site %s で切り替える)", site, s.project.Site, s.project.Site))
 	}
-	if _, err := s.search(s.openJQL()); err != nil {
-		return s.fail(s.classify(err, target.NotVisible), err)
+	open, err := s.search(s.openJQL())
+	if err != nil {
+		return Confirmed{}, s.fail(s.classify(err, target.NotVisible), err)
 	}
 	var problems []string
 	// 同じ名前 (大文字と小文字を区別しない) は 1 度だけ問い合わせ、書いた trigger ごとに名指しする
@@ -412,7 +433,7 @@ func (s Store) Confirm(names Names) error {
 		if !asked {
 			_, err = s.acli.Run("jira", "workitem", "search", "--jql", s.projectJQL()+" AND status = "+quote(n.Value), "--count")
 			if err != nil && s.classify(err, target.Unavailable) == target.Auth {
-				return s.fail(target.Auth, err)
+				return Confirmed{}, s.fail(target.Auth, err)
 			}
 			statusErrors[name] = err
 		}
@@ -424,7 +445,7 @@ func (s Store) Confirm(names Names) error {
 	if len(names.Types) > 0 {
 		types, err := s.issueTypes()
 		if err != nil {
-			return s.fail(s.classify(err, target.NotVisible), err)
+			return Confirmed{}, s.fail(s.classify(err, target.NotVisible), err)
 		}
 		for _, n := range names.Types {
 			if !slices.ContainsFunc(types, func(t string) bool { return strings.EqualFold(t, n.Value) }) {
@@ -433,9 +454,9 @@ func (s Store) Confirm(names Names) error {
 		}
 	}
 	if len(problems) > 0 {
-		return &target.UnknownNames{Problems: problems}
+		return Confirmed{}, &target.UnknownNames{Problems: problems}
 	}
-	return nil
+	return Confirmed{Store: s, open: open}, nil
 }
 
 // issueTypes は project の issue type の名前を読む。
