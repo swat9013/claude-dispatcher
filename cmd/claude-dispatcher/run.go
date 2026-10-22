@@ -109,7 +109,7 @@ func runOnce(args []string, stdout, stderr io.Writer) int {
 		if claimSHA, code = claimOnce(party, ref, stderr); code != 0 {
 			return code
 		}
-		stop := keepReporting(party, coord.HeartbeatInterval(def.Interval), stderr)
+		stop := keepReporting(party.Heartbeat, coord.HeartbeatInterval(def.Interval), time.After, stderr)
 		defer stop()
 	}
 	sessionID, err := worker.NewSessionID()
@@ -262,11 +262,9 @@ func claimOnce(party *coord.Party, ref target.Ref, stderr io.Writer) (string, in
 	if view.Unread != nil {
 		fmt.Fprintln(stderr, printable.Line(view.Unread.Error()))
 	}
-	for _, m := range view.Messages {
-		if m.Newer() {
-			fmt.Fprintln(stderr, "調停 remote に新しい版の ref があるので起動しない (dispatcher を上げる)")
-			return "", exitNotLaunched
-		}
+	if _, newer := view.Newer(); newer {
+		fmt.Fprintln(stderr, "調停 remote に新しい版の ref があるので起動しない (dispatcher を上げる)")
+		return "", exitNotLaunched
 	}
 	if sha, held := view.Claims[ref]; held {
 		fmt.Fprintf(stderr, "%s は loop %s が着手しているので起動しない\n", ref, view.Messages[sha].Loop)
@@ -284,28 +282,14 @@ func claimOnce(party *coord.Party, ref target.Ref, stderr io.Writer) (string, in
 	return sha, 0
 }
 
-// keepReporting は、単発起動が終わるまで生存報告を間隔ごとに置き直す。返した関数で止める (止まるまで待つ)。
-func keepReporting(party *coord.Party, interval time.Duration, stderr io.Writer) func() {
-	done, stopped := make(chan struct{}), make(chan struct{})
-	go func() {
-		defer close(stopped)
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-done:
-				return
-			case <-ticker.C:
-				if err := party.Heartbeat(interval); err != nil {
-					fmt.Fprintf(stderr, "生存報告を置けない: %s\n", printable.Line(err.Error()))
-				}
-			}
+// keepReporting は、単発起動が終わるまで生存報告を間隔ごとに置き直す。after は待つ時計 (本番は time.After)。返した関数で
+// 止める (止まるまで待つ)。
+func keepReporting(heartbeat func(time.Duration) error, interval time.Duration, after func(time.Duration) <-chan time.Time, stderr io.Writer) func() {
+	return coord.KeepBeating(heartbeat, interval, after, func(err error) {
+		if err != nil {
+			fmt.Fprintf(stderr, "生存報告を置けない: %s\n", printable.Line(err.Error()))
 		}
-	}()
-	return func() {
-		close(done)
-		<-stopped
-	}
+	})
 }
 
 // leaveOnce は、単発起動が置いた着手宣言 (置けていれば) と生存報告を消す。消せなければ stderr に出す。

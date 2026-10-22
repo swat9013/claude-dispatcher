@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -294,8 +295,28 @@ type loop struct {
 	orphansUnknown bool
 	// board は状態 file にだけ使う状態。loop の判断には使わない
 	board board
-	// remote は調停 remote を指した loop の調停の記憶。指さなければ nil
-	remote *remote
+	// mediation は調停 remote を指した loop の調停の記憶。指さなければ nil
+	mediation *mediation
+}
+
+// fixedAtStartChanged は、起動時に固定する項目 (formats.md §6) のうち def で起動時と変わったものがあれば、その tick の error の
+// 文を返す。変わらなければ ""。項目ごとの固定する理由は formats.md §6。
+func (l *loop) fixedAtStartChanged(def workflow.Definition) string {
+	start := l.o.Definition
+	key, place, startPlace := l.o.ScopeKeyOf(def), def.CLPlace(), start.CLPlace()
+	for _, f := range []struct {
+		item, now, start string
+		same             bool
+	}{
+		{"scope key", key, l.o.ScopeKey, key == l.o.ScopeKey},
+		{"CL 置き場", strconv.Quote(place), strconv.Quote(startPlace), strings.EqualFold(place, startPlace)},
+		{"coordination.remote", strconv.Quote(def.CoordinationRemote), strconv.Quote(start.CoordinationRemote), def.CoordinationRemote == start.CoordinationRemote},
+	} {
+		if !f.same {
+			return fmt.Sprintf("workflow 定義の %s %s が起動時の %s と違う (loop を起動し直す)", f.item, f.now, f.start)
+		}
+	}
+	return ""
 }
 
 // Run は停止要求で止まるまで tick を回す。起動の直後に 1 回 tick を撃ち、以後は tick の終了から周期だけ待つ。
@@ -309,9 +330,9 @@ func Run(o Options) int {
 	var next <-chan time.Time
 	start := map[string]any{"version": o.Build.Version, "commit": o.Build.Commit}
 	if o.Coordination != nil {
-		l.remote = &remote{c: o.Coordination, seen: map[string]sighting{}, interval: coord.HeartbeatInterval(o.Definition.Interval)}
+		l.mediation = &mediation{c: o.Coordination, seen: map[string]sighting{}, interval: coord.HeartbeatInterval(o.Definition.Interval)}
 		start["loop"] = o.Coordination.LoopName()
-		l.remote.startBeating(o.HeartbeatAfter)
+		l.mediation.startBeating(o.HeartbeatAfter)
 	}
 	// どの版の binary が書いた log かを後から読めるよう、起動を 1 行残す。人が読む起動の行は呼び出し側が出している
 	l.rec.write("loop_start", start)
@@ -435,19 +456,9 @@ func (l *loop) tick() {
 			def.MaxConcurrent = n
 		}
 	}
-	if key := l.o.ScopeKeyOf(def); key != l.o.ScopeKey {
-		// 別の置き場を指す版は採らない。この tick は掃除も起動もせず、次の tick の突き合わせは採っていた版の置き場を読む
-		l.tickFailed(fmt.Sprintf("workflow 定義の scope key %s が起動時の %s と違う (loop を起動し直す)", key, l.o.ScopeKey))
-		return
-	}
-	if place, start := def.CLPlace(), l.o.Definition.CLPlace(); !strings.EqualFold(place, start) {
-		// claim している CL を、起動時と別の CL 置き場で読み直さない。scope key と同じく大文字と小文字は区別しない (formats.md §6)
-		l.tickFailed(fmt.Sprintf("workflow 定義の CL 置き場 %q が起動時の %q と違う (loop を起動し直す)", place, start))
-		return
-	}
-	if remote, start := def.CoordinationRemote, l.o.Definition.CoordinationRemote; remote != start {
-		// 調停 remote は起動時に解いて最初の生存報告を置いている。別の remote を読み書きしない (formats.md §6)
-		l.tickFailed(fmt.Sprintf("workflow 定義の coordination.remote %q が起動時の %q と違う (loop を起動し直す)", remote, start))
+	if changed := l.fixedAtStartChanged(def); changed != "" {
+		// 起動時に固定する項目が変わった版は採らない。この tick は掃除も起動もせず、次の tick の突き合わせは採っていた版を読む
+		l.tickFailed(changed)
 		return
 	}
 	if def.MaxConcurrent != l.def.MaxConcurrent {
@@ -455,7 +466,7 @@ func (l *loop) tick() {
 		l.rec.human(LineNote, "並列上限を変えた", ": %d → %d", l.def.MaxConcurrent, def.MaxConcurrent)
 	}
 	l.def, l.blocked = def, l.o.Precheck(def)
-	if l.remote != nil {
+	if l.mediation != nil {
 		if err := l.coordinate(); err != nil {
 			// 誰が着手しているかを決められないので、掃除も起動 (再起動を含む) もしない
 			l.tickFailed(oneLine(err))
@@ -512,7 +523,7 @@ func (l *loop) tick() {
 		if l.orphans[ref] {
 			continue
 		}
-		if l.remote != nil && l.remote.newer != nil {
+		if l.newerFormatSeen() {
 			// 新しい版の ref がある間は、その scope で worker を起動しない (formats.md §12)
 			break
 		}
@@ -541,7 +552,7 @@ func (l *loop) tick() {
 			launched = append(launched, ref.String())
 		}
 	}
-	if l.remote != nil {
+	if l.mediation != nil {
 		l.cleanupDeadLoops()
 	}
 	l.board.lastTick = &status.Tick{At: l.o.Now(), Result: status.TickOK, Candidates: len(candidates)}

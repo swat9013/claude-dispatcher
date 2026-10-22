@@ -51,7 +51,21 @@ type Snapshot struct {
 	NewerFormat *NewerFormat `json:"newer_format,omitempty"`
 }
 
-// TakenOver は着手宣言を乗っ取られた作業対象と、見たときの持ち主の loop 名 (消えていたら "")。
+// UnknownHolder は、乗っ取った着手宣言の持ち主の loop を読めないときの TakenOver.By (formats.md §4 の taken_over)。
+const UnknownHolder = "?"
+
+// HolderText は乗っ取られた着手宣言の今の持ち主 (TakenOver.By) を人が読む文。loop の画面と status が共に使う。
+func HolderText(by string) string {
+	switch by {
+	case "":
+		return "着手宣言が消えていた"
+	case UnknownHolder:
+		return "持ち主を読めない着手宣言に置き換わっていた"
+	}
+	return "loop " + by + " が着手宣言を持っている"
+}
+
+// TakenOver は着手宣言を乗っ取られた作業対象と、見たときの持ち主の loop 名 (消えていたら ""、読めなければ UnknownHolder)。
 type TakenOver struct {
 	Target string `json:"target"`
 	By     string `json:"by"`
@@ -348,14 +362,7 @@ func needsAttention(s Snapshot) [][]Span {
 		lines = append(lines, []Span{{Yellow, "orphan"}, {Plain, fmt.Sprintf(" %s: 前の loop の claude がまだ動いている。終わるのを待つか、claude の pid (log.jsonl のこの作業対象の直近の start の行) を止める。止めても残れば、worker log (state_dir の %s) を開いている process を lsof で探して止める", o.Target, o.Log)}})
 	}
 	for _, o := range s.TakenOver {
-		holder := fmt.Sprintf("loop %s が着手宣言を持っている", o.By)
-		switch o.By {
-		case "":
-			holder = "着手宣言が消えていた"
-		case "?":
-			holder = "持ち主を読めない着手宣言に置き換わっていた"
-		}
-		lines = append(lines, []Span{{Yellow, "乗っ取られた"}, {Plain, fmt.Sprintf(" %s: %s。worker を止めた。止まる前に push された成果を確かめる", o.Target, holder)}})
+		lines = append(lines, []Span{{Yellow, "乗っ取られた"}, {Plain, fmt.Sprintf(" %s: %s。worker を止めた。止まる前に push された成果を確かめる", o.Target, HolderText(o.By))}})
 	}
 	if f := s.HeartbeatFailures; f != nil {
 		lines = append(lines, []Span{{Yellow, "生存報告"}, {Plain, fmt.Sprintf(" %d 回続けて置けない: %s。他のマシンの loop に死んだとみなされ、着手宣言を乗っ取られうる", f.Count, f.Error)}})

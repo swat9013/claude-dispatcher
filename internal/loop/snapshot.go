@@ -89,10 +89,10 @@ func (l *loop) snapshot() status.Snapshot {
 	for _, p := range l.blocked {
 		s.Blocked = append(s.Blocked, status.Blocked{Trigger: p.Trigger, Error: p.Error})
 	}
-	if r := l.remote; r != nil {
+	if r := l.mediation; r != nil {
 		s.Loop, s.TakenOver, s.NewerFormat = r.c.LoopName(), r.takenOver, r.newer
-		if r.heartbeatFailures >= 2 {
-			s.HeartbeatFailures = &status.HeartbeatFailures{Count: r.heartbeatFailures, Error: r.heartbeatError}
+		if f := r.failures; f.count >= 2 {
+			s.HeartbeatFailures = &status.HeartbeatFailures{Count: f.count, Error: oneLine(f.last)}
 		}
 	}
 	return s
