@@ -103,7 +103,7 @@ dispatcher は、状態の意味を定めない。issue の label が何を表�
 
 **マシンを跨いだ分担** (ADR 0011・0017・0023)。調停 remote を指した project では、loop と単発起動は、着手宣言と生存報告を実装 repo の git remote の独自 ref に置き合って、作業対象を分け合う。leader は持たない。
 
-- **調停 remote は、workflow 定義のある clone の git remote の名前で指す**。名前はその clone で解き、URL と認証はその clone の設定 (`git remote`・credential helper・ssh の鍵) をそのまま使う。dispatcher は認証を持たない。読む URL と書く URL (`pushurl`・`pushInsteadOf`) が違う remote は使えない (自分の置いた ref を読めない) ので、起動時の確認で落とす
+- **調停 remote は、workflow 定義のある clone の git remote の名前で指す**。名前はその clone で解き、URL と認証はその clone の設定 (`git remote`・credential helper・ssh の鍵) をそのまま使う。dispatcher は認証を持たない。読む URL と書く URL (`pushurl`・`pushInsteadOf`) が違うか、どちらかが複数ある remote は使えない (自分の置いた ref を読めない・push の勝ち負けが読む URL の状態と食い違う) ので、起動時の確認で落とす
 - **ref は scope dir (formats.md §1) の 1 段の下に置く**。着手宣言は作業対象ごとに 1 本 (`refs/dispatcher/<scope dir>/claims/<作業対象>`)、生存報告は loop ごとに 1 本 (`refs/dispatcher/<scope dir>/loops/<loop 名>`)。どちらも空の tree の commit を指し、形式の版・持ち主の loop 名・生存報告の間隔は commit message に書く (綴りは formats.md §12)
 - **loop 名は `<hostname を無害化したもの>-<乱数 8 hex>`** で、起動ごとに新しくする。無害化は scope dir と同じ規則 (formats.md §1)。起動し直した loop を、前の loop と別の持ち主として扱う (前の loop の着手宣言を、落ちた loop のものとして片付ける)
 - **先着は条件付きの push で決める**。着手宣言は「ref が無いときだけ作る」で push し、通った loop だけが claim を立てて worker を起動する。負けたら claim を立てず、log に行を残すだけにする (他のマシンが作業しているのは正常な状態)
@@ -373,7 +373,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。claim の段階と打�
   - 間隔は commit message に書き、他の loop はその値の 3 倍で死を判定する
   - 置き直しが続けて落ちたら要対処に出す。他のマシンの loop に死んだとみなされ、着手宣言を乗っ取られうるため
   - 停止要求の後も、loop が止まるまで置き直す (worker の終わりを待つ間に死んだとみなされないため)。止まるときに消す
-  - 止められない claude (§7) を残して止まるときは、その作業対象の着手宣言を消さない。claude が作業を続けうるので、他のマシンの loop には、生存報告が途絶えてから死を判定するまで起動させない
+  - 止められない claude (§7) を残して止まるときは、その作業対象の着手宣言も自分の生存報告も消さない。claude が作業を続けうるので、生存報告を途絶えさせ、他のマシンの loop には間隔の 3 倍を待ってから死を判定させる (生存報告を消すと、持ち主の生存報告の無い着手宣言としてすぐに乗っ取られうる)
 - **loop は自分では起き直さない** (ADR 0006)
   - 起動し直した loop は、外部 store と workspace から続きを拾う
 - **停止は 2 段にする**
@@ -480,6 +480,6 @@ CLI の中で、呼び出し側から中身を隠す部品と、差し替えの�
   - 死んだ loop の判定 (sha が変わったのを最後に見た時刻と間隔) は、時計を持つ loop が行う。部品は時計を持たない
   - git は workflow 定義のある clone を cwd にして撃つ。commit の作者と committer は部品が環境変数で渡し、利用者の git の設定 (`user.name` など) に頼らない
   - push はすべて `--no-verify --porcelain` で撃つ (§4)
-  - git の認証の prompt を出させない (`GIT_TERMINAL_PROMPT=0`)。loop は無人で回るので、prompt は答えられずに上限時間まで止まる
+  - git 自身の認証の prompt を出させない (`GIT_TERMINAL_PROMPT=0`)。loop は無人で回るので、prompt は答えられずに上限時間まで止まる。ssh の passphrase と host key の確認は止めない (利用者の ssh の設定を上書きしないため)。ssh の remote は agent か鍵の設定で prompt なしに通るようにしておく
   - 本番の adapter は git、テストの adapter は loop の単体テストの fake。black-box テストは PATH の git の stub で、git に渡す引数を確かめる
 - **trigger の評価は、正規化した作業対象だけを見る**。adapter の生の応答を覗かない (SPEC §11.2)
