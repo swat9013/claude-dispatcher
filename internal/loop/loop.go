@@ -28,17 +28,64 @@ type Store struct {
 	Issues provider.IssueStore
 	// CLs は CL 置き場の部品。検査に通った workflow 定義は CL 置き場をちょうど 1 つ持つ (ADR 0015) ので、いつも組まれる
 	CLs provider.CLStore
+	// Slow は一覧の読み出しが遅いときの知らせ方。ゼロ値なら知らせない
+	Slow SlowNotice
 }
 
-// Open は種類の open な作業対象を、その種類の置き場の部品で全件読む。
+// SlowListing は 1 つの置き場の一覧を 1 回読む時間の目標。超えたら、読み終わる前に 1 行出す (formats.md §6 の「遅い一覧」)。
+const SlowListing = 15 * time.Second
+
+// SlowNotice は、一覧の読み出しが SlowListing を超えたことを、読み終わる前に 1 回だけ知らせる口。After か Notify が nil
+// なら知らせない。Notify は Open を呼んだ goroutine で呼ぶ。
+type SlowNotice struct {
+	// After は d 後に届く channel を返す (time.After。テストは差し替える)
+	After  func(d time.Duration) <-chan time.Time
+	Notify func(kind target.Kind)
+}
+
+// SlowListingLine は、kind の置き場の一覧の読み出しが SlowListing を超えたときに出す 1 行。置き場は doctor の行と同じ綴り。
+func SlowListingLine(def workflow.Definition, kind target.Kind) string {
+	name, place := "issue 置き場", def.Tracker.Place
+	if kind == target.KindCL {
+		_, place = def.CLHost()
+		name = "CL 置き場"
+	}
+	return fmt.Sprintf("%s %s の一覧の読み出しが %d 秒を超えた", name, place, int(SlowListing/time.Second))
+}
+
+// Open は種類の open な作業対象を、その種類の置き場の部品で全件読む。読み出しが SlowListing を超えたら、読み終わる前に
+// s.Slow で知らせる。知らせても読み出しは止めず、結果も変えない。
 func (s Store) Open(kind target.Kind) ([]target.Item, error) {
+	var read func() ([]target.Item, error)
 	switch kind {
 	case target.KindIssue:
-		return s.Issues.OpenIssues()
+		read = s.Issues.OpenIssues
 	case target.KindCL:
-		return s.CLs.OpenCLs()
+		read = s.CLs.OpenCLs
+	default:
+		return nil, fmt.Errorf("未知の作業対象の種類 %q", kind)
 	}
-	return nil, fmt.Errorf("未知の作業対象の種類 %q", kind)
+	if s.Slow.After == nil || s.Slow.Notify == nil {
+		return read()
+	}
+	type listing struct {
+		items []target.Item
+		err   error
+	}
+	done := make(chan listing, 1)
+	go func() {
+		items, err := read()
+		done <- listing{items, err}
+	}()
+	select {
+	case l := <-done:
+		return l.items, l.err
+	case <-s.Slow.After(SlowListing):
+	}
+	// 知らせは呼んだ goroutine で出す (loop の画面の描き直しと並ばない)
+	s.Slow.Notify(kind)
+	l := <-done
+	return l.items, l.err
 }
 
 // Read は作業対象 1 件を、その種類の置き場の部品で読み直す。終端になっているか消えていれば Terminal。
@@ -106,6 +153,9 @@ type Options struct {
 	After func(d time.Duration) <-chan time.Time
 	// Refresh は走っている worker の活動を確かめる周期 (1s) に届く。nil なら確かめない
 	Refresh <-chan time.Time
+	// SlowAfter は tick の一覧の読み出しが遅いかを測る (time.After。テストは差し替える)。After と分けるのは、After が
+	// 周期と再起動の wake だけを置くため。nil なら測らない
+	SlowAfter func(d time.Duration) <-chan time.Time
 }
 
 // phase は claim の段階。
@@ -332,6 +382,7 @@ func (l *loop) tick() {
 	}
 	l.def, l.blocked = def, l.o.Precheck(def)
 	store := l.o.Store(def)
+	store.Slow = SlowNotice{After: l.o.SlowAfter, Notify: func(kind target.Kind) { l.rec.human(LineNote, SlowListingLine(def, kind), "") }}
 	open, err := OpenItems(store, def)
 	var nonFatal *target.NonFatal
 	switch {

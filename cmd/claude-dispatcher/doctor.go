@@ -39,8 +39,8 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	// loop の起動時と同じく、workflow 定義が撃つ依存 CLI で PATH を解決する
 	e := definitionEnvironment(def)
 	fmt.Fprintf(stdout, "ok   workflow 定義 %s\n", abs)
-	failed := false
-	for _, check := range []func(environment, workflow.Definition, io.Writer) bool{checkStore, checkCLPlace, checkCommands, checkPrecheck} {
+	failed := !checkStore(e, def, stdout, stderr)
+	for _, check := range []func(environment, workflow.Definition, io.Writer) bool{checkCLPlace, checkCommands, checkPrecheck} {
 		if !check(e, def, stdout) {
 			failed = true
 		}
@@ -62,7 +62,8 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 
 // checkStore は issue 置き場を読めるかを確かめる。確認の手順を持つ種類は loop の起動時と同じ確認 (formats.md §6) を通し、
 // workflow 定義が書いた名前のうち実在しないものを 1 つ 1 行で名指しする。cl: の CL 置き場は checkCLPlace が確かめる。
-func checkStore(e environment, def workflow.Definition, stdout io.Writer) bool {
+// 一覧の読み出しが遅ければ、読み終わる前に stderr に 1 行出す (formats.md §7.4)。
+func checkStore(e environment, def workflow.Definition, stdout, stderr io.Writer) bool {
 	if err := e.places(def).ConfirmIssues(); err != nil {
 		var unknown *target.UnknownNames
 		if errors.As(err, &unknown) {
@@ -75,6 +76,7 @@ func checkStore(e environment, def workflow.Definition, stdout io.Writer) bool {
 		return false
 	}
 	store := e.places(def).Store()
+	store.Slow = slowToStderr(def, stderr)
 	var err error
 	if _, _, separate := def.SeparateCLHost(); separate {
 		// CL は別の置き場にあり、checkCLPlace の行で確かめる
