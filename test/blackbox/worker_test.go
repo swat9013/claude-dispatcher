@@ -461,7 +461,7 @@ func TestMaxConcurrentRaisesTheLimitOfTheRunningLoopFromTheNextTick(t *testing.T
 	t.Fatalf("tick の行 = %v, want issue#43 を起動した行がある", s.events("tick"))
 }
 
-func TestConcurrencyLimitFlagSetsTheLimitAtStart(t *testing.T) {
+func TestMaxConcurrentFlagSetsTheLimitAtStart(t *testing.T) {
 	s := newSandbox(t)
 	s.writeWorkflowWithCommands(s.workerWorkflow(""))
 	s.setIssues(readyIssue(42), readyIssue(43))
@@ -490,20 +490,47 @@ func TestMaxConcurrentFailsWithoutARunningLoop(t *testing.T) {
 	}
 }
 
+func TestMaxConcurrentFailsForALoopThatDoesNotReadIt(t *testing.T) {
+	// binary を入れ替える前に起動した loop (状態 file に max_concurrent を書かない版) には、書いても効かないので書かない
+	s := newSandbox(t)
+	s.writeWorkflowWithCommands(s.workerWorkflow(""))
+	dir := s.defaultStateDir()
+	mustMkdir(t, dir)
+	mustWrite(t, filepath.Join(dir, "status.json"), `{"scope": "github.com/acme/widgets"}`+"\n")
+	alive, err := os.Create(filepath.Join(dir, "alive.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer alive.Close()
+	if err := syscall.Flock(int(alive.Fd()), syscall.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+
+	r := s.run("max-concurrent", "2")
+
+	assertExit(t, r, 1)
+	if !strings.Contains(r.stderr, "この loop は max-concurrent を読まない: github.com/acme/widgets") {
+		t.Fatalf("stderr = %q, want 読まない版の loop であること", r.stderr)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "max_concurrent")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("読まない版の loop なのに max_concurrent を書いた (%v)", err)
+	}
+}
+
 func TestLoopStartsFromTheFlagInsteadOfTheLimitLeftByThePreviousLoop(t *testing.T) {
 	// 落ちた loop が残した max_concurrent を、次の loop は起動時に消す
 	s := newSandbox(t)
 	s.writeWorkflowWithCommands(s.workerWorkflow(""))
-	s.setIssues(readyIssue(42), readyIssue(43))
+	s.setIssues(readyIssue(42), readyIssue(43), readyIssue(44))
 	s.onClaude(stubwire.Rule{ReleaseFile: s.releaseFile()})
 	mustMkdir(t, s.defaultStateDir())
-	mustWrite(t, filepath.Join(s.defaultStateDir(), "max_concurrent"), "5\n")
+	mustWrite(t, filepath.Join(s.defaultStateDir(), "max_concurrent"), "1\n")
 
-	s.startLoop()
+	s.startLoop("--max-concurrent", "2")
 
 	tick := s.waitEvents("tick", 1)[0]
-	if len(tick["launched"].([]any)) != 1 || tick["max_concurrent"] != float64(1) {
-		t.Fatalf("最初の tick の行 = %v, want 既定の並列上限 1 で 1 本だけ起動", tick)
+	if len(tick["launched"].([]any)) != 2 || tick["max_concurrent"] != float64(2) {
+		t.Fatalf("最初の tick の行 = %v, want 引数の並列上限 2 で 2 本起動", tick)
 	}
 	if _, err := os.Stat(filepath.Join(s.defaultStateDir(), "max_concurrent")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("前の loop の max_concurrent が残っている (%v)", err)

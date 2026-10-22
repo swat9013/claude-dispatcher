@@ -28,7 +28,7 @@ func TestHeadingOfARunningLoopShowsTheNextAndTheLastTick(t *testing.T) {
 	}
 }
 
-func TestHeadingOfARunningLoopShowsItsConcurrencyLimitBetweenTheTicks(t *testing.T) {
+func TestHeadingOfARunningLoopShowsItsMaxConcurrentBetweenTheTicks(t *testing.T) {
 	s := status.Snapshot{Scope: "s", NextTickAt: at(5 * time.Minute), MaxConcurrent: 3, LastTick: &status.Tick{At: base, Result: status.TickOK, Candidates: 1}}
 
 	got := status.Render(s, status.LoopAlive, base, time.UTC, pipe)

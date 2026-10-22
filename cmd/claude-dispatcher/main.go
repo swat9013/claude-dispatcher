@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -48,7 +47,7 @@ const (
 )
 
 // usage の形式は formats.md §10。Usage 節の command の代わりに flag を書く形と Options 節は引数の宣言 (args.go) から生成し、
-// Usage 節の run の形・Commands・Arguments は手で書く
+// Usage 節の位置引数付きの形 (run と max-concurrent)・Commands・Arguments は手で書く
 var usage = "Usage: claude-dispatcher <command> [options] [WORKFLOW]\n" +
 	"       claude-dispatcher run TRIGGER TARGET [WORKFLOW]\n" +
 	"       claude-dispatcher max-concurrent N [WORKFLOW]\n" + usageForms() + `
@@ -216,7 +215,7 @@ func loopFlags(argv []string) (loopOptions, error) {
 	}
 	o := loopOptions{path: a.workflowPath, dryRun: a.has("--dry-run")}
 	if v := a.value("--max-concurrent"); v != "" {
-		n, err := strconv.Atoi(v)
+		n, err := parsePositiveInt("--max-concurrent", v)
 		if err != nil {
 			panic(fmt.Sprintf("--max-concurrent の値 %q が宣言の検査 (positiveInt) を通っていない", v))
 		}
@@ -280,11 +279,6 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 		return code
 	}
 	defer lock.Close()
-	// 前の loop が max-concurrent で渡した値を継がない (formats.md §6 の起動時の検査)
-	if err := state.RemoveMaxConcurrent(dir); err != nil {
-		fmt.Fprintln(stderr, err)
-		return exitFailed
-	}
 	logFile, err := os.OpenFile(filepath.Join(dir, state.LogFile), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		fmt.Fprintf(stderr, "log.jsonl を開けない: %v\n", err)
@@ -535,16 +529,16 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 }
 
 // runMaxConcurrent は `max-concurrent <N> [<workflow の path>]` を撃つ (formats.md §13)。走っている loop の state dir に並列上限
-// を書く。loop が立っていなければ書かない (次に起動する loop は起動時に消すので効かない)。tracker の CLI は撃たない。
+// を書く。loop が立っていないか、max_concurrent を読まない版の loop なら書かない (書いても効かない)。tracker の CLI は撃たない。
 func runMaxConcurrent(args []string, stdout, stderr io.Writer) int {
 	a, err := commandSpecOf("max-concurrent").parse(args)
 	if err != nil {
 		return usageError(stderr, "%v", err)
 	}
-	if err := positiveInt("N")(a.operands[0]); err != nil {
+	n, err := parsePositiveInt("N", a.operands[0])
+	if err != nil {
 		return usageError(stderr, "%v", err)
 	}
-	n, _ := strconv.Atoi(a.operands[0])
 	e := unresolvedEnvironment()
 	def, code := loadForReading(e, a.workflowPath, stderr)
 	if code != 0 {
@@ -558,6 +552,17 @@ func runMaxConcurrent(args []string, stdout, stderr io.Writer) int {
 	}
 	if !alive {
 		fmt.Fprintf(stderr, "loop が立っていない: %s\n", scopeKey)
+		return exitFailed
+	}
+	// 走っている loop は起動した時点の binary で回るので、max_concurrent を読まない版の loop に書いても効かない。読む版の
+	// loop は状態 file に max_concurrent を書く (formats.md §13)
+	snap, _, err := status.Read(dir)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return exitFailed
+	}
+	if snap.MaxConcurrent == 0 {
+		fmt.Fprintf(stderr, "この loop は max-concurrent を読まない: %s (この版の binary で loop を起動し直す)\n", scopeKey)
 		return exitFailed
 	}
 	if err := state.WriteMaxConcurrent(dir, n); err != nil {

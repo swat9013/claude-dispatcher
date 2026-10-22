@@ -228,14 +228,21 @@ func (c commandSpec) flag(name string) (flagSpec, bool) {
 // positiveInt は値が 1 以上の整数かを検査する。
 func positiveInt(name string) func(string) error {
 	return func(value string) error {
-		if n, err := strconv.Atoi(value); err != nil || n < 1 {
-			return fmt.Errorf("%s は 1 以上の整数 (%q)", name, value)
-		}
-		return nil
+		_, err := parsePositiveInt(name, value)
+		return err
 	}
 }
 
-// usageForms は usage の Usage 節の 4 行目からの (2・3 行目は main.go が手で書く run と max-concurrent の形)、command の代わりに flag を書く形。1 行目と桁を揃える字下げで始める。
+// parsePositiveInt は 1 以上の整数を読む。読めなければ name を名指しした誤り。
+func parsePositiveInt(name, value string) (int, error) {
+	n, err := strconv.Atoi(value)
+	if err != nil || n < 1 {
+		return 0, fmt.Errorf("%s は 1 以上の整数 (%q)", name, value)
+	}
+	return n, nil
+}
+
+// usageForms は usage の Usage 節の、main.go が手で書く位置引数付きの形 (run と max-concurrent) に続く、command の代わりに flag を書く形。1 行目と桁を揃える字下げで始める。
 func usageForms() string {
 	var b strings.Builder
 	for _, g := range globalFlags {

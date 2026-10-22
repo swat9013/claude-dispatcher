@@ -66,11 +66,17 @@ func (h *Held) Close() error {
 	return errors.Join(err, h.lock.Close())
 }
 
-// Lock は state dir を作り、loop の生存期間の lock (loop.lock と alive.lock) を取る。返した lock を閉じると外れる — loop が
+// Lock は state dir を作り、loop の生存期間の lock (loop.lock と alive.lock) を取る。間に前の loop の並列上限を消す。返した lock を閉じると外れる — loop が
 // 終わるまで開いておく。flock は process が消えれば外れるので、落ちた loop の lock が次の起動を塞ぐことはない。
 func Lock(dir, scopeKey string) (*Held, error) {
 	lock, err := lockScope(dir, scopeKey)
 	if err != nil {
+		return nil, err
+	}
+	// 前の loop が残した並列上限は、alive.lock を取る前に消す。取った後に消すと、その間に撃った max-concurrent が loop を
+	// 生きていると見て書き、成功を返した値を消してしまう (formats.md §6 の起動時の検査)
+	if err := RemoveMaxConcurrent(dir); err != nil {
+		lock.Close()
 		return nil, err
 	}
 	// loop.lock を持つのは 1 本だけなので、alive.lock を取り合うのは生死を確かめる status の一瞬の共有 lock だけ。
@@ -155,14 +161,20 @@ func Locked(file string) (bool, error) {
 // tick ごとに読み、起動時に消す
 const MaxConcurrentFile = "max_concurrent"
 
-// WriteMaxConcurrent は並列上限 n を書く。loop に書きかけを見せないよう、同じ dir の一時 file から rename する。
+// WriteMaxConcurrent は並列上限 n を書く。loop に書きかけを見せないよう、同じ dir の一時 file から rename する。一時 file は
+// 呼び出しごとに名前を変え、同時に撃った呼び出しが取り合わないようにする。書けなければ一時 file を消す。
 func WriteMaxConcurrent(dir string, n int) error {
-	file := filepath.Join(dir, MaxConcurrentFile)
-	tmp := file + ".tmp"
-	if err := os.WriteFile(tmp, []byte(strconv.Itoa(n)+"\n"), 0o644); err != nil {
+	tmp, err := os.CreateTemp(dir, MaxConcurrentFile+".*.tmp")
+	if err != nil {
 		return fmt.Errorf("並列上限を書けない: %w", err)
 	}
-	if err := os.Rename(tmp, file); err != nil {
+	_, err = tmp.WriteString(strconv.Itoa(n) + "\n")
+	err = errors.Join(err, tmp.Close())
+	if err == nil {
+		err = os.Rename(tmp.Name(), filepath.Join(dir, MaxConcurrentFile))
+	}
+	if err != nil {
+		os.Remove(tmp.Name())
 		return fmt.Errorf("並列上限を書けない: %w", err)
 	}
 	return nil

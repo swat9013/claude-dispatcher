@@ -136,3 +136,57 @@ func TestLockMakesTheLoopAlive(t *testing.T) {
 		t.Fatalf("loop の間の Alive = %v, %v, want true", alive, err)
 	}
 }
+
+// max-concurrent が渡す並列上限の file (formats.md §13)。
+
+func TestReadMaxConcurrentRejectsALimitBelowOne(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, state.MaxConcurrentFile), []byte("0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, ok, err := state.ReadMaxConcurrent(dir)
+
+	if err == nil || ok {
+		t.Fatalf("ReadMaxConcurrent = %v, %v, want 1 未満を誤りにする", ok, err)
+	}
+}
+
+func TestConcurrentWritesOfMaxConcurrentLeaveOneOfTheWrittenLimits(t *testing.T) {
+	dir := t.TempDir()
+	errs := make(chan error, 20)
+	for n := 1; n <= 20; n++ {
+		go func() { errs <- state.WriteMaxConcurrent(dir, n) }()
+	}
+	for range 20 {
+		if err := <-errs; err != nil {
+			t.Fatalf("同時に撃った WriteMaxConcurrent が落ちた: %v", err)
+		}
+	}
+
+	n, ok, err := state.ReadMaxConcurrent(dir)
+
+	if err != nil || !ok || n < 1 || n > 20 {
+		t.Fatalf("ReadMaxConcurrent = %d, %v, %v, want 書いた値のどれか", n, ok, err)
+	}
+	if leftovers, _ := filepath.Glob(filepath.Join(dir, state.MaxConcurrentFile+".*.tmp")); len(leftovers) != 0 {
+		t.Fatalf("一時 file が残った: %v", leftovers)
+	}
+}
+
+func TestLockDiscardsTheLimitLeftByThePreviousLoopBeforeTheLoopLooksAlive(t *testing.T) {
+	dir := t.TempDir()
+	if err := state.WriteMaxConcurrent(dir, 5); err != nil {
+		t.Fatal(err)
+	}
+
+	held, err := state.Lock(dir, "s")
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	if _, ok, err := state.ReadMaxConcurrent(dir); ok || err != nil {
+		t.Fatalf("Lock の後の ReadMaxConcurrent = %v, %v, want 前の loop の値が消えている", ok, err)
+	}
+}
