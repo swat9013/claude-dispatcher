@@ -244,7 +244,7 @@ fix-ci	cl	#51	ログインの失敗を記録する
 
 - 列はタブで区切る: trigger の名前・作業対象の種類 (`issue` / `cl`)・参照・題名
 - 参照は tracker の綴りで書く: issue と GitHub の CL は `#<番号>`、GitLab の CL (merge request) は `!<番号>`、Jira の issue は key (`WIDGETS-123`)。GitLab では issue と merge request が別々に番号を振るので、同じ番号が両方にありうる
-- `jira` では、snapshot を作る前に issue 置き場を確かめる (§6 の「起動時の検査」の `jira` の行と同じもの)。続けて `cl:` の CL 置き場も確かめる (同じく §6)
+- `jira` では、snapshot を作る前に issue 置き場を確かめる (§6 の「起動時の検査」の `jira` の行と同じもの)。続けて `cl:` の CL 置き場も確かめる (同じく §6)。snapshot は、この確認で読んだ open な一覧 (issue 置き場の open な一覧と、`on: cl` の trigger があれば CL 置き場の open な一覧) をそのまま使い、読み直さない。issue 置き場と CL 置き場の open な一覧は、それぞれ 1 回だけ読む
 - 題名の制御文字 (タブ・改行・ESC など) は空白に置き換える
 
 観測の補助の要求が落ちたとき (§3) は失敗にせず、候補を出し、stderr に理由を出して exit 0 で終わる。
@@ -280,10 +280,11 @@ claude-dispatcher loop [--max-concurrent <N>] [<workflow の path>]
 - 同じ issue 置き場の 2 本目の loop は、clone や workflow 定義の path が違っても起動時に止まる
 - `jira` の issue 置き場の確認は、次の順に撃ち、最初に落ちたもので終わる。試運転 (§5) と `doctor` (§7.4) も同じ確認を通す
   1. acli の認証の site: `acli jira auth status` が通り (落ちれば認証の失敗、exit 4)、出力の `Site:` の行の site が `tracker.host` と同じ (大文字と小文字を区別しない)。違うか `Site:` の行を読めなければ exit 2。acli は呼び出しごとに site を指定できず、active な account の site を読むため
-  2. open な一覧 (`project = "<project key>" AND statusCategory != Done`) を読める。落ちたら §3 の acli の分類で、認証 (exit 4) か見えない (exit 2)
+  2. open な一覧 (`project = "<project key>" AND statusCategory != Done`) を読める。落ちたら §3 の acli の分類で、認証 (exit 4) か見えない (exit 2)。試運転 (§5) は、ここで読んだ一覧を snapshot に使う
   3. trigger の `status` に書いた status 名が実在する (§2.2)。無い名前を trigger と一緒に名指しして exit 2。検索が落ちたら §3 の acli の分類で、認証なら exit 4。それ以外は名前の誤りと読み、acli の理由を添えて名指しする
   4. trigger の `type` に書いた issue type 名が project にある (§2.2)。無い名前を trigger と一緒に名指しして exit 2。project の issue type を読めなければ §3 の acli の分類で、認証 (exit 4) か見えない (exit 2)
-- CL 置き場の確認は、`cl:` の CL 置き場の open な CL の一覧を 1 回読む。落ちたら §3 の gh / glab の分類で、認証 (exit 4) か見えない (exit 2)、それ以外は exit 1。観測の補助の要求だけが落ちたときは通す。試運転 (§5) と `doctor` (§7.4) も同じ確認を通す。`cl:` には token が無く、gh / glab 自身の認証を使う
+- CL 置き場の確認は、`cl:` の CL 置き場の open な CL の一覧を 1 回読む。落ちたら §3 の gh / glab の分類で、認証 (exit 4) か見えない (exit 2)、それ以外は exit 1。観測の補助の要求だけが落ちたときは通す。試運転 (§5) と `doctor` (§7.4) も同じ確認を通す。試運転は、ここで読んだ一覧 (補助の要求の失敗を含む) を snapshot に使う (§5)。`cl:` には token が無く、gh / glab 自身の認証を使う
+- loop は、起動時の確認で読んだ一覧を snapshot に使い回さず、起動直後の tick (下) で読み直す。tick は workflow 定義を読み直してから snapshot を作る (system.md §7) ので、使い回すとその順の例外になる
 - lock は loop の生存期間だけ持つ。loop が死ねば外れる
 - `loop.lock` を取った loop は、続けて `alive.lock` も生存期間のあいだ持つ。単発起動の lock は §11。`status` は `alive.lock` だけを確かめるので、`loop.lock` を取り合わない (`alive.lock` を `status` が一瞬持っていれば、外れるまで待つ)
 
