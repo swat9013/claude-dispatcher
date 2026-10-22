@@ -173,13 +173,14 @@ func TestATickWhoseListingTakesOverFifteenSecondsShowsALineBeforeTheTickLine(t *
 	}
 }
 
-func TestTheSlowListingLineOfATickIsNotWrittenToTheLog(t *testing.T) {
+func TestATickWhoseListingTakesOverFifteenSecondsWritesASlowListingEventToTheLog(t *testing.T) {
 	r := slowTick(t)
 
-	if ticks := r.logEvents(t, "tick"); len(ticks) != 1 || ticks[0]["result"] != "ok" {
-		t.Fatalf("log.jsonl:\n%s\nwant tick ok の行 1 本 (log に書いた tick で確かめる)", r.log.String())
+	slow := r.logEvents(t, "slow_listing")
+	if len(slow) != 1 || slow[0]["kind"] != "issue" || slow[0]["place"] != "acme/widgets" {
+		t.Fatalf("log.jsonl:\n%s\nwant slow_listing (kind issue, place acme/widgets) の行 1 本", r.log.String())
 	}
-	if strings.Contains(r.log.String(), "15 秒") {
-		t.Fatalf("log.jsonl:\n%s", r.log.String())
+	if ticks := r.logEvents(t, "tick"); len(ticks) != 1 || ticks[0]["result"] != "ok" {
+		t.Fatalf("log.jsonl:\n%s\nwant tick ok の行 1 本 (読み出しの結果は変わらない)", r.log.String())
 	}
 }
