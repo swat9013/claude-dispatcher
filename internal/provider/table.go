@@ -141,7 +141,7 @@ var providers = []Provider{
 			Settings:    []string{"Bash(acli jira workitem:*)"},
 		},
 		Build: func(rt Runtime, s Setting) Parts {
-			store := jira.NewStore(rt.runner(acliCommand, jira.Exec{Env: rt.Env, Timeout: rt.Timeout}), s.Place.value.(jira.Project), s.Triggers)
+			store := jira.NewStore(rt.runner(acliCommand, jira.Exec{Env: rt.Env, Timeout: rt.Timeout}), s.Place.value.(jira.Project), trigger.NeedsBlocked(s.Triggers))
 			return Parts{Issues: store, Confirm: func() error { return store.Confirm(jira.NamesOf(s.Triggers)) }}
 		},
 		Setup: Setup{
