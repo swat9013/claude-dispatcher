@@ -264,6 +264,44 @@ func TestADeadLoopsClaimIsInheritedWhileAnOrphanWorksOnTheTarget(t *testing.T) {
 	}
 }
 
+func TestTheSameMachinesPreviousLoopsClaimIsInheritedWithoutWaitingForItsDeath(t *testing.T) {
+	remote := newMemoryRemote()
+	// 落ちた前の loop は同じマシン (hostname "me") の別の loop 名で、生存報告はまだ新しい
+	remote.put(nil, coord.Message{Kind: coord.KindHeartbeat, Format: coord.Format, Loop: "me-00000009", Interval: time.Minute})
+	old := remote.put(&issue42, coord.Message{Kind: coord.KindClaim, Format: coord.Format, Loop: "me-00000009", Target: "issue#42"})
+	r := tickRig(1)
+
+	r.run(t, loop.Options{
+		Definition: definition(time.Minute, 1), Coordination: remote, Store: matchingStore,
+		HeartbeatAfter: func(time.Duration) <-chan time.Time { return nil },
+		Workspaces:     func(workflow.Definition) loop.Workspaces { return listedWorkspaces{issue42} },
+		Orphaned:       func(target.Ref) (bool, error) { return true, nil },
+	})
+
+	// 別のマシンの loop が間隔の 3 倍で前の loop を死んだとみなすより先に、最初の tick で引き継ぐ
+	if !slices.Equal(remote.claimed, []string{"issue#42 holding " + old}) || remote.messages[remote.claims[issue42]].Loop != me {
+		t.Fatalf("着手宣言 %v, want 最初の tick で旧 sha からの置き換えで引き継ぐ", remote.claimed)
+	}
+}
+
+func TestAnotherMachinesLiveClaimIsNotInheritedForAnOrphan(t *testing.T) {
+	remote := newMemoryRemote()
+	remote.put(nil, coord.Message{Kind: coord.KindHeartbeat, Format: coord.Format, Loop: "other-00000002", Interval: time.Minute})
+	remote.put(&issue42, coord.Message{Kind: coord.KindClaim, Format: coord.Format, Loop: "other-00000002", Target: "issue#42"})
+	r := tickRig(1)
+
+	r.run(t, loop.Options{
+		Definition: definition(time.Minute, 1), Coordination: remote, Store: matchingStore,
+		HeartbeatAfter: func(time.Duration) <-chan time.Time { return nil },
+		Workspaces:     func(workflow.Definition) loop.Workspaces { return listedWorkspaces{issue42} },
+		Orphaned:       func(target.Ref) (bool, error) { return true, nil },
+	})
+
+	if len(remote.claimed) != 0 {
+		t.Fatalf("着手宣言 %v, want 別のマシンの生きている loop の着手宣言は引き継がない", remote.claimed)
+	}
+}
+
 func TestAnInheritedClaimIsDeletedWhenTheOrphanEnds(t *testing.T) {
 	remote := newMemoryRemote()
 	old := remote.put(&issue42, coord.Message{Kind: coord.KindClaim, Format: coord.Format, Loop: "dead-00000002", Target: "issue#42"})

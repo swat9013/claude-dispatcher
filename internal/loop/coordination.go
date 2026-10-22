@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -368,10 +369,43 @@ func (l *loop) inherit(ref target.Ref, h *holder) {
 		LineNote, "引き継ぎ", " %s: orphan の claude が動いているので、死んだ loop %s の着手宣言を引き継いだ", ref, h.loop)
 }
 
+// inheritOrphanClaims は、生きている orphan の作業対象に残った、死んだ loop の着手宣言を引き継ぐ (formats.md §12 の 8)。
+// 持ち主が同じマシンの別の loop なら、死の判定 (間隔の 3 倍) を待たずに死んだとみなす。同じ scope の loop は 1 台に 1 つしか
+// 立たない (scope key の lock) ので、同じマシンの別の loop 名は落ちた前の loop で、待つと別のマシンの loop に先に乗っ取られる。
+// 新しい版の ref がある間は撃たない。
+func (l *loop) inheritOrphanClaims() {
+	m := l.mediation
+	if m.newer != nil {
+		return
+	}
+	for _, ref := range sortedRefs(m.holders) {
+		h := m.holders[ref]
+		if _, claimed := l.claims[ref]; claimed || !l.orphans[ref] || h.loop == "" {
+			continue
+		}
+		if h.dead || sameMachine(h.loop, m.c.LoopName()) {
+			l.inherit(ref, h)
+		}
+	}
+}
+
+// sameMachine は、2 つの loop 名が同じ hostname から作られたか (`<hostname>-<乱数 8 hex>`。formats.md §12)。
+func sameMachine(a, b string) bool {
+	host := func(name string) string {
+		i := strings.LastIndex(name, "-")
+		if i < 0 {
+			return name
+		}
+		return name[:i]
+	}
+	return host(a) == host(b)
+}
+
 // cleanupDeadLoops は、死んだ loop の着手宣言のうち乗っ取らなかったものと、死んだ loop の生存報告を消す (formats.md §12 の 7)。
 // 生きている orphan の作業対象の着手宣言は消さずに引き継ぐ。消すときの負けは読み飛ばす (他の loop が先に消したか乗っ取った)。
 func (l *loop) cleanupDeadLoops() {
 	r := l.mediation
+	l.inheritOrphanClaims()
 	loops := make([]string, 0, len(r.deadLoops))
 	for loop := range r.deadLoops {
 		loops = append(loops, loop)
@@ -392,15 +426,11 @@ func (l *loop) cleanupDeadLoops() {
 		}
 		claims := 0
 		for _, ref := range sortedRefs(r.holders) {
-			// 自分が着手宣言を置いて claim している (この tick の候補の起動で乗っ取った) 作業対象の着手宣言は消さない。生きている
-			// orphan の作業対象の着手宣言は、orphan の claude が作業を続けているので、消さずに引き継ぐ
+			// 自分が着手宣言を置いて claim している (この tick の候補の起動で乗っ取った) 作業対象と、生きている orphan の作業対象
+			// (inheritOrphanClaims が引き継ぐ) の着手宣言は消さない
 			h := r.holders[ref]
 			c, claimed := l.claims[ref]
-			if mine := claimed && c.claimSHA != ""; h.loop != loop || !h.dead || mine {
-				continue
-			}
-			if l.orphans[ref] {
-				l.inherit(ref, h)
+			if mine := claimed && c.claimSHA != ""; h.loop != loop || !h.dead || mine || l.orphans[ref] {
 				continue
 			}
 			if remove(ref, r.c.ClaimRef(ref), h.sha) {
