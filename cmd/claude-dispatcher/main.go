@@ -278,7 +278,7 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 		sc = &screen{out: stdout, now: time.Now, loc: time.Local, display: func() status.Display { return display(f, e.getenv) }}
 		output = sc
 	}
-	slow := loop.SlowNotice{After: time.After, Notify: func(kind target.Kind) {
+	slow := loop.SlowNotice{After: slowAfter, Notify: func(kind target.Kind) {
 		output.Show(loop.Line{At: time.Now(), Kind: loop.LineNote, Label: loop.SlowListingLine(def, kind)})
 	}}
 	if code := e.confirmLaunchable(def, stderr, slow); code != 0 {
@@ -342,7 +342,7 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 		Now:          time.Now,
 		After:        time.After,
 		Refresh:      time.Tick(time.Second),
-		SlowAfter:    time.After,
+		SlowAfter:    slowAfter,
 	})
 }
 
@@ -456,10 +456,15 @@ func dryRunOnce(store loop.Store, def workflow.Definition, stdout, stderr io.Wri
 	return 0
 }
 
+// slowAfter は一覧の読み出しが遅いかを測る (起動時の確認・試運転・doctor・単発起動・loop の tick)。閾値は workflow 定義にも
+// 利用者の設定にも出さない (#374)。差し替えるのは black-box テスト用に build tag `blackbox` で build した binary だけ
+// (slow_blackbox.go)
+var slowAfter = time.After
+
 // slowToStderr は、一覧の読み出しが遅いことを読み終わる前に stderr へ 1 行で知らせる口 (formats.md §6 の「遅い一覧」)。
 // 試運転・doctor・単発起動が使う。
 func slowToStderr(def workflow.Definition, stderr io.Writer) loop.SlowNotice {
-	return loop.SlowNotice{After: time.After, Notify: func(kind target.Kind) { fmt.Fprintln(stderr, loop.SlowListingLine(def, kind)) }}
+	return loop.SlowNotice{After: slowAfter, Notify: func(kind target.Kind) { fmt.Fprintln(stderr, loop.SlowListingLine(def, kind)) }}
 }
 
 // stopRequests は loop の停止要求 (SIGINT / SIGTERM / SIGHUP) を受ける channel を返す。
