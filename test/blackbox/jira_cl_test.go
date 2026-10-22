@@ -35,6 +35,64 @@ func TestJiraWithAGitHubCLHostRunsCLTriggersOnTheGitHubCLs(t *testing.T) {
 	s.assertAcliOnlyReads()
 }
 
+func TestJiraDryRunReadsEachOpenListOnlyOnceForTheConfirmationAndTheSnapshot(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflowWithCommands(jiraFixCI)
+	s.setJiraPlaces(readyJiraIssue(42))
+	s.setStore(nil, []cl{failingCL(7)})
+
+	r := s.dryRun()
+
+	assertCandidates(t, r, jiraCandidate("implement", 42), clCandidate("fix-ci", 7))
+	// 候補の読み直しは workitem view と pullRequest(number:) を撃ち、view が通るので一覧を読み足さない。stub は一覧を 1 page で返す
+	if n := s.countCalls("acli", func(arg string) bool { return arg == jiraOpenJQL }); n != 1 {
+		t.Fatalf("issue 置き場の open な一覧を %d 回読んだ (1 回のはず)", n)
+	}
+	if n := s.countCalls("gh", func(arg string) bool { return strings.Contains(arg, clListQuery) }); n != 1 {
+		t.Fatalf("CL 置き場の open な一覧を %d 回読んだ (1 回のはず)", n)
+	}
+}
+
+func TestJiraDryRunReadsTheGitLabCLHostListOnlyOnceEvenWhenTheRecheckRequestFails(t *testing.T) {
+	s := newSandbox(t)
+	unchecked := readyMR(1)
+	unchecked.mergeStatus = "UNCHECKED"
+
+	r := s.dryRunJiraWithGitLabCLHost(unchecked, recheckRequestFails)
+
+	assertCandidates(t, r, mrCandidate("t", 1))
+	if n := s.countCalls("glab", func(arg string) bool { return strings.Contains(arg, gitlabOpenMRsQuery) }); n != 1 {
+		t.Fatalf("CL 置き場の open な一覧を %d 回読んだ (1 回のはず)", n)
+	}
+}
+
+func TestJiraDryRunStillNamesTheFailedRecheckRequestOfTheConfirmedCLList(t *testing.T) {
+	s := newSandbox(t)
+	unchecked := readyMR(1)
+	unchecked.mergeStatus = "UNCHECKED"
+
+	r := s.dryRunJiraWithGitLabCLHost(unchecked, recheckRequestFails)
+
+	assertCandidates(t, r, mrCandidate("t", 1))
+	if !strings.Contains(r.stderr, "補助の要求が落ちた") {
+		t.Fatalf("stderr に計算し直しの求めの失敗が無い:\n%s", r.stderr)
+	}
+}
+
+// recheckRequestFails は、glab の merge request の計算し直しの求め (補助の要求) を落とす応答。
+var recheckRequestFails = stubwire.Rule{ArgsPrefix: glabAPI(), ArgsContain: []string{"with_merge_status_recheck=true"}, Stderr: "glab: HTTP 502\n", Exit: 1}
+
+// dryRunJiraWithGitLabCLHost は、cl: に GitLab を置き、どの merge request にも当たる trigger 1 つの jira の workflow 定義で、
+// glab が mr を返すときの試運転を撃つ。rules は glab の既定の応答より先に当てる応答。
+func (s *sandbox) dryRunJiraWithGitLabCLHost(mr glMR, rules ...stubwire.Rule) runResult {
+	s.t.Helper()
+	gitlabCL := "cl:\n  kind: gitlab\n  host: " + gitlabHost + "\n  repo: " + gitlabRepo + "\n"
+	s.writeWorkflowWithCommands("---\n" + jiraTracker + gitlabCL + "triggers:\n  - {name: t, on: cl, action: /t}\n---\n共通 prompt\n")
+	s.setJiraPlaces()
+	s.respondAll("glab", append(rules, glabStoreRules(nil, []glMR{mr})...))
+	return s.dryRun()
+}
+
 func TestJiraConfirmsTheCLHostEvenWithoutCLTriggers(t *testing.T) {
 	cases := []struct {
 		name   string

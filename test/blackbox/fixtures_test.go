@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -334,6 +335,18 @@ func (s *sandbox) calls(name string) []stubwire.Call {
 		calls = append(calls, c)
 	}
 	return calls
+}
+
+// countCalls は name の CLI の呼び出しのうち、match に当たる argument を持つものの数。
+func (s *sandbox) countCalls(name string, match func(arg string) bool) int {
+	s.t.Helper()
+	n := 0
+	for _, c := range s.calls(name) {
+		if slices.ContainsFunc(c.Argv, match) {
+			n++
+		}
+	}
+	return n
 }
 
 // waitCalls は name の stub が受けた呼び出しが n 件になるまで待ち、受けた順に返す。待ちきれなければ msg で落ちる。
