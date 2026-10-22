@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -163,5 +164,35 @@ func TestConfirmNamesAnUnknownRemote(t *testing.T) {
 
 	if err == nil {
 		t.Fatal("解けない remote を通した")
+	}
+}
+
+const batchSSH = "GIT_SSH_COMMAND=ssh -o BatchMode=yes"
+
+func TestGitDisablesTheSSHPromptWhenTheUserLeavesSSHUnset(t *testing.T) {
+	r := remoteForTest(t)
+
+	if env := r.git().Env; !slices.Contains(env, batchSSH) {
+		t.Fatalf("env = %v, %s を期待", env, batchSSH)
+	}
+}
+
+func TestGitKeepsTheUsersSSHCommand(t *testing.T) {
+	for name, set := range map[string]func(t *testing.T, r *Remote){
+		"GIT_SSH_COMMAND": func(t *testing.T, r *Remote) { r.Git.Env = append(r.Git.Env, "GIT_SSH_COMMAND=ssh -i key") },
+		"core.sshCommand": func(t *testing.T, r *Remote) {
+			if _, err := r.Git.Output("config", "core.sshCommand", "ssh -i key"); err != nil {
+				t.Fatal(err)
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := remoteForTest(t)
+			set(t, &r)
+
+			if env := r.git().Env; slices.Contains(env, batchSSH) {
+				t.Fatalf("env = %v, 利用者の設定を上書きした", env)
+			}
+		})
 	}
 }
