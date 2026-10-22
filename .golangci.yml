@@ -2,7 +2,7 @@
 version: "2"
 
 run:
-  # build tag `blackbox` の file (black-box テスト用の binary だけに入る) も検査する。`!blackbox` の file は無いので、tag 付きで読めば全 file を読む
+  # build tag `blackbox` の file (black-box テスト用の binary だけに入る) も検査する。`!blackbox` の file は無いので、tag 付きで読めば tag `blackbox` で分かれる file はすべて読む (OS で分かれる file は別。checks.yml の lint job のコメント)
   build-tags: [blackbox]
 
 linters:

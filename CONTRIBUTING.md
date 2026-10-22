@@ -85,7 +85,7 @@ claude-dispatcher-dev loop
   - `test/blackbox` は binary を build して外から撃つ black-box テスト (外から観測できる契約の検査。正本は [docs/design/formats.md](docs/design/formats.md))。外部 CLI は stub に差し替えるので、network も認証も要らず、マシンに在る実物にも届かない。例外: Homebrew の prefix 等に gh / claude の実物があるマシン (macOS の runner の gh 等) では、「解決できない」を確かめるテストが skip される
 - PR と main への push: [.github/workflows/ci.yml](.github/workflows/ci.yml) が検査の本体 [.github/workflows/checks.yml](.github/workflows/checks.yml) を呼ぶ。Go は setup-go が go.mod の `toolchain` 行の版を入れる
   - `test`: `go vet -tags blackbox ./...` と `go test -race ./...` を ubuntu と macOS の runner (配布対象の OS) で撃つ。skip したテストは理由とともに job の log の最後に並ぶ
-  - `lint`: `golangci-lint run ./...` を ubuntu の runner だけで撃つ (理由は checks.yml の `lint` job のコメント)
+  - `lint`: `golangci-lint run ./...` を ubuntu の runner だけで撃つ (lint されない OS 別の file は checks.yml の `lint` job のコメント)
   - `goreleaser-check`: `goreleaser check` で [.goreleaser.yaml](.goreleaser.yaml) を検査する
   - `pre-commit`: commit 時の hook を `pre-commit run --all-files` で撃つ。ただし repocheck-adr は `SKIP` で外す (並行する PR が同じ番号を取って merge されると、無関係な PR の merge ref まで赤くなるため)。PR では加えて、push 前の gitleaks の hook を PR の commit 範囲 (base..head。merge commit を除く) に撃つ。merge commit を許しているので、途中の commit で入れて後の commit で消した秘匿情報も main の履歴に残るため。merge commit で解いた conflict の中身は検査されない。手元での再現は `pre-commit run --hook-stage pre-push --from-ref origin/main --to-ref HEAD gitleaks` (stack した CL なら `origin/main` を前段の branch にする)
   - 同じ PR に push が重なると、古い run を中止する。main への push の run は中止しない

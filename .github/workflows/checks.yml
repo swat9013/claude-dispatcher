@@ -44,7 +44,8 @@ jobs:
         shell: bash
 
   # push 前の hook の golangci-lint を撃つ。build tag `blackbox` の file は .golangci.yml の run.build-tags で読む。
-  # OS で分かれる file は internal/proc の exit_other.go (linux / darwin 以外) だけで、配布対象の OS では読まれないので、ubuntu だけで撃つ
+  # ubuntu だけで撃つので、OS で分かれる file のうち linux 以外の file (internal/proc の exit_darwin.go・exit_other.go) は lint されない。
+  # exit_darwin.go は test job の macOS の runner の go vet だけが読む
   lint:
     runs-on: ubuntu-latest
     steps:
