@@ -31,10 +31,18 @@ claude-dispatcher は、tracker (GitHub・GitLab・Jira Cloud) の issue と CL 
 2. **自分の project に合わせて書く**: trigger の述語・action・hooks・並列上限を直し、repo に commit する。書ける項目は下の「workflow 定義の書き方」
    - worker が作業を終えたら作業対象を trigger から外すよう、action か本文 (共通 prompt) に書く (下の「action が守る約束」)
    - workspace の置き場 (`workspace.root`) が clone の中なら、`.gitignore` に足す。既定の `.claude-dispatcher/workspaces` は clone の中に入る。`setup` は `.gitignore` を書かない
+   - **チームで分担するなら、調停 remote を宣言する**: 同じ issue 置き場を複数のマシンの loop で分け合うなら、`WORKFLOW.md` に `coordination.remote: origin` (clone の git remote の名前) を書いて commit する。書かなければ 1 台で回す
+     - loop は、その remote の `refs/dispatcher/` の下に、作業対象ごとの着手宣言と loop ごとの生存報告を置き合い、先に置けた loop だけが worker を起動する。branch・CL・tracker には書かない
+     - loop を回す各マシンの clone から、その remote へ push できる必要がある (認証は clone の git の設定をそのまま使う)。読む URL と書く URL が 1 本ずつの同じ URL の remote を指す (`pushurl` を別の repo に向けた remote や、URL が複数の remote は起動時に落ちる。その clone では別の remote 名を足して指す)。ssh の remote は、passphrase や host key の確認で止まらないよう agent か鍵の設定で prompt なしに通るようにしておく。push は `--no-verify` で撃つので、実装 repo の pre-push hook は通らない
+     - 落ちたマシンの作業対象は、生存報告の間隔 (`polling.interval` と 1 分の長いほう) の 3 倍の後に、生きている loop が拾い直す。network が切れたマシンの worker は、戻ったときに乗っ取られていれば止まり、`要対処` に出る
+     - attempt と打ち切りはマシンごとに数える。あるマシンで打ち切った作業対象を、別のマシンが拾い直しうる
+     - 版はチームで揃えて上げる。新しい版の loop が置いた ref を見た古い版の loop は、worker を起動せずに `要対処` に出す
+     - 試運転 (`loop --dry-run`) は調停 remote を読まないので、他のマシンが作業している作業対象も示しうる。`doctor` は調停 remote を読めるかを確かめる (push は撃たない)
 3. **試運転**: `claude-dispatcher loop --dry-run` が workflow 定義を検査し、起動するはずの作業対象と trigger を 1 件 1 行で示す。何も起動せず、何も書かない
-   - action まで確かめるなら、`claude-dispatcher run <trigger> <作業対象>` (作業対象は `issue#<番号>` か `cl#<番号>` と書く) で、その作業対象に worker を 1 回だけ起動する (単発起動)。作業対象が trigger に当たっているときだけ起動し、終わった後に trigger から外れていれば exit 0、起動しなかったら exit 5、起動したが当たったままなら exit 6 で終わる。retry はしない。同じ issue 置き場の loop が走っている間は撃てない (exit 3)。workspace・hooks・時間の上限・Ctrl+C の扱い (1 回目は待つ、2 回目は止める) は loop と同じ。workspace は作業対象が閉じていなければ残り、後の loop がそのまま使う
+   - action まで確かめるなら、`claude-dispatcher run <trigger> <作業対象>` (作業対象は `issue#<番号>` か `cl#<番号>` と書く) で、その作業対象に worker を 1 回だけ起動する (単発起動)。作業対象が trigger に当たっているときだけ起動し、終わった後に trigger から外れていれば exit 0、起動しなかったら exit 5、起動したが当たったままなら exit 6 で終わる。retry はしない。同じ issue 置き場の loop が走っている間は撃てない (exit 3)。workspace・hooks・時間の上限・Ctrl+C の扱い (1 回目は待つ、2 回目は止める) は loop と同じ。workspace は作業対象が閉じていなければ残り、後の loop がそのまま使う。`coordination.remote` (上の 2) を書いた project では、走っている間は loop と同じく着手宣言と生存報告を置き、他のマシンの loop が作業している作業対象では起動しない (exit 5)
 4. **導入を確かめる**: `claude-dispatcher doctor` が workflow 定義・issue 置き場・依存 CLI・事前検査を確かめ、利用者の約束に頼る宣言を警告する。Claude Code の settings (`permissions.allow`) に要りそうな entry も示すので、自分で足す (CLI は settings を書かない)
-   - 依存 CLI は、gh・glab・acli のどれか・claude・git (git は CL 側の trigger があるとき)
+   - 依存 CLI は、gh・glab・acli のどれか・claude・git (git は CL 側の trigger があるときと、`coordination.remote` を書いたとき)
+   - `coordination.remote` を書いたなら、その remote を解いて読めることも確かめる
    - 警告する宣言は、承認済みの CL への action と、絞り込みの無い CL 側の trigger
 5. **回す**: `claude-dispatcher loop` を撃つ (下の「回す・見る・止める」)
 
@@ -49,7 +57,8 @@ workflow 定義に誤りがあれば、試運転・`loop` の起動・`doctor` �
 - 起動時に workflow 定義の検査と事前検査を通す。落ちれば誤りを名指しして起動しない
 - tick ごとに workflow 定義を読み直す。読み直した定義が検査に落ちた tick と、事前検査に落ちた trigger は、何も起動しない
 - `claude-dispatcher loop --max-concurrent <N>` で、その loop だけ並列上限を `limits.max_concurrent` から変えられる (1 以上の整数)。渡した値は loop を止めるまで変わらず、`WORKFLOW.md` の `limits.max_concurrent` を直しても効かない。変えるなら loop を撃ち直す
-- 同じ issue 置き場の loop は、同じマシンで 1 本しか起動できない (2 本目と、`run` が走っている間の loop は exit 3 で止まる)。マシンを跨いだ排他は持たないので、1 つの issue 置き場は 1 台から回す
+- 同じ issue 置き場の loop は、同じマシンで 1 本しか起動できない (2 本目と、`run` が走っている間の loop は exit 3 で止まる)。マシンを跨いで分け合うなら `coordination.remote` を書く (上の「導入の流れ」の 2)。書かなければマシンを跨いだ排他は持たないので、1 つの issue 置き場は 1 台から回す
+- `coordination.remote` を書いた project では、loop の起動時に調停 remote を解いて読めて、生存報告を置けることを確かめる。落ちれば exit 1 で起動しない
 - loop は自分では起き直さない。端末を閉じた・マシンを再起動した・binary を入れ替えた (走っている loop は起動した時点の binary で回り続ける) ときは、同じコマンドを撃ち直す
 
 ### 見る
@@ -61,7 +70,7 @@ workflow 定義に誤りがあれば、試運転・`loop` の起動・`doctor` �
 - 別の端末からは `claude-dispatcher status` で見る。loop が書き出す状態 file を描くだけで、何も書かず、tracker の CLI も撃たない
   - 見出しの 1 行目は loop が生きているか (`loop 稼働中` / `loop 停止待ち` / `loop なし`)、2 行目は次の tick と直近の tick の結果
   - loop が止まった後 (`loop なし`) は見出しだけを描き、止められない worker も描かない。loop が止まった後に残った claude の pid と workspace は、log.jsonl の `error` の行 `claude を止められないまま止まる (pid <pid>, workspace <path>)` で読む
-  - `workers` に走っている worker と再起動待ちを (段階・経過・最新の活動を含む)、`要対処` に打ち切り・曖昧な CL・事前検査に落ちた trigger・止められない worker (SIGKILL を送れず claude が終わっていない。段階は `unstopped` で、pid と workspace の path を出す)・orphan (前の loop が止まった後も動いている claude。終わるまでその作業対象では起動しない) を解き方とともに並べる
+  - `workers` に走っている worker と再起動待ちを (段階・経過・最新の活動を含む)、`要対処` に打ち切り・曖昧な CL・事前検査に落ちた trigger・止められない worker (SIGKILL を送れず claude が終わっていない。段階は `unstopped` で、pid と workspace の path を出す)・orphan (前の loop が止まった後も動いている claude。終わるまでその作業対象では起動しない) を解き方とともに並べる。`coordination.remote` を書いた project では、乗っ取られた作業対象 (worker を止めたので、止まる前に push された成果を確かめる)・続けて落ちている生存報告・新しい版の ref (dispatcher を上げる) も並べる
 - 置き場は `claude-dispatcher paths --json` で引く。何も書かず、tracker の CLI も撃たない
 
 | key | 中身 |
@@ -197,6 +206,7 @@ triggers:                    # 必須。1 つ以上
 | `limits.max_retry_backoff` | 文字列 | backoff の上限。Go の duration の綴りで、0 より長い。既定 5m |
 | `limits.stall_timeout` | 文字列 | worker の stream (stdout の stream-json) に progress (heartbeat (`tool_progress`)・rate limit の通知・読めない行を除いた行) が書かれなくなってから、止めて失敗とするまでの時間。既定 15m。`0s` で無効。claude が行を書かない区間 (長い build や test などの tool の実行・API の retry の backoff・compaction) より長くする |
 | `limits.run_timeout` | 文字列 | worker 1 回分の上限時間。起動からの経過が超えたら止めて失敗とする。既定 1h。`0s` で無効 |
+| `coordination.remote` | 文字列 | 同じ issue 置き場を複数のマシンの loop で分け合うときの調停 remote。workflow 定義のある clone の git remote の名前 (`origin` など) で書く。綴りは `[A-Za-z0-9._/-]+` で、`-` で始めない。その remote の `refs/dispatcher/` の下に着手宣言と生存報告を置き合う (上の「導入の流れ」の 2)。URL と認証は clone の git の設定を使う。省くと調停 remote を読みも書きもせず、1 台で回す |
 | `claude.command` | 文字列 | worker として起動する command。PATH から探す。既定 `claude` |
 | `claude.args` | 文字列の列 | command に、dispatcher が渡す引数 (上の「action が守る約束」の起動のコマンド) より前に渡す引数。既定は空。permission の扱い (`--permission-mode` など) はここで決める。再入の仕組み (`ScheduleWakeup`・`CronCreate`・`CronList`・`CronDelete`・`Monitor`) を `--disallowedTools` で塞ぐことを勧める (理由と見分け方は表の下の「再入の仕組みを塞ぐ」) |
 | `triggers` | 列 | trigger の宣言。1 つ以上。宣言順が起動の優先順 (先頭の trigger ほど先に起動する) |

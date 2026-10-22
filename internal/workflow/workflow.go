@@ -43,7 +43,10 @@ type Definition struct {
 	StallTimeout time.Duration
 	RunTimeout   time.Duration
 	Claude       Claude
-	Triggers     []trigger.Trigger
+	// CoordinationRemote は調停 remote (system.md §4 のマシンを跨いだ分担) の、workflow 定義のある clone の git remote の
+	// 名前。書かれていなければ ""
+	CoordinationRemote string
+	Triggers           []trigger.Trigger
 	// Prompt は本文 (共通 prompt) の template
 	Prompt string
 }
@@ -408,7 +411,30 @@ func (c *checker) topFields(def *Definition) map[string]field {
 		"claude": {read: func(key, n *yaml.Node, path string) {
 			c.mapping(key, n, path, c.claudeFields(def))
 		}},
+		"coordination": {read: func(key, n *yaml.Node, path string) {
+			c.mapping(key, n, path, c.coordinationFields(def))
+		}},
 		"triggers": {required: true, read: func(_, n *yaml.Node, path string) { def.Triggers = c.triggers(n, path) }},
+	}
+}
+
+// remoteName は coordination.remote の綴り。git の argv に置くので、option と読まれる `-` で始まる名前を拒む
+var remoteName = regexp.MustCompile(`^[A-Za-z0-9._/][A-Za-z0-9._/-]*$`)
+
+// coordinationFields は coordination の表。
+func (c *checker) coordinationFields(def *Definition) map[string]field {
+	return map[string]field{
+		"remote": {read: func(_, n *yaml.Node, path string) {
+			s, ok := c.str(n, path)
+			if !ok {
+				return
+			}
+			if !remoteName.MatchString(s) {
+				c.fail(n, path, "%q: git remote の名前を [A-Za-z0-9._/-]+ で、- で始めずに書く", s)
+				return
+			}
+			def.CoordinationRemote = s
+		}},
 	}
 }
 

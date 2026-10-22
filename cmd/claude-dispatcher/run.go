@@ -1,12 +1,15 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
+	"github.com/swat9013/claude-dispatcher/internal/coord"
 	"github.com/swat9013/claude-dispatcher/internal/loop"
 	"github.com/swat9013/claude-dispatcher/internal/printable"
 	"github.com/swat9013/claude-dispatcher/internal/state"
@@ -88,6 +91,27 @@ func runOnce(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "%s は %s に当たっていないので起動しない (%s)\n", ref, t.Name, observationText(observed))
 		return exitNotLaunched
 	}
+	party, code := e.join(def, stderr)
+	if code != 0 {
+		return code
+	}
+	// claudeLeft は、止められない claude を残して終えるか
+	var claudeLeft bool
+	if party != nil {
+		var claimSHA string
+		// 起動しなかったときも、置いた分の着手宣言と生存報告を消す。止められない claude を残すなら、どちらも消さずに生存報告を
+		// 途絶えさせる (formats.md §12 の後片付け)
+		defer func() {
+			if !claudeLeft {
+				leaveOnce(party, ref, claimSHA, stderr)
+			}
+		}()
+		if claimSHA, code = claimOnce(party, ref, stderr); code != 0 {
+			return code
+		}
+		stop := keepReporting(party, coord.HeartbeatInterval(def.Interval), stderr)
+		defer stop()
+	}
 	sessionID, err := worker.NewSessionID()
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -104,7 +128,7 @@ func runOnce(args []string, stdout, stderr io.Writer) int {
 	ws := e.workspaces(def, &sync.Mutex{})
 	run := worker.Runner{Workspaces: ws, Definition: def, StateDir: dir}.
 		Start(worker.Job{Item: item, Trigger: t, Attempt: 1, SessionID: sessionID, Prompt: def.Prompt}, events)
-	o := once{store: store, workspaces: ws, stateDir: dir, trigger: t, ref: ref, stdout: stdout, stderr: stderr}
+	o := once{store: store, workspaces: ws, stateDir: dir, trigger: t, ref: ref, stdout: stdout, stderr: stderr, claudeLeft: &claudeLeft}
 	return o.await(sessionID, run, events, signals)
 }
 
@@ -117,6 +141,8 @@ type once struct {
 	ref        target.Ref
 	stdout     io.Writer
 	stderr     io.Writer
+	// claudeLeft には、止められない claude を残して終えるときに true を書く
+	claudeLeft *bool
 }
 
 // await は単発起動の worker の終わりを待ち、exit code を返す (formats.md §11)。停止要求は 1 回目で worker の終わりを待ち、
@@ -138,6 +164,7 @@ func (o once) await(sessionID string, run *worker.Run, events <-chan worker.Even
 		}
 	}
 	unstoppedEnd := func() int {
+		*o.claudeLeft = true
 		fmt.Fprintf(o.stdout, "終了: %s 未完了 (claude を止められない)\n", o.ref)
 		return exitNotCompleted
 	}
@@ -222,6 +249,75 @@ func (o once) ended(result worker.Result, started, stopped bool) int {
 	}
 	fmt.Fprintf(o.stdout, "終了: %s 未完了 (%s)\n", o.ref, observationText(observed))
 	return exitNotCompleted
+}
+
+// claimOnce は、単発起動の作業対象の着手宣言を置き、置いた sha を返す (formats.md §11)。ref を 1 回しか読まないので死んだ loop
+// を判定せず、他の loop の着手宣言があれば起動しない。起動しないなら stderr に理由を出して exit code を返す。
+func claimOnce(party *coord.Party, ref target.Ref, stderr io.Writer) (string, int) {
+	view, err := party.Observe()
+	if err != nil {
+		fmt.Fprintln(stderr, printable.Line(err.Error()))
+		return "", exitFailed
+	}
+	if view.Unread != nil {
+		fmt.Fprintln(stderr, printable.Line(view.Unread.Error()))
+	}
+	for _, m := range view.Messages {
+		if m.Newer() {
+			fmt.Fprintln(stderr, "調停 remote に新しい版の ref があるので起動しない (dispatcher を上げる)")
+			return "", exitNotLaunched
+		}
+	}
+	if sha, held := view.Claims[ref]; held {
+		fmt.Fprintf(stderr, "%s は loop %s が着手しているので起動しない\n", ref, view.Messages[sha].Loop)
+		return "", exitNotLaunched
+	}
+	sha, err := party.Claim(ref, coord.Absent())
+	switch {
+	case errors.Is(err, coord.ErrLost):
+		fmt.Fprintf(stderr, "%s は他の loop が先に着手したので起動しない\n", ref)
+		return "", exitNotLaunched
+	case err != nil:
+		fmt.Fprintf(stderr, "%s の着手宣言を置けない: %s\n", ref, printable.Line(err.Error()))
+		return "", exitFailed
+	}
+	return sha, 0
+}
+
+// keepReporting は、単発起動が終わるまで生存報告を間隔ごとに置き直す。返した関数で止める (止まるまで待つ)。
+func keepReporting(party *coord.Party, interval time.Duration, stderr io.Writer) func() {
+	done, stopped := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(stopped)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				if err := party.Heartbeat(interval); err != nil {
+					fmt.Fprintf(stderr, "生存報告を置けない: %s\n", printable.Line(err.Error()))
+				}
+			}
+		}
+	}()
+	return func() {
+		close(done)
+		<-stopped
+	}
+}
+
+// leaveOnce は、単発起動が置いた着手宣言 (置けていれば) と生存報告を消す。消せなければ stderr に出す。
+func leaveOnce(party *coord.Party, ref target.Ref, claimSHA string, stderr io.Writer) {
+	if claimSHA != "" {
+		if err := party.Delete(party.ClaimRef(ref), claimSHA); err != nil {
+			fmt.Fprintf(stderr, "%s の着手宣言を消せない: %s\n", ref, printable.Line(err.Error()))
+		}
+	}
+	if err := party.Leave(); err != nil {
+		fmt.Fprintf(stderr, "生存報告を消せない: %s\n", printable.Line(err.Error()))
+	}
 }
 
 // namedTrigger は workflow 定義の trigger を名前で引く。

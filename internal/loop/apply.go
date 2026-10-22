@@ -27,6 +27,7 @@ func (l *loop) apply(ref target.Ref, c *claim, e effect) {
 	if e.exit == stay {
 		return
 	}
+	l.releaseRemote(ref, c)
 	delete(l.claims, ref)
 	if e.exit == abandon {
 		l.abandoned[ref] = c.trigger.Name

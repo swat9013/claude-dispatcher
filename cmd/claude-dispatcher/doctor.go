@@ -39,7 +39,7 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	e := definitionEnvironment(def)
 	fmt.Fprintf(stdout, "ok   workflow 定義 %s\n", abs)
 	failed := !checkStore(e, def, stdout, stderr)
-	for _, check := range []func(environment, workflow.Definition, io.Writer) bool{checkCLPlace, checkCommands, checkPrecheck} {
+	for _, check := range []func(environment, workflow.Definition, io.Writer) bool{checkCLPlace, checkCommands, checkPrecheck, checkCoordination} {
 		if !check(e, def, stdout) {
 			failed = true
 		}
@@ -134,6 +134,21 @@ func checkPrecheck(e environment, def workflow.Definition, stdout io.Writer) boo
 		return false
 	}
 	fmt.Fprintln(stdout, "ok   事前検査")
+	return true
+}
+
+// checkCoordination は、調停 remote を指した project で、loop の起動時と同じく調停 remote を解いて読めるかを確かめる
+// (formats.md §12)。push は撃たない。指さなければ何も出さない。
+func checkCoordination(e environment, def workflow.Definition, stdout io.Writer) bool {
+	if def.CoordinationRemote == "" {
+		return true
+	}
+	url, err := e.coordinationRemote(def).Confirm()
+	if err != nil {
+		fmt.Fprintf(stdout, "NG   %s\n", printable.Line(err.Error()))
+		return false
+	}
+	fmt.Fprintf(stdout, "ok   調停 remote %s (%s)\n", def.CoordinationRemote, printable.Line(url))
 	return true
 }
 
