@@ -47,11 +47,20 @@ type SlowNotice struct {
 // PlaceLabel は kind の作業対象の置き場を人が読む行で指す綴り (`issue 置き場 <置き場>` か `CL 置き場 <置き場>`)。doctor の
 // 行と遅い一覧の行が使う (formats.md §6・§7.4)。
 func PlaceLabel(def workflow.Definition, kind target.Kind) string {
+	name := "issue 置き場 "
+	if kind == target.KindCL {
+		name = "CL 置き場 "
+	}
+	return name + placeOf(def, kind)
+}
+
+// placeOf は kind の作業対象の置き場の綴り。
+func placeOf(def workflow.Definition, kind target.Kind) string {
 	if kind == target.KindCL {
 		_, place := def.CLHost()
-		return "CL 置き場 " + place.String()
+		return place.String()
 	}
-	return "issue 置き場 " + def.Tracker.Place.String()
+	return def.Tracker.Place.String()
 }
 
 // SlowToOutput は、遅い一覧の行を人が読む行 out に出す口 (formats.md §6 の「遅い一覧」)。
@@ -454,7 +463,10 @@ func (l *loop) tick() {
 		}
 	}
 	store := l.o.Store(def)
-	store.Slow = SlowToOutput(def, l.rec.output, l.o.SlowAfter, l.rec.now)
+	// 遅い一覧は目標を超えた読み出しなので、画面の行に加えて log.jsonl にも残す (formats.md §4 の冒頭の規則)
+	store.Slow = SlowNotice{After: l.o.SlowAfter, Notify: func(kind target.Kind) {
+		l.rec.event("slow_listing", map[string]any{"kind": string(kind), "place": placeOf(def, kind)}, LineNote, SlowListingLine(def, kind), "")
+	}}
 	open, err := OpenItems(store, def)
 	var nonFatal *target.NonFatal
 	switch {
