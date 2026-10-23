@@ -803,7 +803,7 @@ func TestLeaveDeletesTheClaimsAndTheHeartbeatExceptWhereAClaudeMayStillWork(t *t
 			t.Fatalf("Leave %d 回, want 1", w.left)
 		}
 	})
-	t.Run("生存報告を他の loop に消されていたら LeaveFailed を返す", func(t *testing.T) {
+	t.Run("生存報告を他の loop に置き換えられていたら LeaveFailed を返す", func(t *testing.T) {
 		w := newWorld(t)
 		w.beating()
 		w.Put(nil, beatOf(me, beat))
@@ -930,7 +930,7 @@ func TestObservingFailsWhenTheRefsCannotBeReadAndChangesNothing(t *testing.T) {
 }
 
 func TestTheClockIsReadAfterTheRefsAreRead(t *testing.T) {
-	r := &slowRefs{Memory: coordtest.NewMemory(me)}
+	r := &countingRefs{Memory: coordtest.NewMemory(me)}
 	board := coord.NewBoard(r, beat)
 	r.Put(&issue42, claimBy(other, issue42))
 
@@ -944,14 +944,14 @@ func TestTheClockIsReadAfterTheRefsAreRead(t *testing.T) {
 	}
 }
 
-// slowRefs は ref を読んだ回数を数える coordination board。
-type slowRefs struct {
+// countingRefs は ref を読んだ回数を数える coordination board。
+type countingRefs struct {
 	*coordtest.Memory
 	reads                 int
 	readsWhenClockWasRead []int
 }
 
-func (r *slowRefs) Observe() (coord.View, error) {
+func (r *countingRefs) Observe() (coord.View, error) {
 	r.reads++
 	return r.Memory.Observe()
 }

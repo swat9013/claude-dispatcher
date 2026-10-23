@@ -146,7 +146,8 @@ func (l *loop) report(outcomes []coord.Outcome) {
 		case coord.BeatsDropped:
 			l.rec.error(target.Ref{}, fmt.Sprintf("生存報告の置き直しの結果 %d 件を読まずに捨てた", o.N))
 		default:
-			panic(fmt.Sprintf("loop: 行に写せない coordination board の結果 %T", o))
+			// 行の無い結果を黙って捨てない。無人で回る loop を止めないよう、panic ではなく error の行に残す
+			l.rec.error(target.Ref{}, fmt.Sprintf("行に写せない coordination board の結果 %T", o))
 		}
 	}
 }
@@ -167,7 +168,9 @@ func (l *loop) claimRemote(ref target.Ref, triggerName string) bool {
 			LineNote, "乗っ取り", " %s (%s): 死んだ loop %s の着手宣言を乗っ取った", ref, triggerName, o.From)
 	case coord.ClaimPlaced:
 	default:
-		panic(fmt.Sprintf("loop: 着手宣言の結果として知らない値 %T", o))
+		// 置けたかを決められないので、起動しない側に倒す
+		l.rec.error(ref, fmt.Sprintf("着手宣言の結果として知らない値 %T (起動しない)", o))
+		return false
 	}
 	return true
 }

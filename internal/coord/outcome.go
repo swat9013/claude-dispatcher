@@ -101,8 +101,7 @@ type (
 	UnsureInheritKept struct{ Ref target.Ref }
 )
 
-// ClaimReleaseLost は、claim を解いた作業対象の自分の着手宣言の削除に負けたこと (他の loop が先に消したか乗っ取った)。loop は読み捨て、
-// 単発起動は消せなかったものと同じに出す。
+// ClaimReleaseLost は、claim を解いた作業対象の自分の着手宣言の削除に負けたこと (他の loop が先に消したか乗っ取った)。消し直さない。
 type ClaimReleaseLost struct {
 	Ref target.Ref
 	Err error

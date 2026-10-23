@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -107,7 +108,7 @@ func TestOutcomesAreWrittenAsLogLines(t *testing.T) {
 	}
 }
 
-func TestALostDeleteOfMyOwnClaimIsReadOverAndAnOutcomeWithoutALineIsRefused(t *testing.T) {
+func TestALostDeleteOfMyOwnClaimIsReadOver(t *testing.T) {
 	var log bytes.Buffer
 	var out lines
 	l := &loop{rec: recorder{log: &log, output: &out, now: time.Now, scope: "scope-a"}}
@@ -117,10 +118,16 @@ func TestALostDeleteOfMyOwnClaimIsReadOverAndAnOutcomeWithoutALineIsRefused(t *t
 	if log.Len() != 0 || len(out) != 0 {
 		t.Fatalf("log %q・行 %+v, want 何も書かない", log.String(), out)
 	}
-	defer func() {
-		if r := recover(); r == nil {
-			t.Fatal("行に写せない結果を黙って捨てた")
-		}
-	}()
+}
+
+func TestAnOutcomeWithoutALineIsLeftAsAnErrorLine(t *testing.T) {
+	var log bytes.Buffer
+	var out lines
+	l := &loop{rec: recorder{log: &log, output: &out, now: time.Now, scope: "scope-a"}}
+
 	l.report([]coord.Outcome{coord.ClaimLost{}})
+
+	if !strings.Contains(log.String(), `"event":"error"`) || !strings.Contains(log.String(), "行に写せない coordination board の結果 coord.ClaimLost") {
+		t.Fatalf("log %q, want 行に写せない結果を error の行に残す", log.String())
+	}
 }

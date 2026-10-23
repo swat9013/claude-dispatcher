@@ -344,8 +344,8 @@ func Run(o Options) int {
 	}
 	var next <-chan time.Time
 	start := map[string]any{"version": o.Build.Version, "commit": o.Build.Commit}
-	if l.coordinated {
-		start["loop"] = l.coordination.LoopName()
+	if name := l.coordination.LoopName(); name != "" {
+		start["loop"] = name
 	}
 	l.stopBeating = l.coordination.StartBeating(o.HeartbeatAfter, l.deliverBeat)
 	// どの版の binary が書いた log かを後から読めるよう、起動を 1 行残す。人が読む起動の行は呼び出し側が出している

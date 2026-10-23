@@ -165,14 +165,14 @@ func (b *Board) Observe(clock func() time.Time, orphans map[target.Ref]bool) ([]
 
 // see は ref が今指す sha を、前に見た記録に重ねる。sha が変わっていれば見た時刻を now に改める。fresh は、この sha の commit message
 // を初めて読めたか。
-func see(prev sighting, known bool, ref RefState, now time.Time, v View) (s sighting, msg Message, fresh bool) {
-	if !known || prev.sha != ref.SHA {
-		prev = sighting{sha: ref.SHA, since: now}
+func see(prev sighting, known bool, state RefState, now time.Time, v View) (s sighting, msg Message, fresh bool) {
+	if !known || prev.sha != state.SHA {
+		prev = sighting{sha: state.SHA, since: now}
 	}
-	msg, read := v.Messages[ref.SHA]
+	msg, read := v.Messages[state.SHA]
 	fresh = read && !prev.checked
 	prev.checked = prev.checked || read
-	prev.name = ref.Name
+	prev.name = state.Name
 	return prev, msg, fresh
 }
 

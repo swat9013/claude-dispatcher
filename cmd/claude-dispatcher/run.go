@@ -281,7 +281,9 @@ func claimOnce(board *coord.Board, ref target.Ref, stderr io.Writer) int {
 		return exitFailed
 	case coord.ClaimPlaced, coord.ClaimTookOver:
 	default:
-		panic(fmt.Sprintf("run: 着手宣言の結果として知らない値 %T", outcome))
+		// 置けたかを決められないので、起動しない側に倒す
+		fmt.Fprintf(stderr, "%s の着手宣言の結果として知らない値 %T なので起動しない\n", ref, outcome)
+		return exitFailed
 	}
 	return 0
 }
@@ -308,7 +310,8 @@ func leaveOnce(board *coord.Board, stderr io.Writer) {
 		case coord.LeaveFailed:
 			fmt.Fprintf(stderr, "生存報告を消せない: %s\n", printable.Line(o.Err.Error()))
 		default:
-			panic(fmt.Sprintf("run: 単発起動の後片付けの結果として知らない値 %T", o))
+			// 後片付けを途中で止めないよう、panic ではなく stderr に出して続ける
+			fmt.Fprintf(stderr, "後片付けの結果として知らない値 %T\n", o)
 		}
 	}
 }
