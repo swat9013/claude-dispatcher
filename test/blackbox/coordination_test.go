@@ -14,7 +14,7 @@ import (
 	"github.com/swat9013/claude-dispatcher/test/blackbox/stubwire"
 )
 
-// マシンを跨いだ分担: 調停 remote の着手宣言と生存報告 (formats.md §12、system.md §4、ADR 0011・0017・0023)。git は stub
+// マシンを跨いだ分担: coordination board の着手宣言と生存報告 (formats.md §12、system.md §4、ADR 0011・0017・0023)。git は stub
 // なので、確かめるのは git に渡す引数と、loop・単発起動・doctor の外から見える振る舞い。死んだ loop の判定は分の単位の経過を
 // 待つので、internal/loop の単体テストが持つ。
 
@@ -32,7 +32,7 @@ const (
 // coordinated は coordination.remote: origin を書いた workflow 定義の extra (workerWorkflow の hooks の後に足す)。
 const coordinated = "coordination:\n  remote: origin\n"
 
-// refPrefix は既定の scope の調停 remote の ref の頭。scope dir は state dir の名前と同じ (formats.md §12)
+// refPrefix は既定の scope の coordination board の ref の頭。scope dir は state dir の名前と同じ (formats.md §12)
 func (s *sandbox) refPrefix() string {
 	return "refs/dispatcher/" + filepath.Base(s.defaultStateDir()) + "/"
 }
@@ -49,7 +49,7 @@ type remoteRef struct {
 	name, sha, message string
 }
 
-// gitRules は調停 remote の git の応答: ls-remote は refs を返し、その sha の commit を読ませ、commit を作り、push は通す。
+// gitRules は coordination board の git の応答: ls-remote は refs を返し、その sha の commit を読ませ、commit を作り、push は通す。
 // before は先頭に置く rule (push の負け・失敗など)。
 func (s *sandbox) gitRules(refs []remoteRef, before ...stubwire.Rule) []stubwire.Rule {
 	var listed strings.Builder
@@ -103,7 +103,7 @@ func (s *sandbox) pushes() [][]string {
 	return found
 }
 
-// assertEveryPushSkipsHooks は、調停 remote への push がどれも --no-verify と --porcelain を付けていることを確かめる (ADR 0017)。
+// assertEveryPushSkipsHooks は、coordination board への push がどれも --no-verify と --porcelain を付けていることを確かめる (ADR 0017)。
 func (s *sandbox) assertEveryPushSkipsHooks() {
 	s.t.Helper()
 	for _, argv := range s.pushes() {
@@ -127,7 +127,7 @@ func (s *sandbox) pushed(want ...string) bool {
 
 var loopNamePattern = regexp.MustCompile(`^[a-z0-9._-]+-[0-9a-f]{8}$`)
 
-// runOneWorker は、issue 42 に worker を 1 回起動して終える loop を調停 remote を指して回し、止めた後の loop 名を返す。
+// runOneWorker は、issue 42 に worker を 1 回起動して終える loop を coordination board を指して回し、止めた後の loop 名を返す。
 func (s *sandbox) runOneWorker() string {
 	s.t.Helper()
 	s.writeWorkflowWithCommands(s.workerWorkflow(coordinated))
@@ -341,7 +341,7 @@ func TestLoopFailsToStartWhenTheRemoteReadsAndWritesDifferentURLs(t *testing.T) 
 	r := s.run("loop")
 
 	assertExit(t, r, 1)
-	if !strings.Contains(r.stderr, "調停 remote origin の読む URL と書く URL が違う") {
+	if !strings.Contains(r.stderr, "coordination board の remote origin の読む URL と書く URL が違う") {
 		t.Fatalf("stderr = %q", r.stderr)
 	}
 	if pushes := s.pushes(); len(pushes) != 0 {
@@ -378,7 +378,7 @@ func TestLoopWithoutACoordinationRemoteNeverCallsGit(t *testing.T) {
 	s.waitEvents("end", 1)
 
 	if calls := s.calls("git"); len(calls) != 0 {
-		t.Fatalf("調停 remote を指さない loop が git を撃った: %v", calls[0].Argv)
+		t.Fatalf("coordination board を指さない loop が git を撃った: %v", calls[0].Argv)
 	}
 }
 
@@ -402,9 +402,9 @@ func TestLoopFailsToStartWhenTheCoordinationRemoteCannotBeUsed(t *testing.T) {
 		rule stubwire.Rule
 		want string
 	}{
-		{"remote を解けない", stubwire.Rule{ArgsPrefix: []string{"remote", "get-url"}, Exit: 2, Stderr: "error: No such remote 'origin'\n"}, "調停 remote origin を解けない"},
-		{"ref を読めない", stubwire.Rule{ArgsPrefix: []string{"ls-remote"}, Exit: 128, Stderr: "fatal: Could not read from remote repository.\n"}, "調停 remote origin を読めない"},
-		{"生存報告を置けない", stubwire.Rule{ArgsPrefix: []string{"push"}, Exit: 1, Stderr: "remote: Permission denied\n"}, "調停 remote origin に生存報告を置けない"},
+		{"remote を解けない", stubwire.Rule{ArgsPrefix: []string{"remote", "get-url"}, Exit: 2, Stderr: "error: No such remote 'origin'\n"}, "coordination board の remote origin を解けない"},
+		{"ref を読めない", stubwire.Rule{ArgsPrefix: []string{"ls-remote"}, Exit: 128, Stderr: "fatal: Could not read from remote repository.\n"}, "coordination board の remote origin を読めない"},
+		{"生存報告を置けない", stubwire.Rule{ArgsPrefix: []string{"push"}, Exit: 1, Stderr: "remote: Permission denied\n"}, "coordination board の remote origin に生存報告を置けない"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -483,7 +483,7 @@ func TestDoctorShowsAReadableCoordinationRemoteWithoutPushing(t *testing.T) {
 	r := s.run("doctor")
 
 	assertExit(t, r, 0)
-	if !strings.Contains(r.stdout, "ok   調停 remote origin ("+originURL+")\n") {
+	if !strings.Contains(r.stdout, "ok   coordination board の remote origin ("+originURL+")\n") {
 		t.Fatalf("stdout = %q", r.stdout)
 	}
 	if pushes := s.pushes(); len(pushes) != 0 {
@@ -500,7 +500,7 @@ func TestDoctorFailsOnAnUnreadableCoordinationRemoteWithoutPushing(t *testing.T)
 	r := s.run("doctor")
 
 	assertExit(t, r, 1)
-	if !strings.Contains(r.stdout, "NG   調停 remote origin を読めない: ") {
+	if !strings.Contains(r.stdout, "NG   coordination board の remote origin を読めない: ") {
 		t.Fatalf("stdout = %q", r.stdout)
 	}
 	if pushes := s.pushes(); len(pushes) != 0 {
@@ -539,7 +539,7 @@ func TestRunDoesNotLaunchWhileARefOfANewerFormatIsOnTheRemote(t *testing.T) {
 	r := s.run("run", "implement", "issue#42")
 
 	assertExit(t, r, 5)
-	if !strings.Contains(r.stderr, "調停 remote に新しい版の ref があるので起動しない (dispatcher を上げる)") {
+	if !strings.Contains(r.stderr, "coordination board に新しい版の ref があるので起動しない (dispatcher を上げる)") {
 		t.Fatalf("stderr = %q", r.stderr)
 	}
 	if calls := s.calls("claude"); len(calls) != 0 {

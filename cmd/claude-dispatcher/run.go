@@ -51,7 +51,7 @@ func runOnce(args []string, stdout, stderr io.Writer) int {
 		}
 		return exitUsage
 	}
-	// 調停 remote の口は確認と生存報告で共有し、ssh の撃ち方の判定を run の間 1 回にする
+	// coordination board の口は確認と生存報告で共有し、ssh の撃ち方の判定を run の間 1 回にする
 	remote := e.coordinationRemote(def)
 	if code := e.confirmLaunchable(def, remote, stderr, slowToStderr(def, stderr)); code != 0 {
 		return code
@@ -265,7 +265,7 @@ func claimOnce(party *coord.Party, ref target.Ref, stderr io.Writer) (string, in
 		fmt.Fprintln(stderr, printable.Line(view.Unread.Error()))
 	}
 	if _, newer := view.Newer(); newer {
-		fmt.Fprintln(stderr, "調停 remote に新しい版の ref があるので起動しない (dispatcher を上げる)")
+		fmt.Fprintln(stderr, "coordination board に新しい版の ref があるので起動しない (dispatcher を上げる)")
 		return "", exitNotLaunched
 	}
 	if sha, held := view.Claims[ref]; held {

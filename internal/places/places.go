@@ -132,7 +132,7 @@ func Commands(def workflow.Definition) []string {
 }
 
 // RequiredCommands は loop が自分で撃つ依存 CLI: 置き場の CLI と claude.command。起動時に解決できることを確かめる。git は
-// CL 側の trigger があるとき (claim の workspace の branch を読む) と、調停 remote を指したとき (formats.md §12) だけ入れる。
+// CL 側の trigger があるとき (claim の workspace の branch を読む) と、coordination board を指したとき (formats.md §12) だけ入れる。
 // worker と hooks が撃つ git は loop の要件にしない。
 func RequiredCommands(def workflow.Definition) []string {
 	commands := append(placeCommands(def), def.Claude.Command)

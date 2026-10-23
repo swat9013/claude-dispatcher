@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// 調停 remote の commit message と push の結果の読み方 (formats.md §12)。
+// coordination board の commit message と push の結果の読み方 (formats.md §12)。
 
 func TestPushIsLostWhenAPorcelainLineIsRejected(t *testing.T) {
 	cases := map[string]string{
