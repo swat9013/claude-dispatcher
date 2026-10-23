@@ -189,3 +189,36 @@ func TestASlowListingDoesNotChangeTheResultOfTheTick(t *testing.T) {
 		t.Fatalf("log.jsonl:\n%s\nwant tick ok の行 1 本", r.log.String())
 	}
 }
+
+// slowStartup は、起動時の確認で issue の一覧が遅かったと渡して loop を回した rig。
+func slowStartup(t *testing.T) *rig {
+	t.Helper()
+	r := newRig()
+	r.timer = periodsThenStop(0)
+	store := memoryStore{observe: func() ([]target.Item, error) { return nil, nil }}
+	def := workflow.Definition{Tracker: workflow.Tracker{Kind: provider.GitHub, Place: placeOf(provider.GitHub, "", "acme/widgets")}, Interval: time.Minute, MaxConcurrent: 1, MaxAttempts: 1, Triggers: []trigger.Trigger{readyTrigger}}
+	r.run(t, loop.Options{
+		Definition:       def,
+		Store:            func(workflow.Definition) loop.Store { return store.store() },
+		StartupSlowKinds: []target.Kind{target.KindIssue},
+	})
+	return r
+}
+
+func TestASlowListingOfTheStartupConfirmationIsWrittenToTheLog(t *testing.T) {
+	r := slowStartup(t)
+
+	slow := r.logEvents(t, "slow_listing")
+	if len(slow) != 1 || slow[0]["kind"] != "issue" || slow[0]["place"] != "acme/widgets" {
+		t.Fatalf("log.jsonl:\n%s\nwant slow_listing (kind issue, place acme/widgets) の行 1 本", r.log.String())
+	}
+}
+
+func TestASlowListingOfTheStartupConfirmationIsNotShownAgain(t *testing.T) {
+	r := slowStartup(t)
+
+	// 画面の行は確認のときに呼び出し側が出している
+	if strings.Contains(r.stdout.String(), "15 秒を超えた") {
+		t.Fatalf("出力:\n%s", r.stdout.String())
+	}
+}

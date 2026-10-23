@@ -280,9 +280,18 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 		sc = &screen{out: stdout, now: time.Now, loc: time.Local, display: func() status.Display { return display(f, e.getenv) }}
 		output = sc
 	}
+	// 遅かった置き場は、lock を取って log.jsonl を開いた後に loop が slow_listing の行で残す (formats.md §4)
+	slow := loop.SlowToOutput(def, output, slowAfter, time.Now)
+	// 確認は置き場を 1 つずつ読み、Watch は Notify が終わるまで返らないので、append は重ならない
+	var startupSlow []target.Kind
+	show := slow.Notify
+	slow.Notify = func(kind target.Kind) {
+		show(kind)
+		startupSlow = append(startupSlow, kind)
+	}
 	// 調停 remote の口は確認と生存報告で共有し、ssh の撃ち方の判定を run の間 1 回にする
 	remote := e.coordinationRemote(def)
-	if code := e.confirmLaunchable(def, remote, stderr, loop.SlowToOutput(def, output, slowAfter, time.Now)); code != 0 {
+	if code := e.confirmLaunchable(def, remote, stderr, slow); code != 0 {
 		return code
 	}
 	scopeKey, dir := e.stateDir(def)
@@ -343,6 +352,8 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 		After:        time.After,
 		Refresh:      time.Tick(time.Second),
 		SlowAfter:    slowAfter,
+		// 確認は返った後なので、Notify はもう呼ばれない (SlowNotice の Watch は Notify が終わるまで返らない)
+		StartupSlowKinds: startupSlow,
 	})
 }
 
