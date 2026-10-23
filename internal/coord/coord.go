@@ -1,6 +1,6 @@
 // Package coord は coordination board の部品 (system.md §4 の「マシンを跨いだ分担」・§13、formats.md §12)。実装 repo の git
-// remote の `refs/dispatcher/<scope dir>/` の下に、着手宣言と生存報告を git で置き・読み・消す。時計は持たず、死んだ
-// loop の判定は呼び出し側 (loop) が行う。
+// remote の `refs/dispatcher/<scope dir>/` の下に、着手宣言と生存報告を置き・読み・消す。Board が着手宣言の持ち主と生死の判定を
+// 持ち、Refs の口 (本番は git の Party) を通して push と削除まで撃つ。時計は持たず、死んだ loop の判定は呼び出し側が渡す時刻で行う。
 package coord
 
 import (
@@ -285,7 +285,7 @@ func Holding(sha string) Expect { return Expect{sha: sha} }
 // Unconditional は条件を付けない (生存報告。書くのは持ち主の loop だけ)。
 func Unconditional() Expect { return Expect{unconditional: true} }
 
-// String は期待値の綴り: `absent` / `holding <sha>` / `unconditional`。loop のテストの fake が期待値を照合するのに使う。
+// String は期待値の綴り: `absent` / `holding <sha>` / `unconditional`。coordtest.Memory が期待値を照合するのに使う。
 func (e Expect) String() string {
 	switch {
 	case e.unconditional:
