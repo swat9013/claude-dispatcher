@@ -67,7 +67,7 @@ func (Unstopped) isEvent() {}
 func (Ended) isEvent()     {}
 
 // UnstoppedAlive は、止められなかった claude がまだ終わっていないか。exited は Unstopped.Exited (nil なら止められなかった
-// claude はいない)。
+// claude はいない)。終わっていれば、worker は after_run を撃ってから Ended を送るので、止める側はその Ended を待てる。
 func UnstoppedAlive(exited <-chan struct{}) bool {
 	if exited == nil {
 		return false
