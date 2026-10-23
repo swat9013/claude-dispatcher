@@ -3,9 +3,9 @@ package coord
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,24 +17,32 @@ import (
 var issue42 = target.Ref{Kind: target.KindIssue, Number: 42}
 
 // countingFetches は r の git を、fetch を撃つたびに 1 行を書いてから実物の git を呼ぶ script に差し替え、撃った回数を返す
-// 関数を返す。
+// 関数を返す。log は差し替えた時点で作り、script は撃たれるたびに log に書けることを確かめる (書けなければ git を撃たずに
+// 落ちる) ので、数えられない状態が 0 回に見えることは無い。
 func countingFetches(t *testing.T, r *Remote) func() int {
 	t.Helper()
 	dir := t.TempDir()
 	log, wrapper := filepath.Join(dir, "fetches"), filepath.Join(dir, "git")
-	script := fmt.Sprintf("#!/bin/sh\nfor a in \"$@\"; do if [ \"$a\" = fetch ]; then echo >> %q; fi; done\nexec %q \"$@\"\n", log, r.Git.Path)
+	if err := os.WriteFile(log, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	script := "#!/bin/sh\nset -e\n: >> " + shQuote(log) + "\nfor a in \"$@\"; do if [ \"$a\" = fetch ]; then echo >> " + shQuote(log) +
+		"; fi; done\nexec " + shQuote(r.Git.Path) + " \"$@\"\n"
 	if err := os.WriteFile(wrapper, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	r.Git.Path = wrapper
 	return func() int {
 		b, err := os.ReadFile(log)
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err != nil {
 			t.Fatal(err)
 		}
 		return bytes.Count(b, []byte("\n"))
 	}
 }
+
+// shQuote は s を sh の single quote で囲む。
+func shQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
 func TestASecondObservationFetchesNothing(t *testing.T) {
 	r := remoteForTest(t)
@@ -51,6 +59,9 @@ func TestASecondObservationFetchesNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := fetches()
+	if before != 1 {
+		t.Fatalf("1 回目の fetch %d 回, want 1 回 (新しく見た 2 つの sha をまとめて読む)", before)
+	}
 
 	v, err := me.Observe()
 
@@ -184,12 +195,17 @@ func TestMyOlderHeartbeatIsForgottenOnceItIsReplaced(t *testing.T) {
 	if err := r.Push(r.HeartbeatRef("me-00000001"), sha, Unconditional()); err != nil {
 		t.Fatal(err)
 	}
+	before := fetches()
 
-	if _, err := me.Observe(); err != nil {
+	v, err := me.Observe()
+
+	if err != nil {
 		t.Fatal(err)
 	}
-
-	if n := fetches(); n != 1 {
+	if v.Messages[sha].Loop != "me-00000001" {
+		t.Fatalf("戻った古い生存報告の commit message = %+v", v.Messages[sha])
+	}
+	if n := fetches() - before; n != 1 {
 		t.Fatalf("fetch %d 回, want 1 回 (覚えるのは最後に置けた自分の生存報告だけで、古いものは読み直す)", n)
 	}
 }
@@ -266,5 +282,32 @@ func TestLeaveLosesWhenAnotherLoopDeletedMyHeartbeat(t *testing.T) {
 
 	if !errors.Is(err, ErrLost) {
 		t.Fatalf("Leave = %v, want 負け", err)
+	}
+}
+
+func TestLeaveKeepsAHeartbeatItDidNotPlace(t *testing.T) {
+	r := remoteForTest(t)
+	var me Refs = &Party{Remote: r, Loop: "me-00000001"}
+	if err := me.Heartbeat(time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	// 同じ loop 名の別の起動 (別の clone) が、生存報告の ref を自分の置いていない sha に置き換える
+	impostor := cloneForTest(t, bareOf(t, r))
+	name := impostor.HeartbeatRef("me-00000001")
+	theirs, err := impostor.Commit(Message{Kind: KindHeartbeat, Format: Format, Loop: "me-00000001", Interval: time.Minute, Seq: 99})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := impostor.Push(name, theirs, Unconditional()); err != nil {
+		t.Fatal(err)
+	}
+
+	err = me.Leave()
+
+	if !errors.Is(err, ErrLost) {
+		t.Fatalf("Leave = %v, want 負け", err)
+	}
+	if refs, err := r.List(); err != nil || refs[name] != theirs {
+		t.Fatalf("ref = %v (%v), want 自分の置いていない生存報告 %s が残る", refs, err, theirs)
 	}
 }

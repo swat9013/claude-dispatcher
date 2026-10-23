@@ -19,9 +19,6 @@ import (
 // remoteForTest は bare repo を origin に持つ clone を作り、その clone から撃つ Remote を返す。
 func remoteForTest(t *testing.T) Remote {
 	t.Helper()
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git が無い")
-	}
 	bare := filepath.Join(t.TempDir(), "remote.git")
 	gitForTest(t, "", "init", "-q", "--bare", bare)
 	return cloneForTest(t, bare)
@@ -49,9 +46,11 @@ func bareOf(t *testing.T, r Remote) string {
 
 // isolatedEnv は、利用者の git の設定に頼らないことを確かめるため、HOME と global・system の設定を空にした環境。
 func isolatedEnv(t *testing.T) []string {
+	t.Helper()
 	return []string{"HOME=" + t.TempDir(), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null"}
 }
 
+// gitPath は git の実行 file。無ければ test を skip する。
 func gitPath(t *testing.T) string {
 	t.Helper()
 	git, err := exec.LookPath("git")
@@ -65,8 +64,8 @@ func gitPath(t *testing.T) string {
 func gitForTest(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command(gitPath(t), args...)
-	// 同じ名前の変数は後ろのものが勝つので、利用者の環境の上に isolatedEnv を被せる
-	cmd.Dir, cmd.Env = dir, append(os.Environ(), isolatedEnv(t)...)
+	// 利用者の環境 (GIT_DIR・GIT_CONFIG_PARAMETERS など) を持ち込まず、試す Remote と同じ isolatedEnv で撃つ
+	cmd.Dir, cmd.Env = dir, append(isolatedEnv(t), "PATH="+os.Getenv("PATH"))
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %v: %v\n%s", args, err, out)
 	}
@@ -159,9 +158,7 @@ func TestMessagesAreReadFromTheRemote(t *testing.T) {
 
 func TestConfirmRefusesARemoteThatPushesToAnotherURL(t *testing.T) {
 	r := remoteForTest(t)
-	if out, err := exec.Command(r.Git.Path, "-C", r.Git.Dir, "config", "remote.origin.pushurl", filepath.Join(t.TempDir(), "fork.git")).CombinedOutput(); err != nil {
-		t.Fatalf("%v\n%s", err, out)
-	}
+	gitForTest(t, r.Git.Dir, "config", "remote.origin.pushurl", filepath.Join(t.TempDir(), "fork.git"))
 
 	_, err := r.Confirm()
 
@@ -173,9 +170,7 @@ func TestConfirmRefusesARemoteThatPushesToAnotherURL(t *testing.T) {
 func TestConfirmRefusesARemoteThatPushesToMoreThanOneURL(t *testing.T) {
 	r := remoteForTest(t)
 	for _, push := range []string{bareOf(t, r), filepath.Join(t.TempDir(), "mirror.git")} {
-		if out, err := exec.Command(r.Git.Path, "-C", r.Git.Dir, "config", "--add", "remote.origin.pushurl", push).CombinedOutput(); err != nil {
-			t.Fatalf("%v\n%s", err, out)
-		}
+		gitForTest(t, r.Git.Dir, "config", "--add", "remote.origin.pushurl", push)
 	}
 
 	_, err := r.Confirm()
