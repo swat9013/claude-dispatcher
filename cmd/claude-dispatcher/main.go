@@ -262,7 +262,7 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 	}
 	if opts.dryRun {
 		// 確認で読んだ open な一覧を snapshot に使い、一覧を 1 回だけ読む (formats.md §5)
-		store, err := e.places(def).WithSlow(slowToStderr(def, stderr)).ConfirmedStore()
+		store, err := e.places(def).ConfirmedStore(slowToStderr(def, stderr))
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return failureExit(err)
@@ -368,7 +368,7 @@ func (e environment) confirmLaunchable(def workflow.Definition, remote coord.Rem
 			return exitFailed
 		}
 	}
-	if _, err := e.places(def).WithSlow(slow).ConfirmedStore(); err != nil {
+	if _, err := e.places(def).ConfirmedStore(slow); err != nil {
 		fmt.Fprintln(stderr, err)
 		return failureExit(err)
 	}

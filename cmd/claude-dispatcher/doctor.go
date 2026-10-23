@@ -66,8 +66,8 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 // 確認で読んだ open な一覧を使い回し、置き場ごとに 1 回だけ読む。一覧の読み出しが遅ければ、読み終わる前に stderr に 1 行
 // 出す (formats.md §7.4)。
 func checkStore(e environment, def workflow.Definition, stdout, stderr io.Writer) bool {
-	pl := e.places(def).WithSlow(slowToStderr(def, stderr))
-	issues, err := pl.ConfirmIssues()
+	pl, slow := e.places(def), slowToStderr(def, stderr)
+	issues, err := pl.ConfirmIssues(slow)
 	if err != nil {
 		var unknown *target.UnknownNames
 		if errors.As(err, &unknown) {
@@ -79,7 +79,7 @@ func checkStore(e environment, def workflow.Definition, stdout, stderr io.Writer
 		fmt.Fprintf(stdout, "NG   %s: %s\n", places.Label(def, target.KindIssue), printable.Line(err.Error()))
 		return false
 	}
-	store := pl.Store()
+	store := pl.Store().WithSlow(slow)
 	store.Issues = issues
 	if _, _, separate := def.SeparateCLHost(); separate {
 		// CL は別の置き場にあり、checkCLPlace の行で確かめる
@@ -96,7 +96,7 @@ func checkCLPlace(e environment, def workflow.Definition, stdout, stderr io.Writ
 	if _, _, ok := def.SeparateCLHost(); !ok {
 		return true
 	}
-	_, err := e.places(def).WithSlow(slowToStderr(def, stderr)).ConfirmCLs()
+	_, err := e.places(def).ConfirmCLs(slowToStderr(def, stderr))
 	return placeLine(stdout, places.Label(def, target.KindCL), err)
 }
 

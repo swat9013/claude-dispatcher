@@ -44,31 +44,7 @@ func (n SlowNotice) Watch(kind target.Kind, read func()) {
 	read()
 }
 
-// Label は kind の作業対象の置き場を人が読む行で指す綴り (`issue 置き場 <置き場>` か `CL 置き場 <置き場>`)。doctor の行と
-// 遅い一覧の行が使う (formats.md §6・§7.4)。
-func Label(def workflow.Definition, kind target.Kind) string {
-	name := "issue 置き場 "
-	if kind == target.KindCL {
-		name = "CL 置き場 "
-	}
-	return name + placeOf(def, kind)
-}
-
-// placeOf は kind の作業対象の置き場の綴り。
-func placeOf(def workflow.Definition, kind target.Kind) string {
-	if kind == target.KindCL {
-		_, place := def.CLHost()
-		return place.String()
-	}
-	return def.Tracker.Place.String()
-}
-
 // SlowListingLine は、kind の置き場の一覧の読み出しが SlowListing を超えたときに出す 1 行。
 func SlowListingLine(def workflow.Definition, kind target.Kind) string {
 	return fmt.Sprintf("%s の一覧の読み出しが %d 秒を超えた", Label(def, kind), int(SlowListing/time.Second))
-}
-
-// SlowListingFields は log.jsonl の slow_listing の行の中身 (formats.md §4)。
-func SlowListingFields(def workflow.Definition, kind target.Kind) map[string]any {
-	return map[string]any{"kind": string(kind), "place": placeOf(def, kind)}
 }

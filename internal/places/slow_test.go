@@ -124,17 +124,3 @@ func TestTheSlowListingLineNamesThePlaceTheWayDoctorDoes(t *testing.T) {
 		})
 	}
 }
-
-func TestTheSlowListingFieldsNameTheKindAndThePlace(t *testing.T) {
-	def := workflow.Definition{
-		Tracker: workflow.Tracker{Kind: provider.Jira, Place: placeOf(provider.Jira, "acme.atlassian.net", "WIDGETS")},
-		CL:      &workflow.CL{Kind: provider.GitLab, Place: placeOf(provider.GitLab, "gitlab.com", "acme/widgets")},
-	}
-
-	issue := places.SlowListingFields(def, target.KindIssue)
-	cl := places.SlowListingFields(def, target.KindCL)
-
-	if issue["kind"] != "issue" || issue["place"] != "acme.atlassian.net/WIDGETS" || cl["kind"] != "cl" || cl["place"] != "gitlab.com/acme/widgets" {
-		t.Fatalf("issue = %v, cl = %v", issue, cl)
-	}
-}

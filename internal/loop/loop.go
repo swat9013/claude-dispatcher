@@ -234,7 +234,7 @@ func Run(o Options) int {
 	// どの版の binary が書いた log かを後から読めるよう、起動を 1 行残す。人が読む起動の行は呼び出し側が出している
 	l.rec.write("loop_start", start)
 	for _, kind := range o.StartupSlowKinds {
-		l.rec.write("slow_listing", places.SlowListingFields(o.Definition, kind))
+		l.rec.write("slow_listing", slowListingFields(o.Definition, kind))
 	}
 	// 前の loop が残した状態 file を、最初の tick の前に今の loop の状態で書き換える
 	l.publish()
@@ -334,6 +334,11 @@ func (l *loop) slotsInUse() int { return l.running() + len(l.orphans) }
 // holdsWorker は claim が worker (止めている途中と、止められない worker を含む) を持つ段階か。
 func (c *claim) holdsWorker() bool { return c.phase == phaseRunning || c.phase == phaseStopping }
 
+// slowListingFields は log.jsonl の slow_listing の行の中身 (formats.md §4)。
+func slowListingFields(def workflow.Definition, kind target.Kind) map[string]any {
+	return map[string]any{"kind": string(kind), "place": places.Place(def, kind)}
+}
+
 // tick は 1 周期分の仕事をする (formats.md §6 の tick の手順)。
 func (l *loop) tick() {
 	current := l.o.Store(l.def)
@@ -375,7 +380,7 @@ func (l *loop) tick() {
 	}
 	// 遅い一覧は目標を超えた読み出しなので、画面の行に加えて log.jsonl にも残す (formats.md §4 の冒頭の規則)
 	store := l.o.Store(def).WithSlow(places.SlowNotice{After: l.o.SlowAfter, Notify: func(kind target.Kind) {
-		l.rec.event("slow_listing", places.SlowListingFields(def, kind), LineNote, places.SlowListingLine(def, kind), "")
+		l.rec.event("slow_listing", slowListingFields(def, kind), LineNote, places.SlowListingLine(def, kind), "")
 	}})
 	open, err := places.OpenItems(store, def)
 	var nonFatal *target.NonFatal
