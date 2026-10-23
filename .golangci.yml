@@ -1,6 +1,10 @@
 # golangci-lint v2 の設定。撃つ場所と版は CONTRIBUTING.md の「gate」
 version: "2"
 
+run:
+  # build tag `blackbox` の file (black-box テスト用の binary だけに入る) も検査する。`!blackbox` の file は無いので、tag 付きで読めば tag `blackbox` で分かれる file はすべて読む (OS で分かれる file は別。checks.yml の lint job のコメント)
+  build-tags: [blackbox]
+
 linters:
   # errcheck / govet / ineffassign / staticcheck / unused (staticcheck は gosimple と stylecheck を含む)
   default: standard
