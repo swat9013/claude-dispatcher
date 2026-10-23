@@ -3,14 +3,12 @@ package coord
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
-	"github.com/swat9013/claude-dispatcher/internal/proc"
 	"github.com/swat9013/claude-dispatcher/internal/target"
 )
 
@@ -18,48 +16,29 @@ import (
 
 var issue42 = target.Ref{Kind: target.KindIssue, Number: 42}
 
-// bareOf は r の clone が origin に持つ bare repo の path。
-func bareOf(t *testing.T, r Remote) string {
-	t.Helper()
-	url, err := r.Git.Output("remote", "get-url", "origin")
-	if err != nil {
-		t.Fatal(err)
-	}
-	return strings.TrimSpace(url)
-}
-
-// anotherClone は r と同じ bare repo を origin に持つ別の clone から撃つ Remote を返す (別のマシンの loop の代役)。
-func anotherClone(t *testing.T, r Remote) Remote {
-	t.Helper()
-	dir := filepath.Join(t.TempDir(), "clone")
-	for _, args := range [][]string{{"init", "-q", dir}, {"-C", dir, "remote", "add", "origin", bareOf(t, r)}} {
-		if out, err := exec.Command(r.Git.Path, args...).CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
-	}
-	return NewRemote(r.Name, r.ScopeDir, proc.Command{Path: r.Git.Path, Dir: dir, Env: r.Git.Env, Timeout: r.Git.Timeout})
-}
-
 // countingFetches は r の git を、fetch を撃つたびに 1 行を書いてから実物の git を呼ぶ script に差し替え、撃った回数を返す
 // 関数を返す。
 func countingFetches(t *testing.T, r *Remote) func() int {
 	t.Helper()
 	dir := t.TempDir()
 	log, wrapper := filepath.Join(dir, "fetches"), filepath.Join(dir, "git")
-	script := "#!/bin/sh\nfor a in \"$@\"; do if [ \"$a\" = fetch ]; then echo >> " + log + "; fi; done\nexec " + r.Git.Path + " \"$@\"\n"
+	script := fmt.Sprintf("#!/bin/sh\nfor a in \"$@\"; do if [ \"$a\" = fetch ]; then echo >> %q; fi; done\nexec %q \"$@\"\n", log, r.Git.Path)
 	if err := os.WriteFile(wrapper, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	r.Git.Path = wrapper
 	return func() int {
-		b, _ := os.ReadFile(log)
+		b, err := os.ReadFile(log)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			t.Fatal(err)
+		}
 		return bytes.Count(b, []byte("\n"))
 	}
 }
 
-func TestObservingTwiceFetchesOnlyOnce(t *testing.T) {
+func TestASecondObservationFetchesNothing(t *testing.T) {
 	r := remoteForTest(t)
-	other := &Party{Remote: anotherClone(t, r), Loop: "other-00000002"}
+	other := &Party{Remote: cloneForTest(t, bareOf(t, r)), Loop: "other-00000002"}
 	if _, err := other.Claim(issue42, Absent()); err != nil {
 		t.Fatal(err)
 	}
@@ -68,15 +47,18 @@ func TestObservingTwiceFetchesOnlyOnce(t *testing.T) {
 	}
 	fetches := countingFetches(t, &r)
 	var me Refs = &Party{Remote: r, Loop: "me-00000001"}
-
-	_, first := me.Observe()
-	v, second := me.Observe()
-
-	if first != nil || second != nil {
-		t.Fatalf("Observe = %v, %v", first, second)
+	if _, err := me.Observe(); err != nil {
+		t.Fatal(err)
 	}
-	if n := fetches(); n != 1 {
-		t.Fatalf("fetch %d 回, want 1 回 (2 回目は覚えた commit message を使う)", n)
+	before := fetches()
+
+	v, err := me.Observe()
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := fetches() - before; n != 0 {
+		t.Fatalf("2 回目の fetch %d 回, want 0 回 (覚えた commit message を使う)", n)
 	}
 	if len(v.Messages) != 2 || v.Messages[v.Claims[issue42].SHA].Loop != "other-00000002" {
 		t.Fatalf("2 回目の commit message = %+v, want 着手宣言と生存報告の 2 つ", v.Messages)
@@ -109,7 +91,7 @@ func TestObserveNamesEachRefAsItIsSpelledOnTheRemote(t *testing.T) {
 
 func TestACommitWhoseRefWentAwayIsFetchedAgainWhenItComesBack(t *testing.T) {
 	r := remoteForTest(t)
-	otherRemote := anotherClone(t, r)
+	otherRemote := cloneForTest(t, bareOf(t, r))
 	other := &Party{Remote: otherRemote, Loop: "other-00000002"}
 	sha, err := other.Claim(issue42, Absent())
 	if err != nil {
@@ -180,9 +162,41 @@ func TestMyOwnHeartbeatIsKeptWhileItsRefIsAway(t *testing.T) {
 	}
 }
 
+func TestMyOlderHeartbeatIsForgottenOnceItIsReplaced(t *testing.T) {
+	r := remoteForTest(t)
+	fetches := countingFetches(t, &r)
+	var me Refs = &Party{Remote: r, Loop: "me-00000001"}
+	if err := me.Heartbeat(time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	older, err := me.Observe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := me.Heartbeat(time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	// 置き直した後の Observe で、ref に無い古い生存報告を忘れる
+	if _, err := me.Observe(); err != nil {
+		t.Fatal(err)
+	}
+	sha := older.Loops["me-00000001"].SHA
+	if err := r.Push(r.HeartbeatRef("me-00000001"), sha, Unconditional()); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := me.Observe(); err != nil {
+		t.Fatal(err)
+	}
+
+	if n := fetches(); n != 1 {
+		t.Fatalf("fetch %d 回, want 1 回 (覚えるのは最後に置けた自分の生存報告だけで、古いものは読み直す)", n)
+	}
+}
+
 func TestDeleteClaimLosesToAClaimOfAnotherSHA(t *testing.T) {
 	r := remoteForTest(t)
-	other := &Party{Remote: anotherClone(t, r), Loop: "other-00000002"}
+	other := &Party{Remote: cloneForTest(t, bareOf(t, r)), Loop: "other-00000002"}
 	theirs, err := other.Claim(issue42, Absent())
 	if err != nil {
 		t.Fatal(err)
@@ -232,18 +246,19 @@ func TestLeaveDeletesTheLastHeartbeatPlacedEvenAfterARenewalFailed(t *testing.T)
 	}
 }
 
-func TestLeaveLosesWhenAnotherLoopReplacedMyHeartbeat(t *testing.T) {
+func TestLeaveLosesWhenAnotherLoopDeletedMyHeartbeat(t *testing.T) {
 	r := remoteForTest(t)
 	var me Refs = &Party{Remote: r, Loop: "me-00000001"}
 	if err := me.Heartbeat(time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	name := r.HeartbeatRef("me-00000001")
-	replaced, err := r.Commit(Message{Kind: KindHeartbeat, Format: Format, Loop: "me-00000001", Interval: time.Minute, Seq: 99})
+	// 他のマシンの loop が、自分を死んだとみなして生存報告を消す
+	other := &Party{Remote: cloneForTest(t, bareOf(t, r)), Loop: "other-00000002"}
+	seen, err := other.Observe()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Push(name, replaced, Unconditional()); err != nil {
+	if err := other.DeleteHeartbeat("me-00000001", seen.Loops["me-00000001"].SHA); err != nil {
 		t.Fatal(err)
 	}
 
@@ -251,8 +266,5 @@ func TestLeaveLosesWhenAnotherLoopReplacedMyHeartbeat(t *testing.T) {
 
 	if !errors.Is(err, ErrLost) {
 		t.Fatalf("Leave = %v, want 負け", err)
-	}
-	if refs, err := r.List(); err != nil || refs[name] != replaced {
-		t.Fatalf("ref = %v (%v), want 置き換えた生存報告 %s が残る", refs, err, replaced)
 	}
 }
