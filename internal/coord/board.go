@@ -346,8 +346,9 @@ func (b *Board) Claim(ref target.Ref) Outcome {
 	return ClaimPlaced{}
 }
 
-// Release は claim を解いた作業対象の自分の着手宣言を消す。消せなければ Outcome を返す (負けは ClaimReleaseLost) (消し損ねた着手宣言として、次の Observe が
-// 消し直す)。自分の着手宣言を持たない作業対象 (乗っ取られた後を含む) では何もしない。
+// Release は claim を解いた作業対象の自分の着手宣言を消す。消せなければ Outcome を返す (負けは ClaimReleaseLost、それ以外は
+// ClaimReleaseFailed で、消し損ねた着手宣言として次の Observe が消し直す)。自分の着手宣言を持たない作業対象 (乗っ取られた後を
+// 含む) では何もしない。
 func (b *Board) Release(ref target.Ref) []Outcome {
 	sha, ok := b.mine[ref]
 	if !ok {
