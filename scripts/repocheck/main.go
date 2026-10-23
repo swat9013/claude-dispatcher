@@ -64,10 +64,11 @@ func main() {
 		var files repoFiles
 		files, err = readRepoFiles()
 		if err == nil {
-			files.buildConstraints, err = readBuildConstraints(".")
-		}
-		if err == nil {
-			problems, err = checkFiles(files)
+			var constraints map[string]string
+			constraints, err = readBuildConstraints(".")
+			if err == nil {
+				problems, err = checkFiles(files, constraints)
+			}
 		}
 	case "adr":
 		var names []string
@@ -102,9 +103,6 @@ func fatal(err error) {
 
 type repoFiles struct {
 	ci, checks, release, contributing, goMod, preCommit, golangci string
-	// buildConstraints は repo の .go の file の path から、その file の //go:build 行への対応 (行の無い file は入れない)。
-	// files の検査だけが読む (readBuildConstraints)
-	buildConstraints map[string]string
 }
 
 func readRepoFiles() (repoFiles, error) {
@@ -200,8 +198,8 @@ func runRuleset() ([]string, error) {
 	return checkRuleset(names, rules)
 }
 
-// checkFiles は repo の file だけで決まる一致を検査する
-func checkFiles(f repoFiles) ([]string, error) {
+// checkFiles は repo の file だけで決まる一致を検査する。constraints は .go の file の path から //go:build 行への対応 (readBuildConstraints)
+func checkFiles(f repoFiles, constraints map[string]string) ([]string, error) {
 	var problems []string
 
 	checksVersions, err := goreleaserVersions([]byte(f.checks))
@@ -242,7 +240,7 @@ func checkFiles(f repoFiles) ([]string, error) {
 			goVersion, expected))
 	}
 
-	tagProblems, err := checkBuildTags(f)
+	tagProblems, err := checkBuildTags(f, constraints)
 	if err != nil {
 		return nil, err
 	}
@@ -253,7 +251,7 @@ func checkFiles(f repoFiles) ([]string, error) {
 // checks.yml の go vet の step・.golangci.yml の run.build-tags) で一致するかと、その tag を否定する build 制約
 // (`//go:build !blackbox` 等) の file が無いかを検査する。tag 付きでだけ検査するので、否定する file は配布する binary に入るのに
 // go vet からも golangci-lint からも外れる
-func checkBuildTags(f repoFiles) ([]string, error) {
+func checkBuildTags(f repoFiles, constraints map[string]string) ([]string, error) {
 	preCommitTags, err := preCommitVetTags([]byte(f.preCommit))
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", preCommitPath, err)
@@ -280,12 +278,12 @@ func checkBuildTags(f repoFiles) ([]string, error) {
 	}
 
 	tags := slices.Concat(lists...)
-	for _, path := range slices.Sorted(maps.Keys(f.buildConstraints)) {
-		expr, err := constraint.Parse(f.buildConstraints[path])
+	for _, path := range slices.Sorted(maps.Keys(constraints)) {
+		expr, err := constraint.Parse(constraints[path])
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", path, err)
 		}
-		if tag, ok := negatedTag(expr, tags, false); ok {
+		if tag, ok := negatedTag(expr, tags); ok {
 			problems = append(problems, fmt.Sprintf("%s の build 制約が tag %s を否定する。go vet と golangci-lint は tag %s 付きでだけ検査するので、この file はどちらからも外れる。否定を使わない形にする",
 				path, tag, tag))
 		}
@@ -294,23 +292,28 @@ func checkBuildTags(f repoFiles) ([]string, error) {
 }
 
 // negatedTag は、expr の中で否定 (奇数回の !) の下に現れる tag のうち tags に入るものを返す。
-// `!(blackbox || race)` のように括弧の式ごと否定した形も拾う。negated はここまでに通った ! の偶奇
-func negatedTag(expr constraint.Expr, tags []string, negated bool) (string, bool) {
+// `!(blackbox || race)` のように括弧の式ごと否定した形も拾う
+func negatedTag(expr constraint.Expr, tags []string) (string, bool) {
+	return negatedTagUnder(expr, tags, false)
+}
+
+// negatedTagUnder は negatedTag の再帰。negated はここまでに通った ! の偶奇
+func negatedTagUnder(expr constraint.Expr, tags []string, negated bool) (string, bool) {
 	switch e := expr.(type) {
 	case *constraint.TagExpr:
 		return e.Tag, negated && slices.Contains(tags, e.Tag)
 	case *constraint.NotExpr:
-		return negatedTag(e.X, tags, !negated)
+		return negatedTagUnder(e.X, tags, !negated)
 	case *constraint.AndExpr:
-		if t, ok := negatedTag(e.X, tags, negated); ok {
+		if t, ok := negatedTagUnder(e.X, tags, negated); ok {
 			return t, ok
 		}
-		return negatedTag(e.Y, tags, negated)
+		return negatedTagUnder(e.Y, tags, negated)
 	case *constraint.OrExpr:
-		if t, ok := negatedTag(e.X, tags, negated); ok {
+		if t, ok := negatedTagUnder(e.X, tags, negated); ok {
 			return t, ok
 		}
-		return negatedTag(e.Y, tags, negated)
+		return negatedTagUnder(e.Y, tags, negated)
 	}
 	return "", false
 }
@@ -384,11 +387,14 @@ func workflowVetTags(src []byte) ([][]string, error) {
 }
 
 // vetTags は go vet のコマンド行の `-tags x,y` の一覧を並べ替えて重複を除いて返す。-tags が無ければ空。
-// 他の書き方 (`-tags=x` 等) は読まないので、空の一覧として他の箇所とずれて落ちる。-tags が 2 回あればエラーにする
+// 他の書き方 (`-tags=x`・`--tags` 等) は、読み違えて通らないようエラーにする。-tags が 2 回あってもエラーにする
 func vetTags(cmd string) ([]string, error) {
 	fields := strings.Fields(cmd)
 	var values []string
 	for i, f := range fields {
+		if f != "-tags" && (strings.HasPrefix(f, "-tags=") || strings.HasPrefix(f, "--tags")) {
+			return nil, fmt.Errorf("%q の %s は読まない書き方 (`-tags x,y` の形にする)", cmd, f)
+		}
 		if f == "-tags" {
 			if i+1 == len(fields) {
 				return nil, fmt.Errorf("%q の -tags に値が無い", cmd)
@@ -401,7 +407,8 @@ func vetTags(cmd string) ([]string, error) {
 	}
 	var tags []string
 	if len(values) == 1 {
-		tags = strings.Split(values[0], ",")
+		// go は空の要素を捨てるので、ここでも捨てる
+		tags = slices.DeleteFunc(strings.Split(values[0], ","), func(t string) bool { return t == "" })
 	}
 	return slices.Compact(slices.Sorted(slices.Values(tags))), nil
 }
