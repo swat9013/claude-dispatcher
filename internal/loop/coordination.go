@@ -457,7 +457,7 @@ func (l *loop) cleanupDeadLoops() {
 			// 作業対象と、生きている orphan の作業対象 (inheritOrphanClaims が引き継ぐ) の着手宣言は消さない
 			h := r.holders[ref]
 			c, claimed := l.claims[ref]
-			if mine := claimed && (c.claimSHA != "" || c.claudeAlive()); h.loop != loop || !h.dead || mine || l.orphans[ref] {
+			if mine := claimed && (c.claimSHA != "" || UnstoppedAlive(c.exited)); h.loop != loop || !h.dead || mine || l.orphans[ref] {
 				continue
 			}
 			if remove(ref, r.c.ClaimRef(ref), h.sha) {
@@ -518,7 +518,7 @@ func (l *loop) leaveRemote() {
 	for _, ref := range sortedRefs(l.claims) {
 		// 止められない claude が生きている claim の着手宣言は残す。claude が作業を続けうるので、他のマシンの loop には、
 		// 生存報告が途絶えてから死を判定するまで起動させない (system.md §9)
-		if c := l.claims[ref]; c.claudeAlive() {
+		if c := l.claims[ref]; UnstoppedAlive(c.exited) {
 			claudeLeft = true
 		} else {
 			l.releaseRemote(ref, c)

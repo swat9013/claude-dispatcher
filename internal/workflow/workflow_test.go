@@ -65,6 +65,20 @@ func TestValidDefinitionIsRead(t *testing.T) {
 	}
 }
 
+func TestTriggerIsLookedUpByNameFromTheDeclaration(t *testing.T) {
+	def, err := load(t, valid, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, ok := def.Trigger("implement")
+	_, missing := def.Trigger("nothing")
+
+	if !ok || got.Name != "implement" || missing {
+		t.Errorf("Trigger(implement) = %+v, %v / Trigger(nothing) の ok = %v, want 宣言にある名前だけ引ける", got, ok, missing)
+	}
+}
+
 func TestErrorsNameTheItem(t *testing.T) {
 	cases := []struct {
 		name     string

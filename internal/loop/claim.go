@@ -309,7 +309,7 @@ func newClaim(item target.Item, t trigger.Trigger, sessionID, workspaceRoot, cla
 
 // loopEnded は loop の終了を受ける。claim を持ったまま止まることを error の行に残す。
 func (c *claim) loopEnded() effect {
-	if c.claudeAlive() {
+	if UnstoppedAlive(c.exited) {
 		return effect{lines: []logLine{errorLine(fmt.Sprintf("claude を止められないまま止まる (pid %d, workspace %s)", c.pid, c.workspace))}}
 	}
 	if c.exited != nil {
@@ -322,14 +322,15 @@ func (c *claim) loopEnded() effect {
 	return effect{lines: []logLine{errorLine(fmt.Sprintf("終わり方を確かめられないまま止まる (%s)", c.trigger.Name))}}
 }
 
-// claudeAlive は、止められなかった claude がまだ終わっていないか。終わっていれば、worker は after_run を撃ってから終わりを
-// 送るので、loop の停止はその終わりを待てる。
-func (c *claim) claudeAlive() bool {
-	if c.exited == nil {
+// UnstoppedAlive は、止められなかった claude がまだ終わっていないか。exited は worker.Unstopped が渡す channel (nil なら止め
+// られなかった claude はいない)。終わっていれば、worker は after_run を撃ってから終わりを送るので、loop の停止はその終わりを
+// 待てる。単発起動 (run) も同じ判定を使う。
+func UnstoppedAlive(exited <-chan struct{}) bool {
+	if exited == nil {
 		return false
 	}
 	select {
-	case <-c.exited:
+	case <-exited:
 		return false
 	default:
 		return true

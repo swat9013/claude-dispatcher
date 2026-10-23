@@ -38,3 +38,20 @@ func TestObserveClassifiesARereadItemIntoOneOfFourObservations(t *testing.T) {
 		})
 	}
 }
+
+func TestObservationScreenIsTheSentenceOfTheReasonScreen(t *testing.T) {
+	cases := []struct {
+		observed trigger.Observation
+		want     string
+	}{
+		{trigger.ObservedStillMatches, "trigger に当たったまま"},
+		{trigger.ObservedTerminal, "終端"},
+		{trigger.ObservedLeftTrigger, "trigger から外れた"},
+		{trigger.ObservedUndecided, "当たるかをまだ決められない"},
+	}
+	for _, c := range cases {
+		if got := c.observed.Screen(); got != c.want {
+			t.Errorf("Observation(%d).Screen() = %q, want %q", c.observed, got, c.want)
+		}
+	}
+}

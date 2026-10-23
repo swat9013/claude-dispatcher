@@ -1,5 +1,7 @@
 package loop
 
+import "github.com/swat9013/claude-dispatcher/internal/trigger"
+
 // Reason は log.jsonl の reason の値 (formats.md §4)。言語に依らない token で書き、人が読む行には screen の文を出す
 // (ADR 0013)。
 type Reason string
@@ -27,14 +29,14 @@ const reasonEarlierTrigger Reason = "earlier_trigger"
 // 着手宣言が乗っ取られて worker を止めた・claim を解いた理由 (formats.md §12)
 const reasonTakenOver Reason = "taken_over"
 
-// screens は理由の token から人が読む行に出す文への対応 (formats.md §4 の reason の表)
+// screens は理由の token から人が読む行に出す文への対応 (formats.md §4 の reason の表)。観測に当たる理由の文は trigger.Observation が持つ
 var screens = map[Reason]string{
-	reasonTerminal:       "終端",
-	reasonLeftTrigger:    "trigger から外れた",
-	reasonStillMatches:   "trigger に当たったまま",
+	reasonTerminal:       trigger.ObservedTerminal.Screen(),
+	reasonLeftTrigger:    trigger.ObservedLeftTrigger.Screen(),
+	reasonStillMatches:   trigger.ObservedStillMatches.Screen(),
 	reasonStopRequested:  "停止要求",
 	reasonTriggerRemoved: "trigger が workflow 定義から消えた",
-	reasonUndecided:      "当たるかをまだ決められない",
+	reasonUndecided:      trigger.ObservedUndecided.Screen(),
 	reasonEarlierTrigger: "宣言順で先の trigger に当たる",
 	reasonTakenOver:      "着手宣言が乗っ取られた",
 }

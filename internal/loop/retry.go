@@ -68,7 +68,7 @@ func (l *loop) retry(store Store, v *view) {
 			l.apply(ref, c, c.backoffElapsed(ref, hindranceNoSlot, nil, l.env()))
 			continue
 		}
-		current, ok := triggerNamed(l.def, c.trigger.Name)
+		current, ok := l.def.Trigger(c.trigger.Name)
 		if !ok {
 			l.apply(ref, c, c.backoffElapsed(ref, hindranceTriggerRemoved, nil, l.env()))
 			continue
@@ -114,16 +114,6 @@ func findItem(open []target.Item, ref target.Ref) (target.Item, bool) {
 	return nil, false
 }
 
-// triggerNamed は workflow 定義から名前の trigger を引く。
-func triggerNamed(def workflow.Definition, name string) (trigger.Trigger, bool) {
-	for _, t := range def.Triggers {
-		if t.Name == name {
-			return t, true
-		}
-	}
-	return trigger.Trigger{}, false
-}
-
 // restartable は、再起動待ちの claim のうち、起動できるもの (trigger が事前検査に落ちていない)。落ちている trigger の
 // claim は、直るまで並列の枠にも再起動の予定にも数えない (枠を塞いで他の trigger を止めず、明けた予定で回り続けない)。
 // retry は、落ちている間も終端や trigger から外れたことを確かめて claim を解くので、この述語で絞らずに読み直す。
@@ -160,7 +150,7 @@ func (l *loop) clearAbandoned(store Store, def workflow.Definition, v *view) {
 // なら保つ。一覧に無いか一覧で外れて見えれば、一覧は古い結果を返しうるので置き場から 1 件読み直し、終端か外れたのを確かめて
 // から解く。読み直せないか、当たるかをまだ決められなければ保つ (外れたのを観測するまで解かない。次の tick で確かめ直す)。
 func (l *loop) stillAbandoned(store Store, def workflow.Definition, v *view, ref target.Ref, triggerName string) bool {
-	t, ok := triggerNamed(def, triggerName)
+	t, ok := def.Trigger(triggerName)
 	if !ok {
 		return false
 	}

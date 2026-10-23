@@ -420,7 +420,7 @@ func (l *loop) exit() int {
 func (l *loop) awaited() int {
 	n := 0
 	for _, c := range l.claims {
-		if c.holdsWorker() && !c.claudeAlive() {
+		if c.holdsWorker() && !UnstoppedAlive(c.exited) {
 			n++
 		}
 	}
