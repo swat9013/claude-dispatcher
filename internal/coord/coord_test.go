@@ -93,6 +93,19 @@ func TestLoopNameIsTheSanitizedHostnameAndEightHex(t *testing.T) {
 	}
 }
 
+func TestLoopHostReturnsTheHostnamePartOfABuiltLoopName(t *testing.T) {
+	for host, want := range map[string]string{"build": "build", "build-host-01": "build-host-01", "Build.Host:01": "build.host_01"} {
+		name, err := newLoopName(host, func(b []byte) (int, error) { return len(b), nil })
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if got := LoopHost(name); got != want {
+			t.Fatalf("LoopHost(%q) = %q, want %q", name, got, want)
+		}
+	}
+}
+
 func TestLoopNameChangesOnEveryStart(t *testing.T) {
 	a, errA := NewLoopName()
 	b, errB := NewLoopName()
