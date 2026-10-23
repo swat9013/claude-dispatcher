@@ -36,6 +36,10 @@ type memoryRemote struct {
 	heartbeatErr error
 	// deleteErr が nil でなければ、ref の削除をこの失敗で落とす (負けではない失敗)
 	deleteErr error
+	// claimErr が nil でなければ、着手宣言の push を通したうえでこの失敗を返す (結果の分からない失敗)
+	claimErr error
+	// left は Leave の呼び出しの回数
+	left int
 }
 
 func newMemoryRemote() *memoryRemote {
@@ -80,6 +84,9 @@ func (m *memoryRemote) Claim(ref target.Ref, expect coord.Expect) (string, error
 		return "", coord.ErrLost
 	}
 	m.put(&ref, coord.Message{Kind: coord.KindClaim, Format: coord.Format, Loop: me, Target: ref.String()})
+	if m.claimErr != nil {
+		return "", m.claimErr
+	}
 	return m.claims[ref], nil
 }
 
@@ -108,6 +115,7 @@ func (m *memoryRemote) Heartbeat(interval time.Duration) error {
 }
 
 func (m *memoryRemote) Leave() error {
+	m.left++
 	delete(m.loops, me)
 	return nil
 }
@@ -281,6 +289,30 @@ func TestTheSameMachinesPreviousLoopsClaimIsInheritedWithoutWaitingForItsDeath(t
 	// 別のマシンの loop が間隔の 3 倍で前の loop を死んだとみなすより先に、最初の tick で引き継ぐ
 	if !slices.Equal(remote.claimed, []string{"issue#42 holding " + old}) || remote.messages[remote.claims[issue42]].Loop != me {
 		t.Fatalf("着手宣言 %v, want 最初の tick で旧 sha からの置き換えで引き継ぐ", remote.claimed)
+	}
+}
+
+func TestAnInheritWithAnUnknownResultKeepsThePresenceWhenTheLoopStopsBeforeTheNextTick(t *testing.T) {
+	remote := newMemoryRemote()
+	remote.put(nil, coord.Message{Kind: coord.KindHeartbeat, Format: coord.Format, Loop: "me-00000009", Interval: time.Minute})
+	remote.put(&issue42, coord.Message{Kind: coord.KindClaim, Format: coord.Format, Loop: "me-00000009", Target: "issue#42"})
+	// push は remote に届いたが、結果の分からない失敗を返す
+	remote.claimErr = errors.New("connection reset")
+	r := tickRig(1)
+
+	r.run(t, loop.Options{
+		Definition: definition(time.Minute, 1), Coordination: remote, Store: matchingStore,
+		HeartbeatAfter: func(time.Duration) <-chan time.Time { return nil },
+		Workspaces:     func(workflow.Definition) loop.Workspaces { return listedWorkspaces{issue42} },
+		Orphaned:       func(target.Ref) (bool, error) { return true, nil },
+	})
+
+	// 次の tick で覚え直す前に止まっても、引き継いだものと同じに扱い、生存報告を消さない
+	if remote.left != 0 || remote.messages[remote.claims[issue42]].Loop != me {
+		t.Fatalf("Leave %d 回 (着手宣言の持ち主 %q), want 生存報告を消さずに止まる", remote.left, remote.messages[remote.claims[issue42]].Loop)
+	}
+	if !strings.Contains(r.log.String(), "orphan のために引き継いだ着手宣言を残して止まる (orphan の claude が作業を続けうる)") {
+		t.Fatalf("log = %q, want 残して止まる error の行", r.log.String())
 	}
 }
 

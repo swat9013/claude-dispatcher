@@ -63,6 +63,9 @@ type mediation struct {
 	// inherited は、生きている orphan の作業対象のために死んだ loop から引き継いだ自分の着手宣言の sha (claim は立てない。
 	// ADR 0027)
 	inherited map[target.Ref]string
+	// unsureInherits は、直近の tick で引き継ぎの push が結果の分からない失敗をした作業対象。remote に届いていたかは次の
+	// tick の deleteStaleClaims が確かめる。それより前に止まるときは inherited と同じに扱う
+	unsureInherits map[target.Ref]bool
 	// takenOver は乗っ取られた作業対象。loop を起動し直すまで残す
 	takenOver []status.TakenOver
 	// failures は続けて落ちた生存報告の置き直しの回数と直近の理由
@@ -276,6 +279,8 @@ func (l *loop) detectTakeovers(v coord.View) {
 // deleteStaleClaims は、自分の loop 名の着手宣言のうち claim の無い作業対象のもの (消し損ねた着手宣言) を消す。
 func (l *loop) deleteStaleClaims(v coord.View) {
 	r := l.mediation
+	// 結果の分からなかった引き継ぎは、この View で確かめる (届いていれば下で inherited に覚え直す)
+	r.unsureInherits = nil
 	for ref, sha := range r.inherited {
 		if v.Claims[ref] != sha {
 			// 引き継いだ着手宣言が置き換わったか消えた。claim が無いので止める worker は無く、忘れる。orphan はまだ動きうるので、
@@ -378,6 +383,11 @@ func (l *loop) inherit(ref target.Ref, h *holder) {
 		return
 	case err != nil:
 		l.rec.error(ref, "orphan の作業対象の着手宣言を引き継げない (次の tick で試み直す): "+oneLine(err))
+		// remote に届いていたかもしれない。次の tick で確かめる前に止まるときのために覚えておく
+		if m.unsureInherits == nil {
+			m.unsureInherits = map[target.Ref]bool{}
+		}
+		m.unsureInherits[ref] = true
 		return
 	}
 	if m.inherited == nil {
@@ -518,7 +528,15 @@ func (l *loop) leaveRemote() {
 	// orphan のために引き継いだ着手宣言は、直近の tick で orphan が終わっていたものを消し、生きていたものは残す (orphan が
 	// 作業を続けうる)
 	l.releaseInherited()
-	for _, ref := range sortedRefs(l.mediation.inherited) {
+	// 結果の分からなかった引き継ぎは、届いていたものとして引き継いだ着手宣言と同じに扱う (sha を知らないので消せない)
+	left := map[target.Ref]bool{}
+	for ref := range l.mediation.inherited {
+		left[ref] = true
+	}
+	for ref := range l.mediation.unsureInherits {
+		left[ref] = true
+	}
+	for _, ref := range sortedRefs(left) {
 		reason := "orphan は終わったが消せなかった"
 		if l.orphans[ref] {
 			// orphan が作業を続けうる間だけ、生存報告も残す
