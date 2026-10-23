@@ -46,7 +46,7 @@ repos:
       # golangci-lint の既定セットも govet を含むが、go vet も撃つ。go vet は go.mod の toolchain の Go に入っている
       # analyzer で動き、golangci-lint の govet は golangci-lint を build したときの analyzer で動くので、
       # Go の新しい版で足された analyzer は go vet にしか無いことがある
-      # -tags blackbox で build tag `blackbox` の file も読む (`!blackbox` の file は無いので、tag 付きで読めば tag `blackbox` で分かれる file はすべて読む)
+      # -tags blackbox で build tag `blackbox` の file も読む (`!blackbox` の file は無い (repocheck files が検査する) ので、tag 付きで読めば tag `blackbox` で分かれる file はすべて読む)
       - id: go-vet
         name: go vet
         entry: go vet -tags blackbox ./...
@@ -54,7 +54,7 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [pre-push]
-      # 同じ値を 2 箇所以上に書いている設定 (GoReleaser の版、check 名の列挙、go.mod の `go` 行と CONTRIBUTING.md の期待値) の
+      # 同じ値を 2 箇所以上に書いている設定 (GoReleaser の版、check 名の列挙、go.mod の `go` 行と CONTRIBUTING.md の期待値、go vet と golangci-lint の build tag) の
       # 一致を検査する。network は使わず軽いので、読む file を files: に重ねて書かずに毎回撃つ
       - id: repocheck
         name: repocheck (設定の一致)

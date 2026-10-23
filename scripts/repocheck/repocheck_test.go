@@ -19,6 +19,8 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    steps:
+      - run: go vet -tags blackbox ./...
   lint:
     runs-on: ubuntu-latest
   goreleaser-check:
@@ -44,11 +46,23 @@ const contributing = "- PR に付く check 名: `checks / test (ubuntu-latest)`�
 
 const goMod = "module example.com/m\n\ngo 1.26.0\n\ntoolchain go1.27.2\n"
 
+const preCommitYAML = `
+repos:
+  - repo: local
+    hooks:
+      - id: go-vet
+        entry: go vet -tags blackbox ./...
+`
+
+const golangciYAML = "version: \"2\"\nrun:\n  build-tags: [blackbox]\n"
+
 var adrNames = []string{"0001-first.md", "0002-second.md", "0003-third.md"}
 
 // validFiles は、すべての検査が一致する file の組を返す。各テストは変える file だけを上書きする
 func validFiles() repoFiles {
-	return repoFiles{ci: ciYAML, checks: checksYAML, release: releaseYAML, contributing: contributing, goMod: goMod}
+	return repoFiles{ci: ciYAML, checks: checksYAML, release: releaseYAML, contributing: contributing, goMod: goMod,
+		preCommit: preCommitYAML, golangci: golangciYAML,
+		buildConstraints: map[string]string{"cmd/x/slow_blackbox.go": "//go:build blackbox", "internal/proc/exit_other.go": "//go:build !linux && !darwin"}}
 }
 
 var wantNames = []string{"checks / test (ubuntu-latest)", "checks / test (macos-latest)", "checks / lint", "checks / goreleaser-check"}
@@ -298,6 +312,82 @@ func TestCheckRuleset_required_checksの規則が無ければずれとして落�
 		t.Fatal(err)
 	}
 	assertProblem(t, problems, "required_status_checks")
+}
+
+func TestCheckFiles_3箇所のbuild_tagの一覧がずれれば落とす(t *testing.T) {
+	cases := map[string]func(*repoFiles){
+		"pre-commit の go-vet": func(f *repoFiles) { f.preCommit = strings.Replace(preCommitYAML, " -tags blackbox", "", 1) },
+		"checks.yml の go vet": func(f *repoFiles) { f.checks = strings.Replace(f.checks, "-tags blackbox", "-tags=blackbox,other", 1) },
+		".golangci.yml":       func(f *repoFiles) { f.golangci = "run:\n  build-tags: []\n" },
+	}
+	for name, edit := range cases {
+		t.Run(name, func(t *testing.T) {
+			files := validFiles()
+			edit(&files)
+
+			problems, err := checkFiles(files)
+
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertProblem(t, problems, "build tag の一覧が違う")
+		})
+	}
+}
+
+func TestCheckFiles_tagの書き方と順が違っても同じ一覧なら通す(t *testing.T) {
+	files := validFiles()
+	files.preCommit = strings.Replace(preCommitYAML, "-tags blackbox", "-tags=other,blackbox", 1)
+	files.checks = strings.Replace(files.checks, "-tags blackbox", "-tags blackbox,other", 1)
+	files.golangci = "run:\n  build-tags: [other, blackbox]\n"
+
+	problems, err := checkFiles(files)
+
+	if err != nil || len(problems) != 0 {
+		t.Fatalf("got %q, %v", problems, err)
+	}
+}
+
+func TestCheckFiles_go_vetのhookかstepが無ければエラーにする(t *testing.T) {
+	cases := map[string]func(*repoFiles){
+		"hook": func(f *repoFiles) { f.preCommit = "repos: []\n" },
+		"step": func(f *repoFiles) { f.checks = strings.Replace(f.checks, "go vet", "go test", 1) },
+	}
+	for name, edit := range cases {
+		t.Run(name, func(t *testing.T) {
+			files := validFiles()
+			edit(&files)
+
+			if _, err := checkFiles(files); err == nil {
+				t.Fatal("エラーにならなかった")
+			}
+		})
+	}
+}
+
+func TestCheckFiles_検査するtagを否定するbuild制約のfileがあれば落とす(t *testing.T) {
+	for _, line := range []string{"//go:build !blackbox", "//go:build linux && (darwin || !blackbox)"} {
+		t.Run(line, func(t *testing.T) {
+			files := validFiles()
+			files.buildConstraints["cmd/x/slow_default.go"] = line
+
+			problems, _ := checkFiles(files)
+
+			assertProblem(t, problems, "cmd/x/slow_default.go の build 制約が tag blackbox を否定する")
+		})
+	}
+}
+
+func TestGoBuildLine_package句より前のgo_build行だけを読む(t *testing.T) {
+	cases := map[string]string{
+		"// c\n\n//go:build blackbox\n\npackage main\n": "//go:build blackbox",
+		"package main\n\n//go:build blackbox\n":         "",
+	}
+	for src, want := range cases {
+		if got := goBuildLine(src); got != want {
+			t.Errorf("goBuildLine(%q) = %q; want %q", src, got, want)
+		}
+	}
 }
 
 func assertProblem(t *testing.T, problems []string, want string) {

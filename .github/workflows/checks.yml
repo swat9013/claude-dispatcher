@@ -23,7 +23,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      # build tag `blackbox` の file も読む (.pre-commit-config.yaml の go-vet の hook と同じ)
+      # build tag `blackbox` の file も読む (.pre-commit-config.yaml の go-vet の hook・.golangci.yml の run.build-tags と同じ tag。一致は repocheck files が検査する)
       - run: go vet -tags blackbox ./...
       # go test は scripts/checkstatechart で python3 (3.11 以上。CONTRIBUTING.md の「セットアップ」) を撃つ。runner の image に入っているものを使う
       # -json の event を残し、log には -v と同じ出力を流す。shell: bash は pipefail で撃つので、go test が落ちれば step も落ちる
