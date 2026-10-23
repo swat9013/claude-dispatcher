@@ -275,6 +275,28 @@ func TestAnInheritWithAnUnknownResultKeepsTheHeartbeatWhenTheLoopStopsBeforeTheN
 	}
 }
 
+func TestAnInheritWithAnUnknownResultIsKeptAsInheritedByTheNextTick(t *testing.T) {
+	remote := newFlaky()
+	remote.beating(t)
+	remote.Put(nil, heartbeatOf("me-00000009"))
+	remote.Put(&issue42, claimBy("me-00000009", issue42))
+	// push は remote に届いたが、結果の分からない失敗を返す
+	remote.claimErr = errors.New("connection reset")
+
+	r := orphanedRun(t, remote, 2, always)
+
+	// 2 tick 目の突き合わせが、前の tick の orphan を使って、届いていた着手宣言を消し損ねたものでなく引き継いだものと見分ける
+	if owner := remote.Message(remote.Claims()[issue42]).Loop; owner != me {
+		t.Fatalf("着手宣言の持ち主 %q, want 引き継いだ着手宣言を消さずに残す", owner)
+	}
+	if _, beating := remote.Loops()[me]; !beating || len(r.jobs) != 0 {
+		t.Fatalf("生存報告 = %v・起動 %d 回, want 生存報告を消さずに止まり、起動しない", remote.Loops(), len(r.jobs))
+	}
+	if !hasErrorLine(t, r, "issue#42", "orphan のために引き継いだ着手宣言を残して止まる (orphan の claude が作業を続けうる)") {
+		t.Fatalf("error の行 = %v, want 引き継いだものとして残して止まる行", r.logEvents(t, "error"))
+	}
+}
+
 func TestALostClaimWritesAClaimLostLineAndDoesNotLaunch(t *testing.T) {
 	remote := newFlaky()
 	// 他のマシンの loop が、着手宣言を置く直前に先に置く
@@ -523,6 +545,36 @@ func TestHeartbeatIsRenewedWhileATickIsStillRunning(t *testing.T) {
 
 	if !renewedDuringTick {
 		t.Fatal("tick が終わるまで生存報告を置き直さなかった")
+	}
+}
+
+func TestARestartWaitsWhileARefOfANewerFormatExists(t *testing.T) {
+	remote := newFlaky()
+	remote.onObserve = func(times int) {
+		if times == 2 {
+			remote.Put(nil, coord.Message{Kind: coord.KindHeartbeat, Format: coord.Format + 1, Loop: "newer-00000002", Interval: time.Minute})
+		}
+	}
+	def := definition(time.Minute, 1)
+	def.MaxAttempts = 2
+	r := newRig()
+	r.script = func(worker.Job) workerScript { return exits(1) }
+	periods := 0
+	r.timer = func(kind timerKind, _ time.Duration) timing {
+		if kind != periodTimer {
+			return timing{fate: neverFires}
+		}
+		if periods++; periods >= 2 {
+			return timing{fate: stopsTheLoop}
+		}
+		return timing{fate: fires}
+	}
+
+	r.run(t, loop.Options{Definition: def, Coordination: boardOf(remote), Store: matchingStore, HeartbeatAfter: noRenewal})
+
+	// 2 回目の tick が新しい版の ref を見たので、再起動待ちの claim は attempt を進めずに待ち直す
+	if len(r.jobs) != 1 {
+		t.Fatalf("起動 %d 回, want 新しい版の ref がある間は再起動しない", len(r.jobs))
 	}
 }
 

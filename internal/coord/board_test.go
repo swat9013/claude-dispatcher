@@ -592,6 +592,18 @@ func TestAnInheritedClaimIsDeletedWhenTheOrphanEnds(t *testing.T) {
 	}
 }
 
+func TestAnInheritedClaimIsNotDeletedAsAStaleClaimEvenAfterTheOrphanEnded(t *testing.T) {
+	w, _ := inherited(t)
+
+	// 前の tick で orphan が終わっていても、引き継いだ着手宣言は ReleaseInherited が消すので、突き合わせでは消さない
+	wantOutcomes(t, w.observe(4*beat))
+
+	wantDeleted(t, w)
+	if !w.board.Held(issue42) {
+		t.Fatal("引き継いだ着手宣言が残る間は、起動しない")
+	}
+}
+
 func TestAnInheritedClaimThatCannotBeDeletedKeepsTheTargetFromLaunching(t *testing.T) {
 	w, _ := inherited(t)
 	w.deleteErr = errPush
