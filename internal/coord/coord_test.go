@@ -106,6 +106,12 @@ func TestLoopHostReturnsTheHostnamePartOfABuiltLoopName(t *testing.T) {
 	}
 }
 
+func TestLoopHostIsTheWholeNameWithoutAHyphen(t *testing.T) {
+	if got := LoopHost("nohyphen"); got != "nohyphen" {
+		t.Fatalf("LoopHost = %q", got)
+	}
+}
+
 func TestLoopNameChangesOnEveryStart(t *testing.T) {
 	a, errA := NewLoopName()
 	b, errB := NewLoopName()
