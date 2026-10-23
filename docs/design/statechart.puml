@@ -94,8 +94,8 @@ Abandoned --> [*] : loopの終了
 ' uncovered: NoClaim x 停止要求2回目 — claim が無いので止める worker が無い
 ' uncovered: NoClaim x 先のtriggerに当たる — その tick では起動せず、次の tick の評価が先の trigger で拾う (§7 の tick の手順 5)
 ' uncovered: NoClaim x triggerの削除 — claim も打ち切りも無いので変わる記憶が無い。消えた trigger は評価しないので、その trigger では候補にならないだけ
-' uncovered: NoClaim x 乗っ取られた — claim が無いので止める worker が無い。orphan のために引き継いだ着手宣言は忘れる (置き換わっていたら error の行を残す)。消し損ねた自分の着手宣言は消すだけ (§7 の調停 remote の突き合わせ)
-' uncovered: NoClaim x 新しい版のref — その tick は候補を起動しないので、claim は立たない (§7 の調停 remote の突き合わせ)
+' uncovered: NoClaim x 乗っ取られた — claim が無いので止める worker が無い。orphan のために引き継いだ着手宣言は忘れる (置き換わっていたら error の行を残す)。消し損ねた自分の着手宣言は消すだけ (§7 の coordination board の突き合わせ)
+' uncovered: NoClaim x 新しい版のref — その tick は候補を起動しないので、claim は立たない (§7 の coordination board の突き合わせ)
 ' 走っている
 ' uncovered: Running x 候補になる — claim されている作業対象は候補にならない (§4 の候補の定義)
 ' uncovered: Running x trigger外れの観測 — 走っている worker は終端でだけ止める (ADR 0009)
@@ -157,7 +157,7 @@ Abandoned --> [*] : loopの終了
 ' uncovered: WaitingRetry x 上限時間 — worker は走っていない
 ' uncovered: WaitingRetry x 当たったままの観測 — 当たったままであることは backoffの明け で再起動する条件として読む
 ' uncovered: WaitingRetry x 停止要求2回目 — 止める worker が無い。loopの終了 で消える
-' uncovered: WaitingRetry x 着手宣言に負けた — 再起動は claim を持つ間の着手宣言をそのまま使い、push し直さない (§7 の調停 remote の突き合わせ)
+' uncovered: WaitingRetry x 着手宣言に負けた — 再起動は claim を持つ間の着手宣言をそのまま使い、push し直さない (§7 の coordination board の突き合わせ)
 ' 打ち切り
 ' uncovered: Abandoned x 候補になる — 打ち切った作業対象は、どの trigger に当たっても起動しない (§7)
 ' uncovered: Abandoned x worker終了 — worker は走っていない
@@ -178,6 +178,6 @@ Abandoned --> [*] : loopの終了
 ' uncovered: Abandoned x 先のtriggerに当たる — 打ち切った作業対象は、どの trigger に当たっても起動しない (§7)
 ' uncovered: Abandoned x 着手宣言に負けた — 打ち切った作業対象は候補にならないので、着手宣言を push しない
 ' uncovered: Abandoned x 乗っ取られた — 打ち切りは claim を解いて着手宣言を消しているので、乗っ取られる着手宣言が無い
-' uncovered: Abandoned x 新しい版のref — 打ち切りを解く判定は trigger の述語で行い、調停 remote の ref を見ない
+' uncovered: Abandoned x 新しい版のref — 打ち切りを解く判定は trigger の述語で行い、coordination board の ref を見ない
 
 @enduml

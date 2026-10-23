@@ -44,7 +44,7 @@ workspace は state dir の外、workflow 定義の `workspace.root` の下に�
   - 例: scope key `github.com/acme/widgets` → `github.com_acme_widgets-<hash 8 文字>`
   - hash を足すのは、無害化で別の scope key が同じ綴りになっても、置き場を分けるため
 - state dir は loop が起動時に作る。試運転 (§5) は作らない
-- 調停 remote (`coordination.remote`) を指した project は、実装 repo の git remote の `refs/dispatcher/<scope dir>/` の下にも着手宣言と生存報告を置く (§12)。`<scope dir>` は state dir と同じ綴り
+- coordination board (`coordination.remote`) を指した project は、実装 repo の git remote の `refs/dispatcher/<scope dir>/` の下にも着手宣言と生存報告を置く (§12)。`<scope dir>` は state dir と同じ綴り
 - 時刻は RFC 3339 の UTC (`Z` 表記) で、秒まで
 
 ## 2. workflow 定義 (`WORKFLOW.md`)
@@ -137,11 +137,11 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 | exit | 意味 |
 |---|---|
 | 0 | 成功 |
-| 1 | 観測できなかった (置き場の CLI を起動できない・rate limit・読み切れない・その他の置き場の CLI の失敗) / 調停 remote (§12) を解けない・読めない・生存報告を置けない / `max-concurrent` (§13) を撃った scope key の loop が立っていないか、書いても効かない (§13) / 想定外の失敗 |
+| 1 | 観測できなかった (置き場の CLI を起動できない・rate limit・読み切れない・その他の置き場の CLI の失敗) / coordination board (§12) を解けない・読めない・生存報告を置けない / `max-concurrent` (§13) を撃った scope key の loop が立っていないか、書いても効かない (§13) / 想定外の失敗 |
 | 2 | 引数の誤り / workflow 定義の誤り (§2.8) / issue 置き場か `cl:` の CL 置き場が見えない (綴りの誤りか、権限が無い) / `jira` の起動時の確認 (§6) で、acli の認証の site が `tracker.host` と違うか読めない・status 名か issue type 名が実在しない |
 | 3 | 同じ scope key の loop か単発起動が走っている (§6・§11) |
 | 4 | 置き場の CLI (issue 置き場か CL 置き場の CLI。`github` なら gh、`gitlab` なら glab、`jira` なら acli) の認証が通らない |
-| 5 | 単発起動 (§11) が worker を起動しなかった: 指名した作業対象が指名した trigger に当たっていない・終端・当たるかをまだ決められない・orphan が生きている・他の loop の着手宣言がある・着手宣言の push に負けた・調停 remote に新しい版の ref がある・起動の前に停止要求を受けた・claude を起動する前に失敗した (hooks・描画・claude の起動) |
+| 5 | 単発起動 (§11) が worker を起動しなかった: 指名した作業対象が指名した trigger に当たっていない・終端・当たるかをまだ決められない・orphan が生きている・他の loop の着手宣言がある・着手宣言の push に負けた・ coordination board に新しい版の ref がある・起動の前に停止要求を受けた・claude を起動する前に失敗した (hooks・描画・claude の起動) |
 | 6 | 単発起動 (§11) が worker を起動したが完了しなかった: 終わった後も trigger に当たったまま・当たるかをまだ決められない・2 回目の停止要求で止めた・claude を止められない |
 
 - 観測の失敗は、issue 置き場の部品が 認証 / 見えない / 読み切れない / rate limit に分けて返す (system.md §13)
@@ -171,7 +171,7 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 
 | `event` | いつ | ほかの key |
 |---|---|---|
-| `loop_start` | loop を起動した (起動時の検査に通り、最初の tick の前。1 回の起動につき 1 行) | `version`・`commit` (loop を書いた binary の版と commit。値は `--version` (§8) と同じ)・`loop` (loop 名 (§12)。調停 remote を指した project だけ) |
+| `loop_start` | loop を起動した (起動時の検査に通り、最初の tick の前。1 回の起動につき 1 行) | `version`・`commit` (loop を書いた binary の版と commit。値は `--version` (§8) と同じ)・`loop` (loop 名 (§12)。coordination board を指した project だけ) |
 | `tick` | tick の終わり | `result` (`ok` / `error`)・`candidates` (候補の数)・`launched` (起動した作業対象の列)・`ambiguous` (曖昧な CL。`{"head": <head branch>, "targets": [<作業対象>…]}` の列)・`blocked` (事前検査 (§2.9) に落ちて起動しない trigger。`{"trigger": <名前>, "error": <理由>}` の列)・`running`・`waiting_retry`・`orphans`・`max_concurrent` (起動の判定に使った値。`result` が `ok` のとき)・`error` (`result` が `error` のとき) |
 | `start` | worker を起動した | `target`・`trigger`・`attempt`・`session_id`・`workspace`・`pid` |
 | `end` | worker 1 回分の終わり方を決めた | `target`・`trigger`・`attempt`・`session_id`・`outcome`・`reason`・`failure` (worker 自身が失敗したときだけ。下の `outcome` の表)・`exit_code` (process が自分で終わったときだけ。signal で止まったら載せない)・`is_error`・`num_turns`・`permission_denial_count` (attempt の最後の `result` の要約。下の箇条) |
@@ -233,7 +233,7 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
   - 要約は attempt 開始時の offset から読む。終了時の大きさがその offset より小さければ 0 から読む
 - `session_id` は CLI が発行して最初の attempt に `--session-id` で渡した値。同じ claim の attempt を通して 1 つ。Claude Code の transcript へ辿る鍵
 - claim を解くのは `completed` と `stopped` の `end`・`release`・`abandon` の行
-- 調停 remote (§12) の失敗は `error` の行に残す: ref を読めない (その tick は `result` が `error`)・着手宣言の push の負け以外の失敗・commit message を読めない・自分の ref を消せない (着手宣言は次の tick で消し直す)・生存報告を置けない・死んだ loop の ref を消せない
+- coordination board (§12) の失敗は `error` の行に残す: ref を読めない (その tick は `result` が `error`)・着手宣言の push の負け以外の失敗・commit message を読めない・自分の ref を消せない (着手宣言は次の tick で消し直す)・生存報告を置けない・死んだ loop の ref を消せない
 
 ## 5. 試運転 (`loop --dry-run`)
 
@@ -243,7 +243,7 @@ claude-dispatcher loop --dry-run [--max-concurrent <N>] [<workflow の path>]
 
 `--max-concurrent` は `loop` (§6) と同じ綴りと検査で受ける。試運転は並列上限に依らずに候補を出すので、渡しても出力は変わらない。
 
-workflow 定義を読んで検査し、事前検査 (§2.9) を通し、snapshot を作って trigger を評価し、起動するはずの作業対象を示して終わる。**何も書かない** (state dir を作らず、lock も取らない)。調停 remote (§12) も読みも書きもしないので、他のマシンの loop が持つ作業対象も示しうる。
+workflow 定義を読んで検査し、事前検査 (§2.9) を通し、snapshot を作って trigger を評価し、起動するはずの作業対象を示して終わる。**何も書かない** (state dir を作らず、lock も取らない)。coordination board (§12) も読みも書きもしないので、他のマシンの loop が持つ作業対象も示しうる。
 
 候補は、loop の起動の直前と同じ読み直し (§6 の tick の手順 7) を 1 件ずつ掛け、loop が起動しない候補は出さない (open な一覧の検索は、書き込みの直後に古い結果を返しうるため)。読み直しで起動しない理由は §6 と同じで、出さなかったことはどこにも示さない。候補が並列上限より多くても、どれも読み直す。候補を 1 件でも読み直せなければ、open な一覧を読めなかったときと同じく失敗する (下)。
 
@@ -289,11 +289,11 @@ claude-dispatcher loop [--max-concurrent <N>] [<workflow の path>]
 | tracker の CLI (`tracker.kind` が `github` なら gh、`gitlab` なら glab、`jira` なら acli)・`jira` では `cl.kind` の CLI (gh か glab)・`claude.command` を解決できる (PATH と、よく使われる置き場)。`on: cl` の trigger があるか `coordination.remote` を書いたなら git も | 1 |
 | `jira` だけ: issue 置き場の確認 (下) | 下 |
 | `jira` だけ: `cl:` の CL 置き場の確認 (下)。`on: cl` の trigger が無くても撃つ | 下 |
-| 調停 remote を指した project だけ: 調停 remote の確認 (§12) | 1 |
+| coordination board を指した project だけ: coordination board の確認 (§12) | 1 |
 | state dir を作れる | 1 |
 | 同じ scope key の loop が走っていない (`loop.lock` を取れる) | 3 |
 | state dir の `max_concurrent` (§13) が無いか、消せる (前の loop が残した値を継がない。`alive.lock` を取る前に消す) | 1 |
-| 調停 remote を指した project だけ: 最初の生存報告を置ける (§12) | 1 |
+| coordination board を指した project だけ: 最初の生存報告を置ける (§12) | 1 |
 
 - よく使われる置き場は、workflow 定義が撃つ依存 CLI (`tracker.kind` の CLI・`cl.kind` の CLI・claude・git) のどれかが PATH に無いときだけ PATH の前に足す。使わない置き場の CLI が無いことでは PATH を書き換えない (worker と hooks は loop の PATH を継ぐので、足すと worker が撃つ git などが入れ替わりうる)
 - 同じ issue 置き場の 2 本目の loop は、clone や workflow 定義の path が違っても起動時に止まる
@@ -313,7 +313,7 @@ claude-dispatcher loop [--max-concurrent <N>] [<workflow の path>]
 - 読み直した workflow 定義の、起動時に固定する項目のどれかが起動時と違えば、その tick を error で終え、何も起動しない (`tick` の行の `result` が `error`)。`error` は `workflow 定義の <項目> <今の値> が起動時の <起動時の値> と違う (loop を起動し直す)`。CL 置き場と `coordination.remote` の値は空になりうるので、Go の引用符付きの綴り (`"origin"`) で出す。項目と、起動時に固定する理由は次のとおり
   - scope key: lock は起動時の scope key で取っている
   - CL 置き場 (`jira` では `cl.kind`・`cl.host`・`cl.repo`。`github`・`gitlab` では issue 置き場と同じ場所なので、大文字と小文字以外の違いは scope key で先に止まる): claim している CL を、起動時と別の CL 置き場で読み直さない。scope key と同じく大文字と小文字を区別しない。`tracker.repo` (`github`・`gitlab`) か `cl.repo` (`jira`) の大文字と小文字だけを書き換えた版は同じ CL 置き場とみなし、tick を続ける
-  - `coordination.remote` (足した・消した・名前を変えた): 調停 remote は起動時に解いて最初の生存報告を置いている
+  - `coordination.remote` (足した・消した・名前を変えた): coordination board の remote は起動時に解いて最初の生存報告を置いている
 
 **tick の手順** (system.md §7):
 
@@ -335,7 +335,7 @@ claude-dispatcher loop [--max-concurrent <N>] [<workflow の path>]
 2. 終わった worker のうち、作業対象を読み直せなかったものを読み直す
 3. workflow 定義を読み直し、事前検査 (§2.9) を通して snapshot を作る。事前検査に落ちた trigger は、手順 6 で再起動せず、手順 7 の評価から外す
    - state dir の `max_concurrent` (§13) があれば読み、その tick の並列上限にする。読めない・1 以上の整数でなければ、その tick を error で終える (`tick` の行の `result` が `error`)。起動 (再起動を含む) をしない。読んだ値が前の tick の並列上限と違えば、人が読む行に `並列上限を変えた` (下の「画面」) を出す
-   - 調停 remote を指した project では、続けて調停 remote の突き合わせ (§12) を撃つ。ref を読めなければ、その tick を error で終える (`tick` の行の `result` が `error`)。掃除も起動 (再起動を含む) もしない
+   - coordination board を指した project では、続けて coordination board の突き合わせ (§12) を撃つ。ref を読めなければ、その tick を error で終える (`tick` の行の `result` が `error`)。掃除も起動 (再起動を含む) もしない
 4. 掃除: workspace root の下の `issue-<番号>` と `cl-<番号>` のうち claim が無いものの orphan を確かめ (下の「orphan」)、orphan が生きておらず open な一覧にも無いものを読み直し、終端になっていれば `before_remove` を撃って消す。起動の直後の tick が起動時の掃除を兼ね、以後の tick が、claim を解いた後に終端になったものと消し損ねたものを拾う
 5. 打ち切りを解く: 打ち切った作業対象のうち、終端になったか、打ち切ったときの trigger の述語に当たらなくなったもの (その trigger が workflow 定義から消えたものを含む) の打ち切りを解く。conflict を計算中の CL は、外れたとは数えない
    - 曖昧な CL になったことでは解かない。曖昧さは open な一覧でしか決まらず、古い一覧で曖昧に見えただけで解けてしまうため (曖昧な間はどの trigger でも起動しないので、保っても起動は遅れない)。曖昧な間も、ほかの作業対象と同じ規則で外れたかを確かめる
@@ -349,7 +349,7 @@ claude-dispatcher loop [--max-concurrent <N>] [<workflow の path>]
    - CL は、claim している作業対象の workspace で checkout されている branch を head に持つもの (同じ repo の CL) なら起動しない。一覧の CL で当たれば読み直さずに外し、読み直した CL でも確かめ直す。branch は workspace を cwd にして `git symbolic-ref --short -q HEAD` で読む。workspace が無い・git の作業ツリーでない・detached HEAD なら branch は無いとする
    - branch をそれ以外の理由で読めなければ、error の行を残し、その tick は CL の候補を起動しない (同じ branch に worker を重ねないため)
    - 起動した worker には、読み直した作業対象を渡す
-   - 調停 remote を指した project では、読み直しの後、claim を立てる直前に着手宣言を push する (§12)。負けたら `claim_lost` の行を書いて起動しない。負け以外の失敗は `error` の行を残して起動しない。どちらも、起動しなかった分の空きを次の候補に回す
+   - coordination board を指した project では、読み直しの後、claim を立てる直前に着手宣言を push する (§12)。負けたら `claim_lost` の行を書いて起動しない。負け以外の失敗は `error` の行を残して起動しない。どちらも、起動しなかった分の空きを次の候補に回す
 
 **再起動** (system.md §7「失敗の扱い」):
 
@@ -367,8 +367,8 @@ claude-dispatcher loop [--max-concurrent <N>] [<workflow の path>]
 - 再起動は、そのときの workflow 定義 (trigger・本文・hooks・`claude`・`limits`) で行う。workspace の root だけは、最初に起動したときのものを使う (session は workspace の path ごとに保存されるので)
 - 前の attempt で claude を起動できていなければ (hook・描画・起動の失敗)、session はまだ無いので `--session-id` で始める
 - 停止要求を受けた後に失敗した attempt は、再起動を予定しない
-- 調停 remote (§12) を指した project では、tick の外で backoff が明けても `start` の行は次の tick まで書かない (再起動は tick の中だけ。system.md §7)
-- 調停 remote (§12) に自分の知る版より新しい版の ref がある間は、attempt を進めずに待ち直す。着手宣言は claim を持つ間のものをそのまま使い、push し直さない
+- coordination board (§12) を指した project では、tick の外で backoff が明けても `start` の行は次の tick まで書かない (再起動は tick の中だけ。system.md §7)
+- coordination board (§12) に自分の知る版より新しい版の ref がある間は、attempt を進めずに待ち直す。着手宣言は claim を持つ間のものをそのまま使い、push し直さない
 - 打ち切りは作業対象ごとに memory に持つ。打ち切った作業対象は、どの trigger に当たっても起動しない。loop を起動し直すと消える
 - 打ち切りを解くには、label を外して打ち切ったときの trigger から外し、1 周期待ってから付け直す (外してから付け直すまでが 1 周期に収まると、外れたのを観測できない)。`status` (§7) の打ち切りの行にこの手順を出す
 
@@ -437,7 +437,7 @@ claude-dispatcher loop [--max-concurrent <N>] [<workflow の path>]
 <時刻> loop を止めた (停止要求 SIGINT)
 ```
 
-- 調停 remote を指した project では、`loop を始めた` の行の scope の後に ` · loop <loop 名>` を足す
+- coordination board を指した project では、`loop を始めた` の行の scope の後に ` · loop <loop 名>` を足す
 
 端末の画面 (停止待ち):
 
@@ -595,10 +595,10 @@ loop の今の状態を、表示のためだけに書き出す (system.md §9)�
 | `ambiguous` | 直近の tick の曖昧な CL (§2.4) |
 | `blocked` | 直近の tick で事前検査 (§2.9) に落ちて、起動しない trigger |
 | `orphans` | 直近に確かめられた tick で生きていた orphan (§6) の作業対象 (`target`) と、lock を持たれている worker log の state dir からの相対 path (`log`)。この key を足す前の版が書いた状態 file には無い |
-| `loop` | loop 名 (§12)。調停 remote を指した project だけ |
-| `taken_over` | この loop が着手宣言を乗っ取られた作業対象 (`target`) と、見たときの持ち主の loop 名 (`by`。消えていたら空文字列、持ち主の loop を読めなければ `?`)。loop を起動し直すまで残す。調停 remote を指した project だけ |
+| `loop` | loop 名 (§12)。coordination board を指した project だけ |
+| `taken_over` | この loop が着手宣言を乗っ取られた作業対象 (`target`) と、見たときの持ち主の loop 名 (`by`。消えていたら空文字列、持ち主の loop を読めなければ `?`)。loop を起動し直すまで残す。coordination board を指した project だけ |
 | `heartbeat_failures` | 生存報告の置き直しが 2 回以上続けて落ちている間だけ、続けて落ちた回数 (`count`) と直近の理由 (`error`)。置き直せたら無くなる |
-| `newer_format` | 直近の tick で、調停 remote に自分の知る版より新しい版の ref を見た間だけ、見た版 (`format`。版を読めなければ `null`)。この間はその scope で worker を起動しない |
+| `newer_format` | 直近の tick で、coordination board に自分の知る版より新しい版の ref を見た間だけ、見た版 (`format`。版を読めなければ `null`)。この間はその scope で worker を起動しない |
 
 ### 7.2 `status`
 
@@ -640,7 +640,7 @@ orphan issue#45: 前の loop の claude がまだ動いている。終わるの�
 - `要対処 <n>`: 打ち切り・曖昧な CL・起動しない trigger・止められない worker (段階が `unstopped` の claim)・orphan・乗っ取られた・生存報告の失敗・新しい版の ref を 1 件 1 行で並べる。1 件も無ければセクションごと出さない
   - `乗っ取られた <作業対象>: loop <by> が着手宣言を持っている。worker を止めた。止まる前に push された成果を確かめる` (`by` が空なら `着手宣言が消えていた。…`、`?` なら `持ち主を読めない着手宣言に置き換わっていた。…`)
   - `生存報告 <count> 回続けて置けない: <error>。他のマシンの loop に死んだとみなされ、着手宣言を乗っ取られうる`
-  - `新しい版の ref 調停 remote に版 <format> の ref がある: この scope では worker を起動しない。dispatcher を上げる` (版を読めなければ `版を読めない ref がある`)
+  - `新しい版の ref coordination board に版 <format> の ref がある: この scope では worker を起動しない。dispatcher を上げる` (版を読めなければ `版を読めない ref がある`)
 - 時刻は端末の local time の `HH:MM:SS`
 - stdout が端末でなくても、描き方は同じ人が読む形 (列は空白揃え)。機械が読むなら状態 file (§7.1) を読む
 
@@ -775,7 +775,7 @@ triggers:
    - 一覧の読み出しが 15 秒を超えたら、読み終わる前に stderr に 1 行出す (§6 の「遅い一覧」)。stdout の行と exit は変えない
 3. tracker の CLI・`jira` では `cl.kind` の CLI・`claude.command` を解決できる。`on: cl` の trigger があるか `coordination.remote` を書いたなら git も (loop の起動時の検査と同じ。§6)
 4. 事前検査 (§2.9)。落ちた trigger ごとに `NG` の行
-   - 調停 remote を指した project では、続けて loop の起動時と同じ調停 remote の確認 (§12) を通し、`ok   調停 remote <名前> (<URL>)` か、§12 の起動時の確認の文を載せた `NG   調停 remote <名前> を解けない: <理由>` / `NG   調停 remote <名前> を読めない: <理由>` の行を出す。push は撃たない
+   - coordination board を指した project では、続けて loop の起動時と同じ coordination board の確認 (§12) を通し、`ok   coordination board の remote <名前> (<URL>)` か、§12 の起動時の確認の文を載せた `NG   coordination board の remote <名前> を解けない: <理由>` / `NG   coordination board の remote <名前> を読めない: <理由>` の行を出す。push は撃たない
 5. 利用者の約束に頼る宣言を `警告` の行に出す (system.md §11)
    - `approved: true` の CL 側の trigger (merge を worker に任せうる)
    - `head`・`labels.all`・`labels.any`・`same_repo: true` のどれも書いていない CL 側の trigger (人の CL や fork の CL に worker を送りうる)
@@ -874,13 +874,13 @@ claude-dispatcher run <trigger> <作業対象> [<workflow の path>]
 | 作業対象の worker log の orphan が生きていない (§6 の「orphan」。確かめられなければ exit 1) | 5 |
 | 作業対象を置き場から読める | §3 |
 | 読んだ作業対象が終端でなく、その trigger に当たっている (当たるかをまだ決められないときを含めず) | 5 |
-| 調停 remote を指した project だけ: 最初の生存報告を置ける (§12) | 1 |
-| 調停 remote を指した project だけ: ref を読めて、自分の知る版より新しい版の ref が無い | 1 / 5 (新しい版) |
-| 調停 remote を指した project だけ: 作業対象に他の loop の着手宣言が無く、着手宣言の push に勝つ (負け以外の失敗は exit 1) | 5 |
+| coordination board を指した project だけ: 最初の生存報告を置ける (§12) | 1 |
+| coordination board を指した project だけ: ref を読めて、自分の知る版より新しい版の ref が無い | 1 / 5 (新しい版) |
+| coordination board を指した project だけ: 作業対象に他の loop の着手宣言が無く、着手宣言の push に勝つ (負け以外の失敗は exit 1) | 5 |
 
 - 事前検査は §6 と同じく、指名していない trigger が落ちても失敗させる
 - 当たっているかは指名した trigger の述語だけで決める。宣言順で先の trigger に当たっていても起動する (loop の読み直しの `earlier_trigger` は当てない)
-- 調停 remote を指した project では、loop と同じく、単発起動の終わりまで生存報告を置き直し (§12)、終わるときに着手宣言と生存報告を消す (起動しなかったときも、置いた分を消す)。止められない claude を残して終わるときは、どちらも消さない (§12 の後片付け)。乗っ取られたかは確かめない。ref を 1 回しか読まず、生存報告が新しくならない経過を数えられないので、死んだ loop を判定しない (他の loop の着手宣言があれば、持ち主が落ちていても起動しない。乗っ取りと死んだ loop の ref の掃除は loop に任せる)
+- coordination board を指した project では、loop と同じく、単発起動の終わりまで生存報告を置き直し (§12)、終わるときに着手宣言と生存報告を消す (起動しなかったときも、置いた分を消す)。止められない claude を残して終わるときは、どちらも消さない (§12 の後片付け)。乗っ取られたかは確かめない。ref を 1 回しか読まず、生存報告が新しくならない経過を数えられないので、死んだ loop を判定しない (他の loop の着手宣言があれば、持ち主が落ちていても起動しない。乗っ取りと死んだ loop の ref の掃除は loop に任せる)
 - lock は §6 と同じ `loop.lock` だけを、単発起動の終わりまで持つ。`alive.lock` は取らないので、単発起動の間の `status` は `○ loop なし` と描く (止まった loop が残した状態 file を今の状態として描かない)。同じ scope key の loop・単発起動との排他は `loop.lock` が担う
 
 **worker の 1 回分**: §6 の「worker の 1 回分」と同じ (workspace の用意と hooks・描画・`claude -p` の起動・`limits.stall_timeout`・`limits.run_timeout`・`after_run`)。attempt は 1 で、session id は新しく発行する (`--session-id`)。retry も打ち切りもしない。
@@ -900,12 +900,12 @@ claude-dispatcher run <trigger> <作業対象> [<workflow の path>]
 ```
 
 - 終了の行は `完了 (<reason の画面の文>)` か `未完了 (<reason の画面の文>)` (§4 の `reason`。停止要求で止めたら `停止要求`、止められない claude を残したら `claude を止められない`)。claude を起動する前に失敗したら `起動できなかった`。worker 自身の失敗・`after_run` の失敗・`result` の要約の失敗は、stderr に 1 件 1 行で出す
-- 着手宣言の push に負けたら stderr に `<作業対象> は他の loop が先に着手したので起動しない` を、他の生きている loop の着手宣言があれば `<作業対象> は loop <loop 名> が着手しているので起動しない` を、新しい版の ref があれば `調停 remote に新しい版の ref があるので起動しない (dispatcher を上げる)` を出す
+- 着手宣言の push に負けたら stderr に `<作業対象> は他の loop が先に着手したので起動しない` を、他の生きている loop の着手宣言があれば `<作業対象> は loop <loop 名> が着手しているので起動しない` を、新しい版の ref があれば `coordination board に新しい版の ref があるので起動しない (dispatcher を上げる)` を出す
 - 停止要求を受けたら、stderr に `停止要求 <signal>: worker の終了を待つ` (1 回目) / `worker を止める` (2 回目と、claude を起動する前の hooks の間) / `止められない claude を残して終える` を出す。`<signal>` は `SIGINT` の綴り
 
 exit: 0 = 完了 / 1・2・3・4 = 起動前の検査・読み直し (§3) / 5 = 起動しなかった / 6 = 起動したが完了しなかった。
 
-## 12. 調停 remote の ref
+## 12. coordination board の ref
 
 workflow 定義に `coordination.remote` を書いた project で、loop と単発起動が置く着手宣言と生存報告の形 (system.md §4 の「マシンを跨いだ分担」、ADR 0011・0017・0023)。
 
@@ -962,14 +962,14 @@ seq: 17
 - `<remote>` は `coordination.remote` の名前のまま渡す (URL と認証はその clone の設定を git が使う)
 - **負け**: push の exit code が非 0 で、porcelain の行 (タブ区切り) のうち `!` で始まる行が `[remote rejected]` か `[rejected]` を含むとき。理由の文言 (`cannot lock ref ...`・`stale info` など) は見ない。それ以外の非 0 は、負け以外の失敗 (git の stderr を理由に載せる)
 
-**起動時の調停 remote の確認** (loop の起動時 (§6)・単発起動 (§11)・`doctor` (§7.4)):
+**起動時の coordination board の確認** (loop の起動時 (§6)・単発起動 (§11)・`doctor` (§7.4)):
 
-1. `git remote get-url --all <coordination.remote>` と `git remote get-url --push --all <coordination.remote>` が通り、どちらも 1 本だけの同じ URL を返す。落ちたら `調停 remote <名前> を解けない: <理由>`、違うか複数あれば `調停 remote <名前> の読む URL と書く URL が違う: <URL の列> と <URL の列>` (exit 1)
-2. `git ls-remote <remote> refs/dispatcher/<scope dir>/*` が通る。落ちたら `調停 remote <名前> を読めない: <理由>` (exit 1)
+1. `git remote get-url --all <coordination.remote>` と `git remote get-url --push --all <coordination.remote>` が通り、どちらも 1 本だけの同じ URL を返す。落ちたら `coordination board の remote <名前> を解けない: <理由>`、違うか複数あれば `coordination board の remote <名前> の読む URL と書く URL が違う: <URL の列> と <URL の列>` (exit 1)
+2. `git ls-remote <remote> refs/dispatcher/<scope dir>/*` が通る。落ちたら `coordination board の remote <名前> を読めない: <理由>` (exit 1)
 
-loop と単発起動は、続けて lock を取った後に最初の生存報告を置く。落ちたら `調停 remote <名前> に生存報告を置けない: <理由>` (exit 1)。
+loop と単発起動は、続けて lock を取った後に最初の生存報告を置く。落ちたら `coordination board の remote <名前> に生存報告を置けない: <理由>` (exit 1)。
 
-**調停 remote の突き合わせ** (§6 の tick の手順 3 の後。system.md §7):
+**coordination board の突き合わせ** (§6 の tick の手順 3 の後。system.md §7):
 
 1. ref を読み、新しく見た sha の commit message を読む。ref を読めなければ tick を error で終える。commit message を読めない sha は `error` の行を残し、その tick は持ち主を知らないものとして扱う (その作業対象は起動しない・持ち主を死んだとみなさない)
 2. 自分が置いた着手宣言が、sha が違うか消えていれば `taken_over` の行を書き、その claim に「乗っ取られた」を渡す (走っている worker は止め、ほかの claim は `release` の行で解く。`reason` は `taken_over`)。要対処に出す

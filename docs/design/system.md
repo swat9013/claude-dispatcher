@@ -20,14 +20,14 @@ CLI の subcommand は、役割で 3 群に分かれる。
 
 | 群 | subcommand | 書くもの |
 |---|---|---|
-| 駆動 | `loop` (と単発起動 `run`) | state dir (状態 file・log・worker log・lock・共通 prompt の描画結果) と workspace。外部 store には書かない。例外は、`coordination.remote` を書いた project の調停 remote の `refs/dispatcher/*` (着手宣言と生存報告。§4) |
+| 駆動 | `loop` (と単発起動 `run`) | state dir (状態 file・log・worker log・lock・共通 prompt の描画結果) と workspace。外部 store には書かない。例外は、`coordination.remote` を書いた project の coordination board の `refs/dispatcher/*` (着手宣言と生存報告。§4) |
 | 観測 | `status` / `paths` | 何も書かない (読み取り専用) |
 | 導入 | `setup` / `doctor` / `guide` | `setup` だけが書く。書くのは workflow 定義の雛形で、無いときだけ作り、既存は上書きしない。Claude Code の settings はどれも書かない。`guide` は案内を出すだけで、workflow 定義も state dir も読まない |
 
 | アクター | 方向 | 関わり |
 |---|---|---|
 | tracker | ← 観測 / worker と人が書く | issue と label の置き場。CLI は**読むだけ** |
-| CL host | ← 観測 / worker と人が書く | CL の置き場。CLI は**読むだけ**。例外は、調停 remote を指した project で、実装 repo の git remote の `refs/dispatcher/*` に着手宣言と生存報告を書くこと (§4、ADR 0011) |
+| CL host | ← 観測 / worker と人が書く | CL の置き場。CLI は**読むだけ**。例外は、coordination board を指した project で、実装 repo の git remote の `refs/dispatcher/*` に着手宣言と生存報告を書くこと (§4、ADR 0011) |
 | worker (LLM) | ← 起動される / → stream | loop の子 process。action を実行し、結果は外部 store と workspace に残す。loop へは stream (進行の event) を流すだけで、問い合わせの往復は持たない |
 | 人間 | → | workflow 定義を書き、triage と、自分の手に残した merge を行う。機械システムとの接点は次のものだけ<br>- `loop` の起動と停止<br>- loop の画面・`status`・log の読み<br>- `doctor` |
 
@@ -65,9 +65,9 @@ issue や CL を起点に無人で作業を回す機構は、次の 4 つの失�
 
 解き方は「**状態を外部 store に置き、機械は読むだけにする。何を起動するかは宣言で決める**」。
 
-- **機械は tracker に書かず、CL host には調停用の独自 ref (`refs/dispatcher/*`) だけを書く** (ADR 0011)。label・CL・review・branch には書かないので、silent な機械遷移は起きない
+- **機械は tracker に書かず、CL host には coordination board の独自 ref (`refs/dispatcher/*`) だけを書く** (ADR 0011)。label・CL・review・branch には書かないので、silent な機械遷移は起きない
 - **loop の memory に持つのは claim と retry だけ**
-  - 調停 remote を指した project では、claim を持つ間はその着手宣言も remote に置く (§4)。着手宣言は他のマシンの loop との調停のためのもので、loop は claim を remote から読み戻さない
+  - coordination board を指した project では、claim を持つ間はその着手宣言も remote に置く (§4)。着手宣言は他のマシンの loop との分担のためのもので、loop は claim を remote から読み戻さない
   - どちらも loop の process と寿命を共にする。loop が止まっても、走っていた claude は止まらずに orphan として残りうる (§7)
   - 起動し直した loop は外部 store を読み直すので、drift は tick を跨いで残らない
 - **起動は trigger の宣言で決定的に決める**。判断する役を別に置かないので、往復は生まれない
@@ -85,11 +85,11 @@ dispatcher は、状態の意味を定めない。issue の label が何を表�
 | attempt・打ち切り | loop の memory | loop | loop の process |
 | workspace | workflow 定義が決める root の下の作業場所 (既定は clone 配下) | loop (hooks) | 作業対象が終端になるまで |
 | orphan の生死 | worker log に掛けた flock | kernel (claude が持つ fd) | claude の process |
-| 着手宣言 | 調停 remote の `refs/dispatcher/<scope dir>/claims/<作業対象>` (下の「マシンを跨いだ分担」) | loop / 単発起動 | claim を持つ間。落ちた loop のものは、気づいた loop が消すまで |
-| 生存報告 | 調停 remote の `refs/dispatcher/<scope dir>/loops/<loop 名>` | loop / 単発起動 | loop の process。落ちた loop のものは、気づいた loop が消すまで |
+| 着手宣言 | coordination board の `refs/dispatcher/<scope dir>/claims/<作業対象>` (下の「マシンを跨いだ分担」) | loop / 単発起動 | claim を持つ間。落ちた loop のものは、気づいた loop が消すまで |
+| 生存報告 | coordination board の `refs/dispatcher/<scope dir>/loops/<loop 名>` | loop / 単発起動 | loop の process。落ちた loop のものは、気づいた loop が消すまで |
 
 - **候補 = いずれかの trigger に当たり ∧ claim されておらず ∧ 打ち切られておらず ∧ orphan が生きていない ∧ 他の loop の着手宣言が立っていない作業対象**
-  - 他の loop の着手宣言は、調停 remote を指した project でだけ数える。持ち主の loop が死んだとみなした着手宣言は、立っていないものとして数える (下の「マシンを跨いだ分担」)
+  - 他の loop の着手宣言は、coordination board を指した project でだけ数える。持ち主の loop が死んだとみなした着手宣言は、立っていないものとして数える (下の「マシンを跨いだ分担」)
 - **完了 = worker が終わった後に、作業対象が起動した trigger から外れていること**
   - 外すのは action の責務 (SPEC の handoff state と同じ)
   - 例: 実装の action は、CL を開いたら着手可の label を外す
@@ -99,11 +99,11 @@ dispatcher は、状態の意味を定めない。issue の label が何を表�
   - CL が merge されずに close されても、issue は自動では候補に戻らない。戻すなら、人が label を付け直す
 - **claim は tracker に書かない**。同じ issue 置き場に 2 本の loop が立つと、次の 2 つが無ければ二重に起動する
   - 同じマシンの中では、scope key の lock で 2 本目の loop を拒む (§9)
-  - マシンを跨いでは、workflow 定義で調停 remote (`coordination.remote`) を指した project に限り、下の「マシンを跨いだ分担」で分担する。指さない project はマシンを跨いだ排他を持たないので、1 つの issue 置き場は 1 台から回す
+  - マシンを跨いでは、workflow 定義で coordination board (`coordination.remote`) を指した project に限り、下の「マシンを跨いだ分担」で分担する。指さない project はマシンを跨いだ排他を持たないので、1 つの issue 置き場は 1 台から回す
 
-**マシンを跨いだ分担** (ADR 0011・0017・0023・0025・0027)。調停 remote を指した project では、loop と単発起動は、着手宣言と生存報告を実装 repo の git remote の独自 ref に置き合って、作業対象を分け合う。leader は持たない。
+**マシンを跨いだ分担** (ADR 0011・0017・0023・0025・0027)。coordination board を指した project では、loop と単発起動は、着手宣言と生存報告を実装 repo の git remote の独自 ref に置き合って、作業対象を分け合う。leader は持たない。
 
-- **調停 remote は、workflow 定義のある clone の git remote の名前で指す**。名前はその clone で解き、URL と認証はその clone の設定 (`git remote`・credential helper・ssh の鍵) をそのまま使う。dispatcher は認証を持たない。読む URL と書く URL (`pushurl`・`pushInsteadOf`) が違うか、どちらかが複数ある remote は使えない (自分の置いた ref を読めない・push の勝ち負けが読む URL の状態と食い違う) ので、起動時の確認で落とす
+- **coordination board は、workflow 定義のある clone の git remote の名前で指す**。名前はその clone で解き、URL と認証はその clone の設定 (`git remote`・credential helper・ssh の鍵) をそのまま使う。dispatcher は認証を持たない。読む URL と書く URL (`pushurl`・`pushInsteadOf`) が違うか、どちらかが複数ある remote は使えない (自分の置いた ref を読めない・push の勝ち負けが読む URL の状態と食い違う) ので、起動時の確認で落とす
 - **ref は scope dir (formats.md §1) の 1 段の下に置く**。着手宣言は作業対象ごとに 1 本 (`refs/dispatcher/<scope dir>/claims/<作業対象>`)、生存報告は loop ごとに 1 本 (`refs/dispatcher/<scope dir>/loops/<loop 名>`)。どちらも空の tree の commit を指し、形式の版・持ち主の loop 名・生存報告の間隔は commit message に書く (綴りは formats.md §12)
 - **loop 名は `<hostname を無害化したもの>-<乱数 8 hex>`** で、起動ごとに新しくする。無害化は scope dir と同じ規則 (formats.md §1)。起動し直した loop を、前の loop と別の持ち主として扱う (前の loop の着手宣言を、落ちた loop のものとして片付ける)
 - **先着は条件付きの push で決める**。着手宣言は「ref が無いときだけ作る」で push し、通った loop だけが claim を立てて worker を起動する。負けたら claim を立てず、log に行を残すだけにする (他のマシンが作業しているのは正常な状態)
@@ -115,15 +115,15 @@ dispatcher は、状態の意味を定めない。issue の label が何を表�
 - **自分の着手宣言が乗っ取られていたら (sha が変わったか、消えていたら)、その作業対象の worker を止めて claim を解く**。network が切れた loop が、生きたまま死んだとみなされたときに通る経路で、まれな二重実行は受け入れる (self-fencing は持たない)。落ちた loop の orphan の作業対象は、同じマシンで起動し直した loop が着手宣言を引き継いで守る。起動し直さない間は別のマシンの loop が乗っ取りうるので、その二重実行も受け入れる (ADR 0027)。止める前に push した成果は残りうるので、要対処に出して人が見る
 - **自分の ref は claim を解いたときと loop を止めたときに消す**。消すときは、自分が置いた sha を期待値にする。消せなかった着手宣言は、自分の loop 名の着手宣言のうち claim の無いものとして、次の tick で消し直す
 - **形式の版を commit message に書き、自分の知る版より新しい版の ref (版を読めない ref を含む) を見たら、その scope では worker を起動しない** (再起動も含む)。走っている worker は止めない。dispatcher を上げることを要対処に出す。新しい版の loop は古い版の ref も読む
-- **調停 remote への `refs/dispatcher/*` の push は、すべて `git push --no-verify` で撃ち、実装 repo の pre-push hook (husky・lefthook・pre-commit など) を通さない** (ADR 0017)。push するのは利用者のコードを含まない空の tree の commit なので、利用者のコードの変更を検査する hook を飛ばしても守るものを失わない
+- **coordination board への `refs/dispatcher/*` の push は、すべて `git push --no-verify` で撃ち、実装 repo の pre-push hook (husky・lefthook・pre-commit など) を通さない** (ADR 0017)。push するのは利用者のコードを含まない空の tree の commit なので、利用者のコードの変更を検査する hook を飛ばしても守るものを失わない
 - **attempt と打ち切りは loop ごとに数え、マシンを跨いで共有しない**。打ち切った作業対象は、claim を解くので着手宣言も消える。マシン A が打ち切った作業対象を、マシン B の loop が attempt 1 から拾い直しうる
-- **試運転 (§9) は調停 remote を読みも書きもしない**。他のマシンの loop が持つ作業対象も、起動するはずの作業対象として示しうる
+- **試運転 (§9) は coordination board を読みも書きもしない**。他のマシンの loop が持つ作業対象も、起動するはずの作業対象として示しうる
 
 ## 5. 機械と LLM の線
 
 | 主体 | やってよいこと | やらないこと |
 |---|---|---|
-| CLI (`loop`) | 外部 store の観測と正規化<br>trigger の評価<br>claim・attempt・打ち切りの記憶<br>調停 remote の着手宣言と生存報告 (§4)<br>workspace の作成と削除 (hooks を撃つ)<br>worker の起動・監視・停止<br>状態 file と log を書くこと | tracker・CL・review・branch への書き込み<br>宣言にない判断 (見送り・優先順位の変更) |
+| CLI (`loop`) | 外部 store の観測と正規化<br>trigger の評価<br>claim・attempt・打ち切りの記憶<br>coordination board の着手宣言と生存報告 (§4)<br>workspace の作成と削除 (hooks を撃つ)<br>worker の起動・監視・停止<br>状態 file と log を書くこと | tracker・CL・review・branch への書き込み<br>宣言にない判断 (見送り・優先順位の変更) |
 | worker | action の実行 (実装・CL 作成・コメント・label の付け替えなど)<br>作業対象を trigger から外すこと<br>見送ること・人へ返すこと | loop への問い合わせ<br>permission が止めた操作の迂回 |
 | 人間 | workflow 定義を書くこと・triage・merge (workflow 定義で worker に任せない限り) | — |
 
@@ -227,7 +227,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。claim の段階と打�
    - 読めない・文法に合わないときは、この tick は何も起動しない。突き合わせは続ける
    - subcommand で渡した並列上限 (§8) も読む。読めない・1 以上の整数でないときも、この tick は何も起動しない。突き合わせは続ける。黙って前の値を使い続けると、渡したつもりの値が効いていないことに気づけない
    - action の template の先頭の `/名前` が見つからない trigger だけは、その trigger を評価から外し、再起動もしない。他の trigger は評価する
-   - 調停 remote を指した project では、採った版で調停 remote の ref を読む (下の「調停 remote の突き合わせ」)。読めなければ、その tick は掃除も起動 (再起動を含む) もしない。突き合わせ (手順 1) は続ける
+   - coordination board を指した project では、採った版で coordination board の ref を読む (下の「coordination board の突き合わせ」)。読めなければ、その tick は掃除も起動 (再起動を含む) もしない。突き合わせ (手順 1) は続ける
 3. **snapshot を作る**: open な issue と open な CL を読み、正規化する
    - 一覧は、全件の trigger の評価に要る項目だけを 1 往復で読める単位で読む。作業対象ごとに往復が要る重い項目 (GitLab の merge request の discussion など) は、その項目を条件に書いた trigger の、ほかの条件をすべて満たす作業対象だけ読み足す。読み足さなかった作業対象のその項目は、どの trigger の評価も変えない
 4. **trigger を評価し、候補を並べる** (§6)
@@ -237,7 +237,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。claim の段階と打�
    - 読み直すと宣言順で先の trigger に当たるようになっていれば、その tick では起動しない。次の tick の評価が先の trigger で拾う
    - 起動しなかった分の空きは、次の候補に回す
 
-**調停 remote の突き合わせ** (調停 remote を指した project だけ。§4 の「マシンを跨いだ分担」)。
+**coordination board の突き合わせ** (coordination board を指した project だけ。§4 の「マシンを跨いだ分担」)。
 
 - tick ごとに `refs/dispatcher/<scope dir>/` の下の ref を読み、新しく見た sha の commit message を読む。読んだ sha の中身は loop の memory に持ち、読み直さない
 - **自分の着手宣言が乗っ取られていたら** (sha が自分の置いたものと違うか、消えていたら)、その作業対象の claim に「乗っ取られた」を渡す (段階ごとの行き先は statechart.puml)
@@ -280,11 +280,11 @@ SPEC §7・§8・§16 の状態機械を土台にする。claim の段階と打�
   - 曖昧な間も claim は再起動待ちとして残り、並列の枠を 1 つ使い続ける。曖昧な CL は `status` に出るので、人が片方を close すれば解ける
   - CL の head branch を別の claim の workspace が checkout している (branch の重なり) か、その branch を読めないときも、claim を解かず、attempt を進めずに次の tick で試み直す。同じ branch に worker を重ねないため
   - 再起動は同じ trigger で続ける。宣言順で先の trigger に当たるようになっていても、その評価は claim が解けた後の tick で行う
-  - 調停 remote に自分の知る版より新しい版の ref がある間は、attempt を進めずに待ち直す (上の「調停 remote の突き合わせ」)
+  - coordination board に自分の知る版より新しい版の ref がある間は、attempt を進めずに待ち直す (上の「coordination board の突き合わせ」)
   - 再起動を試みるときに、起動した trigger が workflow 定義から消えていれば、作業対象を読み直さずに claim を解く (続ける trigger が無いため)。trigger は名前で引き当てるので、名前を変えた trigger は消えたものと数える。試みるのは backoff が明けて空きがあるときなので、それまでは claim を持ったまま待つ
 - **attempt が上限に達したら打ち切る**
   - 打ち切りは memory に持ち、log と `status` に出す。tracker には書かない
-  - 打ち切りは claim を解くので、調停 remote の着手宣言も消す。attempt と打ち切りは loop ごとに数え、マシンを跨いで共有しない。別のマシンの loop は、打ち切った作業対象を attempt 1 から拾い直しうる (§4)
+  - 打ち切りは claim を解くので、coordination board の着手宣言も消す。attempt と打ち切りは loop ごとに数え、マシンを跨いで共有しない。別のマシンの loop は、打ち切った作業対象を attempt 1 から拾い直しうる (§4)
   - 打ち切りは作業対象ごとに持つ。打ち切った作業対象は、どの trigger に当たっても起動しない
   - 打ち切ったときの trigger から作業対象が一度外れたのを tick で観測すると解ける。人が label を外して付け直せば、再び候補になる
   - 外してから付け直すまでが 1 周期に収まると、外れたのを観測できない。`status` の打ち切りの表示に、label を外して 1 周期待つよう書く
@@ -315,7 +315,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。claim の段階と打�
 - 同じ scope key の lock を loop と共有する。同じ scope key の loop が立っていれば起動時に止まり、単発起動の間は loop も起動できない (project 1 ─ 0..1 loop を保つ)。共有するのは排他の lock だけで、loop の生死を `status` に見せる lock は取らない — 単発起動は loop ではないので、その間 `status` は loop なしと描く
 - 指名した作業対象が指名した trigger に当たっているときだけ起動する。完了は「worker が終わった後に trigger から外れていること」なので、当たっていない作業対象では完了を判定できない。宣言順で先の trigger に当たるかは見ない (人が trigger を指名している)
 - orphan (上の「orphan」) が生きている作業対象では起動しない
-- 調停 remote を指した project では、loop と同じく起動の前に生存報告と着手宣言を置き、走っている間は生存報告を置き直し、終わったら両方を消す (§4)。他の loop の着手宣言がある・着手宣言の push に負けた・新しい版の ref があるときは起動しない。ref を 1 回しか読まないので、死んだ loop の判定 (と乗っ取り・掃除) も、乗っ取られたかの確かめもしない (経過を数える次の tick が無い)
+- coordination board を指した project では、loop と同じく起動の前に生存報告と着手宣言を置き、走っている間は生存報告を置き直し、終わったら両方を消す (§4)。他の loop の着手宣言がある・着手宣言の push に負けた・新しい版の ref があるときは起動しない。ref を 1 回しか読まないので、死んだ loop の判定 (と乗っ取り・掃除) も、乗っ取られたかの確かめもしない (経過を数える次の tick が無い)
 - claim も打ち切りも持たない。attempt は 1 回だけで、retry も打ち切りもしない。終わった後に作業対象を 1 回読み直し、外れていれば完了。当たったまま・当たるかをまだ決められないときは完了しなかったと返す (次の tick が無いので確かめ直さない)
 - worker の 1 回分 (workspace・hooks・上限時間・stall) と停止要求 (1 回目は worker の終わりを待ち、2 回目は止める) は loop と同じ規則にする。workspace も loop と同じく、終わった後に終端なら消す。それ以外は残し、単発起動で作った workspace を後の loop がそのまま使える
 
@@ -332,8 +332,8 @@ SPEC §7・§8・§16 の状態機械を土台にする。claim の段階と打�
   - attempt の上限・backoff の上限・stall の上限・worker 1 回分の上限時間 (既定 1 時間。0 で無効)
   - 周期
   - `claude` の起動 command と引数
-  - 調停 remote (`coordination.remote`): マシンを跨いで分担するときに、workflow 定義のある clone の git remote の名前で書く (§4)。書かなければ調停 remote を読みも書きもせず、1 台で回す
-- **loop を回すマシンごとに値が変わらざるを得ないものは、workflow 定義に置かず、loop の引数と subcommand で渡す** (今は並列上限。ADR 0024)。workflow 定義は repo に commit され、その版を読むどの loop にも同じ値が効くので、マシンごとの値を置くと、loop を回すマシンを替える・一時的に絞るたびに commit が要り、調停 remote (§4) で分担するとマシンごとに違う値を置けない。trigger・action・hooks・置き場・周期・retry と時間の上限・起動の command と引数は project の宣言なので workflow 定義に置く。path と command のようにマシンで変わりうる値でも、相対 path や PATH からの探索でどのマシンでも同じ値に書けるなら、workflow 定義に置く
+  - coordination board (`coordination.remote`): マシンを跨いで分担するときに、workflow 定義のある clone の git remote の名前で書く (§4)。書かなければ coordination board を読みも書きもせず、1 台で回す
+- **loop を回すマシンごとに値が変わらざるを得ないものは、workflow 定義に置かず、loop の引数と subcommand で渡す** (今は並列上限。ADR 0024)。workflow 定義は repo に commit され、その版を読むどの loop にも同じ値が効くので、マシンごとの値を置くと、loop を回すマシンを替える・一時的に絞るたびに commit が要り、coordination board (§4) で分担するとマシンごとに違う値を置けない。trigger・action・hooks・置き場・周期・retry と時間の上限・起動の command と引数は project の宣言なので workflow 定義に置く。path と command のようにマシンで変わりうる値でも、相対 path や PATH からの探索でどのマシンでも同じ値に書けるなら、workflow 定義に置く
   - 並列上限は、loop の起動時に引数 (`--max-concurrent`) で受け、省けば 1 にする。走っている間は `max-concurrent` subcommand で変えられ、subcommand で渡した値が引数より優先して、その loop が止まるまで効く
   - subcommand は、workflow 定義から scope key を引き、その state dir に値を書く。loop が立っていなければ書かずに失敗する (書いても次の loop には効かないため)
   - loop は tick の手順 2 (§7) でこの値を読み、次の tick から新しい値で空きを判定する。新しい値を採った tick で、ログの行に前の値と新しい値を 1 行出す。loop を起こして tick を早めることはしない
@@ -374,7 +374,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。claim の段階と打�
   - lock は loop の生存期間だけ持つ
   - 同じ issue 置き場の 2 本目の loop は、clone や workflow 定義が違っても起動時に止まる
   - 走っている間に workflow 定義の issue 置き場を書き換えて scope key が変わったら、その tick は何も起動しない。lock は起動時の scope key で取っているので、別の置き場を回すには loop を起動し直す
-- **生存報告は loop が自分の時計で置き直す** (調停 remote を指した project だけ。§4)
+- **生存報告は loop が自分の時計で置き直す** (coordination board を指した project だけ。§4)
   - 起動時に最初の生存報告を置き、以後は生存報告の間隔 (`polling.interval` と 1 分の長いほう。loop の起動時の workflow 定義の値で、走っている間は変えない) ごとに置き直す。tick とは別の goroutine と時計で置き直し、tick が長引いても遅らせない
   - 間隔は commit message に書き、他の loop はその値の 3 倍で死を判定する
   - 置き直しが続けて落ちたら要対処に出す。他のマシンの loop に死んだとみなされ、着手宣言を乗っ取られうるため
@@ -407,7 +407,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。claim の段階と打�
 - **試運転**
   - 1 tick 分の読み直し・事前検査・trigger の評価までを通し、起動する直前で止めて、起動するはずの作業対象と trigger を示す
   - open な一覧は、起動時の確認で読んだものがあればそれを snapshot に使う (tick の「workflow 定義を読み直してから snapshot を作る」順の例外。snapshot のために一覧を読み直さないため)
-  - state dir に何も書かない。調停 remote を読みも書きもしない (§4)
+  - state dir に何も書かない。coordination board を読みも書きもしない (§4)
 
 ## 10. worker に渡すもの
 
@@ -434,7 +434,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。claim の段階と打�
   - action が呼ぶ skill と command は、利用者が入れた plugin・repo の `.claude/`・`~/.claude/` のどれに置いてもよい
   - 事前検査 (§8) は、この 3 か所の skill と command から先頭の `/名前` を探す。plugin は、user scope で入れたものと、この repo に project scope で入れたものを数える (local scope の plugin は commit しない settings で有効になり、worker の workspace では読まれない)
 - **Claude Code の settings は CLI が書かない** (ADR 0004)。`doctor` は、worker が外部 store を操作するのに要りそうな entry を、役割 (tracker / CL host) ごとに、その役割を担う provider の CLI (gh・glab・acli) の綴りで表示する。`jira` の CL host の役割は `cl.kind` の provider が担う
-- **`doctor` は、調停 remote を指した project では、loop の起動時と同じく調停 remote を解いて読めるかを確かめる**。push は撃たない (何も書かない)
+- **`doctor` は、coordination board を指した project では、loop の起動時と同じく coordination board の remote を解いて読めるかを確かめる**。push は撃たない (何も書かない)
 - **`doctor` は、利用者の約束に頼る宣言を警告する**
   - `cl.approved` に action を当てている (merge を worker に任せうる)
   - CL 側の trigger に、head branch の pattern・label・同じ repo の branch のどの絞り込みも無い (人の CL や fork の CL に worker を送りうる)
@@ -462,7 +462,7 @@ CLI の中で、呼び出し側から中身を隠す部品と、差し替えの�
 | CL 置き場の部品 | tick / 試運転 / 単発起動 (`run`) / `doctor` | CL host の呼び方・応答から CL の状態の語彙への写し方・失敗の見分け方 | gh / glab / テストの in-memory |
 | 起動部 | tick / 単発起動 (`run`) | セッションの起動の形 (argv・process group・stream の読み方・停止・回収) | `claude -p` / テストの fake |
 | hooks の実行 | tick / 単発起動 (`run`) | shell の撃ち方・timeout | (seam を置かない。テストは一時 dir で本物を撃つ) |
-| 調停 remote の部品 | tick / 単発起動 (`run`) / `doctor` | remote の解き方・ref の綴り・git の撃ち方 (`ls-remote`・空の tree の commit の作り方・条件付きの push・削除・commit message の fetch と読み方)・負けの見分け方・commit message の形式と版 | git / テストの fake |
+| coordination board の部品 | tick / 単発起動 (`run`) / `doctor` | remote の解き方・ref の綴り・git の撃ち方 (`ls-remote`・空の tree の commit の作り方・条件付きの push・削除・commit message の fetch と読み方)・負けの見分け方・commit message の形式と版 | git / テストの fake |
 
 - **issue 置き場の部品と CL 置き場の部品は、workflow 定義から組み立てて、正規化した作業対象と分類済みの失敗を返す** (ADR 0008)
   - 正規化は SPEC §4.1.1 の Issue を土台にする。CL は、CL の状態の語彙と絞り込みに要る field を持つ
@@ -485,7 +485,7 @@ CLI の中で、呼び出し側から中身を隠す部品と、差し替えの�
 - **起動部は、1 つの worker の起動・stream の読み取り・停止・回収を 1 つの部品に閉じる** (ADR 0005)
   - stream の event (起動・活動・終了) は中立の形で返す
   - 停止は process group ごと行い、上限時間か停止要求のどちらで止まったかを区別して返す
-- **調停 remote の部品は、ref の一覧を、持ち主の loop 名・形式の版・間隔を読んだ形で返し、push の結果を 勝った / 負けた / その他の失敗 に分けて返す**
+- **coordination board の部品は、ref の一覧を、持ち主の loop 名・形式の版・間隔を読んだ形で返し、push の結果を 勝った / 負けた / その他の失敗 に分けて返す**
   - 死んだ loop の判定 (sha が変わったのを最後に見た時刻と間隔) は、時計を持つ loop が行う。部品は時計を持たない
   - git は workflow 定義のある clone を cwd にして撃つ。commit の作者と committer は部品が環境変数で渡し、利用者の git の設定 (`user.name` など) に頼らない
   - push はすべて `--no-verify --porcelain` で撃つ (§4)
