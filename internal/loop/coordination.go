@@ -17,8 +17,6 @@ import (
 // project は何もしない noCoordination。
 type Coordination interface {
 	LoopName() string
-	// Observes は、tick ごとに coordination board を突き合わせるか。突き合わせるなら、tick の外では再起動しない
-	Observes() bool
 	// Observe は coordination board の突き合わせ。clock は ref を読み終えた後に読む時計、orphans は前の tick に生きていた orphan。
 	// ref を読めなければ error
 	Observe(clock func() time.Time, orphans map[target.Ref]bool) ([]coord.Outcome, error)
@@ -53,7 +51,6 @@ var _ Coordination = (*coord.Board)(nil)
 type noCoordination struct{}
 
 func (noCoordination) LoopName() string { return "" }
-func (noCoordination) Observes() bool   { return false }
 func (noCoordination) Observe(func() time.Time, map[target.Ref]bool) ([]coord.Outcome, error) {
 	return nil, nil
 }

@@ -300,8 +300,10 @@ type loop struct {
 	orphansUnknown bool
 	// published は状態 file にだけ使う状態。loop の判断には使わない
 	published published
-	// coordination は coordination board の口。指さない project では何もしない
+	// coordination は coordination board の口。指さない project では何もしない。coordinated は、指しているか。指していれば、再起動は
+	// 乗っ取られたかを tick の突き合わせで確かめるまで tick の外では試みない (system.md §7)
 	coordination Coordination
+	coordinated  bool
 	// beats は生存報告の置き直しの結果が届く channel。stopBeating は置き直しを止めて、終わりを待つ
 	beats       chan error
 	stopBeating func()
@@ -336,13 +338,14 @@ func Run(o Options) int {
 		rec: recorder{log: o.Log, output: o.Output, now: o.Now, scope: o.ScopeKey}, published: published{startedAt: o.Now()},
 		coordination: o.Coordination, beats: make(chan error, 16),
 	}
-	if l.coordination == nil {
+	l.coordinated = l.coordination != nil
+	if !l.coordinated {
 		l.coordination = noCoordination{}
 	}
 	var next <-chan time.Time
 	start := map[string]any{"version": o.Build.Version, "commit": o.Build.Commit}
-	if name := l.coordination.LoopName(); name != "" {
-		start["loop"] = name
+	if l.coordinated {
+		start["loop"] = l.coordination.LoopName()
 	}
 	l.stopBeating = l.coordination.StartBeating(o.HeartbeatAfter, l.deliverBeat)
 	// どの版の binary が書いた log かを後から読めるよう、起動を 1 行残す。人が読む起動の行は呼び出し側が出している

@@ -103,10 +103,6 @@ type Attention struct {
 // LoopName は自分の loop 名。
 func (b *Board) LoopName() string { return b.refs.LoopName() }
 
-// Observes は、tick ごとに coordination board を突き合わせるか。突き合わせるなら、tick の外では再起動しない (乗っ取られたかを
-// 確かめるまで待つ。system.md §7)。
-func (b *Board) Observes() bool { return true }
-
 // Attention は今の要対処の元。
 func (b *Board) Attention() Attention {
 	a := Attention{TakenOver: b.takenOver, NewerFormat: b.newer}

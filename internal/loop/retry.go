@@ -73,7 +73,7 @@ func (l *loop) retry(store Store, v *view) {
 			l.apply(ref, c, c.backoffElapsed(ref, hindranceTriggerRemoved, nil, l.env()))
 			continue
 		}
-		if l.coordination.Observes() && v == outsideTick {
+		if l.coordinated && v == outsideTick {
 			// coordination board を指した loop は、乗っ取られたかを tick の突き合わせで確かめてから再起動する (system.md §7)
 			continue
 		}
