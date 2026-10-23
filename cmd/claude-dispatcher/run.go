@@ -254,7 +254,7 @@ func (o once) ended(result worker.Result, started, stopped bool) int {
 // claimOnce は、単発起動の作業対象の着手宣言を置く (formats.md §11)。ref を 1 回しか読まないので、sha を見た時刻が 1 つしか無く
 // 死んだ loop を判定せず、他の loop の着手宣言があれば起動しない。起動しないなら stderr に理由を出して exit code を返す。
 func claimOnce(board *coord.Board, ref target.Ref, stderr io.Writer) int {
-	outcomes, err := board.Observe(time.Now(), nil)
+	outcomes, err := board.Observe(time.Now, nil)
 	if err != nil {
 		fmt.Fprintln(stderr, printable.Line(err.Error()))
 		return exitFailed
@@ -299,6 +299,8 @@ func leaveOnce(board *coord.Board, stderr io.Writer) {
 	for _, outcome := range board.Leave(nil, nil) {
 		switch o := outcome.(type) {
 		case coord.ClaimReleaseFailed:
+			fmt.Fprintf(stderr, "%s の着手宣言を消せない: %s\n", o.Ref, printable.Line(o.Err.Error()))
+		case coord.ClaimReleaseLost:
 			fmt.Fprintf(stderr, "%s の着手宣言を消せない: %s\n", o.Ref, printable.Line(o.Err.Error()))
 		case coord.LeaveFailed:
 			fmt.Fprintf(stderr, "生存報告を消せない: %s\n", printable.Line(o.Err.Error()))

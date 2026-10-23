@@ -101,6 +101,13 @@ type (
 	UnsureInheritKept struct{ Ref target.Ref }
 )
 
+// ClaimReleaseLost は、claim を解いた作業対象の自分の着手宣言の削除に負けたこと (他の loop が先に消したか乗っ取った)。loop は読み捨て、
+// 単発起動は消せなかったものと同じに出す。
+type ClaimReleaseLost struct {
+	Ref target.Ref
+	Err error
+}
+
 // LeaveFailed は、止まるときに自分の生存報告を消せなかったこと。
 type LeaveFailed struct{ Err error }
 
@@ -126,6 +133,7 @@ func (DeadRefDeleteFailed) outcome()    {}
 func (DeadLoopCleaned) outcome()        {}
 func (InheritedReleaseFailed) outcome() {}
 func (ClaimReleaseFailed) outcome()     {}
+func (ClaimReleaseLost) outcome()       {}
 func (InheritKept) outcome()            {}
 func (UnsureInheritKept) outcome()      {}
 func (LeaveFailed) outcome()            {}

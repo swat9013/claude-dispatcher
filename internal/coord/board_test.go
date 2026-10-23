@@ -132,7 +132,7 @@ func set(refs []target.Ref) map[target.Ref]bool {
 // observe は、起動から at 経った時刻に coordination board を突き合わせる。orphans は前の tick に生きていた orphan。
 func (w *world) observe(at time.Duration, orphans ...target.Ref) []coord.Outcome {
 	w.t.Helper()
-	out, err := w.board.Observe(start.Add(at), set(orphans))
+	out, err := w.board.Observe(func() time.Time { return start.Add(at) }, set(orphans))
 	if err != nil {
 		w.t.Fatal(err)
 	}
@@ -275,6 +275,28 @@ func TestClaimPushesWithTheExpectationThatMatchesTheHolder(t *testing.T) {
 			t.Fatalf("Claim = %#v・push %v", out, w.claimed)
 		}
 	})
+	t.Run("他の生きている loop の着手宣言は、push せずに負けとする", func(t *testing.T) {
+		for name, holder := range map[string]string{"生きている loop": other, "持ち主を読めない着手宣言": ""} {
+			w := newWorld(t)
+			w.Put(&issue42, claimBy(holder, issue42))
+			w.observe(0)
+
+			out := w.board.Claim(issue42)
+
+			if !reflect.DeepEqual(out, coord.ClaimLost{}) || len(w.claimed) != 0 {
+				t.Fatalf("%s: Claim = %#v・push %v, want push せずに ClaimLost", name, out, w.claimed)
+			}
+		}
+	})
+	t.Run("引き継いだ着手宣言がある作業対象は、push せずに負けとする", func(t *testing.T) {
+		w, _ := inherited(t)
+
+		out := w.board.Claim(issue42)
+
+		if !reflect.DeepEqual(out, coord.ClaimLost{}) || len(w.claimed) != 0 {
+			t.Fatalf("Claim = %#v・push %v, want push せずに ClaimLost", out, w.claimed)
+		}
+	})
 	t.Run("先に他の loop が置いたら負ける", func(t *testing.T) {
 		w := newWorld(t)
 		w.observe(0)
@@ -322,13 +344,13 @@ func TestReleaseDeletesOnlyTheClaimItPlacedAndReportsAFailure(t *testing.T) {
 	wantOutcomes(t, w.board.Release(issue7), coord.ClaimReleaseFailed{Ref: issue7, Err: errPush})
 }
 
-func TestALostDeleteIsReadOverWhenReleasing(t *testing.T) {
+func TestALostDeleteIsReturnedAsALostReleaseWhenReleasing(t *testing.T) {
 	w := newWorld(t)
 	w.observe(0)
 	w.claim(issue42)
 	w.Put(&issue42, claimBy(other, issue42))
 
-	wantOutcomes(t, w.board.Release(issue42))
+	wantOutcomes(t, w.board.Release(issue42), coord.ClaimReleaseLost{Ref: issue42, Err: coord.ErrLost})
 }
 
 func TestAClaimThatWasTakenOverIsReportedOnceAndNeverDeleted(t *testing.T) {
@@ -492,6 +514,23 @@ func TestAnOrphansDeadHoldersClaimIsInheritedOnlyWhereTheOrphanWorks(t *testing.
 				t.Fatal("引き継いだ着手宣言が残る間は、起動しない")
 			}
 		})
+	}
+}
+
+func TestAClaimIPlacedOnAnOrphansTargetIsNotInherited(t *testing.T) {
+	w := newWorld(t)
+	w.Put(&issue42, claimBy(dead, issue42))
+	w.observe(0, issue42)
+	w.observe(3*beat, issue42)
+	if out := w.board.Claim(issue42); !reflect.DeepEqual(out, coord.ClaimTookOver{From: dead}) {
+		t.Fatalf("Claim = %#v", out)
+	}
+	w.claimed = nil
+
+	wantOutcomes(t, w.board.Tidy(set([]target.Ref{issue42}), nil))
+
+	if len(w.claimed) != 0 {
+		t.Fatalf("着手宣言の push = %v, want 自分の着手宣言の作業対象は引き継がない", w.claimed)
 	}
 }
 
@@ -764,6 +803,13 @@ func TestLeaveDeletesTheClaimsAndTheHeartbeatExceptWhereAClaudeMayStillWork(t *t
 			t.Fatalf("Leave %d 回, want 1", w.left)
 		}
 	})
+	t.Run("生存報告を他の loop に消されていたら LeaveFailed を返す", func(t *testing.T) {
+		w := newWorld(t)
+		w.beating()
+		w.Put(nil, beatOf(me, beat))
+
+		wantOutcomes(t, w.board.Leave(nil, nil), coord.LeaveFailed{Err: coord.ErrLost})
+	})
 	t.Run("生存報告を消せなければ Outcome を返す", func(t *testing.T) {
 		w := newWorld(t)
 		w.leaveErr = errPush
@@ -873,7 +919,7 @@ func TestObservingFailsWhenTheRefsCannotBeReadAndChangesNothing(t *testing.T) {
 	board := coord.NewBoard(r, beat)
 	r.Put(&issue42, claimBy(other, issue42))
 
-	out, err := board.Observe(start, nil)
+	out, err := board.Observe(func() time.Time { return start }, nil)
 
 	if !errors.Is(err, errFetch) || out != nil {
 		t.Fatalf("Observe = %v, %v, want 読めなかった error", out, err)
@@ -881,6 +927,33 @@ func TestObservingFailsWhenTheRefsCannotBeReadAndChangesNothing(t *testing.T) {
 	if board.Held(issue42) {
 		t.Fatal("読めなかった突き合わせが、持ち主を決めた")
 	}
+}
+
+func TestTheClockIsReadAfterTheRefsAreRead(t *testing.T) {
+	r := &slowRefs{Memory: coordtest.NewMemory(me)}
+	board := coord.NewBoard(r, beat)
+	r.Put(&issue42, claimBy(other, issue42))
+
+	_, err := board.Observe(func() time.Time {
+		r.readsWhenClockWasRead = append(r.readsWhenClockWasRead, r.reads)
+		return start
+	}, nil)
+
+	if err != nil || !slices.Equal(r.readsWhenClockWasRead, []int{1}) {
+		t.Fatalf("時計を読んだときの ref の読み出しの回数 = %v (%v), want ref を読み終えた後に 1 回", r.readsWhenClockWasRead, err)
+	}
+}
+
+// slowRefs は ref を読んだ回数を数える coordination board。
+type slowRefs struct {
+	*coordtest.Memory
+	reads                 int
+	readsWhenClockWasRead []int
+}
+
+func (r *slowRefs) Observe() (coord.View, error) {
+	r.reads++
+	return r.Memory.Observe()
 }
 
 // unreadableRefs は ref の一覧を読めない coordination board。

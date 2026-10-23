@@ -141,13 +141,15 @@ func (b *Board) Holder(ref target.Ref) string {
 // 見た時刻を覚え直し、自分の着手宣言の乗っ取りを見つけ、消し損ねた自分の着手宣言を消し、他の loop の着手宣言と死んだ loop を
 // 判定する。ref を読めなければ error を返し、何も変えない。
 //
-// now は読んだ時刻。orphans は前の tick に生きていた orphan の作業対象で、消し損ねた着手宣言の掃除が、引き継いだ着手宣言との
+// now は時計で、ref を読み終えた後に 1 回だけ読む (読む前に取ると、読みが遅いときに sha を見た時刻が早くなり、生きている loop を
+// 早く死んだとみなす)。orphans は前の tick に生きていた orphan の作業対象で、消し損ねた着手宣言の掃除が、引き継いだ着手宣言との
 // 見分けに使う (この tick の orphan の確かめより前に撃つため)。返す Outcome は log に残す順に並ぶ。
-func (b *Board) Observe(now time.Time, orphans map[target.Ref]bool) ([]Outcome, error) {
+func (b *Board) Observe(clock func() time.Time, orphans map[target.Ref]bool) ([]Outcome, error) {
 	v, err := b.refs.Observe()
 	if err != nil {
 		return nil, err
 	}
+	now := clock()
 	var out []Outcome
 	if v.Unread != nil {
 		out = append(out, Unread{v.Unread})
@@ -321,9 +323,14 @@ func (b *Board) deleteStaleClaims(v View, orphans map[target.Ref]bool) []Outcome
 	return out
 }
 
-// Claim は候補の着手宣言を置く。持ち主の死んだ着手宣言は旧 sha を期待値にして乗っ取り、無ければ「無いときだけ作る」で置く。置けたら
-// 自分の着手宣言として覚える。ClaimPlaced・ClaimTookOver・ClaimLost・ClaimFailed のどれかを返す。
+// Claim は候補の着手宣言を置く。持ち主の死んだ着手宣言は旧 sha を期待値にして乗っ取り、無ければ「無いときだけ作る」で置く。他の
+// 生きている loop の着手宣言があれば push せずに負けとする。置けたら自分の着手宣言として覚える。ClaimPlaced・ClaimTookOver・
+// ClaimLost・ClaimFailed のどれかを返す。
 func (b *Board) Claim(ref target.Ref) Outcome {
+	if b.Held(ref) {
+		// 他の生きている loop (持ち主を読めないものを含む) の着手宣言と、引き継いだ着手宣言は奪わない
+		return ClaimLost{}
+	}
 	expect, from := Absent(), ""
 	h, held := b.holders[ref]
 	if held {
@@ -343,7 +350,7 @@ func (b *Board) Claim(ref target.Ref) Outcome {
 	return ClaimPlaced{}
 }
 
-// Release は claim を解いた作業対象の自分の着手宣言を消す。消せなければ Outcome を返す (消し損ねた着手宣言として、次の Observe が
+// Release は claim を解いた作業対象の自分の着手宣言を消す。消せなければ Outcome を返す (負けは ClaimReleaseLost) (消し損ねた着手宣言として、次の Observe が
 // 消し直す)。自分の着手宣言を持たない作業対象 (乗っ取られた後を含む) では何もしない。
 func (b *Board) Release(ref target.Ref) []Outcome {
 	sha, ok := b.mine[ref]
@@ -351,7 +358,10 @@ func (b *Board) Release(ref target.Ref) []Outcome {
 		return nil
 	}
 	delete(b.mine, ref)
-	if err := b.refs.DeleteClaim(ref, sha); err != nil && !errors.Is(err, ErrLost) {
+	switch err := b.refs.DeleteClaim(ref, sha); {
+	case errors.Is(err, ErrLost):
+		return []Outcome{ClaimReleaseLost{ref, err}}
+	case err != nil:
 		return []Outcome{ClaimReleaseFailed{ref, err}}
 	}
 	return nil
@@ -391,7 +401,7 @@ func (b *Board) inheritOrphanClaims(orphans map[target.Ref]bool) []Outcome {
 	var out []Outcome
 	for _, ref := range target.SortedRefs(b.holders) {
 		h := b.holders[ref]
-		if !orphans[ref] || h.loop == "" {
+		if _, mine := b.mine[ref]; mine || !orphans[ref] || h.loop == "" {
 			continue
 		}
 		if h.dead || sameMachine(h.loop, b.refs.LoopName()) {

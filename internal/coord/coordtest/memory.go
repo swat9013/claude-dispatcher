@@ -22,6 +22,8 @@ type Memory struct {
 	loops    map[string]string
 	messages map[string]coord.Message
 	n        int
+	// heartbeat は自分が最後に置けた生存報告の sha。無ければ ""
+	heartbeat string
 }
 
 var _ coord.Refs = (*Memory)(nil)
@@ -121,14 +123,22 @@ func (m *Memory) DeleteHeartbeat(loop, sha string) error {
 func (m *Memory) Heartbeat(interval time.Duration) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.put(nil, coord.Message{Kind: coord.KindHeartbeat, Format: coord.Format, Loop: m.loop, Interval: interval})
+	m.heartbeat = m.put(nil, coord.Message{Kind: coord.KindHeartbeat, Format: coord.Format, Loop: m.loop, Interval: interval})
 	return nil
 }
 
+// Leave は自分が最後に置けた生存報告を、その sha を指しているときだけ消す。置けていなければ何もしない。
 func (m *Memory) Leave() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.heartbeat == "" {
+		return nil
+	}
+	if m.loops[m.loop] != m.heartbeat {
+		return coord.ErrLost
+	}
 	delete(m.loops, m.loop)
+	m.heartbeat = ""
 	return nil
 }
 

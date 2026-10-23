@@ -480,7 +480,7 @@ func (l *loop) tick() {
 		l.rec.human(LineNote, "並列上限を変えた", ": %d → %d", l.def.MaxConcurrent, def.MaxConcurrent)
 	}
 	l.def, l.blocked = def, l.o.Precheck(def)
-	outcomes, err := l.coordination.Observe(l.o.Now(), l.orphans)
+	outcomes, err := l.coordination.Observe(l.o.Now, l.orphans)
 	if err != nil {
 		// 誰が着手しているかを決められないので、掃除も起動 (再起動を含む) もしない
 		l.tickFailed(oneLine(err))

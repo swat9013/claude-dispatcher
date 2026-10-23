@@ -218,6 +218,27 @@ func toStrings(v any) []string {
 	return out
 }
 
+func TestTheDeathOfALoopIsJudgedFromTheTimeAfterTheRefsWereRead(t *testing.T) {
+	remote := newFlaky()
+	remote.Put(nil, heartbeatOf("other-00000002"))
+	remote.Put(&issue42, claimBy("other-00000002", issue42))
+	r := tickRig(3)
+	// 1 tick 目の ref の読みが 2 分 59 秒かかる。sha を見た時刻は読み終えた後なので、次の tick (その 1 分後) までは 3 分に満たない
+	remote.onObserve = func(times int) {
+		if times == 1 {
+			r.setClock(2*time.Minute + 59*time.Second)
+		}
+	}
+
+	r.run(t, loop.Options{
+		Definition: definition(time.Minute, 1), Coordination: boardOf(remote), HeartbeatAfter: noRenewal, Store: matchingStore,
+	})
+
+	if takeovers := r.logEvents(t, "takeover"); len(r.jobs) != 0 || len(takeovers) != 0 {
+		t.Fatalf("起動 %d 回・takeover の行 %v, want 読みが遅くても生きている loop を死んだとみなさない", len(r.jobs), takeovers)
+	}
+}
+
 func TestADeadLoopsClaimIsInheritedWhileAnOrphanWorksOnTheTarget(t *testing.T) {
 	remote := newFlaky()
 	remote.Put(&issue42, claimBy("dead-00000002", issue42))

@@ -19,8 +19,9 @@ type Coordination interface {
 	LoopName() string
 	// Observes は、tick ごとに coordination board を突き合わせるか。突き合わせるなら、tick の外では再起動しない
 	Observes() bool
-	// Observe は coordination board の突き合わせ。now は読んだ時刻、orphans は前の tick に生きていた orphan。ref を読めなければ error
-	Observe(now time.Time, orphans map[target.Ref]bool) ([]coord.Outcome, error)
+	// Observe は coordination board の突き合わせ。clock は ref を読み終えた後に読む時計、orphans は前の tick に生きていた orphan。
+	// ref を読めなければ error
+	Observe(clock func() time.Time, orphans map[target.Ref]bool) ([]coord.Outcome, error)
 	// Newer は、自分の知る版より新しい版の ref を直近の突き合わせで見たか
 	Newer() bool
 	// Held は、作業対象に他の生きている loop の着手宣言があるか (候補の定義)
@@ -53,7 +54,7 @@ type noCoordination struct{}
 
 func (noCoordination) LoopName() string { return "" }
 func (noCoordination) Observes() bool   { return false }
-func (noCoordination) Observe(time.Time, map[target.Ref]bool) ([]coord.Outcome, error) {
+func (noCoordination) Observe(func() time.Time, map[target.Ref]bool) ([]coord.Outcome, error) {
 	return nil, nil
 }
 func (noCoordination) Newer() bool                                          { return false }
@@ -131,6 +132,8 @@ func (l *loop) report(outcomes []coord.Outcome) {
 			l.rec.error(o.Ref, "引き継いだ着手宣言を消せない (次の tick で消し直す): "+oneLine(o.Err))
 		case coord.ClaimReleaseFailed:
 			l.rec.error(o.Ref, "着手宣言を消せない (次の tick で消し直す): "+oneLine(o.Err))
+		case coord.ClaimReleaseLost:
+			// 他の loop が先に消したか乗っ取った。何も書かずに読み飛ばす
 		case coord.InheritKept:
 			reason := "orphan は終わったが消せなかった"
 			if o.OrphanAlive {
