@@ -19,20 +19,56 @@ import (
 // remoteForTest は bare repo を origin に持つ clone を作り、その clone から撃つ Remote を返す。
 func remoteForTest(t *testing.T) Remote {
 	t.Helper()
+	bare := filepath.Join(t.TempDir(), "remote.git")
+	gitForTest(t, "", "init", "-q", "--bare", bare)
+	return cloneForTest(t, bare)
+}
+
+// cloneForTest は bare を origin に持つ clone を新しく作り、その clone から撃つ Remote を返す。同じ bare から 2 つ作れば、別の
+// マシンの loop の代役になる。
+func cloneForTest(t *testing.T, bare string) Remote {
+	t.Helper()
+	clone := filepath.Join(t.TempDir(), "clone")
+	gitForTest(t, "", "init", "-q", clone)
+	gitForTest(t, clone, "remote", "add", "origin", bare)
+	return NewRemote("origin", "github.com_acme_widgets-1a2b3c4d", proc.Command{Path: gitPath(t), Dir: clone, Env: isolatedEnv(t), Timeout: 30 * time.Second})
+}
+
+// bareOf は r の clone が r.Name の remote に持つ bare repo の path。
+func bareOf(t *testing.T, r Remote) string {
+	t.Helper()
+	url, err := r.Git.Output("remote", "get-url", r.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.TrimSpace(url)
+}
+
+// isolatedEnv は、利用者の git の設定に頼らないことを確かめるため、HOME と global・system の設定を空にした環境。
+func isolatedEnv(t *testing.T) []string {
+	t.Helper()
+	return []string{"HOME=" + t.TempDir(), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null"}
+}
+
+// gitPath は git の実行 file。無ければ test を skip する。
+func gitPath(t *testing.T) string {
+	t.Helper()
 	git, err := exec.LookPath("git")
 	if err != nil {
 		t.Skip("git が無い")
 	}
-	root := t.TempDir()
-	bare, clone := filepath.Join(root, "remote.git"), filepath.Join(root, "clone")
-	for _, args := range [][]string{{"init", "-q", "--bare", bare}, {"init", "-q", clone}, {"-C", clone, "remote", "add", "origin", bare}} {
-		if out, err := exec.Command(git, args...).CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
+	return git
+}
+
+// gitForTest は dir で git を isolatedEnv の下で撃つ (dir が "" なら作業 dir を指定しない)。
+func gitForTest(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command(gitPath(t), args...)
+	// 利用者の環境 (GIT_DIR・GIT_CONFIG_PARAMETERS など) を持ち込まず、試す Remote と同じ isolatedEnv で撃つ
+	cmd.Dir, cmd.Env = dir, append(isolatedEnv(t), "PATH="+os.Getenv("PATH"))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
 	}
-	// 利用者の git の設定に頼らないことを確かめるため、HOME と global の設定を空にする
-	env := []string{"HOME=" + root, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null"}
-	return NewRemote("origin", "github.com_acme_widgets-1a2b3c4d", proc.Command{Path: git, Dir: clone, Env: env, Timeout: 30 * time.Second})
 }
 
 func TestClaimIsCreatedOnlyWhenAbsent(t *testing.T) {
@@ -111,15 +147,7 @@ func TestMessagesAreReadFromTheRemote(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 別の clone から読む (自分の clone に object がある前提にしない)
-	reader := remoteForTest(t)
-	reader.Git.Dir = filepath.Join(t.TempDir(), "reader")
-	if out, err := exec.Command(reader.Git.Path, "init", "-q", reader.Git.Dir).CombinedOutput(); err != nil {
-		t.Fatalf("%v\n%s", err, out)
-	}
-	bare, _ := r.Git.Output("remote", "get-url", "origin")
-	if out, err := exec.Command(reader.Git.Path, "-C", reader.Git.Dir, "remote", "add", "origin", bare[:len(bare)-1]).CombinedOutput(); err != nil {
-		t.Fatalf("%v\n%s", err, out)
-	}
+	reader := cloneForTest(t, bareOf(t, r))
 
 	messages, err := reader.Read([]string{sha})
 
@@ -130,9 +158,7 @@ func TestMessagesAreReadFromTheRemote(t *testing.T) {
 
 func TestConfirmRefusesARemoteThatPushesToAnotherURL(t *testing.T) {
 	r := remoteForTest(t)
-	if out, err := exec.Command(r.Git.Path, "-C", r.Git.Dir, "config", "remote.origin.pushurl", filepath.Join(t.TempDir(), "fork.git")).CombinedOutput(); err != nil {
-		t.Fatalf("%v\n%s", err, out)
-	}
+	gitForTest(t, r.Git.Dir, "config", "remote.origin.pushurl", filepath.Join(t.TempDir(), "fork.git"))
 
 	_, err := r.Confirm()
 
@@ -143,11 +169,8 @@ func TestConfirmRefusesARemoteThatPushesToAnotherURL(t *testing.T) {
 
 func TestConfirmRefusesARemoteThatPushesToMoreThanOneURL(t *testing.T) {
 	r := remoteForTest(t)
-	url, _ := r.Git.Output("remote", "get-url", "origin")
-	for _, push := range []string{strings.TrimSpace(url), filepath.Join(t.TempDir(), "mirror.git")} {
-		if out, err := exec.Command(r.Git.Path, "-C", r.Git.Dir, "config", "--add", "remote.origin.pushurl", push).CombinedOutput(); err != nil {
-			t.Fatalf("%v\n%s", err, out)
-		}
+	for _, push := range []string{bareOf(t, r), filepath.Join(t.TempDir(), "mirror.git")} {
+		gitForTest(t, r.Git.Dir, "config", "--add", "remote.origin.pushurl", push)
 	}
 
 	_, err := r.Confirm()
