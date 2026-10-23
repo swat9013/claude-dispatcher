@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -94,25 +93,24 @@ func runOnce(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "%s は %s に当たっていないので起動しない (%s)\n", ref, t.Name, loop.ObservationScreen(observed))
 		return exitNotLaunched
 	}
-	party, code := e.join(def, remote, stderr)
+	board, code := e.join(def, remote, stderr)
 	if code != 0 {
 		return code
 	}
 	// claudeLeft は、止められない claude を残して終えるか
 	var claudeLeft bool
-	if party != nil {
-		var claimSHA string
+	if board != nil {
 		// 起動しなかったときも、置いた分の着手宣言と生存報告を消す。止められない claude を残すなら、どちらも消さずに生存報告を
 		// 途絶えさせる (formats.md §12 の後片付け)
 		defer func() {
 			if !claudeLeft {
-				leaveOnce(party, ref, claimSHA, stderr)
+				leaveOnce(board, stderr)
 			}
 		}()
-		if claimSHA, code = claimOnce(party, ref, stderr); code != 0 {
+		if code = claimOnce(board, ref, stderr); code != 0 {
 			return code
 		}
-		stop := keepReporting(party.Heartbeat, coord.HeartbeatInterval(def.Interval), time.After, stderr)
+		stop := keepReporting(board, time.After, stderr)
 		defer stop()
 	}
 	sessionID, err := worker.NewSessionID()
@@ -242,55 +240,67 @@ func (o once) ended(result worker.Result, started, stopped bool) int {
 	return exitNotCompleted
 }
 
-// claimOnce は、単発起動の作業対象の着手宣言を置き、置いた sha を返す (formats.md §11)。ref を 1 回しか読まないので死んだ loop
-// を判定せず、他の loop の着手宣言があれば起動しない。起動しないなら stderr に理由を出して exit code を返す。
-func claimOnce(party *coord.Party, ref target.Ref, stderr io.Writer) (string, int) {
-	view, err := party.Observe()
+// claimOnce は、単発起動の作業対象の着手宣言を置く (formats.md §11)。ref を 1 回しか読まないので、sha を見た時刻が 1 つしか無く
+// 死んだ loop を判定せず、他の loop の着手宣言があれば起動しない。起動しないなら stderr に理由を出して exit code を返す。
+func claimOnce(board *coord.Board, ref target.Ref, stderr io.Writer) int {
+	outcomes, err := board.Observe(time.Now, nil)
 	if err != nil {
 		fmt.Fprintln(stderr, printable.Line(err.Error()))
-		return "", exitFailed
+		return exitFailed
 	}
-	if view.Unread != nil {
-		fmt.Fprintln(stderr, printable.Line(view.Unread.Error()))
+	for _, outcome := range outcomes {
+		if unread, ok := outcome.(coord.Unread); ok {
+			fmt.Fprintln(stderr, printable.Line(unread.Err.Error()))
+		}
 	}
-	if _, newer := view.Newer(); newer {
+	if board.Newer() {
 		fmt.Fprintln(stderr, "coordination board に新しい版の ref があるので起動しない (dispatcher を上げる)")
-		return "", exitNotLaunched
+		return exitNotLaunched
 	}
-	if sha, held := view.Claims[ref]; held {
-		fmt.Fprintf(stderr, "%s は loop %s が着手しているので起動しない\n", ref, view.Messages[sha].Loop)
-		return "", exitNotLaunched
+	if board.Held(ref) {
+		fmt.Fprintf(stderr, "%s は loop %s が着手しているので起動しない\n", ref, board.Holder(ref))
+		return exitNotLaunched
 	}
-	sha, err := party.Claim(ref, coord.Absent())
-	switch {
-	case errors.Is(err, coord.ErrLost):
+	switch outcome := board.Claim(ref).(type) {
+	case coord.ClaimLost:
 		fmt.Fprintf(stderr, "%s は他の loop が先に着手したので起動しない\n", ref)
-		return "", exitNotLaunched
-	case err != nil:
-		fmt.Fprintf(stderr, "%s の着手宣言を置けない: %s\n", ref, printable.Line(err.Error()))
-		return "", exitFailed
+		return exitNotLaunched
+	case coord.ClaimFailed:
+		fmt.Fprintf(stderr, "%s の着手宣言を置けない: %s\n", ref, printable.Line(outcome.Err.Error()))
+		return exitFailed
+	case coord.ClaimPlaced, coord.ClaimTookOver:
+	default:
+		// 置けたかを決められないので、起動しない側に倒す
+		fmt.Fprintf(stderr, "%s の着手宣言の結果として知らない値 %T なので起動しない\n", ref, outcome)
+		return exitFailed
 	}
-	return sha, 0
+	return 0
 }
 
 // keepReporting は、単発起動が終わるまで生存報告を間隔ごとに置き直す。after は待つ時計 (本番は time.After)。返した関数で
 // 止める (止まるまで待つ)。
-func keepReporting(heartbeat func(time.Duration) error, interval time.Duration, after func(time.Duration) <-chan time.Time, stderr io.Writer) func() {
-	return coord.KeepBeating(heartbeat, interval, after, func(err error) {
+func keepReporting(board *coord.Board, after func(time.Duration) <-chan time.Time, stderr io.Writer) func() {
+	return board.StartBeating(after, func(err error) bool {
 		if err != nil {
 			fmt.Fprintf(stderr, "生存報告を置けない: %s\n", printable.Line(err.Error()))
 		}
+		return true
 	})
 }
 
 // leaveOnce は、単発起動が置いた着手宣言 (置けていれば) と生存報告を消す。消せなければ stderr に出す。
-func leaveOnce(party *coord.Party, ref target.Ref, claimSHA string, stderr io.Writer) {
-	if claimSHA != "" {
-		if err := party.Delete(party.ClaimRef(ref), claimSHA); err != nil {
-			fmt.Fprintf(stderr, "%s の着手宣言を消せない: %s\n", ref, printable.Line(err.Error()))
+func leaveOnce(board *coord.Board, stderr io.Writer) {
+	for _, outcome := range board.Leave(nil, nil) {
+		switch o := outcome.(type) {
+		case coord.ClaimReleaseFailed:
+			fmt.Fprintf(stderr, "%s の着手宣言を消せない: %s\n", o.Ref, printable.Line(o.Err.Error()))
+		case coord.ClaimReleaseLost:
+			fmt.Fprintf(stderr, "%s の着手宣言を消せない: %s\n", o.Ref, printable.Line(o.Err.Error()))
+		case coord.LeaveFailed:
+			fmt.Fprintf(stderr, "生存報告を消せない: %s\n", printable.Line(o.Err.Error()))
+		default:
+			// 後片付けを途中で止めないよう、panic ではなく stderr に出して続ける
+			fmt.Fprintf(stderr, "後片付けの結果として知らない値 %T\n", o)
 		}
-	}
-	if err := party.Leave(); err != nil {
-		fmt.Fprintf(stderr, "生存報告を消せない: %s\n", printable.Line(err.Error()))
 	}
 }

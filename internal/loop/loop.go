@@ -13,7 +13,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/swat9013/claude-dispatcher/internal/coord"
 	"github.com/swat9013/claude-dispatcher/internal/places"
 	"github.com/swat9013/claude-dispatcher/internal/precheck"
 	"github.com/swat9013/claude-dispatcher/internal/status"
@@ -86,10 +85,10 @@ type Options struct {
 	// StartupSlowKinds は、起動時の確認で一覧の読み出しが places.SlowListing を超えた置き場の種類 (読んだ順)。確認は log.jsonl を
 	// 開く前に読むので、loop_start の後に slow_listing の行として書く。人が読む行は確認のときに出ているので出さない
 	StartupSlowKinds []target.Kind
-	// Coordination は coordination board の口 (system.md §4 のマシンを跨いだ分担)。coordination board を指さない project では nil。
-	// 最初の生存報告は呼び出し側が起動時の検査として置いてから渡す
+	// Coordination は coordination board の口 (system.md §4 のマシンを跨いだ分担)。coordination board を指さない project では nil
+	// で、何もしない口になる。最初の生存報告は呼び出し側が起動時の検査として置いてから渡す
 	Coordination Coordination
-	// HeartbeatAfter は d 後に届く、次の生存報告の時計 (time.After。テストは差し替える)。Coordination があるときだけ使う
+	// HeartbeatAfter は d 後に届く、次の生存報告の時計 (time.After。テストは差し替える)。coordination board を指すときだけ使う
 	HeartbeatAfter func(d time.Duration) <-chan time.Time
 }
 
@@ -157,8 +156,6 @@ type claim struct {
 	// pid と workspace は今の attempt で起動した claude の pid と workspace の path (止められない claude を人が探すため)
 	pid       int
 	workspace string
-	// claimSHA は coordination board に置いた自分の着手宣言の sha。coordination board を指さない project と、乗っ取られた後は ""
-	claimSHA string
 	// takenOver は着手宣言を乗っ取られたか。乗っ取られた worker は、終われば終わりを確かめずに claim を解く (system.md §7)
 	takenOver bool
 	// exited は、SIGKILL を送れず claude が終わっていなかった worker の知らせ (worker.Unstopped) が渡した、claude が終わると
@@ -190,10 +187,15 @@ type loop struct {
 	orphans map[target.Ref]bool
 	// orphansUnknown は、直近の tick で orphan を確かめられなかったか。次に確かめられる tick まで、tick の外の再起動もしない
 	orphansUnknown bool
-	// board は状態 file にだけ使う状態。loop の判断には使わない
-	board board
-	// mediation は coordination board を指した loop が coordination board について持つ記憶。指さなければ nil
-	mediation *mediation
+	// published は状態 file にだけ使う状態。loop の判断には使わない
+	published published
+	// coordination は coordination board の口。指さない project では何もしない。coordinated は、指しているか。指していれば、再起動は
+	// 乗っ取られたかを tick の突き合わせで確かめるまで tick の外では試みない (system.md §7)
+	coordination Coordination
+	coordinated  bool
+	// beats は生存報告の置き直しの結果が届く channel。stopBeating は置き直しを止めて、終わりを待つ
+	beats       chan error
+	stopBeating func()
 }
 
 // fixedAtStartChanged は、起動時に固定する項目 (formats.md §6) のうち def で起動時と変わったものがあれば、その tick の error の
@@ -222,15 +224,19 @@ func (l *loop) fixedAtStartChanged(def workflow.Definition) string {
 func Run(o Options) int {
 	l := &loop{
 		o: o, def: o.Definition, claims: map[target.Ref]*claim{}, abandoned: map[target.Ref]string{}, events: make(chan worker.Event),
-		rec: recorder{log: o.Log, output: o.Output, now: o.Now, scope: o.ScopeKey}, board: board{startedAt: o.Now()},
+		rec: recorder{log: o.Log, output: o.Output, now: o.Now, scope: o.ScopeKey}, published: published{startedAt: o.Now()},
+		coordination: o.Coordination, beats: make(chan error, 16),
+	}
+	l.coordinated = l.coordination != nil
+	if !l.coordinated {
+		l.coordination = noCoordination{}
 	}
 	var next <-chan time.Time
 	start := map[string]any{"version": o.Build.Version, "commit": o.Build.Commit}
-	if o.Coordination != nil {
-		l.mediation = &mediation{c: o.Coordination, seen: map[string]sighting{}, interval: coord.HeartbeatInterval(o.Definition.Interval)}
-		start["loop"] = o.Coordination.LoopName()
-		l.mediation.startBeating(o.HeartbeatAfter)
+	if name := l.coordination.LoopName(); name != "" {
+		start["loop"] = name
 	}
+	l.stopBeating = l.coordination.StartBeating(o.HeartbeatAfter, l.deliverBeat)
 	// どの版の binary が書いた log かを後から読めるよう、起動を 1 行残す。人が読む起動の行は呼び出し側が出している
 	l.rec.write("loop_start", start)
 	for _, kind := range o.StartupSlowKinds {
@@ -251,7 +257,7 @@ func Run(o Options) int {
 		}
 		if next == nil {
 			next = o.After(l.def.Interval)
-			l.board.nextTickAt = o.Now().Add(l.def.Interval)
+			l.published.nextTickAt = o.Now().Add(l.def.Interval)
 		}
 		l.arm()
 		l.publish()
@@ -274,8 +280,8 @@ func Run(o Options) int {
 			}
 		case <-o.Refresh:
 			l.refresh()
-		case err := <-l.beats():
-			l.beat(err)
+		case err := <-l.beats:
+			l.report(l.coordination.Beat(err))
 		}
 	}
 }
@@ -297,7 +303,7 @@ func (l *loop) exit() int {
 	for ref, c := range l.claims {
 		l.apply(ref, c, c.loopEnded())
 	}
-	l.leaveRemote()
+	l.leaveCoordination()
 	// 止まる時点の claim を状態 file に残す (loop が止まった後の status は worker を出さないが、file は読み返せる)
 	l.publish()
 	l.rec.human(LineNote, "loop を止めた", " (停止要求 %s)", SignalName(l.lastStop))
@@ -371,13 +377,13 @@ func (l *loop) tick() {
 		l.rec.human(LineNote, "並列上限を変えた", ": %d → %d", l.def.MaxConcurrent, def.MaxConcurrent)
 	}
 	l.def, l.blocked = def, l.o.Precheck(def)
-	if l.mediation != nil {
-		if err := l.coordinate(); err != nil {
-			// 誰が着手しているかを決められないので、掃除も起動 (再起動を含む) もしない
-			l.tickFailed(oneLine(err))
-			return
-		}
+	outcomes, err := l.coordination.Observe(l.o.Now, l.orphans)
+	if err != nil {
+		// 誰が着手しているかを決められないので、掃除も起動 (再起動を含む) もしない
+		l.tickFailed(oneLine(err))
+		return
 	}
+	l.report(outcomes)
 	// 遅い一覧は目標を超えた読み出しなので、画面の行に加えて log.jsonl にも残す (formats.md §4 の冒頭の規則)
 	store := l.o.Store(def).WithSlow(places.SlowNotice{After: l.o.SlowAfter, Notify: func(kind target.Kind) {
 		l.rec.event("slow_listing", slowListingFields(def, kind), LineNote, places.SlowListingLine(def, kind), "")
@@ -406,9 +412,7 @@ func (l *loop) tick() {
 		l.tickFailed(oneLine(err))
 		return
 	}
-	if l.mediation != nil {
-		l.releaseInherited()
-	}
+	l.report(l.coordination.ReleaseInherited(l.orphans))
 	l.sweep(store, ws, open, unclaimed)
 	l.retry(store, v)
 	// 起動を始める前の数を tick の行にも載せる。起動した worker は走っている worker に加わるので、launched の数を足して判定する。
@@ -430,11 +434,11 @@ func (l *loop) tick() {
 		if l.orphans[ref] {
 			continue
 		}
-		if l.newerFormatSeen() {
+		if l.coordination.Newer() {
 			// 新しい版の ref がある間は、その scope で worker を起動しない (formats.md §12)
 			break
 		}
-		if l.heldByOther(ref) {
+		if l.coordination.Held(ref) {
 			continue
 		}
 		// claim している作業対象の branch に、CL の worker を重ねない。一覧の CL で外せるものは読み直さずに外し、読み直した
@@ -459,12 +463,9 @@ func (l *loop) tick() {
 			launched = append(launched, ref.String())
 		}
 	}
-	if l.mediation != nil {
-		l.inheritOrphanClaims()
-		l.cleanupDeadLoops()
-	}
-	l.board.lastTick = &status.Tick{At: l.o.Now(), Result: status.TickOK, Candidates: len(candidates)}
-	l.board.ambiguous = ambiguous
+	l.report(l.coordination.Tidy(l.orphans, l.unstopped()))
+	l.published.lastTick = &status.Tick{At: l.o.Now(), Result: status.TickOK, Candidates: len(candidates)}
+	l.published.ambiguous = ambiguous
 	l.rec.event("tick", map[string]any{"result": status.TickOK, "candidates": len(candidates), "launched": nonNil(launched), "ambiguous": ambiguousFields(ambiguous), "blocked": blockedFields(l.blocked),
 		"running": running, "waiting_retry": waitingRetry, "orphans": orphans, "max_concurrent": def.MaxConcurrent},
 		LineTickOK, "tick ok", " · %s%s%s", Summary(candidates, def), ambiguousSummary(ambiguous), blockedSummary(l.blocked))
@@ -648,17 +649,17 @@ func (l *loop) observeOrphans(ws Workspaces) (unclaimed []target.Ref, checked ma
 			return nil, nil, err
 		}
 	}
-	for _, ref := range sortedRefs(l.orphans) {
+	for _, ref := range target.SortedRefs(l.orphans) {
 		if err := probe(ref); err != nil {
 			return nil, nil, err
 		}
 	}
-	for _, ref := range sortedRefs(alive) {
+	for _, ref := range target.SortedRefs(alive) {
 		if !l.orphans[ref] {
 			l.logOrphan(ref)
 		}
 	}
-	for _, ref := range sortedRefs(l.orphans) {
+	for _, ref := range target.SortedRefs(l.orphans) {
 		if !alive[ref] {
 			l.rec.event("orphan_end", map[string]any{"target": ref.String()}, LineNote, "orphan", " %s が終わった", ref)
 		}
@@ -771,11 +772,10 @@ func (l *loop) launch(def workflow.Definition, c trigger.Candidate) bool {
 		return false
 	}
 	// 着手宣言は claim を立てる直前に置く。負けたら claim を立てない (system.md §7 の coordination board の突き合わせ)
-	claimSHA, ok := l.claimRemote(ref, c.Trigger.Name)
-	if !ok {
+	if !l.claimRemote(ref, c.Trigger.Name) {
 		return false
 	}
-	claimed := newClaim(c.Item, *c.Trigger, sessionID, def.WorkspaceRoot, claimSHA)
+	claimed := newClaim(c.Item, *c.Trigger, sessionID, def.WorkspaceRoot)
 	l.claims[ref] = claimed
 	l.start(claimed)
 	return true

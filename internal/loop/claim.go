@@ -286,7 +286,7 @@ func (c *claim) backoffElapsed(ref target.Ref, h hindrance, item target.Item, en
 // takenOverBy は、自分の着手宣言が乗っ取られた (sha が変わったか消えた) ことを受ける。走っている worker は止め、止めている
 // worker は終われば claim を解く。終わりを確かめ待ちと再起動待ちの claim はその場で解く (system.md §7 の coordination board の突き合わせ)。
 func (c *claim) takenOverBy(ref target.Ref, by string) effect {
-	c.claimSHA, c.takenOver = "", true
+	c.takenOver = true
 	line := logLine{
 		event: "taken_over", fields: map[string]any{"target": ref.String(), "trigger": c.trigger.Name, "by": by},
 		kind: LineError, label: "乗っ取られた", format: " %s (%s): %s",
@@ -303,8 +303,8 @@ func (c *claim) takenOverBy(ref target.Ref, by string) effect {
 }
 
 // newClaim は候補になった作業対象に立てる claim。attempt 1 の worker が走っている段階で始まる。
-func newClaim(item target.Item, t trigger.Trigger, sessionID, workspaceRoot, claimSHA string) *claim {
-	return &claim{item: item, trigger: t, attempt: 1, sessionID: sessionID, workspaceRoot: workspaceRoot, phase: phaseRunning, claimSHA: claimSHA}
+func newClaim(item target.Item, t trigger.Trigger, sessionID, workspaceRoot string) *claim {
+	return &claim{item: item, trigger: t, attempt: 1, sessionID: sessionID, workspaceRoot: workspaceRoot, phase: phaseRunning}
 }
 
 // loopEnded は loop の終了を受ける。claim を持ったまま止まることを error の行に残す。
