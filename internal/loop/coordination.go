@@ -148,6 +148,8 @@ func (l *loop) report(outcomes []coord.Outcome) {
 			l.rec.error(target.Ref{}, "生存報告を置けない: "+oneLine(o.Err))
 		case coord.BeatsDropped:
 			l.rec.error(target.Ref{}, fmt.Sprintf("生存報告の置き直しの結果 %d 件を読まずに捨てた", o.N))
+		default:
+			panic(fmt.Sprintf("loop: 行に写せない coordination board の結果 %T", o))
 		}
 	}
 }
@@ -166,6 +168,9 @@ func (l *loop) claimRemote(ref target.Ref, triggerName string) bool {
 	case coord.ClaimTookOver:
 		l.rec.event("takeover", map[string]any{"target": ref.String(), "trigger": triggerName, "from": o.From},
 			LineNote, "乗っ取り", " %s (%s): 死んだ loop %s の着手宣言を乗っ取った", ref, triggerName, o.From)
+	case coord.ClaimPlaced:
+	default:
+		panic(fmt.Sprintf("loop: 着手宣言の結果として知らない値 %T", o))
 	}
 	return true
 }

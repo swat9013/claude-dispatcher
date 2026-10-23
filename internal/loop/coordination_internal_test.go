@@ -106,3 +106,21 @@ func TestOutcomesAreWrittenAsLogLines(t *testing.T) {
 		})
 	}
 }
+
+func TestALostDeleteOfMyOwnClaimIsReadOverAndAnOutcomeWithoutALineIsRefused(t *testing.T) {
+	var log bytes.Buffer
+	var out lines
+	l := &loop{rec: recorder{log: &log, output: &out, now: time.Now, scope: "scope-a"}}
+
+	l.report([]coord.Outcome{coord.ClaimReleaseLost{Ref: target.Ref{Kind: target.KindIssue, Number: 42}, Err: coord.ErrLost}})
+
+	if log.Len() != 0 || len(out) != 0 {
+		t.Fatalf("log %q・行 %+v, want 何も書かない", log.String(), out)
+	}
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("行に写せない結果を黙って捨てた")
+		}
+	}()
+	l.report([]coord.Outcome{coord.ClaimLost{}})
+}
