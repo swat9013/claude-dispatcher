@@ -87,11 +87,19 @@ func (l *loop) snapshot() status.Snapshot {
 	for _, p := range l.blocked {
 		s.Blocked = append(s.Blocked, status.Blocked{Trigger: p.Trigger, Error: p.Error})
 	}
-	if r := l.mediation; r != nil {
-		s.Loop, s.TakenOver, s.NewerFormat = r.c.LoopName(), r.takenOver, r.newer
-		if f := r.failures; f.count >= 2 {
-			s.HeartbeatFailures = &status.HeartbeatFailures{Count: f.count, Error: oneLine(f.last)}
+	s.Loop = l.coordination.LoopName()
+	attention := l.coordination.Attention()
+	for _, t := range attention.TakenOver {
+		s.TakenOver = append(s.TakenOver, status.TakenOver{Target: t.Ref.String(), By: holderOf(t)})
+	}
+	if n := attention.NewerFormat; n != nil {
+		s.NewerFormat = &status.NewerFormat{}
+		if format := n.Format; format > 0 {
+			s.NewerFormat.Format = &format
 		}
+	}
+	if f := attention.HeartbeatFailures; f != nil {
+		s.HeartbeatFailures = &status.HeartbeatFailures{Count: f.Count, Error: oneLine(f.Last)}
 	}
 	return s
 }

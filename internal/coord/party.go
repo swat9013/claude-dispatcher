@@ -72,12 +72,6 @@ func (v View) Newer() (Message, bool) {
 // LoopName は自分の loop 名。
 func (p *Party) LoopName() string { return p.Loop }
 
-// ClaimRef は作業対象の着手宣言の ref の名前。
-func (p *Party) ClaimRef(ref target.Ref) string { return p.Remote.ClaimRef(ref) }
-
-// HeartbeatRef は loop 名の生存報告の ref の名前。
-func (p *Party) HeartbeatRef(loop string) string { return p.Remote.HeartbeatRef(loop) }
-
 // remember は sha の commit message を覚える。
 func (p *Party) remember(sha string, m Message) {
 	p.mu.Lock()
@@ -155,21 +149,22 @@ func (p *Party) Claim(ref target.Ref, expect Expect) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("着手宣言の commit を作れない: %w", err)
 	}
-	if err := p.Remote.Push(p.ClaimRef(ref), sha, expect); err != nil {
+	if err := p.Remote.Push(p.Remote.ClaimRef(ref), sha, expect); err != nil {
 		return "", err
 	}
 	p.remember(sha, m)
 	return sha, nil
 }
 
-// Delete は ref を、sha を指しているときだけ消す。負けたら ErrLost を包んで返す。
-func (p *Party) Delete(name, sha string) error { return p.Remote.Push(name, "", Holding(sha)) }
-
 // DeleteClaim は作業対象の着手宣言を、sha を指しているときだけ消す。負けたら ErrLost を包んで返す。
-func (p *Party) DeleteClaim(ref target.Ref, sha string) error { return p.Delete(p.ClaimRef(ref), sha) }
+func (p *Party) DeleteClaim(ref target.Ref, sha string) error {
+	return p.Remote.Push(p.Remote.ClaimRef(ref), "", Holding(sha))
+}
 
 // DeleteHeartbeat は loop の生存報告を、sha を指しているときだけ消す。負けたら ErrLost を包んで返す。
-func (p *Party) DeleteHeartbeat(loop, sha string) error { return p.Delete(p.HeartbeatRef(loop), sha) }
+func (p *Party) DeleteHeartbeat(loop, sha string) error {
+	return p.Remote.Push(p.Remote.HeartbeatRef(loop), "", Holding(sha))
+}
 
 // Heartbeat は生存報告を、間隔 interval を書いた新しい commit で置き直す。条件は付けない (書くのは自分だけ)。
 func (p *Party) Heartbeat(interval time.Duration) error {
@@ -181,7 +176,7 @@ func (p *Party) Heartbeat(interval time.Duration) error {
 	if err != nil {
 		return fmt.Errorf("生存報告の commit を作れない: %w", err)
 	}
-	if err := p.Remote.Push(p.HeartbeatRef(p.Loop), sha, Unconditional()); err != nil {
+	if err := p.Remote.Push(p.Remote.HeartbeatRef(p.Loop), sha, Unconditional()); err != nil {
 		return err
 	}
 	p.remember(sha, m)
@@ -199,7 +194,7 @@ func (p *Party) Leave() error {
 	if sha == "" {
 		return nil
 	}
-	err := p.Delete(p.HeartbeatRef(p.Loop), sha)
+	err := p.DeleteHeartbeat(p.Loop, sha)
 	if err == nil {
 		p.mu.Lock()
 		p.heartbeat = ""

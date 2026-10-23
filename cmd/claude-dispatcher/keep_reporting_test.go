@@ -6,12 +6,31 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/swat9013/claude-dispatcher/internal/coord"
+	"github.com/swat9013/claude-dispatcher/internal/coord/coordtest"
 )
+
+// beatingRefs は、生存報告の置き直しの結果を results の順に返し、置き直すたびに beats へ知らせる coordination board。
+type beatingRefs struct {
+	*coordtest.Memory
+	beats   chan time.Duration
+	results []error
+}
+
+func (b *beatingRefs) Heartbeat(interval time.Duration) error {
+	err := b.Memory.Heartbeat(interval)
+	if len(b.results) > 0 {
+		err, b.results = b.results[0], b.results[1:]
+	}
+	b.beats <- interval
+	return err
+}
 
 // 単発起動は worker の終わりを待つ間、生存報告を間隔ごとに置き直す (formats.md §11・§12)。
 func TestKeepReportingRenewsHeartbeatEveryInterval(t *testing.T) {
 	clock := make(chan time.Time)
-	beats := make(chan time.Duration)
+	refs := &beatingRefs{Memory: coordtest.NewMemory("me-00000001"), beats: make(chan time.Duration)}
 	var mu sync.Mutex
 	var waits []time.Duration
 	after := func(d time.Duration) <-chan time.Time {
@@ -20,14 +39,10 @@ func TestKeepReportingRenewsHeartbeatEveryInterval(t *testing.T) {
 		waits = append(waits, d)
 		return clock
 	}
-	heartbeat := func(d time.Duration) error {
-		beats <- d
-		return nil
-	}
-	stop := keepReporting(heartbeat, time.Minute, after, &strings.Builder{})
+	stop := keepReporting(coord.NewBoard(refs, time.Minute), after, &strings.Builder{})
 	for i := range 2 {
 		clock <- time.Time{}
-		if d := <-beats; d != time.Minute {
+		if d := <-refs.beats; d != time.Minute {
 			t.Fatalf("%d 回目の置き直しに書く間隔 %v, want 1m", i+1, d)
 		}
 	}
@@ -44,20 +59,13 @@ func TestKeepReportingRenewsHeartbeatEveryInterval(t *testing.T) {
 // 単発起動は落ちた置き直しだけを stderr に 1 行出す。
 func TestKeepReportingWritesOnlyFailedHeartbeatsToStderr(t *testing.T) {
 	clock := make(chan time.Time)
+	refs := &beatingRefs{Memory: coordtest.NewMemory("me-00000001"), beats: make(chan time.Duration), results: []error{nil, errors.New("負けた")}}
 	var mu sync.Mutex
 	var stderr strings.Builder
-	results := []error{nil, errors.New("負けた")}
-	done := make(chan struct{}, len(results))
-	heartbeat := func(time.Duration) error {
-		err := results[0]
-		results = results[1:]
-		done <- struct{}{}
-		return err
-	}
-	stop := keepReporting(heartbeat, time.Minute, func(time.Duration) <-chan time.Time { return clock }, lockedWriter{&mu, &stderr})
+	stop := keepReporting(coord.NewBoard(refs, time.Minute), func(time.Duration) <-chan time.Time { return clock }, lockedWriter{&mu, &stderr})
 	for range 2 {
 		clock <- time.Time{}
-		<-done
+		<-refs.beats
 	}
 	stop()
 	mu.Lock()

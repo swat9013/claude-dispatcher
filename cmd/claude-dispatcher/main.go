@@ -307,7 +307,7 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 	}
 	defer logFile.Close()
 	// 最初の生存報告は、起動を失敗させうる処理を済ませてから置く (後で失敗すると、置いた生存報告が remote に残る)
-	party, code := e.join(def, remote, stderr)
+	board, code := e.join(def, remote, stderr)
 	if code != 0 {
 		return code
 	}
@@ -320,9 +320,9 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 	}
 	scope := scopeKey
 	var coordination loop.Coordination
-	if party != nil {
-		scope += " · loop " + party.LoopName()
-		coordination = party
+	if board != nil {
+		scope += " · loop " + board.LoopName()
+		coordination = board
 	}
 	output.Show(loop.Line{At: time.Now(), Label: "loop を始めた", Rest: fmt.Sprintf(": scope %s · state dir %s · workflow %s", scope, dir, abs)})
 	hookLock := &sync.Mutex{}
@@ -392,9 +392,9 @@ func (e environment) coordinationRemote(def workflow.Definition) coord.Remote {
 	return coord.NewRemote(def.CoordinationRemote, state.DirName(places.ScopeKey(def)), proc.Command{Path: git, Env: e.env, Dir: def.Dir, Timeout: commandTimeout})
 }
 
-// join は、coordination board を指した project で loop 名を決め、最初の生存報告を置く (formats.md §12 の起動時の確認)。指さない
+// join は、coordination board を指した project で loop 名を決め、最初の生存報告を置いて Board を返す (formats.md §12 の起動時の確認)。指さない
 // project では nil。置けなければ stderr に理由を出して exit code を返す。
-func (e environment) join(def workflow.Definition, remote coord.Remote, stderr io.Writer) (*coord.Party, int) {
+func (e environment) join(def workflow.Definition, remote coord.Remote, stderr io.Writer) (*coord.Board, int) {
 	if def.CoordinationRemote == "" {
 		return nil, 0
 	}
@@ -404,11 +404,12 @@ func (e environment) join(def workflow.Definition, remote coord.Remote, stderr i
 		return nil, exitFailed
 	}
 	party := &coord.Party{Remote: remote, Loop: name}
-	if err := party.Heartbeat(coord.HeartbeatInterval(def.Interval)); err != nil {
+	interval := coord.HeartbeatInterval(def.Interval)
+	if err := party.Heartbeat(interval); err != nil {
 		fmt.Fprintf(stderr, "coordination board の remote %s に生存報告を置けない: %s\n", def.CoordinationRemote, printable.Line(err.Error()))
 		return nil, exitFailed
 	}
-	return party, 0
+	return coord.NewBoard(party, interval), 0
 }
 
 // lockState は state dir を作って scope key の lock を take に取らせる (formats.md §6・§11)。loop (state.Lock) と単発起動
