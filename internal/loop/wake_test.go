@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/swat9013/claude-dispatcher/internal/loop"
+	"github.com/swat9013/claude-dispatcher/internal/places"
 	"github.com/swat9013/claude-dispatcher/internal/precheck"
 	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/trigger"
@@ -81,7 +82,7 @@ func (s wakeLoop) run(t *testing.T) *wakeRun {
 		},
 		Definition: s.def(1),
 		Precheck:   s.precheck,
-		Store: func(workflow.Definition) loop.Store {
+		Store: func(workflow.Definition) places.Store {
 			return memoryStore{
 				observe: func() ([]target.Item, error) { return s.open, nil },
 				reread:  func(ref target.Ref) (target.Item, error) { return s.read(w.tick, ref), nil },

@@ -1,10 +1,10 @@
-package loop_test
+package places_test
 
 import (
 	"errors"
 	"testing"
 
-	"github.com/swat9013/claude-dispatcher/internal/loop"
+	"github.com/swat9013/claude-dispatcher/internal/places"
 	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/trigger"
 	"github.com/swat9013/claude-dispatcher/internal/workflow"
@@ -28,7 +28,7 @@ func (clsOnly) ReadCL(n int) (target.Item, error) { return target.CL{Number: n},
 var refs = []target.Ref{{Kind: target.KindIssue, Number: 5}, {Kind: target.KindCL, Number: 6}}
 
 func TestStoreListsEachKindFromThePlaceThatHoldsIt(t *testing.T) {
-	store := loop.Store{Issues: issuesOnly{}, CLs: clsOnly{}}
+	store := places.Store{Issues: issuesOnly{}, CLs: clsOnly{}}
 	for _, ref := range refs {
 		t.Run(string(ref.Kind), func(t *testing.T) {
 			open, err := store.Open(ref.Kind)
@@ -41,7 +41,7 @@ func TestStoreListsEachKindFromThePlaceThatHoldsIt(t *testing.T) {
 }
 
 func TestStoreRereadsEachKindFromThePlaceThatHoldsIt(t *testing.T) {
-	store := loop.Store{Issues: issuesOnly{}, CLs: clsOnly{}}
+	store := places.Store{Issues: issuesOnly{}, CLs: clsOnly{}}
 	for _, ref := range refs {
 		t.Run(ref.String(), func(t *testing.T) {
 			item, err := store.Read(ref)
@@ -72,9 +72,9 @@ func (failingIssues) OpenIssues() ([]target.Item, error) {
 var bothKinds = workflow.Definition{Triggers: []trigger.Trigger{{On: target.KindCL}, {On: target.KindIssue}}}
 
 func TestOpenItemsKeepsReadingAfterANonFatalFailureAndReturnsItWithTheItems(t *testing.T) {
-	store := loop.Store{Issues: issuesOnly{}, CLs: clsWithNonFatal{}}
+	store := places.Store{Issues: issuesOnly{}, CLs: clsWithNonFatal{}}
 
-	items, err := loop.OpenItems(store, bothKinds)
+	items, err := places.OpenItems(store, bothKinds)
 
 	var nonFatal *target.NonFatal
 	if !errors.As(err, &nonFatal) || len(items) != 2 {
@@ -83,9 +83,9 @@ func TestOpenItemsKeepsReadingAfterANonFatalFailureAndReturnsItWithTheItems(t *t
 }
 
 func TestOpenItemsFailsWhenALaterKindFailsAfterANonFatalFailure(t *testing.T) {
-	store := loop.Store{Issues: failingIssues{}, CLs: clsWithNonFatal{}}
+	store := places.Store{Issues: failingIssues{}, CLs: clsWithNonFatal{}}
 
-	items, err := loop.OpenItems(store, bothKinds)
+	items, err := places.OpenItems(store, bothKinds)
 
 	var failure *target.Failure
 	if !errors.As(err, &failure) || failure.Kind != target.Auth || items != nil {

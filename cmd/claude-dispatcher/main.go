@@ -281,7 +281,7 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 		output = sc
 	}
 	// 遅かった置き場は、lock を取って log.jsonl を開いた後に loop が slow_listing の行で残す (formats.md §4)
-	slow := loop.SlowToOutput(def, output, slowAfter, time.Now)
+	slow := slowToOutput(def, output)
 	// 確認は置き場を 1 つずつ読み、Watch は Notify が終わるまで返らないので、append は重ならない
 	var startupSlow []target.Kind
 	show := slow.Notify
@@ -333,7 +333,7 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 		MaxConcurrent:  func() (int, bool, error) { return state.ReadMaxConcurrent(dir) },
 		Definition:     def,
 		Precheck:       e.precheck,
-		Store:          func(def workflow.Definition) loop.Store { return e.places(def).Store() },
+		Store:          func(def workflow.Definition) places.Store { return e.places(def).Store() },
 		Workspaces:     func(def workflow.Definition) loop.Workspaces { return e.workspaces(def, hookLock) },
 		Launch: func(def workflow.Definition, job worker.Job, events chan<- worker.Event) loop.Worker {
 			return worker.Runner{Workspaces: e.workspaces(def, hookLock), Definition: def, StateDir: dir}.Start(job, events)
@@ -352,7 +352,7 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 		After:        time.After,
 		Refresh:      time.Tick(time.Second),
 		SlowAfter:    slowAfter,
-		// 確認は返った後なので、Notify はもう呼ばれない (SlowNotice の Watch は Notify が終わるまで返らない)
+		// 確認は返った後なので、Notify はもう呼ばれない (places.SlowNotice の Watch は Notify が終わるまで返らない)
 		StartupSlowKinds: startupSlow,
 	})
 }
@@ -360,7 +360,7 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 // confirmLaunchable は起動時の検査のうち、依存 CLI の解決と置き場の確認を通す (formats.md §6)。loop と単発起動が使う。
 // 落ちたら stderr に理由を出して exit code を返す。確認が読む open な一覧が遅ければ slow で知らせる (formats.md §6 の
 // 「遅い一覧」)。
-func (e environment) confirmLaunchable(def workflow.Definition, remote coord.Remote, stderr io.Writer, slow loop.SlowNotice) int {
+func (e environment) confirmLaunchable(def workflow.Definition, remote coord.Remote, stderr io.Writer, slow places.SlowNotice) int {
 	// 起動時は人が画面の前にいるので、起動した後に落ちる前に依存 CLI を解決できることを確かめる (system.md §8)
 	for _, name := range places.RequiredCommands(def) {
 		if _, err := deps.Lookup(name, e.env); err != nil {
@@ -439,8 +439,8 @@ func (e environment) workspaces(def workflow.Definition, hookLock *sync.Mutex) w
 // dryRunOnce は試運転 (formats.md §5): store から snapshot を作って trigger を評価し、候補を loop の起動の直前と同じく
 // 1 件ずつ読み直して、loop が起動する候補だけを 1 件 1 行で出す。候補を 1 件でも読み直せなければ、何も出さずに失敗する。
 // 何も書かない。
-func dryRunOnce(store loop.Store, def workflow.Definition, stdout, stderr io.Writer) int {
-	open, err := loop.OpenItems(store, def)
+func dryRunOnce(store places.Store, def workflow.Definition, stdout, stderr io.Writer) int {
+	open, err := places.OpenItems(store, def)
 	var nonFatal *target.NonFatal
 	switch {
 	case errors.As(err, &nonFatal):
@@ -474,8 +474,16 @@ var slowAfter = time.After
 
 // slowToStderr は、一覧の読み出しが遅いことを読み終わる前に stderr へ 1 行で知らせる口 (formats.md §6 の「遅い一覧」)。
 // 試運転・doctor・単発起動が使う。
-func slowToStderr(def workflow.Definition, stderr io.Writer) loop.SlowNotice {
-	return loop.SlowNotice{After: slowAfter, Notify: func(kind target.Kind) { fmt.Fprintln(stderr, loop.SlowListingLine(def, kind)) }}
+func slowToStderr(def workflow.Definition, stderr io.Writer) places.SlowNotice {
+	return places.SlowNotice{After: slowAfter, Notify: func(kind target.Kind) { fmt.Fprintln(stderr, places.SlowListingLine(def, kind)) }}
+}
+
+// slowToOutput は、一覧の読み出しが遅いことを読み終わる前に人が読む行 out へ知らせる口 (formats.md §6 の「遅い一覧」)。
+// 起動時の確認が使う。
+func slowToOutput(def workflow.Definition, out loop.Output) places.SlowNotice {
+	return places.SlowNotice{After: slowAfter, Notify: func(kind target.Kind) {
+		out.Show(loop.Line{At: time.Now(), Kind: loop.LineNote, Label: places.SlowListingLine(def, kind)})
+	}}
 }
 
 // stopRequests は loop の停止要求 (SIGINT / SIGTERM / SIGHUP) を受ける channel を返す。

@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/swat9013/claude-dispatcher/internal/coord"
+	"github.com/swat9013/claude-dispatcher/internal/places"
 	"github.com/swat9013/claude-dispatcher/internal/precheck"
-	"github.com/swat9013/claude-dispatcher/internal/provider"
 	"github.com/swat9013/claude-dispatcher/internal/status"
 	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/trigger"
@@ -23,117 +23,6 @@ import (
 	"github.com/swat9013/claude-dispatcher/internal/worker"
 	"github.com/swat9013/claude-dispatcher/internal/workflow"
 )
-
-// Store は loop が読む置き場: issue 置き場の部品と CL 置き場の部品 (system.md §13)。本番は provider が組み立てた adapter、
-// テストは in-memory。失敗は *target.Failure。一覧は *target.NonFatal を一覧とともに返しうる (OpenItems)。
-type Store struct {
-	Issues provider.IssueStore
-	// CLs は CL 置き場の部品。検査に通った workflow 定義は CL 置き場をちょうど 1 つ持つ (ADR 0015) ので、いつも組まれる
-	CLs provider.CLStore
-	// Slow は一覧の読み出しが遅いときの知らせ方。ゼロ値なら知らせない
-	Slow SlowNotice
-}
-
-// SlowListing は 1 つの置き場の一覧を 1 回読む時間の目標。超えたら、読み終わる前に 1 行出す (formats.md §6 の「遅い一覧」)。
-const SlowListing = 15 * time.Second
-
-// SlowNotice は、一覧の読み出しが SlowListing を超えたことを、読み終わる前に 1 回だけ知らせる口。After か Notify が nil
-// なら知らせない。Notify は見張りの goroutine で呼び、Watch (Open も Watch を通る) は Notify が終わるまで返らない。
-type SlowNotice struct {
-	// After は d 後に届く channel を返す (time.After。テストは差し替える)
-	After  func(d time.Duration) <-chan time.Time
-	Notify func(kind target.Kind)
-}
-
-// PlaceLabel は kind の作業対象の置き場を人が読む行で指す綴り (`issue 置き場 <置き場>` か `CL 置き場 <置き場>`)。doctor の
-// 行と遅い一覧の行が使う (formats.md §6・§7.4)。
-func PlaceLabel(def workflow.Definition, kind target.Kind) string {
-	name := "issue 置き場 "
-	if kind == target.KindCL {
-		name = "CL 置き場 "
-	}
-	return name + placeOf(def, kind)
-}
-
-// placeOf は kind の作業対象の置き場の綴り。
-func placeOf(def workflow.Definition, kind target.Kind) string {
-	if kind == target.KindCL {
-		_, place := def.CLHost()
-		return place.String()
-	}
-	return def.Tracker.Place.String()
-}
-
-// SlowToOutput は、遅い一覧の行を人が読む行 out に出す口 (formats.md §6 の「遅い一覧」)。
-func SlowToOutput(def workflow.Definition, out Output, after func(time.Duration) <-chan time.Time, now func() time.Time) SlowNotice {
-	return SlowNotice{After: after, Notify: func(kind target.Kind) {
-		out.Show(Line{At: now(), Kind: LineNote, Label: SlowListingLine(def, kind)})
-	}}
-}
-
-// SlowListingLine は、kind の置き場の一覧の読み出しが SlowListing を超えたときに出す 1 行。
-func SlowListingLine(def workflow.Definition, kind target.Kind) string {
-	return fmt.Sprintf("%s の一覧の読み出しが %d 秒を超えた", PlaceLabel(def, kind), int(SlowListing/time.Second))
-}
-
-// slowListingFields は log.jsonl の slow_listing の行の中身 (formats.md §4)。
-func slowListingFields(def workflow.Definition, kind target.Kind) map[string]any {
-	return map[string]any{"kind": string(kind), "place": placeOf(def, kind)}
-}
-
-// Open は種類の open な作業対象を、その種類の置き場の部品で全件読む。読み出しが SlowListing を超えたら、読み終わる前に
-// s.Slow で知らせる。知らせても読み出しは止めず、結果も変えない。
-func (s Store) Open(kind target.Kind) ([]target.Item, error) {
-	var read func() ([]target.Item, error)
-	switch kind {
-	case target.KindIssue:
-		read = s.Issues.OpenIssues
-	case target.KindCL:
-		read = s.CLs.OpenCLs
-	default:
-		return nil, fmt.Errorf("未知の作業対象の種類 %q", kind)
-	}
-	var items []target.Item
-	var err error
-	s.Slow.Watch(kind, func() { items, err = read() })
-	return items, err
-}
-
-// Watch は read を呼び、read が SlowListing を超えたら、終わる前に kind の置き場の知らせを 1 回出す。After か Notify が nil
-// なら read を呼ぶだけ。知らせても read は止めない。
-func (n SlowNotice) Watch(kind target.Kind, read func()) {
-	if n.After == nil || n.Notify == nil {
-		read()
-		return
-	}
-	// 読み出しは呼んだ goroutine のまま撃ち (panic も呼んだ側で起きる)、見張りだけを別の goroutine に置く。見張りが
-	// 終わるまで返らないので、知らせの行は Watch の後に呼んだ側が出す行と並ばない
-	finished, watching := make(chan struct{}), make(chan struct{})
-	go func() {
-		defer close(watching)
-		select {
-		case <-n.After(SlowListing):
-			n.Notify(kind)
-		case <-finished:
-		}
-	}()
-	defer func() {
-		close(finished)
-		<-watching
-	}()
-	read()
-}
-
-// Read は作業対象 1 件を、その種類の置き場の部品で読み直す。終端になっているか消えていれば Terminal。
-func (s Store) Read(ref target.Ref) (target.Item, error) {
-	switch ref.Kind {
-	case target.KindIssue:
-		return s.Issues.ReadIssue(ref.Number)
-	case target.KindCL:
-		return s.CLs.ReadCL(ref.Number)
-	}
-	return nil, fmt.Errorf("未知の作業対象の種類 %q", ref.Kind)
-}
 
 // Workspaces は workspace の掃除の口。
 type Workspaces interface {
@@ -162,7 +51,7 @@ type Options struct {
 	// Precheck は workflow 定義の事前検査 (formats.md §2.9)。落ちた trigger は起動しない
 	Precheck func(workflow.Definition) []precheck.Problem
 	// Store は workflow 定義から置き場の部品を組み立てる
-	Store func(workflow.Definition) Store
+	Store func(workflow.Definition) places.Store
 	// Workspaces は workflow 定義から workspace の掃除の口を組み立てる
 	Workspaces func(workflow.Definition) Workspaces
 	// Launch は worker を起動し、起動と終わりを events に送らせる
@@ -194,7 +83,7 @@ type Options struct {
 	// SlowAfter は tick の一覧の読み出しが遅いかを測る (time.After。テストは差し替える)。After と分けるのは、After が
 	// 周期と再起動の wake だけを置くため。nil なら測らない
 	SlowAfter func(d time.Duration) <-chan time.Time
-	// StartupSlowKinds は、起動時の確認で一覧の読み出しが SlowListing を超えた置き場の種類 (読んだ順)。確認は log.jsonl を
+	// StartupSlowKinds は、起動時の確認で一覧の読み出しが places.SlowListing を超えた置き場の種類 (読んだ順)。確認は log.jsonl を
 	// 開く前に読むので、loop_start の後に slow_listing の行として書く。人が読む行は確認のときに出ているので出さない
 	StartupSlowKinds []target.Kind
 	// Coordination は coordination board の口 (system.md §4 のマシンを跨いだ分担)。coordination board を指さない project では nil。
@@ -445,6 +334,11 @@ func (l *loop) slotsInUse() int { return l.running() + len(l.orphans) }
 // holdsWorker は claim が worker (止めている途中と、止められない worker を含む) を持つ段階か。
 func (c *claim) holdsWorker() bool { return c.phase == phaseRunning || c.phase == phaseStopping }
 
+// slowListingFields は log.jsonl の slow_listing の行の中身 (formats.md §4)。
+func slowListingFields(def workflow.Definition, kind target.Kind) map[string]any {
+	return map[string]any{"kind": string(kind), "place": places.Place(def, kind)}
+}
+
 // tick は 1 周期分の仕事をする (formats.md §6 の tick の手順)。
 func (l *loop) tick() {
 	current := l.o.Store(l.def)
@@ -484,12 +378,11 @@ func (l *loop) tick() {
 			return
 		}
 	}
-	store := l.o.Store(def)
 	// 遅い一覧は目標を超えた読み出しなので、画面の行に加えて log.jsonl にも残す (formats.md §4 の冒頭の規則)
-	store.Slow = SlowNotice{After: l.o.SlowAfter, Notify: func(kind target.Kind) {
-		l.rec.event("slow_listing", slowListingFields(def, kind), LineNote, SlowListingLine(def, kind), "")
-	}}
-	open, err := OpenItems(store, def)
+	store := l.o.Store(def).WithSlow(places.SlowNotice{After: l.o.SlowAfter, Notify: func(kind target.Kind) {
+		l.rec.event("slow_listing", slowListingFields(def, kind), LineNote, places.SlowListingLine(def, kind), "")
+	}})
+	open, err := places.OpenItems(store, def)
 	var nonFatal *target.NonFatal
 	switch {
 	case errors.As(err, &nonFatal):
@@ -700,27 +593,8 @@ func refNames(refs []target.Ref) []string {
 	return names
 }
 
-// OpenItems は、workflow 定義の trigger に現れる種類の open な作業対象を置き場から全件読む。置き場の部品が作業対象とともに
-// 処理を続けられる失敗 (*target.NonFatal) を返したら、作業対象を読み進め、その失敗をまとめて作業対象とともに返す。
-func OpenItems(store Store, def workflow.Definition) ([]target.Item, error) {
-	items := []target.Item{}
-	var nonFatal []error
-	for _, kind := range def.Kinds() {
-		open, err := store.Open(kind)
-		var failure *target.NonFatal
-		switch {
-		case errors.As(err, &failure):
-			nonFatal = append(nonFatal, err)
-		case err != nil:
-			return nil, err
-		}
-		items = append(items, open...)
-	}
-	return items, errors.Join(nonFatal...)
-}
-
 // reconcile は走っている worker の作業対象を読み直し、終端になっていれば worker を止める。trigger から外れただけでは止めない。
-func (l *loop) reconcile(store Store) {
+func (l *loop) reconcile(store places.Store) {
 	for ref, c := range l.claims {
 		if c.phase != phaseRunning {
 			continue
@@ -731,7 +605,7 @@ func (l *loop) reconcile(store Store) {
 }
 
 // recheck は、終わり方を確かめ待ちの worker (phaseAwaitingVerification) を確かめ直す。
-func (l *loop) recheck(store Store) {
+func (l *loop) recheck(store places.Store) {
 	for ref, c := range l.claims {
 		if c.phase == phaseAwaitingVerification {
 			l.verify(store, ref, c)
@@ -819,7 +693,7 @@ func (l *loop) logOrphan(ref target.Ref) {
 // sweep は、claim の無い workspace (unclaimed) のうち、orphan が生きておらず作業対象が終端になったものを消す。open な一覧に
 // 無いものだけを読み直す。loop の起動の直後の tick が起動時の掃除を兼ね、以後の tick が claim を解いた後に終端になったものと、
 // 消し損ねたものと、orphan が終わったものを拾う。
-func (l *loop) sweep(store Store, ws Workspaces, open []target.Item, unclaimed []target.Ref) {
+func (l *loop) sweep(store places.Store, ws Workspaces, open []target.Item, unclaimed []target.Ref) {
 	isOpen := map[target.Ref]bool{}
 	for _, i := range open {
 		isOpen[i.Ref()] = true
@@ -842,7 +716,7 @@ func (l *loop) sweep(store Store, ws Workspaces, open []target.Item, unclaimed [
 // recheckCandidate は、起動しようとする候補を RecheckCandidate で読み直し、起動してよければ読み直した作業対象を返す。
 // 起動しない理由があれば recheck_skip の行を、読み直せなければ error の行を残して起動しない。どれも次の tick で候補になれば
 // 試み直す。
-func (l *loop) recheckCandidate(store Store, triggers []trigger.Trigger, c trigger.Candidate) (target.Item, bool) {
+func (l *loop) recheckCandidate(store places.Store, triggers []trigger.Trigger, c trigger.Candidate) (target.Item, bool) {
 	ref := c.Item.Ref()
 	item, reason, err := RecheckCandidate(store, triggers, c)
 	if err != nil {
@@ -862,7 +736,7 @@ func (l *loop) recheckCandidate(store Store, triggers []trigger.Trigger, c trigg
 // 直す。loop の起動と試運転 (formats.md §5) が同じ判定を使う。起動してよければ読み直した作業対象と "" を、起動しなければその理由 (当たるかを
 // まだ決められない・終端・起動しようとした trigger から外れた・triggers (宣言順) のうち先のものに当たる) を返す。読み直せ
 // なければ error。再起動はこの判定を使わない (宣言順で先の trigger を確かめないため。retry を見る)。
-func RecheckCandidate(store Store, triggers []trigger.Trigger, c trigger.Candidate) (target.Item, Reason, error) {
+func RecheckCandidate(store places.Store, triggers []trigger.Trigger, c trigger.Candidate) (target.Item, Reason, error) {
 	item, err := store.Read(c.Item.Ref())
 	if err != nil {
 		return nil, "", err
@@ -978,7 +852,7 @@ func (l *loop) claimOf(ref target.Ref) (*claim, bool) {
 }
 
 // verify は終わった worker の作業対象を読み直し、観測を claim の入口に渡す (終わり方の規則は claim.verified)。
-func (l *loop) verify(store Store, ref target.Ref, c *claim) {
+func (l *loop) verify(store places.Store, ref target.Ref, c *claim) {
 	o, _ := l.read(store, ref, c.trigger.Observe)
 	l.apply(ref, c, c.observed(ref, o, l.env()))
 }

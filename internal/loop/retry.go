@@ -3,6 +3,7 @@ package loop
 import (
 	"time"
 
+	"github.com/swat9013/claude-dispatcher/internal/places"
 	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/trigger"
 	"github.com/swat9013/claude-dispatcher/internal/workflow"
@@ -52,7 +53,7 @@ func (l *loop) arm() {
 // 試み直す)。曖昧に見えても claim は解かない (理由は formats.md §6 の再起動)。作業対象が終端か、trigger から外れて
 // いれば、起動せずに claim を解く (release の行を残す)。宣言順で先の trigger に当たるようになったかは確かめない (再起動
 // は同じ trigger で続ける。system.md §7)。CL の再起動は、曖昧さと branch を確かめられる tick の中でだけ試みる。
-func (l *loop) retry(store Store, v *view) {
+func (l *loop) retry(store places.Store, v *view) {
 	now := l.o.Now()
 	l.retriedAt = now
 	if l.orphansUnknown {
@@ -135,7 +136,7 @@ func (l *loop) waitingRetry() int {
 // clearAbandoned は、打ち切った作業対象のうち、終端になったか、打ち切ったときの trigger の述語に当たらなくなったものの
 // 打ち切りを解く。trigger が workflow 定義から消えたものも解く。曖昧な CL になったことでは解かない (formats.md §6 の
 // tick の手順 5)。
-func (l *loop) clearAbandoned(store Store, def workflow.Definition, v *view) {
+func (l *loop) clearAbandoned(store places.Store, def workflow.Definition, v *view) {
 	for ref, name := range l.abandoned {
 		if l.stillAbandoned(store, def, v, ref, name) {
 			continue
@@ -149,7 +150,7 @@ func (l *loop) clearAbandoned(store Store, def workflow.Definition, v *view) {
 // stillAbandoned は打ち切りを保つか。open な一覧で打ち切ったときの trigger に当たったまま (か当たるかをまだ決められない)
 // なら保つ。一覧に無いか一覧で外れて見えれば、一覧は古い結果を返しうるので置き場から 1 件読み直し、終端か外れたのを確かめて
 // から解く。読み直せないか、当たるかをまだ決められなければ保つ (外れたのを観測するまで解かない。次の tick で確かめ直す)。
-func (l *loop) stillAbandoned(store Store, def workflow.Definition, v *view, ref target.Ref, triggerName string) bool {
+func (l *loop) stillAbandoned(store places.Store, def workflow.Definition, v *view, ref target.Ref, triggerName string) bool {
 	t, ok := def.Trigger(triggerName)
 	if !ok {
 		return false

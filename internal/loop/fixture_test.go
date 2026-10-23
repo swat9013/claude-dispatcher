@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/swat9013/claude-dispatcher/internal/loop"
+	"github.com/swat9013/claude-dispatcher/internal/places"
 	"github.com/swat9013/claude-dispatcher/internal/precheck"
 	"github.com/swat9013/claude-dispatcher/internal/provider"
 	"github.com/swat9013/claude-dispatcher/internal/status"
@@ -53,7 +54,7 @@ func (m memoryStore) ReadCL(n int) (target.Item, error) {
 }
 
 // store は m を issue 置き場と CL 置き場の両方の部品にした置き場。
-func (m memoryStore) store() loop.Store { return loop.Store{Issues: m, CLs: m} }
+func (m memoryStore) store() places.Store { return places.Store{Issues: m, CLs: m} }
 
 // noWorkspaces は workspace を持たない掃除の口。
 type noWorkspaces struct{}
@@ -166,7 +167,7 @@ func (r *rig) run(t *testing.T, o loop.Options) {
 		o.Precheck = noProblems
 	}
 	if o.Store == nil {
-		o.Store = func(workflow.Definition) loop.Store {
+		o.Store = func(workflow.Definition) places.Store {
 			return memoryStore{observe: func() ([]target.Item, error) { return nil, nil }}.store()
 		}
 	}

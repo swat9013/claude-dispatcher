@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/swat9013/claude-dispatcher/internal/loop"
+	"github.com/swat9013/claude-dispatcher/internal/places"
 	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/trigger"
 	"github.com/swat9013/claude-dispatcher/internal/worker"
@@ -82,7 +83,7 @@ func (o oneTick) rig(t *testing.T) *rig {
 	r.signals <- syscall.SIGINT
 	r.run(t, loop.Options{
 		Definition: def,
-		Store: func(workflow.Definition) loop.Store {
+		Store: func(workflow.Definition) places.Store {
 			return memoryStore{
 				observe: func() ([]target.Item, error) { return o.open, nil },
 				reread:  o.read,

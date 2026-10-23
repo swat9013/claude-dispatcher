@@ -11,6 +11,7 @@ import (
 
 	"github.com/swat9013/claude-dispatcher/internal/coord"
 	"github.com/swat9013/claude-dispatcher/internal/loop"
+	"github.com/swat9013/claude-dispatcher/internal/places"
 	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/worker"
 	"github.com/swat9013/claude-dispatcher/internal/workflow"
@@ -156,7 +157,7 @@ func coordinatedRun(t *testing.T, remote *memoryRemote, ticks int, script func(w
 		Definition:     definition(time.Minute, 1),
 		Coordination:   remote,
 		HeartbeatAfter: func(time.Duration) <-chan time.Time { return nil },
-		Store: func(workflow.Definition) loop.Store {
+		Store: func(workflow.Definition) places.Store {
 			return memoryStore{
 				observe: func() ([]target.Item, error) { return []target.Item{item}, nil },
 				reread:  func(target.Ref) (target.Item, error) { return item, nil },
@@ -243,7 +244,7 @@ func tickRig(ticks int) *rig {
 }
 
 // matchingStore は issue 42 が当たり続ける置き場。
-func matchingStore(workflow.Definition) loop.Store {
+func matchingStore(workflow.Definition) places.Store {
 	item := target.Issue{Number: 42}
 	return memoryStore{
 		observe: func() ([]target.Item, error) { return []target.Item{item}, nil },
@@ -733,7 +734,7 @@ func TestHeartbeatIsRenewedWhileATickIsStillRunning(t *testing.T) {
 			}()
 			return fired
 		},
-		Store: func(workflow.Definition) loop.Store {
+		Store: func(workflow.Definition) places.Store {
 			return memoryStore{observe: func() ([]target.Item, error) {
 				close(inTick)
 				// 一覧の読み出しが長引いている間に、置き直しが届くか (届かなければ 5 秒で諦めて落とす)

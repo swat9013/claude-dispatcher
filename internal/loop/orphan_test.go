@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/swat9013/claude-dispatcher/internal/loop"
+	"github.com/swat9013/claude-dispatcher/internal/places"
 	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/trigger"
 	"github.com/swat9013/claude-dispatcher/internal/workflow"
@@ -60,7 +61,7 @@ func TestIssueWithALiveOrphanIsNotLaunchedUntilTheOrphanEnds(t *testing.T) {
 
 	r.run(t, loop.Options{
 		Definition: orphanDefinition(),
-		Store:      func(workflow.Definition) loop.Store { return ready.store() },
+		Store:      func(workflow.Definition) places.Store { return ready.store() },
 		Workspaces: func(workflow.Definition) loop.Workspaces { return &removals{} },
 		Orphaned:   o.orphaned,
 	})
@@ -98,7 +99,7 @@ func TestWorkspaceOfATerminalIssueWithALiveOrphanIsNotRemovedUntilTheOrphanEnds(
 
 	r.run(t, loop.Options{
 		Definition: orphanDefinition(),
-		Store:      func(workflow.Definition) loop.Store { return terminal.store() },
+		Store:      func(workflow.Definition) places.Store { return terminal.store() },
 		Workspaces: func(workflow.Definition) loop.Workspaces { return ws },
 		Orphaned:   o.orphaned,
 	})
@@ -121,7 +122,7 @@ func TestLiveOrphanTakesASlotOfTheConcurrencyLimit(t *testing.T) {
 
 	r.run(t, loop.Options{
 		Definition: orphanDefinition(),
-		Store:      func(workflow.Definition) loop.Store { return open.store() },
+		Store:      func(workflow.Definition) places.Store { return open.store() },
 		Workspaces: func(workflow.Definition) loop.Workspaces { return &removals{} },
 		Orphaned:   func(ref target.Ref) (bool, error) { return ref.Number == 1, nil },
 	})
@@ -149,7 +150,7 @@ func TestTickThatCannotCheckForOrphansNeitherSweepsNorLaunches(t *testing.T) {
 
 	r.run(t, loop.Options{
 		Definition: orphanDefinition(),
-		Store:      func(workflow.Definition) loop.Store { return store.store() },
+		Store:      func(workflow.Definition) places.Store { return store.store() },
 		Workspaces: func(workflow.Definition) loop.Workspaces { return ws },
 		Orphaned:   (&orphanTicks{err: errors.New("EIO")}).orphaned,
 	})

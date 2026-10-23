@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/swat9013/claude-dispatcher/internal/loop"
 	"github.com/swat9013/claude-dispatcher/internal/provider"
 	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/workflow"
@@ -138,7 +137,7 @@ func TestConfirmOfJiraWithCLConfirmsBothTheIssuePlaceAndTheCLPlace(t *testing.T)
 		return nil, errors.New("gh を撃った")
 	}}
 
-	_, err := New(def, s.runtime(nil)).ConfirmedStore(loop.SlowNotice{})
+	_, err := New(def, s.runtime(nil)).ConfirmedStore(SlowNotice{})
 
 	if err == nil || !strings.Contains(err.Error(), "gh を撃った") {
 		t.Fatalf("確認 = %v, want CL 置き場の失敗", err)
@@ -167,7 +166,7 @@ func TestConfirmOfJiraWithCLNotifiesSlowListingsBeforeTheyFinish(t *testing.T) {
 	fired := make(chan time.Time)
 	close(fired)
 	var kinds []target.Kind
-	slow := loop.SlowNotice{After: func(time.Duration) <-chan time.Time { return fired }, Notify: func(kind target.Kind) {
+	slow := SlowNotice{After: func(time.Duration) <-chan time.Time { return fired }, Notify: func(kind target.Kind) {
 		kinds = append(kinds, kind)
 		close(notified[kind])
 	}}

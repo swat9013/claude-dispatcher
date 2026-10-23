@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/swat9013/claude-dispatcher/internal/loop"
+	"github.com/swat9013/claude-dispatcher/internal/places"
 	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/trigger"
 	"github.com/swat9013/claude-dispatcher/internal/worker"
@@ -60,7 +61,7 @@ func (s staleTicks) run(t *testing.T) ([]worker.Job, *rig) {
 			return def, nil
 		},
 		Definition: def,
-		Store: func(workflow.Definition) loop.Store {
+		Store: func(workflow.Definition) places.Store {
 			return memoryStore{
 				observe: func() ([]target.Item, error) { return s.open(tick), nil },
 				reread: func(target.Ref) (target.Item, error) {
