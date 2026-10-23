@@ -63,8 +63,9 @@ type mediation struct {
 	// inherited は、生きている orphan の作業対象のために死んだ loop から引き継いだ自分の着手宣言の sha (claim は立てない。
 	// ADR 0027)
 	inherited map[target.Ref]string
-	// unsureInherits は、直近の tick で引き継ぎの push が結果の分からない失敗をした作業対象。remote に届いていたかは次の
-	// tick の deleteStaleClaims が確かめる。それより前に止まるときは inherited と同じに扱う
+	// unsureInherits は、引き継ぎの push が結果の分からない失敗をした作業対象。remote に届いていたかは後の tick の
+	// deleteStaleClaims が View で決める (commit message を読めない間は覚えたまま)。決める前に止まるときは、生存報告を
+	// 残すかを inherited と同じく orphan の生死で決める (sha を知らないので着手宣言は消せない)
 	unsureInherits map[target.Ref]bool
 	// takenOver は乗っ取られた作業対象。loop を起動し直すまで残す
 	takenOver []status.TakenOver
@@ -401,6 +402,7 @@ func (l *loop) inherit(ref target.Ref, h *holder) {
 		m.inherited = map[target.Ref]string{}
 	}
 	m.inherited[ref] = sha
+	delete(m.unsureInherits, ref)
 	l.rec.event("inherit", map[string]any{"target": ref.String(), "from": h.loop},
 		LineNote, "引き継ぎ", " %s: orphan の claude が動いているので、死んだ loop %s の着手宣言を引き継いだ", ref, h.loop)
 }
@@ -535,12 +537,14 @@ func (l *loop) leaveRemote() {
 	// orphan のために引き継いだ着手宣言は、直近の tick で orphan が終わっていたものを消し、生きていたものは残す (orphan が
 	// 作業を続けうる)
 	l.releaseInherited()
-	// 結果の分からなかった引き継ぎは、届いていたものとして引き継いだ着手宣言と同じに扱う (sha を知らないので消せない)
+	// 結果の分からなかった引き継ぎは、届いていたかもしれないので、生存報告を残すかを引き継いだ着手宣言と同じく orphan の
+	// 生死で決める (sha を知らないので消せない)
 	for _, ref := range sortedRefs(l.mediation.unsureInherits) {
+		reason := "orphan は終わったが消せなかった"
 		if l.orphans[ref] {
-			claudeLeft = true
-			l.rec.error(ref, "orphan のために引き継いだかもしれない着手宣言を残して止まる (引き継ぎの結果が分からず、orphan の claude が作業を続けうる)")
+			claudeLeft, reason = true, "orphan の claude が作業を続けうる"
 		}
+		l.rec.error(ref, "orphan のために引き継いだかもしれない着手宣言を残して止まる (引き継ぎの結果が分からず、"+reason+")")
 	}
 	for _, ref := range sortedRefs(l.mediation.inherited) {
 		reason := "orphan は終わったが消せなかった"

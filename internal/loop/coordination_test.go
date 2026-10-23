@@ -71,7 +71,7 @@ func (m *memoryRemote) Observe() (coord.View, error) {
 	v := coord.View{Claims: map[target.Ref]string{}, Loops: map[string]string{}, Messages: map[string]coord.Message{}}
 	for ref, sha := range m.claims {
 		v.Claims[ref] = sha
-		// 消した message は読めなかった commit message の代役 (View に載せない)
+		// 消した着手宣言の message は、読めなかった commit message の代役 (View に載せない。生存報告には当てていない)
 		if msg, read := m.messages[sha]; read {
 			v.Messages[sha] = msg
 		}
@@ -303,7 +303,38 @@ func TestAnInheritWithAnUnknownResultKeepsTheHeartbeatWhenTheLoopStopsBeforeTheN
 	// push は remote に届いたが、結果の分からない失敗を返す
 	remote.claimErr = errors.New("connection reset")
 	r := tickRig(1)
-	unsureInheritRun(t, r, remote)
+	runAndCheckUnsureInheritKeepsHeartbeat(t, r, remote)
+	if remote.messages[remote.claims[issue42]].Loop != me {
+		t.Fatalf("着手宣言の持ち主 %q, want 届いた自分の着手宣言を消さずに残す", remote.messages[remote.claims[issue42]].Loop)
+	}
+}
+
+func TestAnInheritWithAnUnknownResultWhoseOrphanEndedLeavesAnErrorLineAndTheHeartbeatGoes(t *testing.T) {
+	remote := newMemoryRemote()
+	remote.put(nil, coord.Message{Kind: coord.KindHeartbeat, Format: coord.Format, Loop: "me-00000009", Interval: time.Minute})
+	remote.put(&issue42, coord.Message{Kind: coord.KindClaim, Format: coord.Format, Loop: "me-00000009", Target: "issue#42"})
+	remote.claimErr = errors.New("connection reset")
+	remote.onObserve = func(m *memoryRemote, times int) {
+		if times == 2 {
+			delete(m.messages, m.claims[issue42])
+		}
+	}
+	r := tickRig(2)
+
+	r.run(t, loop.Options{
+		Definition: definition(time.Minute, 1), Coordination: remote, Store: matchingStore,
+		HeartbeatAfter: func(time.Duration) <-chan time.Time { return nil },
+		Workspaces:     func(workflow.Definition) loop.Workspaces { return listedWorkspaces{issue42} },
+		// orphan は 2 tick 目の確かめで終わっている
+		Orphaned: func(target.Ref) (bool, error) { return remote.observed < 2, nil },
+	})
+
+	if remote.left != 1 {
+		t.Fatalf("Leave %d 回, want orphan が終わったので生存報告を消す", remote.left)
+	}
+	if !strings.Contains(r.log.String(), "orphan のために引き継いだかもしれない着手宣言を残して止まる (引き継ぎの結果が分からず、orphan は終わったが消せなかった)") {
+		t.Fatalf("log = %q, want 消せずに残した error の行", r.log.String())
+	}
 }
 
 func TestAnInheritWithAnUnknownResultIsKeptWhileTheNextTickCannotReadTheClaim(t *testing.T) {
@@ -318,11 +349,12 @@ func TestAnInheritWithAnUnknownResultIsKeptWhileTheNextTickCannotReadTheClaim(t 
 		}
 	}
 	r := tickRig(2)
-	unsureInheritRun(t, r, remote)
+	runAndCheckUnsureInheritKeepsHeartbeat(t, r, remote)
 }
 
-// unsureInheritRun は、結果の分からない引き継ぎの後に loop を止め、生存報告を消さずに止まったかを見る。
-func unsureInheritRun(t *testing.T, r *rig, remote *memoryRemote) {
+// runAndCheckUnsureInheritKeepsHeartbeat は、orphan が生き続ける loop を回して止め、結果の分からない引き継ぎのために
+// 生存報告を消さずに止まったことと、その error の行を確かめる。
+func runAndCheckUnsureInheritKeepsHeartbeat(t *testing.T, r *rig, remote *memoryRemote) {
 	t.Helper()
 
 	r.run(t, loop.Options{
