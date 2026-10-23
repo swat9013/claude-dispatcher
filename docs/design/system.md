@@ -462,7 +462,8 @@ CLI の中で、呼び出し側から中身を隠す部品と、差し替えの�
 | CL 置き場の部品 | tick / 試運転 / 単発起動 (`run`) / `doctor` | CL host の呼び方・応答から CL の状態の語彙への写し方・失敗の見分け方 | gh / glab / テストの in-memory |
 | 起動部 | tick / 単発起動 (`run`) | セッションの起動の形 (argv・process group・stream の読み方・停止・回収) | `claude -p` / テストの fake |
 | hooks の実行 | tick / 単発起動 (`run`) | shell の撃ち方・timeout | (seam を置かない。テストは一時 dir で本物を撃つ) |
-| coordination board の部品 | tick / 単発起動 (`run`) / `doctor` | remote の解き方・ref の綴り・git の撃ち方 (`ls-remote`・空の tree の commit の作り方・条件付きの push・削除・commit message の fetch と読み方)・負けの見分け方・commit message の形式と版 | git / テストの fake |
+| coordination board の部品 (`coord.Board`) | tick / 単発起動 (`run`) | 着手宣言の持ち主 (自分・引き継いだもの・他の生きている loop・死んだ loop) と生死の判定 (間隔の 3 倍の規則・sha を最後に見た時刻)・自分の着手宣言の sha と乗っ取られたかの記憶・生存報告の置き直しと失敗の数え方・ref の名前と sha・push と削除の撃ち方 | `coord.Board` / 何もしない adapter (coordination board を指さない project) |
+| ref の口 (`coord.Refs`) | `coord.Board` | remote の解き方・ref の綴り・git の撃ち方 (`ls-remote`・空の tree の commit の作り方・条件付きの push・削除・commit message の fetch と読み方)・負けの見分け方・commit message の形式と版 | git (`coord.Party`) / テストの in-memory (`coordtest.Memory`) |
 
 - **issue 置き場の部品と CL 置き場の部品は、workflow 定義から組み立てて、正規化した作業対象と分類済みの失敗を返す** (ADR 0008)
   - 正規化は SPEC §4.1.1 の Issue を土台にする。CL は、CL の状態の語彙と絞り込みに要る field を持つ
@@ -485,10 +486,20 @@ CLI の中で、呼び出し側から中身を隠す部品と、差し替えの�
 - **起動部は、1 つの worker の起動・stream の読み取り・停止・回収を 1 つの部品に閉じる** (ADR 0005)
   - stream の event (起動・活動・終了) は中立の形で返す
   - 停止は process group ごと行い、上限時間か停止要求のどちらで止まったかを区別して返す
-- **coordination board の部品は、ref の一覧を、持ち主の loop 名・形式の版・間隔を読んだ形で返し、push の結果を 勝った / 負けた / その他の失敗 に分けて返す**
-  - 死んだ loop の判定 (sha が変わったのを最後に見た時刻と間隔) は、時計を持つ loop が行う。部品は時計を持たない
+- **coordination board の部品 (`coord.Board`) は、着手宣言の持ち主と生死の判定を 1 か所に集め、push と削除まで撃って、何が起きたかを型を持つ値で返す**
+  - loop から見えるのは作業対象 (`target.Ref`) と、その持ち主の判定だけにする。ref の名前と sha は部品の中に閉じる。log に載せる ref の名前 (§7 の突き合わせの error の行と、`dead_loop` の行の `refs`) だけは、起きたことの値に載せて返す
+  - 持ち主は 4 つに分けて持つ: 自分の着手宣言 (置いた sha と、乗っ取られたかの印)・orphan のために引き継いだもの (結果の分からない引き継ぎを含む。§7)・他の生きている loop のもの・死んだ loop のもの。生死の判定 (§4。生存報告が「その報告に書かれた間隔の 3 倍」新しくならない、か、持ち主の生存報告が無い着手宣言が自分の間隔の 3 倍変わらない) の規則と、sha を最後に見た時刻も部品が持つ
+  - 部品は時計を持たない。経過は、呼び出し側が突き合わせのたびに渡す時刻で数える
+  - 呼び順は呼び出し側 (tick の手順。§7) が決め、部品は呼ばれた順に従う。前の tick の orphan など、loop が持つ事実は method の引数で渡す
+  - 部品は log を書かない。起きたこと (乗っ取られた・引き継いだ・消せなかった、など) を値で返し、行 (event 名・field・画面の文) は loop が書く。単発起動は同じ値から stderr の文を書く
+  - 生存報告の置き直し (§9) と、続けて落ちた回数・捨てた結果の数も部品が持つ。loop と単発起動が同じ置き直しを使う
+  - 単発起動も部品を通す。ref を 1 回しか読まないので、sha を見た時刻が 1 つしかなく、間隔の 3 倍が過ぎないため、死んだ loop を判定しない (§11)
+  - coordination board を指さない project には、何もしない adapter を渡す。誰も着手宣言を持たず、着手宣言の push は常に通り、掃除と生存報告は無い。loop は coordination board を指すかで分岐しない
+- **ref の口 (`coord.Refs`) は、ref の一覧を、持ち主の loop 名・形式の版・間隔を読んだ形で返し、条件付きの push (無いときだけ作る・旧 sha を期待値に置き換える・sha を指しているときだけ消す) の結果を 勝った / 負けた / その他の失敗 に分けて返す**
+  - 着手宣言を消す口と生存報告を消す口は分け、ref の名前を呼び出し側が組み立てて渡さない
   - git は workflow 定義のある clone を cwd にして撃つ。commit の作者と committer は部品が環境変数で渡し、利用者の git の設定 (`user.name` など) に頼らない
   - push はすべて `--no-verify --porcelain` で撃つ (§4)
   - git 自身の認証の prompt を出させない (`GIT_TERMINAL_PROMPT=0`)。loop は無人で回るので、prompt は答えられずに上限時間まで止まる。利用者が `core.sshCommand`・`GIT_SSH_COMMAND`・`GIT_SSH` のどれも設定していないときは、ssh の passphrase と host key の確認も出させない (`GIT_SSH_COMMAND="ssh -o BatchMode=yes"`)。どれかが設定されていれば何も足さず、利用者の設定を使う (利用者の ssh の設定を上書きしないため)。どちらの場合も、agent か鍵の設定で prompt なしに通るようにしておく
-  - 本番の adapter は git、テストの adapter は loop の単体テストの fake。black-box テストは PATH の git の stub で、git に渡す引数を確かめる
+  - 本番の adapter は git、テストの adapter は ref と条件付きの更新だけを持つ in-memory。black-box テストは PATH の git の stub で、git に渡す引数を確かめる
+  - 起動時の確認 (formats.md §12) と `doctor` は、remote を解いて読めるかを確かめるだけなので、この口を通さず git の `coord.Remote` を直に撃つ
 - **trigger の評価は、正規化した作業対象だけを見る**。adapter の生の応答を覗かない (SPEC §11.2)
