@@ -513,6 +513,9 @@ func (l *loop) tick() {
 		l.tickFailed(oneLine(err))
 		return
 	}
+	if l.mediation != nil {
+		l.releaseInherited()
+	}
 	l.sweep(store, ws, open, unclaimed)
 	l.retry(store, v)
 	// 起動を始める前の数を tick の行にも載せる。起動した worker は走っている worker に加わるので、launched の数を足して判定する。
@@ -564,6 +567,7 @@ func (l *loop) tick() {
 		}
 	}
 	if l.mediation != nil {
+		l.inheritOrphanClaims()
 		l.cleanupDeadLoops()
 	}
 	l.board.lastTick = &status.Tick{At: l.o.Now(), Result: status.TickOK, Candidates: len(candidates)}

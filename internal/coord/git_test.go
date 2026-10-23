@@ -2,6 +2,7 @@ package coord
 
 import (
 	"errors"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
@@ -31,7 +32,7 @@ func remoteForTest(t *testing.T) Remote {
 	}
 	// 利用者の git の設定に頼らないことを確かめるため、HOME と global の設定を空にする
 	env := []string{"HOME=" + root, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null"}
-	return Remote{Name: "origin", ScopeDir: "github.com_acme_widgets-1a2b3c4d", Git: proc.Command{Path: git, Dir: clone, Env: env, Timeout: 30 * time.Second}}
+	return NewRemote("origin", "github.com_acme_widgets-1a2b3c4d", proc.Command{Path: git, Dir: clone, Env: env, Timeout: 30 * time.Second})
 }
 
 func TestClaimIsCreatedOnlyWhenAbsent(t *testing.T) {
@@ -174,6 +175,40 @@ func TestGitDisablesTheSSHPromptWhenTheUserLeavesSSHUnset(t *testing.T) {
 
 	if env := r.git().Env; !slices.Contains(env, batchSSH) {
 		t.Fatalf("env = %v, %s を期待", env, batchSSH)
+	}
+}
+
+func TestGitDecidesTheSSHCommandOnceAcrossCopies(t *testing.T) {
+	r := remoteForTest(t)
+	copied := r
+	if env := r.git().Env; !slices.Contains(env, batchSSH) {
+		t.Fatalf("env = %v, %s を期待", env, batchSSH)
+	}
+	// 判定の後に設定を変えても読み直さない (読み直すなら BatchMode が消える)
+	if _, err := r.Git.Output("config", "core.sshCommand", "ssh -i key"); err != nil {
+		t.Fatal(err)
+	}
+
+	if env := copied.git().Env; !slices.Contains(env, batchSSH) {
+		t.Fatalf("env = %v, 写しが core.sshCommand を読み直した", env)
+	}
+}
+
+func TestGitRereadsTheSSHCommandAfterAFailedRead(t *testing.T) {
+	dir := t.TempDir()
+	// 1 回目の読み出しは exit 128 で失敗し、2 回目以降は設定が無い (exit 1)
+	stub := filepath.Join(dir, "git")
+	script := "#!/bin/sh\nif [ -e " + dir + "/failed ]; then exit 1; fi\ntouch " + dir + "/failed\nexit 128\n"
+	if err := os.WriteFile(stub, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r := NewRemote("origin", "scope", proc.Command{Path: stub, Dir: dir, Timeout: 30 * time.Second})
+
+	if env := r.git().Env; slices.Contains(env, batchSSH) {
+		t.Fatalf("env = %v, 読めなかったのに BatchMode を足した", env)
+	}
+	if env := r.git().Env; !slices.Contains(env, batchSSH) {
+		t.Fatalf("env = %v, 読めなかった判定を持ち続けた", env)
 	}
 }
 

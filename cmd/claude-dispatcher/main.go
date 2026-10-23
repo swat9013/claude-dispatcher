@@ -289,7 +289,9 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 		show(kind)
 		startupSlow = append(startupSlow, kind)
 	}
-	if code := e.confirmLaunchable(def, stderr, slow); code != 0 {
+	// 調停 remote の口は確認と生存報告で共有し、ssh の撃ち方の判定を run の間 1 回にする
+	remote := e.coordinationRemote(def)
+	if code := e.confirmLaunchable(def, remote, stderr, slow); code != 0 {
 		return code
 	}
 	scopeKey, dir := e.stateDir(def)
@@ -305,7 +307,7 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 	}
 	defer logFile.Close()
 	// 最初の生存報告は、起動を失敗させうる処理を済ませてから置く (後で失敗すると、置いた生存報告が remote に残る)
-	party, code := e.join(def, stderr)
+	party, code := e.join(def, remote, stderr)
 	if code != 0 {
 		return code
 	}
@@ -358,7 +360,7 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 // confirmLaunchable は起動時の検査のうち、依存 CLI の解決と置き場の確認を通す (formats.md §6)。loop と単発起動が使う。
 // 落ちたら stderr に理由を出して exit code を返す。確認が読む open な一覧が遅ければ slow で知らせる (formats.md §6 の
 // 「遅い一覧」)。
-func (e environment) confirmLaunchable(def workflow.Definition, stderr io.Writer, slow loop.SlowNotice) int {
+func (e environment) confirmLaunchable(def workflow.Definition, remote coord.Remote, stderr io.Writer, slow loop.SlowNotice) int {
 	// 起動時は人が画面の前にいるので、起動した後に落ちる前に依存 CLI を解決できることを確かめる (system.md §8)
 	for _, name := range places.RequiredCommands(def) {
 		if _, err := deps.Lookup(name, e.env); err != nil {
@@ -371,7 +373,7 @@ func (e environment) confirmLaunchable(def workflow.Definition, stderr io.Writer
 		return failureExit(err)
 	}
 	if def.CoordinationRemote != "" {
-		if _, err := e.coordinationRemote(def).Confirm(); err != nil {
+		if _, err := remote.Confirm(); err != nil {
 			fmt.Fprintln(stderr, printable.Line(err.Error()))
 			return exitFailed
 		}
@@ -387,12 +389,12 @@ func (e environment) coordinationRemote(def workflow.Definition) coord.Remote {
 		// 解決できない git は、撃ったときの失敗として名前のまま返す (起動時は依存 CLI の検査が先に落とす)
 		git = "git"
 	}
-	return coord.Remote{Name: def.CoordinationRemote, ScopeDir: state.DirName(places.ScopeKey(def)), Git: proc.Command{Path: git, Env: e.env, Dir: def.Dir, Timeout: commandTimeout}}
+	return coord.NewRemote(def.CoordinationRemote, state.DirName(places.ScopeKey(def)), proc.Command{Path: git, Env: e.env, Dir: def.Dir, Timeout: commandTimeout})
 }
 
 // join は、調停 remote を指した project で loop 名を決め、最初の生存報告を置く (formats.md §12 の起動時の確認)。指さない
 // project では nil。置けなければ stderr に理由を出して exit code を返す。
-func (e environment) join(def workflow.Definition, stderr io.Writer) (*coord.Party, int) {
+func (e environment) join(def workflow.Definition, remote coord.Remote, stderr io.Writer) (*coord.Party, int) {
 	if def.CoordinationRemote == "" {
 		return nil, 0
 	}
@@ -401,7 +403,7 @@ func (e environment) join(def workflow.Definition, stderr io.Writer) (*coord.Par
 		fmt.Fprintln(stderr, err)
 		return nil, exitFailed
 	}
-	party := &coord.Party{Remote: e.coordinationRemote(def), Loop: name}
+	party := &coord.Party{Remote: remote, Loop: name}
 	if err := party.Heartbeat(coord.HeartbeatInterval(def.Interval)); err != nil {
 		fmt.Fprintf(stderr, "調停 remote %s に生存報告を置けない: %s\n", def.CoordinationRemote, printable.Line(err.Error()))
 		return nil, exitFailed

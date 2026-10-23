@@ -23,7 +23,8 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      - run: go vet ./...
+      # build tag `blackbox` の file も読む (.pre-commit-config.yaml の go-vet の hook と同じ)
+      - run: go vet -tags blackbox ./...
       # go test は scripts/checkstatechart で python3 (3.11 以上。CONTRIBUTING.md の「セットアップ」) を撃つ。runner の image に入っているものを使う
       # -json の event を残し、log には -v と同じ出力を流す。shell: bash は pipefail で撃つので、go test が落ちれば step も落ちる
       - run: go test -race -count=1 -json ./... | tee test.json | jq -rj 'select(.Action == "output") | .Output'
@@ -42,7 +43,9 @@ jobs:
               end' test.json
         shell: bash
 
-  # push 前の hook の golangci-lint を撃つ。build tag が無く OS で結果が変わらないので ubuntu だけで撃つ
+  # push 前の hook の golangci-lint を撃つ。build tag `blackbox` の file は .golangci.yml の run.build-tags で読む。
+  # ubuntu だけで撃つので、OS で分かれる file のうち linux 以外の file (internal/proc の exit_darwin.go・exit_other.go) は lint されない。
+  # CI で exit_darwin.go を読むのは test job の macOS の runner (go vet と go test) だけ。exit_other.go は配布対象の OS 向けでなく、CI のどの job も読まない
   lint:
     runs-on: ubuntu-latest
     steps:

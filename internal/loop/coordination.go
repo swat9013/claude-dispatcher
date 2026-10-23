@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -59,6 +60,9 @@ type mediation struct {
 	deadLoops map[string]string
 	// newer は直近の tick で見た、新しい版の ref。無ければ nil
 	newer *status.NewerFormat
+	// inherited は、生きている orphan の作業対象のために死んだ loop から引き継いだ自分の着手宣言の sha (claim は立てない。
+	// ADR 0027)
+	inherited map[target.Ref]string
 	// takenOver は乗っ取られた作業対象。loop を起動し直すまで残す
 	takenOver []status.TakenOver
 	// failures は続けて落ちた生存報告の置き直しの回数と直近の理由
@@ -272,12 +276,33 @@ func (l *loop) detectTakeovers(v coord.View) {
 // deleteStaleClaims は、自分の loop 名の着手宣言のうち claim の無い作業対象のもの (消し損ねた着手宣言) を消す。
 func (l *loop) deleteStaleClaims(v coord.View) {
 	r := l.mediation
+	for ref, sha := range r.inherited {
+		if v.Claims[ref] != sha {
+			// 引き継いだ着手宣言が置き換わったか消えた。claim が無いので止める worker は無く、忘れる。orphan はまだ動きうるので、
+			// 置き換わったなら二重実行になりうることを残す
+			if _, held := v.Claims[ref]; held {
+				l.rec.error(ref, "orphan のために引き継いだ着手宣言が置き換わった (orphan の claude と二重に動きうる)")
+			}
+			delete(r.inherited, ref)
+		}
+	}
 	for _, ref := range sortedRefs(v.Claims) {
 		sha := v.Claims[ref]
 		if m, read := v.Messages[sha]; !read || m.Loop != r.c.LoopName() {
 			continue
 		}
 		if c, claimed := l.claims[ref]; claimed && c.claimSHA == sha {
+			continue
+		}
+		if r.inherited[ref] == sha {
+			continue
+		}
+		if l.orphans[ref] {
+			// 引き継ぎの push が結果の分からない失敗をしたが、remote には届いていた。orphan が生きているので引き継いだものとして覚える
+			if r.inherited == nil {
+				r.inherited = map[target.Ref]string{}
+			}
+			r.inherited[ref] = sha
 			continue
 		}
 		if err := r.c.Delete(r.c.ClaimRef(ref), sha); err != nil && !errors.Is(err, coord.ErrLost) {
@@ -290,6 +315,10 @@ func (l *loop) deleteStaleClaims(v coord.View) {
 func (l *loop) heldByOther(ref target.Ref) bool {
 	if l.mediation == nil {
 		return false
+	}
+	if _, inherited := l.mediation.inherited[ref]; inherited {
+		// 消し損ねた引き継いだ着手宣言が残っている。消し直すまで起動しない (自分の着手宣言に負けて claim_lost と書かないため)
+		return true
 	}
 	h, ok := l.mediation.holders[ref]
 	return ok && !h.dead
@@ -323,8 +352,76 @@ func (l *loop) claimRemote(ref target.Ref, triggerName string) (string, bool) {
 	return sha, true
 }
 
+// releaseInherited は、orphan が終わった作業対象の引き継いだ着手宣言を消す (formats.md §12 の 8)。orphan を確かめた後、候補の
+// 起動の前に撃つ。消せなければ error の行を残して覚えたままにする (次の tick で消し直す)。
+func (l *loop) releaseInherited() {
+	m := l.mediation
+	for _, ref := range sortedRefs(m.inherited) {
+		if l.orphans[ref] {
+			continue
+		}
+		if err := m.c.Delete(m.c.ClaimRef(ref), m.inherited[ref]); err != nil && !errors.Is(err, coord.ErrLost) {
+			l.rec.error(ref, "引き継いだ着手宣言を消せない (次の tick で消し直す): "+oneLine(err))
+			continue
+		}
+		delete(m.inherited, ref)
+	}
+}
+
+// inherit は、生きている orphan の作業対象の死んだ loop の着手宣言を、旧 sha を期待値にした置き換えで自分の名前に引き継ぐ
+// (formats.md §12 の 8)。負けは読み飛ばす。
+func (l *loop) inherit(ref target.Ref, h *holder) {
+	m := l.mediation
+	sha, err := m.c.Claim(ref, coord.Holding(h.sha))
+	switch {
+	case errors.Is(err, coord.ErrLost):
+		return
+	case err != nil:
+		l.rec.error(ref, "orphan の作業対象の着手宣言を引き継げない (次の tick で試み直す): "+oneLine(err))
+		return
+	}
+	if m.inherited == nil {
+		m.inherited = map[target.Ref]string{}
+	}
+	m.inherited[ref] = sha
+	l.rec.event("inherit", map[string]any{"target": ref.String(), "from": h.loop},
+		LineNote, "引き継ぎ", " %s: orphan の claude が動いているので、死んだ loop %s の着手宣言を引き継いだ", ref, h.loop)
+}
+
+// inheritOrphanClaims は、生きている orphan の作業対象に残った、死んだ loop の着手宣言を引き継ぐ (formats.md §12 の 8)。
+// 持ち主が同じマシンの別の loop なら、死の判定 (間隔の 3 倍) を待たずに死んだとみなす。同じ scope の loop は 1 台に 1 つしか
+// 立たない (scope key の lock) ので、同じマシンの別の loop 名は落ちた前の loop で、待つと別のマシンの loop に先に乗っ取られる。
+// 新しい版の ref がある間は撃たない。
+func (l *loop) inheritOrphanClaims() {
+	m := l.mediation
+	if m.newer != nil {
+		return
+	}
+	for _, ref := range sortedRefs(m.holders) {
+		h := m.holders[ref]
+		if _, claimed := l.claims[ref]; claimed || !l.orphans[ref] || h.loop == "" {
+			continue
+		}
+		if h.dead || sameMachine(h.loop, m.c.LoopName()) {
+			l.inherit(ref, h)
+		}
+	}
+}
+
+// sameMachine は、2 つの loop 名が同じ hostname から作られたか (`<hostname>-<乱数 8 hex>`。formats.md §12)。
+func sameMachine(a, b string) bool {
+	host := func(name string) string {
+		i := strings.LastIndex(name, "-")
+		if i < 0 {
+			return name
+		}
+		return name[:i]
+	}
+	return host(a) == host(b)
+}
+
 // cleanupDeadLoops は、死んだ loop の着手宣言のうち乗っ取らなかったものと、死んだ loop の生存報告を消す (formats.md §12 の 7)。
-// 消すときの負けは読み飛ばす (他の loop が先に消したか乗っ取った)。
+// 生きている orphan の作業対象の着手宣言は消さずに引き継ぐ。消すときの負けは読み飛ばす (他の loop が先に消したか乗っ取った)。
 func (l *loop) cleanupDeadLoops() {
 	r := l.mediation
 	loops := make([]string, 0, len(r.deadLoops))
@@ -347,11 +444,14 @@ func (l *loop) cleanupDeadLoops() {
 		}
 		claims := 0
 		for _, ref := range sortedRefs(r.holders) {
-			// 自分が着手宣言を置いて claim している (この tick の候補の起動で乗っ取った) 作業対象と、自分の claude か生きている
-			// orphan の claude が作業を続けている作業対象の着手宣言は消さない
+			// 自分が着手宣言を置いて claim している (この tick の候補の起動で乗っ取った) 作業対象と、自分の claude が作業を続けている
+			// 作業対象と、生きている orphan の作業対象 (inheritOrphanClaims が引き継ぐ) の着手宣言は消さない
+			h := r.holders[ref]
 			c, claimed := l.claims[ref]
-			mine := claimed && (c.claimSHA != "" || c.claudeAlive())
-			if h := r.holders[ref]; h.loop == loop && h.dead && !mine && !l.orphans[ref] && remove(ref, r.c.ClaimRef(ref), h.sha) {
+			if mine := claimed && (c.claimSHA != "" || c.claudeAlive()); h.loop != loop || !h.dead || mine || l.orphans[ref] {
+				continue
+			}
+			if remove(ref, r.c.ClaimRef(ref), h.sha) {
 				claims++
 			}
 		}
@@ -414,6 +514,17 @@ func (l *loop) leaveRemote() {
 		} else {
 			l.releaseRemote(ref, c)
 		}
+	}
+	// orphan のために引き継いだ着手宣言は、直近の tick で orphan が終わっていたものを消し、生きていたものは残す (orphan が
+	// 作業を続けうる)
+	l.releaseInherited()
+	for _, ref := range sortedRefs(l.mediation.inherited) {
+		reason := "orphan は終わったが消せなかった"
+		if l.orphans[ref] {
+			// orphan が作業を続けうる間だけ、生存報告も残す
+			claudeLeft, reason = true, "orphan の claude が作業を続けうる"
+		}
+		l.rec.error(ref, "orphan のために引き継いだ着手宣言を残して止まる ("+reason+")")
 	}
 	if claudeLeft {
 		// 生存報告も消さずに途絶えさせる。消すと、持ち主の生存報告の無い着手宣言としてすぐに乗っ取られうる

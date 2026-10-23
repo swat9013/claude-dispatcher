@@ -202,6 +202,22 @@ func TestEveryGitCallToTheCoordinationRemoteDisablesTheTerminalPrompt(t *testing
 	s.assertEveryGitCallDisablesTheTerminalPrompt()
 }
 
+func TestRunReadsTheSSHCommandSettingOnce(t *testing.T) {
+	s := newSandbox(t)
+
+	s.runOneWorker()
+
+	var reads int
+	for _, c := range s.calls("git") {
+		if slices.Contains(c.Argv, "core.sshCommand") {
+			reads++
+		}
+	}
+	if reads != 1 {
+		t.Fatalf("core.sshCommand を %d 回読んだ。run の間 1 回を期待", reads)
+	}
+}
+
 // assertEveryGitCallDisablesTheTerminalPrompt は、git の stub が受けた呼び出しが 1 回以上あり、どれも
 // GIT_TERMINAL_PROMPT=0 と BatchMode の ssh を付けていることを確かめる。
 func (s *sandbox) assertEveryGitCallDisablesTheTerminalPrompt() {
