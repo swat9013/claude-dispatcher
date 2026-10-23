@@ -3,7 +3,9 @@
 package target
 
 import (
+	"cmp"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -95,6 +97,18 @@ func (r Ref) String() string { return fmt.Sprintf("%s#%d", r.Kind, r.Number) }
 
 // FileName は作業対象ごとの file と dir の名前 (workspace・描画した共通 prompt・worker log。`issue-42` の綴り)。
 func (r Ref) FileName() string { return fmt.Sprintf("%s-%d", r.Kind, r.Number) }
+
+// SortedRefs は表の作業対象を、種類と番号の順に並べて返す。
+func SortedRefs[V any](m map[Ref]V) []Ref {
+	refs := make([]Ref, 0, len(m))
+	for ref := range m {
+		refs = append(refs, ref)
+	}
+	slices.SortFunc(refs, func(a, b Ref) int {
+		return cmp.Or(cmp.Compare(a.Kind, b.Kind), cmp.Compare(a.Number, b.Number))
+	})
+	return refs
+}
 
 // ParseFileName は FileName の綴りの name から作業対象を読む。その綴りでなければ false。
 func ParseFileName(name string) (Ref, bool) {

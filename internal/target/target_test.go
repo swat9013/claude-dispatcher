@@ -1,6 +1,7 @@
 package target_test
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/swat9013/claude-dispatcher/internal/target"
@@ -17,5 +18,18 @@ func TestParseRefReadsOnlyTheSpellingOfString(t *testing.T) {
 		if ref, ok := target.ParseRef(s); ok {
 			t.Errorf("ParseRef(%q) = %v, want false", s, ref)
 		}
+	}
+}
+
+func TestSortedRefsOrdersByKindThenNumber(t *testing.T) {
+	refs := map[target.Ref]bool{
+		{Kind: target.KindIssue, Number: 10}: true, {Kind: target.KindCL, Number: 2}: true, {Kind: target.KindIssue, Number: 9}: true,
+	}
+
+	got := target.SortedRefs(refs)
+
+	want := []target.Ref{{Kind: target.KindCL, Number: 2}, {Kind: target.KindIssue, Number: 9}, {Kind: target.KindIssue, Number: 10}}
+	if !slices.Equal(got, want) {
+		t.Fatalf("SortedRefs = %v, want %v", got, want)
 	}
 }

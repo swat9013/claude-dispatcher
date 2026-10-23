@@ -1,8 +1,6 @@
 package loop
 
 import (
-	"cmp"
-	"slices"
 	"time"
 
 	"github.com/swat9013/claude-dispatcher/internal/status"
@@ -53,14 +51,14 @@ func (l *loop) snapshot() status.Snapshot {
 		Stopping: l.stop.requested(), MaxConcurrent: l.def.MaxConcurrent, LastTick: l.published.lastTick,
 		Workers: []status.Worker{}, Abandoned: []status.Abandoned{}, Ambiguous: []status.Ambiguous{}, Blocked: []status.Blocked{}, Orphans: []status.Orphan{},
 	}
-	for _, ref := range sortedRefs(l.orphans) {
+	for _, ref := range target.SortedRefs(l.orphans) {
 		s.Orphans = append(s.Orphans, status.Orphan{Target: ref.String(), Log: worker.LogFile("", ref)})
 	}
 	if !l.stop.requested() && !l.published.nextTickAt.IsZero() {
 		next := l.published.nextTickAt
 		s.NextTickAt = &next
 	}
-	for _, ref := range sortedRefs(l.claims) {
+	for _, ref := range target.SortedRefs(l.claims) {
 		c := l.claims[ref]
 		w := status.Worker{
 			Target: ref.String(), Trigger: c.trigger.Name, Attempt: c.attempt, SessionID: c.sessionID,
@@ -80,7 +78,7 @@ func (l *loop) snapshot() status.Snapshot {
 		}
 		s.Workers = append(s.Workers, w)
 	}
-	for _, ref := range sortedRefs(l.abandoned) {
+	for _, ref := range target.SortedRefs(l.abandoned) {
 		s.Abandoned = append(s.Abandoned, status.Abandoned{Target: ref.String(), Trigger: l.abandoned[ref]})
 	}
 	for _, a := range l.published.ambiguous {
@@ -98,20 +96,9 @@ func (l *loop) snapshot() status.Snapshot {
 	return s
 }
 
-func sortedRefs[V any](m map[target.Ref]V) []target.Ref {
-	refs := make([]target.Ref, 0, len(m))
-	for ref := range m {
-		refs = append(refs, ref)
-	}
-	slices.SortFunc(refs, func(a, b target.Ref) int {
-		return cmp.Or(cmp.Compare(a.Kind, b.Kind), cmp.Compare(a.Number, b.Number))
-	})
-	return refs
-}
-
 // refresh は走っている worker の活動を読み、変わっていれば活動の行を出す。終わった worker (run が nil) は読まない。
 func (l *loop) refresh() {
-	for _, ref := range sortedRefs(l.claims) {
+	for _, ref := range target.SortedRefs(l.claims) {
 		c := l.claims[ref]
 		if c.run == nil {
 			continue

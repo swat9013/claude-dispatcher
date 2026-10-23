@@ -174,7 +174,7 @@ func (l *loop) noteSightings(v coord.View, now time.Time) {
 		current[name] = s
 		return msg, fresh
 	}
-	for _, ref := range sortedRefs(v.Claims) {
+	for _, ref := range target.SortedRefs(v.Claims) {
 		msg, fresh := note(m.c.ClaimRef(ref), v.Claims[ref])
 		if fresh && msg.Loop == "" {
 			l.rec.error(ref, "持ち主の loop を読めない着手宣言がある (この作業対象は起動しない): "+m.c.ClaimRef(ref))
@@ -254,7 +254,7 @@ func (l *loop) newerFormatSeen() bool {
 
 // detectTakeovers は、自分の着手宣言の sha が変わったか消えた claim に乗っ取られたことを渡し、要対処に足す。
 func (l *loop) detectTakeovers(v coord.View) {
-	for _, ref := range sortedRefs(l.claims) {
+	for _, ref := range target.SortedRefs(l.claims) {
 		c := l.claims[ref]
 		if c.claimSHA == "" {
 			continue
@@ -297,7 +297,7 @@ func (l *loop) deleteStaleClaims(v coord.View) {
 			delete(r.inherited, ref)
 		}
 	}
-	for _, ref := range sortedRefs(v.Claims) {
+	for _, ref := range target.SortedRefs(v.Claims) {
 		sha := v.Claims[ref]
 		if m, read := v.Messages[sha]; !read || m.Loop != r.c.LoopName() {
 			continue
@@ -367,7 +367,7 @@ func (l *loop) claimRemote(ref target.Ref, triggerName string) (string, bool) {
 // 起動の前に撃つ。消せなければ error の行を残して覚えたままにする (次の tick で消し直す)。
 func (l *loop) releaseInherited() {
 	m := l.mediation
-	for _, ref := range sortedRefs(m.inherited) {
+	for _, ref := range target.SortedRefs(m.inherited) {
 		if l.orphans[ref] {
 			continue
 		}
@@ -413,7 +413,7 @@ func (l *loop) inheritOrphanClaims() {
 	if m.newer != nil {
 		return
 	}
-	for _, ref := range sortedRefs(m.holders) {
+	for _, ref := range target.SortedRefs(m.holders) {
 		h := m.holders[ref]
 		if _, claimed := l.claims[ref]; claimed || !l.orphans[ref] || h.loop == "" {
 			continue
@@ -452,7 +452,7 @@ func (l *loop) cleanupDeadLoops() {
 			return false
 		}
 		claims := 0
-		for _, ref := range sortedRefs(r.holders) {
+		for _, ref := range target.SortedRefs(r.holders) {
 			// 自分が着手宣言を置いて claim している (この tick の候補の起動で乗っ取った) 作業対象と、自分の claude が作業を続けている
 			// 作業対象と、生きている orphan の作業対象 (inheritOrphanClaims が引き継ぐ) の着手宣言は消さない
 			h := r.holders[ref]
@@ -515,7 +515,7 @@ func (l *loop) leaveRemote() {
 	}
 	l.noteDropped()
 	claudeLeft := false
-	for _, ref := range sortedRefs(l.claims) {
+	for _, ref := range target.SortedRefs(l.claims) {
 		// 止められない claude が生きている claim の着手宣言は残す。claude が作業を続けうるので、他のマシンの loop には、
 		// 生存報告が途絶えてから死を判定するまで起動させない (system.md §9)
 		if c := l.claims[ref]; c.claudeAlive() {
@@ -528,13 +528,13 @@ func (l *loop) leaveRemote() {
 	// 作業を続けうる)
 	l.releaseInherited()
 	// 結果の分からなかった引き継ぎは、届いていたものとして引き継いだ着手宣言と同じに扱う (sha を知らないので消せない)
-	for _, ref := range sortedRefs(l.mediation.unsureInherits) {
+	for _, ref := range target.SortedRefs(l.mediation.unsureInherits) {
 		if l.orphans[ref] {
 			claudeLeft = true
 			l.rec.error(ref, "orphan のために引き継いだかもしれない着手宣言を残して止まる (引き継ぎの結果が分からず、orphan の claude が作業を続けうる)")
 		}
 	}
-	for _, ref := range sortedRefs(l.mediation.inherited) {
+	for _, ref := range target.SortedRefs(l.mediation.inherited) {
 		reason := "orphan は終わったが消せなかった"
 		if l.orphans[ref] {
 			// orphan が作業を続けうる間だけ、生存報告も残す

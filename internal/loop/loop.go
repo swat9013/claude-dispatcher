@@ -774,17 +774,17 @@ func (l *loop) observeOrphans(ws Workspaces) (unclaimed []target.Ref, checked ma
 			return nil, nil, err
 		}
 	}
-	for _, ref := range sortedRefs(l.orphans) {
+	for _, ref := range target.SortedRefs(l.orphans) {
 		if err := probe(ref); err != nil {
 			return nil, nil, err
 		}
 	}
-	for _, ref := range sortedRefs(alive) {
+	for _, ref := range target.SortedRefs(alive) {
 		if !l.orphans[ref] {
 			l.logOrphan(ref)
 		}
 	}
-	for _, ref := range sortedRefs(l.orphans) {
+	for _, ref := range target.SortedRefs(l.orphans) {
 		if !alive[ref] {
 			l.rec.event("orphan_end", map[string]any{"target": ref.String()}, LineNote, "orphan", " %s が終わった", ref)
 		}
