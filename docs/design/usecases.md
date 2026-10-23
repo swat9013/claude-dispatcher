@@ -235,7 +235,7 @@ Cockburn『ユースケース実践ガイド』(Writing Effective Use Cases) の
 - **Scope**: dispatcher (機械システム)
 - **Level**: user-goal (sea)
 - **Trigger**: チームが、同じ issue 置き場を複数のマシンの loop で二重に起動せずに分け合いたい
-- **事前条件**: workflow 定義に coordination board (`coordination.remote`) が commit されている。各マシンの clone が、その名前の git remote へ push できる
+- **事前条件**: workflow 定義に、coordination board にする git remote の名前 (`coordination.remote`) が commit されている。各マシンの clone が、その名前の git remote へ push できる
 - **成功保証**: 1 つの作業対象の worker は、どの時点でもいずれか 1 台の loop だけが起動する (乗っ取りの直後の、まれな二重実行を除く)。落ちたマシンの作業対象は、生存報告の間隔の 3 倍の後に、生きている loop が拾い直す。ただし落ちた loop の orphan の claude が生きている作業対象は、同じマシンで起動し直した loop が着手宣言を引き継ぎ、別のマシンの loop は拾わない (同じマシンで起動し直さない間は拾いうる。ADR 0027)
 
 **Main Success Scenario**

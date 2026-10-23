@@ -141,7 +141,7 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 | 2 | 引数の誤り / workflow 定義の誤り (§2.8) / issue 置き場か `cl:` の CL 置き場が見えない (綴りの誤りか、権限が無い) / `jira` の起動時の確認 (§6) で、acli の認証の site が `tracker.host` と違うか読めない・status 名か issue type 名が実在しない |
 | 3 | 同じ scope key の loop か単発起動が走っている (§6・§11) |
 | 4 | 置き場の CLI (issue 置き場か CL 置き場の CLI。`github` なら gh、`gitlab` なら glab、`jira` なら acli) の認証が通らない |
-| 5 | 単発起動 (§11) が worker を起動しなかった: 指名した作業対象が指名した trigger に当たっていない・終端・当たるかをまだ決められない・orphan が生きている・他の loop の着手宣言がある・着手宣言の push に負けた・ coordination board に新しい版の ref がある・起動の前に停止要求を受けた・claude を起動する前に失敗した (hooks・描画・claude の起動) |
+| 5 | 単発起動 (§11) が worker を起動しなかった: 指名した作業対象が指名した trigger に当たっていない・終端・当たるかをまだ決められない・orphan が生きている・他の loop の着手宣言がある・着手宣言の push に負けた・coordination board に新しい版の ref がある・起動の前に停止要求を受けた・claude を起動する前に失敗した (hooks・描画・claude の起動) |
 | 6 | 単発起動 (§11) が worker を起動したが完了しなかった: 終わった後も trigger に当たったまま・当たるかをまだ決められない・2 回目の停止要求で止めた・claude を止められない |
 
 - 観測の失敗は、issue 置き場の部品が 認証 / 見えない / 読み切れない / rate limit に分けて返す (system.md §13)

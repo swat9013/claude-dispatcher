@@ -332,7 +332,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。claim の段階と打�
   - attempt の上限・backoff の上限・stall の上限・worker 1 回分の上限時間 (既定 1 時間。0 で無効)
   - 周期
   - `claude` の起動 command と引数
-  - coordination board (`coordination.remote`): マシンを跨いで分担するときに、workflow 定義のある clone の git remote の名前で書く (§4)。書かなければ coordination board を読みも書きもせず、1 台で回す
+  - `coordination.remote`: マシンを跨いで分担するときに coordination board にする git remote を、workflow 定義のある clone の git remote の名前で書く (§4)。書かなければ coordination board を読みも書きもせず、1 台で回す
 - **loop を回すマシンごとに値が変わらざるを得ないものは、workflow 定義に置かず、loop の引数と subcommand で渡す** (今は並列上限。ADR 0024)。workflow 定義は repo に commit され、その版を読むどの loop にも同じ値が効くので、マシンごとの値を置くと、loop を回すマシンを替える・一時的に絞るたびに commit が要り、coordination board (§4) で分担するとマシンごとに違う値を置けない。trigger・action・hooks・置き場・周期・retry と時間の上限・起動の command と引数は project の宣言なので workflow 定義に置く。path と command のようにマシンで変わりうる値でも、相対 path や PATH からの探索でどのマシンでも同じ値に書けるなら、workflow 定義に置く
   - 並列上限は、loop の起動時に引数 (`--max-concurrent`) で受け、省けば 1 にする。走っている間は `max-concurrent` subcommand で変えられ、subcommand で渡した値が引数より優先して、その loop が止まるまで効く
   - subcommand は、workflow 定義から scope key を引き、その state dir に値を書く。loop が立っていなければ書かずに失敗する (書いても次の loop には効かないため)

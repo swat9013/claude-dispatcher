@@ -142,8 +142,8 @@ _Avoid_: zombie (終わったが回収されていない process の意味に定
 ## マシンを跨いだ分担
 
 **coordination board**:
-別々のマシンの loop が同じ issue 置き場を分担するときに、着手宣言と生存報告を置き合い、読み合う場。先着を裁く役は持たない。実装 repo の git remote に置き、workflow 定義で指したときだけ使う。tracker には置かない。常に「coordination board」の全体で書く。
-_Avoid_: 調停 remote (旧称。ADR 0011–0027 の本文に残る), board (単独では Jira・GitHub Projects の board と紛れる), 共有スレッド, 連絡 issue, lock server
+別々のマシンの loop が同じ issue 置き場を分担するときに、着手宣言と生存報告を置き合い、読み合う場。実装 repo の git remote に置き、workflow 定義で指したときだけ使う。tracker には置かない。常に「coordination board」の全体で書く。
+_Avoid_: 調停 remote (旧称。ADR の本文に残る), board (単独では Jira・GitHub Projects の board と紛れる), 共有スレッド, 連絡 issue, lock server
 
 **loop 名**:
 coordination board の上で loop を見分ける名前。loop を起動するたびに新しくなるので、起動し直した loop は前の loop とは別の者として扱う。
