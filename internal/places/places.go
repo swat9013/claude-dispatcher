@@ -1,13 +1,12 @@
 // Package places は、検査に通った workflow 定義から project の issue 置き場と CL 置き場の組を作る (system.md §13)。
-// 部品の組み立て・tracker.token の渡し先・起動時の確認・撃つ CLI の一覧・scope key を 1 か所に置き、loop・試運転・doctor・
-// status・paths が同じ組を使う。
+// 部品の組み立て・tracker.token の渡し先・起動時の確認・撃つ CLI の一覧・scope key に加え、組を読む口 (Store)・置き場の名前・遅い一覧の知らせを
+// 1 か所に置き、loop・試運転・doctor・status・paths が同じ組を使う。
 package places
 
 import (
 	"errors"
 	"slices"
 
-	"github.com/swat9013/claude-dispatcher/internal/loop"
 	"github.com/swat9013/claude-dispatcher/internal/provider"
 	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/workflow"
@@ -23,11 +22,20 @@ type Places struct {
 	def workflow.Definition
 	// rt は tracker.token を置く前の実行環境
 	rt provider.Runtime
+	// slow は一覧の読み出しが遅いときの知らせ方 (WithSlow)。ゼロ値なら知らせない
+	slow SlowNotice
 }
 
 // New は workflow 定義 def の置き場の組。rt.Env には tracker.token を置かない環境を渡す (置く先は Places が決める)。
 func New(def workflow.Definition, rt provider.Runtime) Places {
 	return Places{def: def, rt: rt}
+}
+
+// WithSlow は、一覧の読み出しが SlowListing を超えたときの知らせ方を n にした置き場の組。Store と起動時の確認 (ConfirmedStore・
+// ConfirmIssues・ConfirmCLs) が読む一覧は、この知らせ方で知らせる。
+func (p Places) WithSlow(n SlowNotice) Places {
+	p.slow = n
+	return p
 }
 
 // TokenEnv は rt.Env に tracker.token を、tracker の CLI が読む環境変数として置いた環境 (system.md §8)。issue 置き場の CLI と、
@@ -36,16 +44,16 @@ func (p Places) TokenEnv() []string {
 	return p.def.Tracker.Provider().WithToken(p.rt.Env, p.def.Tracker.Token)
 }
 
-// Store は loop が読む置き場。issue 置き場の部品は tracker.kind の provider が tracker.token を置いた環境で組み、CL 置き場の
+// Store は loop・試運転・doctor が読む置き場。issue 置き場の部品は tracker.kind の provider が tracker.token を置いた環境で組み、CL 置き場の
 // 部品は cl: があれば cl.kind の provider が tracker.token を置かない環境で組む (ADR 0014。cl: は CL 置き場の CLI 自身の
 // 認証を使う)。cl: が無ければ issue 置き場と同じ provider の CL 置き場の部品。
-func (p Places) Store() loop.Store {
+func (p Places) Store() Store {
 	parts := p.trackerParts()
 	cls := parts.CLs
 	if separate, ok := p.separateCLs(); ok {
 		cls = separate
 	}
-	return loop.Store{Issues: parts.Issues, CLs: cls}
+	return Store{Issues: parts.Issues, CLs: cls}.WithSlow(p.slow)
 }
 
 func (p Places) trackerParts() provider.Parts {
@@ -65,43 +73,43 @@ func (p Places) separateCLs() (provider.CLStore, bool) {
 
 // ConfirmedStore は起動時の置き場の確認 (formats.md §6) を ConfirmIssues・ConfirmCLs の順に通し、確認で読んだ open な一覧を
 // snapshot に使う置き場を返す (試運転。formats.md §5)。CL 置き場の補助の要求だけの失敗 (*target.NonFatal) は、一覧を読めて
-// いるので確認を落とさず、置き場の一覧とともに返す。作業対象の読み直しは、どの部品も置き場から読む。返す置き場の Slow は
-// slow で、確認が読まなかった種類の一覧を読むときに知らせる。
-func (p Places) ConfirmedStore(slow loop.SlowNotice) (loop.Store, error) {
-	issues, err := p.ConfirmIssues(slow)
+// いるので確認を落とさず、置き場の一覧とともに返す。作業対象の読み直しは、どの部品も置き場から読む。返す置き場は、確認が
+// 読まなかった種類の一覧を読むときにも遅い一覧を知らせる (WithSlow)。
+func (p Places) ConfirmedStore() (Store, error) {
+	issues, err := p.ConfirmIssues()
 	if err != nil {
-		return loop.Store{}, err
+		return Store{}, err
 	}
-	cls, err := p.ConfirmCLs(slow)
+	cls, err := p.ConfirmCLs()
 	var nonFatal *target.NonFatal
 	if err != nil && !errors.As(err, &nonFatal) {
-		return loop.Store{}, err
+		return Store{}, err
 	}
-	return loop.Store{Issues: issues, CLs: cls, Slow: slow}, nil
+	return Store{Issues: issues, CLs: cls}.WithSlow(p.slow), nil
 }
 
 // ConfirmIssues は起動時の issue 置き場の確認 (formats.md §6) を通し、確認で読んだ open な一覧を持つ issue 置き場を返す。
 // 確認の手順を持たない種類は確かめず、tracker の部品のまま返す。失敗は *target.Failure か *target.UnknownNames。確認が
-// 読む open な一覧が遅ければ slow で知らせる。
-func (p Places) ConfirmIssues(slow loop.SlowNotice) (provider.IssueStore, error) {
+// 読む open な一覧が遅ければ知らせる (WithSlow)。
+func (p Places) ConfirmIssues() (provider.IssueStore, error) {
 	parts := p.trackerParts()
 	if parts.Confirm == nil {
 		return parts.Issues, nil
 	}
-	return parts.Confirm(func(read func()) { slow.Watch(target.KindIssue, read) })
+	return parts.Confirm(func(read func()) { p.slow.Watch(target.KindIssue, read) })
 }
 
 // ConfirmCLs は起動時の cl: の CL 置き場の確認 (formats.md §6): open な一覧を 1 回読み、読んだ一覧を持つ CL 置き場を、一覧と
 // ともに返った失敗と一緒に返す。補助の要求だけが落ちれば *target.NonFatal。cl: が無ければ確かめず、issue 置き場と同じ
-// provider の部品を返す。一覧の読み出しが遅ければ slow で知らせる。
-func (p Places) ConfirmCLs(slow loop.SlowNotice) (provider.CLStore, error) {
+// provider の部品を返す。一覧の読み出しが遅ければ知らせる (WithSlow)。
+func (p Places) ConfirmCLs() (provider.CLStore, error) {
 	separate, ok := p.separateCLs()
 	if !ok {
 		return p.trackerParts().CLs, nil
 	}
 	var open []target.Item
 	var err error
-	slow.Watch(target.KindCL, func() { open, err = separate.OpenCLs() })
+	p.slow.Watch(target.KindCL, func() { open, err = separate.OpenCLs() })
 	return confirmedCLs{CLStore: separate, open: open, err: err}, err
 }
 

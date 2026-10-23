@@ -11,6 +11,7 @@ import (
 
 	"github.com/swat9013/claude-dispatcher/internal/coord"
 	"github.com/swat9013/claude-dispatcher/internal/loop"
+	"github.com/swat9013/claude-dispatcher/internal/places"
 	"github.com/swat9013/claude-dispatcher/internal/printable"
 	"github.com/swat9013/claude-dispatcher/internal/state"
 	"github.com/swat9013/claude-dispatcher/internal/target"
@@ -136,7 +137,7 @@ func runOnce(args []string, stdout, stderr io.Writer) int {
 
 // once は単発起動の 1 回分の、終わりを待って確かめるのに使うもの。
 type once struct {
-	store      loop.Store
+	store      places.Store
 	workspaces workspace.Manager
 	stateDir   string
 	trigger    trigger.Trigger

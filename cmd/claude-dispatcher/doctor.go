@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/swat9013/claude-dispatcher/internal/deps"
-	"github.com/swat9013/claude-dispatcher/internal/loop"
 	"github.com/swat9013/claude-dispatcher/internal/places"
 	"github.com/swat9013/claude-dispatcher/internal/printable"
 	"github.com/swat9013/claude-dispatcher/internal/target"
@@ -67,8 +66,8 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 // 確認で読んだ open な一覧を使い回し、置き場ごとに 1 回だけ読む。一覧の読み出しが遅ければ、読み終わる前に stderr に 1 行
 // 出す (formats.md §7.4)。
 func checkStore(e environment, def workflow.Definition, stdout, stderr io.Writer) bool {
-	slow := slowToStderr(def, stderr)
-	issues, err := e.places(def).ConfirmIssues(slow)
+	pl := e.places(def).WithSlow(slowToStderr(def, stderr))
+	issues, err := pl.ConfirmIssues()
 	if err != nil {
 		var unknown *target.UnknownNames
 		if errors.As(err, &unknown) {
@@ -77,18 +76,18 @@ func checkStore(e environment, def workflow.Definition, stdout, stderr io.Writer
 			}
 			return false
 		}
-		fmt.Fprintf(stdout, "NG   %s: %s\n", loop.PlaceLabel(def, target.KindIssue), printable.Line(err.Error()))
+		fmt.Fprintf(stdout, "NG   %s: %s\n", places.Label(def, target.KindIssue), printable.Line(err.Error()))
 		return false
 	}
-	store := e.places(def).Store()
-	store.Issues, store.Slow = issues, slow
+	store := pl.Store()
+	store.Issues = issues
 	if _, _, separate := def.SeparateCLHost(); separate {
 		// CL は別の置き場にあり、checkCLPlace の行で確かめる
 		_, err = store.Open(target.KindIssue)
 	} else {
-		_, err = loop.OpenItems(store, def)
+		_, err = places.OpenItems(store, def)
 	}
-	return placeLine(stdout, loop.PlaceLabel(def, target.KindIssue), err)
+	return placeLine(stdout, places.Label(def, target.KindIssue), err)
 }
 
 // checkCLPlace は cl: の CL 置き場を、loop の起動時と同じ確認 (formats.md §6) で読めるかを確かめる。cl: が無ければ何も出さない。
@@ -97,11 +96,11 @@ func checkCLPlace(e environment, def workflow.Definition, stdout, stderr io.Writ
 	if _, _, ok := def.SeparateCLHost(); !ok {
 		return true
 	}
-	_, err := e.places(def).ConfirmCLs(slowToStderr(def, stderr))
-	return placeLine(stdout, loop.PlaceLabel(def, target.KindCL), err)
+	_, err := e.places(def).WithSlow(slowToStderr(def, stderr)).ConfirmCLs()
+	return placeLine(stdout, places.Label(def, target.KindCL), err)
 }
 
-// placeLine は置き場を読んだ結果 err を、label (loop.PlaceLabel) の置き場の 1 行に出す。処理を続けられる失敗
+// placeLine は置き場を読んだ結果 err を、label (places.Label) の置き場の 1 行に出す。処理を続けられる失敗
 // (*target.NonFatal) は、置き場を読めているので NG にせず、ok の行に理由を添える (formats.md §7.4)。
 func placeLine(stdout io.Writer, label string, err error) bool {
 	var nonFatal *target.NonFatal

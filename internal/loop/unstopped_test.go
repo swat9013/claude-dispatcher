@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/swat9013/claude-dispatcher/internal/loop"
+	"github.com/swat9013/claude-dispatcher/internal/places"
 	"github.com/swat9013/claude-dispatcher/internal/status"
 	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/trigger"
@@ -60,7 +61,7 @@ func TestAWorkerWhoseClaudeCannotBeStoppedIsNeitherVerifiedNorRestartedAndKeepsI
 
 	r.run(t, loop.Options{
 		Definition: def,
-		Store: func(workflow.Definition) loop.Store {
+		Store: func(workflow.Definition) places.Store {
 			return memoryStore{
 				observe: func() ([]target.Item, error) {
 					if reads > 0 {
@@ -139,7 +140,7 @@ func TestAnUnstoppedWorkerWhoseClaudeLaterExitsIsVerifiedAndNotReportedAtLoopEnd
 
 	r.run(t, loop.Options{
 		Definition: def,
-		Store: func(workflow.Definition) loop.Store {
+		Store: func(workflow.Definition) places.Store {
 			return memoryStore{
 				observe: func() ([]target.Item, error) { return []target.Item{readyIssue(1)}, nil },
 				reread: func(target.Ref) (target.Item, error) {
@@ -190,7 +191,7 @@ func TestTheStopWaitsForAnUnstoppedWorkerWhoseClaudeHasExited(t *testing.T) {
 
 	r.run(t, loop.Options{
 		Definition: def,
-		Store: func(workflow.Definition) loop.Store {
+		Store: func(workflow.Definition) places.Store {
 			return memoryStore{
 				observe: func() ([]target.Item, error) { return []target.Item{readyIssue(1)}, nil },
 				reread:  func(target.Ref) (target.Item, error) { return readyIssue(1), nil },

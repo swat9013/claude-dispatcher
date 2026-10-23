@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/swat9013/claude-dispatcher/internal/loop"
+	"github.com/swat9013/claude-dispatcher/internal/places"
 	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/trigger"
 	"github.com/swat9013/claude-dispatcher/internal/workflow"
@@ -27,7 +28,7 @@ func (w orphanWorkspaces) Branch(ref target.Ref) (string, error) {
 }
 
 // readyStore は issue#1 を ready のまま返す置き場。
-func readyStore(workflow.Definition) loop.Store {
+func readyStore(workflow.Definition) places.Store {
 	return memoryStore{
 		observe: func() ([]target.Item, error) { return []target.Item{readyIssue(1)}, nil },
 		reread:  func(target.Ref) (target.Item, error) { return readyIssue(1), nil },
@@ -84,7 +85,7 @@ func TestCLWhoseHeadIsCheckedOutInTheWorkspaceOfALiveOrphanIsNotLaunched(t *test
 
 	r.run(t, loop.Options{
 		Definition: def,
-		Store: func(workflow.Definition) loop.Store {
+		Store: func(workflow.Definition) places.Store {
 			return memoryStore{
 				observe: func() ([]target.Item, error) { return []target.Item{cl}, nil },
 				reread:  func(target.Ref) (target.Item, error) { return cl, nil },
