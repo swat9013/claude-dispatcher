@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -425,16 +424,9 @@ func (l *loop) inheritOrphanClaims() {
 	}
 }
 
-// sameMachine は、2 つの loop 名が同じ hostname から作られたか (`<hostname>-<乱数 8 hex>`。formats.md §12)。
+// sameMachine は、2 つの loop 名の hostname の部分 (coord.LoopHost) が同じか。
 func sameMachine(a, b string) bool {
-	host := func(name string) string {
-		i := strings.LastIndex(name, "-")
-		if i < 0 {
-			return name
-		}
-		return name[:i]
-	}
-	return host(a) == host(b)
+	return coord.LoopHost(a) == coord.LoopHost(b)
 }
 
 // cleanupDeadLoops は、死んだ loop の着手宣言のうち乗っ取らなかったものと、死んだ loop の生存報告を消す (formats.md §12 の 7)。

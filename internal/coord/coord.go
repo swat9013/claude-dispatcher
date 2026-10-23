@@ -103,6 +103,15 @@ func newLoopName(host string, read func([]byte) (int, error)) (string, error) {
 	return state.Sanitize(host) + "-" + hex.EncodeToString(b), nil
 }
 
+// LoopHost は、newLoopName が組み立てた loop 名の hostname の部分 (最後の `-` より前)。`-` が無ければ名前全体。
+func LoopHost(name string) string {
+	i := strings.LastIndex(name, "-")
+	if i < 0 {
+		return name
+	}
+	return name[:i]
+}
+
 // Remote は、workflow 定義のある clone から撃つ git で調停 remote を読み書きする口。
 type Remote struct {
 	// Name は coordination.remote (clone の git remote の名前)
