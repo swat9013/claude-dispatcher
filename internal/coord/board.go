@@ -39,7 +39,7 @@ type Board struct {
 	// takenOver は乗っ取られた作業対象。loop を起動し直すまで残す
 	takenOver []TakenOver
 	// failures は続けて落ちた生存報告の置き直しの回数と直近の理由
-	failures heartbeatFailures
+	failures HeartbeatFailures
 	// dropped は、受け取り手が読めないほど溜まって捨てた置き直しの結果の数
 	dropped atomic.Int64
 }
@@ -75,25 +75,19 @@ type holder struct {
 // NewerFormat は coordination board に見た、自分の知る版より新しい版の ref。Format は読んだ版で、版を読めなければ 0。
 type NewerFormat struct{ Format int }
 
-// HeartbeatFailures は続けて落ちた生存報告の置き直しの回数と、直近の理由。
+// HeartbeatFailures は生存報告の置き直しが続けて落ちた回数と、直近の理由。
 type HeartbeatFailures struct {
 	Count int
 	Last  error
 }
 
-// heartbeatFailures は生存報告の置き直しが続けて落ちた回数と、直近の理由。
-type heartbeatFailures struct {
-	count int
-	last  error
-}
-
 // note は置き直しの結果を数える。落ちていれば続けて落ちた回数を足し、通っていれば 0 に戻す。
-func (f *heartbeatFailures) note(err error) {
+func (f *HeartbeatFailures) note(err error) {
 	if err != nil {
-		f.count, f.last = f.count+1, err
+		f.Count, f.Last = f.Count+1, err
 		return
 	}
-	f.count, f.last = 0, nil
+	f.Count, f.Last = 0, nil
 }
 
 // Attention は、人に見せる要対処の元 (状態 file に載る。formats.md §7.1)。
@@ -116,8 +110,8 @@ func (b *Board) Observes() bool { return true }
 // Attention は今の要対処の元。
 func (b *Board) Attention() Attention {
 	a := Attention{TakenOver: b.takenOver, NewerFormat: b.newer}
-	if f := b.failures; f.count >= 2 {
-		a.HeartbeatFailures = &HeartbeatFailures{Count: f.count, Last: f.last}
+	if f := b.failures; f.Count >= 2 {
+		a.HeartbeatFailures = &f
 	}
 	return a
 }
@@ -173,14 +167,14 @@ func (b *Board) Observe(now time.Time, orphans map[target.Ref]bool) ([]Outcome, 
 
 // see は ref が今指す sha を、前に見た記録に重ねる。sha が変わっていれば見た時刻を now に改める。fresh は、この sha の commit message
 // を初めて読めたか。
-func see(prev sighting, known bool, sha, name string, now time.Time, v View) (s sighting, msg Message, fresh bool) {
-	if !known || prev.sha != sha {
-		prev = sighting{sha: sha, since: now}
+func see(prev sighting, known bool, ref RefState, now time.Time, v View) (s sighting, msg Message, fresh bool) {
+	if !known || prev.sha != ref.SHA {
+		prev = sighting{sha: ref.SHA, since: now}
 	}
-	msg, read := v.Messages[sha]
+	msg, read := v.Messages[ref.SHA]
 	fresh = read && !prev.checked
 	prev.checked = prev.checked || read
-	prev.name = name
+	prev.name = ref.Name
 	return prev, msg, fresh
 }
 
@@ -191,7 +185,7 @@ func (b *Board) noteSightings(v View, now time.Time) []Outcome {
 	claims := map[target.Ref]sighting{}
 	for _, ref := range target.SortedRefs(v.Claims) {
 		prev, known := b.claimSeen[ref]
-		s, msg, fresh := see(prev, known, v.Claims[ref], v.ClaimNames[ref], now, v)
+		s, msg, fresh := see(prev, known, v.Claims[ref], now, v)
 		claims[ref] = s
 		if fresh && msg.Loop == "" {
 			out = append(out, OwnerUnreadable{Ref: ref, Name: s.name})
@@ -200,7 +194,7 @@ func (b *Board) noteSightings(v View, now time.Time) []Outcome {
 	loops := map[string]sighting{}
 	for _, loop := range slices.Sorted(maps.Keys(v.Loops)) {
 		prev, known := b.loopSeen[loop]
-		s, msg, fresh := see(prev, known, v.Loops[loop], v.LoopNames[loop], now, v)
+		s, msg, fresh := see(prev, known, v.Loops[loop], now, v)
 		loops[loop] = s
 		if fresh && !msg.Newer() && msg.Interval <= 0 && loop != b.refs.LoopName() {
 			out = append(out, IntervalUnreadable{Loop: loop, Name: s.name})
@@ -223,12 +217,12 @@ func newerFormatIn(v View) *NewerFormat {
 // (起動しない・片付けない)。死んだかはまだ決めない。
 func (b *Board) othersClaims(v View) map[target.Ref]*holder {
 	holders := map[target.Ref]*holder{}
-	for ref, sha := range v.Claims {
-		msg, read := v.Messages[sha]
+	for ref, state := range v.Claims {
+		msg, read := v.Messages[state.SHA]
 		if read && msg.Loop == b.refs.LoopName() {
 			continue
 		}
-		holders[ref] = &holder{loop: msg.Loop, sha: sha}
+		holders[ref] = &holder{loop: msg.Loop, sha: state.SHA}
 	}
 	return holders
 }
@@ -236,13 +230,13 @@ func (b *Board) othersClaims(v View) map[target.Ref]*holder {
 // judgeDeadLoops は、生存報告が間隔の 3 倍新しくならない loop と、持ち主の生存報告が無いまま自分の間隔の 3 倍変わらない着手宣言の
 // 持ち主を死んだとみなす (formats.md §12 の 5)。
 func (b *Board) judgeDeadLoops(v View, now time.Time) {
-	for loop, sha := range v.Loops {
-		msg, read := v.Messages[sha]
+	for loop, state := range v.Loops {
+		msg, read := v.Messages[state.SHA]
 		if loop == b.refs.LoopName() || !read || msg.Interval <= 0 {
 			continue
 		}
 		if now.Sub(b.loopSeen[loop].since) >= missedBeats*msg.Interval {
-			b.deadLoops[loop] = sha
+			b.deadLoops[loop] = state.SHA
 		}
 	}
 	for ref, h := range b.holders {
@@ -266,14 +260,14 @@ func (b *Board) judgeDeadLoops(v View, now time.Time) {
 func (b *Board) detectTakeovers(v View) []Outcome {
 	var out []Outcome
 	for _, ref := range target.SortedRefs(b.mine) {
-		sha, ok := v.Claims[ref]
-		if ok && sha == b.mine[ref] {
+		state, ok := v.Claims[ref]
+		if ok && state.SHA == b.mine[ref] {
 			continue
 		}
 		t := TakenOver{Ref: ref}
 		if ok {
 			t.Unreadable = true
-			if m, read := v.Messages[sha]; read && m.Loop != "" {
+			if m, read := v.Messages[state.SHA]; read && m.Loop != "" {
 				t.By, t.Unreadable = m.Loop, false
 			}
 		}
@@ -291,14 +285,14 @@ func (b *Board) deleteStaleClaims(v View, orphans map[target.Ref]bool) []Outcome
 	// 結果の分からなかった引き継ぎは、この View で決着したものだけ忘れる (届いていれば下で inherited に覚え直す)。着手宣言の
 	// commit message を読めなかったものは、届いたかを決められないので覚えたままにする
 	for ref := range b.unsure {
-		if sha, held := v.Claims[ref]; !held {
+		if state, held := v.Claims[ref]; !held {
 			delete(b.unsure, ref)
-		} else if _, read := v.Messages[sha]; read {
+		} else if _, read := v.Messages[state.SHA]; read {
 			delete(b.unsure, ref)
 		}
 	}
 	for _, ref := range target.SortedRefs(b.inherited) {
-		if v.Claims[ref] != b.inherited[ref] {
+		if v.Claims[ref].SHA != b.inherited[ref] {
 			// 引き継いだ着手宣言が置き換わったか消えた。claim が無いので止める worker は無く、忘れる。orphan はまだ動きうるので、
 			// 置き換わったなら二重実行になりうることを残す
 			if _, held := v.Claims[ref]; held {
@@ -308,7 +302,7 @@ func (b *Board) deleteStaleClaims(v View, orphans map[target.Ref]bool) []Outcome
 		}
 	}
 	for _, ref := range target.SortedRefs(v.Claims) {
-		sha := v.Claims[ref]
+		sha := v.Claims[ref].SHA
 		if m, read := v.Messages[sha]; !read || m.Loop != b.refs.LoopName() {
 			continue
 		}

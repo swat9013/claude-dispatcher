@@ -46,17 +46,20 @@ type Party struct {
 
 // View は coordination board の scope dir の下の ref を、読んだ形にしたもの。
 type View struct {
-	// Claims は着手宣言の作業対象ごとの sha
-	Claims map[target.Ref]string
-	// Loops は生存報告の loop 名ごとの sha
-	Loops map[string]string
+	// Claims は着手宣言の作業対象ごとの ref
+	Claims map[target.Ref]RefState
+	// Loops は生存報告の loop 名ごとの ref
+	Loops map[string]RefState
 	// Messages は読めた commit message。読めなかった sha は無い
 	Messages map[string]Message
-	// ClaimNames と LoopNames は ref の名前 (remote 上の綴り)。Board が log の行に載せる名前として返す
-	ClaimNames map[target.Ref]string
-	LoopNames  map[string]string
 	// Unread は commit message を読めなかった理由。処理は続ける
 	Unread error
+}
+
+// RefState は読んだ ref の sha と名前 (remote 上の綴り。Board が log の行に載せる名前として返す)。
+type RefState struct {
+	SHA  string
+	Name string
 }
 
 // Newer は、自分の知る版より新しい版 (版を読めないものを含む) の commit message があればそれを返す。
@@ -89,10 +92,7 @@ func (p *Party) Observe() (View, error) {
 	if err != nil {
 		return View{}, fmt.Errorf("coordination board の remote %s の ref を読めない: %w", p.Remote.Name, err)
 	}
-	v := View{
-		Claims: map[target.Ref]string{}, Loops: map[string]string{}, Messages: map[string]Message{},
-		ClaimNames: map[target.Ref]string{}, LoopNames: map[string]string{},
-	}
+	v := View{Claims: map[target.Ref]RefState{}, Loops: map[string]RefState{}, Messages: map[string]Message{}}
 	claims, loops := p.Remote.prefix()+"claims/", p.Remote.prefix()+"loops/"
 	listed := map[string]bool{}
 	for name, sha := range refs {
@@ -102,10 +102,10 @@ func (p *Party) Observe() (View, error) {
 			if !ok {
 				continue
 			}
-			v.Claims[ref], v.ClaimNames[ref] = sha, name
+			v.Claims[ref] = RefState{SHA: sha, Name: name}
 		case strings.HasPrefix(name, loops):
 			loop := strings.TrimPrefix(name, loops)
-			v.Loops[loop], v.LoopNames[loop] = sha, name
+			v.Loops[loop] = RefState{SHA: sha, Name: name}
 		default:
 			continue
 		}
@@ -158,13 +158,16 @@ func (p *Party) Claim(ref target.Ref, expect Expect) (string, error) {
 
 // DeleteClaim は作業対象の着手宣言を、sha を指しているときだけ消す。負けたら ErrLost を包んで返す。
 func (p *Party) DeleteClaim(ref target.Ref, sha string) error {
-	return p.Remote.Push(p.Remote.ClaimRef(ref), "", Holding(sha))
+	return p.delete(p.Remote.ClaimRef(ref), sha)
 }
 
 // DeleteHeartbeat は loop の生存報告を、sha を指しているときだけ消す。負けたら ErrLost を包んで返す。
 func (p *Party) DeleteHeartbeat(loop, sha string) error {
-	return p.Remote.Push(p.Remote.HeartbeatRef(loop), "", Holding(sha))
+	return p.delete(p.Remote.HeartbeatRef(loop), sha)
 }
+
+// delete は ref を、sha を指しているときだけ消す。負けたら ErrLost を包んで返す。
+func (p *Party) delete(name, sha string) error { return p.Remote.Push(name, "", Holding(sha)) }
 
 // Heartbeat は生存報告を、間隔 interval を書いた新しい commit で置き直す。条件は付けない (書くのは自分だけ)。
 func (p *Party) Heartbeat(interval time.Duration) error {

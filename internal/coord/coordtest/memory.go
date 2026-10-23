@@ -78,14 +78,13 @@ func (m *Memory) Observe() (coord.View, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	v := coord.View{
-		Claims: map[target.Ref]string{}, Loops: map[string]string{}, Messages: map[string]coord.Message{},
-		ClaimNames: map[target.Ref]string{}, LoopNames: map[string]string{},
+		Claims: map[target.Ref]coord.RefState{}, Loops: map[string]coord.RefState{}, Messages: map[string]coord.Message{},
 	}
 	for ref, sha := range m.claims {
-		v.Claims[ref], v.ClaimNames[ref], v.Messages[sha] = sha, "claims/"+ref.FileName(), m.messages[sha]
+		v.Claims[ref], v.Messages[sha] = coord.RefState{SHA: sha, Name: "claims/" + ref.FileName()}, m.messages[sha]
 	}
 	for loop, sha := range m.loops {
-		v.Loops[loop], v.LoopNames[loop], v.Messages[sha] = sha, "loops/"+loop, m.messages[sha]
+		v.Loops[loop], v.Messages[sha] = coord.RefState{SHA: sha, Name: "loops/" + loop}, m.messages[sha]
 	}
 	return v, nil
 }
