@@ -150,7 +150,7 @@ _Avoid_: 共有スレッド, 連絡 issue, lock server
 _Avoid_: machine id, host 名 (同じマシンでも起動ごとに変わる)
 
 **着手宣言**:
-loop が作業対象を引き受けたことを調停 remote に示したもの。1 つの作業対象には 1 つしか立たず、立てられた loop だけが worker を起動する。その loop が claim を解くまで残る。claim はその loop の記憶にあり、着手宣言はそれを他の loop に見せる写しにあたる。
+loop が作業対象を引き受けたことを調停 remote に示したもの。1 つの作業対象には 1 つしか立たず、立てられた loop だけが worker を起動する。ふつうは立てた loop の claim の写しにあたり、その loop が claim を解くまで残る (claim はその loop の記憶にある)。引き継いだ着手宣言は claim の写しではなく、orphan が終わるまで残る。
 _Avoid_: 取得, lock, 予約
 
 **生存報告**:
@@ -160,6 +160,10 @@ _Avoid_: heartbeat (worker の stream の通知行と紛れる), ping
 **乗っ取り**:
 死んだとみなした loop の着手宣言を、別の loop が自分の着手宣言に置き換えること。乗っ取られた loop が実は生きていた場合は、気づいた時点でその作業対象の worker を止める。
 _Avoid_: takeover, 横取り
+
+**引き継ぎ**:
+同じマシンで起動し直した loop が、生きている orphan の作業対象に残った前の loop の着手宣言を、claim を立てずに自分の名前の着手宣言に置き換えること。引き継いだ loop は worker を起動せず、自分の生存報告でその着手宣言を守り、orphan が終わったら消す。claim を立てて worker を起動する乗っ取りとは別で、別のマシンの loop は引き継いだ着手宣言を生きている loop のものとして扱い、乗っ取らない (ADR 0027)。
+_Avoid_: 乗っ取り (claim を立てる別の操作), 継承
 
 ## 観測
 
