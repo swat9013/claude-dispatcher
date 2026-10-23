@@ -78,6 +78,16 @@ func (d Definition) Kinds() []target.Kind {
 	return kinds
 }
 
+// Trigger は名前の trigger を宣言から引く。
+func (d Definition) Trigger(name string) (trigger.Trigger, bool) {
+	for _, t := range d.Triggers {
+		if t.Name == name {
+			return t, true
+		}
+	}
+	return trigger.Trigger{}, false
+}
+
 // Tracker は issue 置き場の設定。
 type Tracker struct {
 	Kind provider.Kind
