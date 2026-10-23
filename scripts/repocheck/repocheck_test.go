@@ -1,6 +1,9 @@
 package main
 
 import (
+	"maps"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -317,8 +320,11 @@ func TestCheckRuleset_required_checksの規則が無ければずれとして落�
 func TestCheckFiles_3箇所のbuild_tagの一覧がずれれば落とす(t *testing.T) {
 	cases := map[string]func(*repoFiles){
 		"pre-commit の go-vet": func(f *repoFiles) { f.preCommit = strings.Replace(preCommitYAML, " -tags blackbox", "", 1) },
-		"checks.yml の go vet": func(f *repoFiles) { f.checks = strings.Replace(f.checks, "-tags blackbox", "-tags=blackbox,other", 1) },
-		".golangci.yml":       func(f *repoFiles) { f.golangci = "run:\n  build-tags: []\n" },
+		"checks.yml の go vet": func(f *repoFiles) { f.checks = strings.Replace(f.checks, "-tags blackbox", "-tags blackbox,other", 1) },
+		"pre-commit の args": func(f *repoFiles) {
+			f.preCommit = strings.Replace(preCommitYAML, "go vet -tags blackbox ./...", "go vet\n        args: [-tags, other, ./...]", 1)
+		},
+		".golangci.yml": func(f *repoFiles) { f.golangci = "run:\n  build-tags: []\n" },
 	}
 	for name, edit := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -332,19 +338,6 @@ func TestCheckFiles_3箇所のbuild_tagの一覧がずれれば落とす(t *test
 			}
 			assertProblem(t, problems, "build tag の一覧が違う")
 		})
-	}
-}
-
-func TestCheckFiles_tagの書き方と順が違っても同じ一覧なら通す(t *testing.T) {
-	files := validFiles()
-	files.preCommit = strings.Replace(preCommitYAML, "-tags blackbox", "-tags=other,blackbox", 1)
-	files.checks = strings.Replace(files.checks, "-tags blackbox", "-tags blackbox,other", 1)
-	files.golangci = "run:\n  build-tags: [other, blackbox]\n"
-
-	problems, err := checkFiles(files)
-
-	if err != nil || len(problems) != 0 {
-		t.Fatalf("got %q, %v", problems, err)
 	}
 }
 
@@ -366,7 +359,7 @@ func TestCheckFiles_go_vetのhookかstepが無ければエラーにする(t *tes
 }
 
 func TestCheckFiles_検査するtagを否定するbuild制約のfileがあれば落とす(t *testing.T) {
-	for _, line := range []string{"//go:build !blackbox", "//go:build linux && (darwin || !blackbox)"} {
+	for _, line := range []string{"//go:build !blackbox", "//go:build linux && (darwin || !blackbox)", "//go:build !(blackbox || race)"} {
 		t.Run(line, func(t *testing.T) {
 			files := validFiles()
 			files.buildConstraints["cmd/x/slow_default.go"] = line
@@ -378,15 +371,42 @@ func TestCheckFiles_検査するtagを否定するbuild制約のfileがあれば
 	}
 }
 
-func TestGoBuildLine_package句より前のgo_build行だけを読む(t *testing.T) {
-	cases := map[string]string{
-		"// c\n\n//go:build blackbox\n\npackage main\n": "//go:build blackbox",
-		"package main\n\n//go:build blackbox\n":         "",
+func TestCheckFiles_二重に否定したtagは否定として数えない(t *testing.T) {
+	files := validFiles()
+	files.buildConstraints["cmd/x/y.go"] = "//go:build !(!blackbox)"
+
+	problems, err := checkFiles(files)
+
+	if err != nil || len(problems) != 0 {
+		t.Fatalf("got %q, %v", problems, err)
 	}
-	for src, want := range cases {
-		if got := goBuildLine(src); got != want {
-			t.Errorf("goBuildLine(%q) = %q; want %q", src, got, want)
+}
+
+func TestReadBuildConstraints_go_toolが読まないdirectoryとfileを読まず_package句より前の行だけを読む(t *testing.T) {
+	root := t.TempDir()
+	write := func(path, src string) {
+		full := filepath.Join(root, path)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
 		}
+		if err := os.WriteFile(full, []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	neg := "//go:build !blackbox\n\npackage x\n"
+	write("cmd/a.go", "// c\n\n"+neg)
+	write("cmd/after.go", "package x\n\n//go:build !blackbox\n")
+	write(".claude/b.go", neg)
+	write("_x/c.go", neg)
+	write("testdata/d.go", neg)
+	write("cmd/_e.go", neg)
+	write("cmd/f.txt", neg)
+
+	got, err := readBuildConstraints(root)
+
+	want := map[string]string{filepath.Join(root, "cmd/a.go"): "//go:build !blackbox"}
+	if err != nil || !maps.Equal(got, want) {
+		t.Fatalf("got %q, %v; want %q", got, err, want)
 	}
 }
 

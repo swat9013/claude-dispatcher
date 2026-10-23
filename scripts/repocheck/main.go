@@ -64,6 +64,9 @@ func main() {
 		var files repoFiles
 		files, err = readRepoFiles()
 		if err == nil {
+			files.buildConstraints, err = readBuildConstraints(".")
+		}
+		if err == nil {
 			problems, err = checkFiles(files)
 		}
 	case "adr":
@@ -99,7 +102,8 @@ func fatal(err error) {
 
 type repoFiles struct {
 	ci, checks, release, contributing, goMod, preCommit, golangci string
-	// buildConstraints は repo の .go の file の path から、その file の //go:build 行への対応 (行の無い file は入れない)
+	// buildConstraints は repo の .go の file の path から、その file の //go:build 行への対応 (行の無い file は入れない)。
+	// files の検査だけが読む (readBuildConstraints)
 	buildConstraints map[string]string
 }
 
@@ -109,7 +113,7 @@ func readRepoFiles() (repoFiles, error) {
 		return string(b), err
 	}
 	var f repoFiles
-	var errs [8]error
+	var errs [7]error
 	f.ci, errs[0] = read(ciPath)
 	f.checks, errs[1] = read(checksPath)
 	f.release, errs[2] = read(releasePath)
@@ -117,27 +121,26 @@ func readRepoFiles() (repoFiles, error) {
 	f.goMod, errs[4] = read(goModPath)
 	f.preCommit, errs[5] = read(preCommitPath)
 	f.golangci, errs[6] = read(golangciPath)
-	f.buildConstraints, errs[7] = readBuildConstraints()
 	return f, errors.Join(errs[:]...)
 }
 
 // readBuildConstraints は repo の .go の file の //go:build 行を読む。go の tool が読まない directory
 // (`.`・`_` で始まる名前と testdata) には入らない。`.` で始まる名前を外すのは CONTRIBUTING.md の「gate」の方針で、
 // .claude/worktrees の他の作業ツリーも読まずに済む
-func readBuildConstraints() (map[string]string, error) {
+func readBuildConstraints(root string) (map[string]string, error) {
 	constraints := map[string]string{}
-	err := filepath.WalkDir(".", func(path string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		name := d.Name()
 		if d.IsDir() {
-			if path != "." && (strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_") || name == "testdata") {
+			if path != root && (strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_") || name == "testdata") {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if strings.HasPrefix(name, ".") || !strings.HasSuffix(name, ".go") {
+		if strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_") || !strings.HasSuffix(name, ".go") {
 			return nil
 		}
 		b, err := os.ReadFile(path)
@@ -233,18 +236,17 @@ func checkFiles(f repoFiles) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", contributingPath, err)
 	}
-	tagProblems, err := checkBuildTags(f)
-	if err != nil {
-		return nil, err
-	}
-	problems = append(problems, tagProblems...)
-
 	if goVersion != expected {
 		problems = append(problems, fmt.Sprintf("go.mod の `go` 行 (`%s`) が CONTRIBUTING.md の期待値 (`%s`) と違う。"+
 			"利用者に求める版が上がってよいかを人が判断し、受け入れるなら CONTRIBUTING.md の「版の更新」の期待値を書き換える (worker は書き換えずに人へ返す)",
 			goVersion, expected))
 	}
-	return problems, nil
+
+	tagProblems, err := checkBuildTags(f)
+	if err != nil {
+		return nil, err
+	}
+	return append(problems, tagProblems...), nil
 }
 
 // checkBuildTags は、go vet と golangci-lint に渡す build tag の一覧が 3 箇所 (.pre-commit-config.yaml の go-vet の hook・
@@ -260,15 +262,10 @@ func checkBuildTags(f repoFiles) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", checksPath, err)
 	}
-	var golangci struct {
-		Run struct {
-			BuildTags []string `yaml:"build-tags"`
-		} `yaml:"run"`
-	}
-	if err := yaml.Unmarshal([]byte(f.golangci), &golangci); err != nil {
+	golangciTags, err := golangciBuildTags([]byte(f.golangci))
+	if err != nil {
 		return nil, fmt.Errorf("%s: %w", golangciPath, err)
 	}
-	golangciTags := slices.Sorted(slices.Values(golangci.Run.BuildTags))
 
 	var problems []string
 	lists := append([][]string{preCommitTags}, checksTags...)
@@ -288,7 +285,7 @@ func checkBuildTags(f repoFiles) ([]string, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", path, err)
 		}
-		if tag, ok := negatedTag(expr, tags); ok {
+		if tag, ok := negatedTag(expr, tags, false); ok {
 			problems = append(problems, fmt.Sprintf("%s の build 制約が tag %s を否定する。go vet と golangci-lint は tag %s 付きでだけ検査するので、この file はどちらからも外れる。否定を使わない形にする",
 				path, tag, tag))
 		}
@@ -296,35 +293,49 @@ func checkBuildTags(f repoFiles) ([]string, error) {
 	return problems, nil
 }
 
-// negatedTag は、expr の中で否定される tag のうち tags に入るものを返す
-func negatedTag(expr constraint.Expr, tags []string) (string, bool) {
+// negatedTag は、expr の中で否定 (奇数回の !) の下に現れる tag のうち tags に入るものを返す。
+// `!(blackbox || race)` のように括弧の式ごと否定した形も拾う。negated はここまでに通った ! の偶奇
+func negatedTag(expr constraint.Expr, tags []string, negated bool) (string, bool) {
 	switch e := expr.(type) {
+	case *constraint.TagExpr:
+		return e.Tag, negated && slices.Contains(tags, e.Tag)
 	case *constraint.NotExpr:
-		if t, ok := e.X.(*constraint.TagExpr); ok && slices.Contains(tags, t.Tag) {
-			return t.Tag, true
-		}
-		return negatedTag(e.X, tags)
+		return negatedTag(e.X, tags, !negated)
 	case *constraint.AndExpr:
-		if t, ok := negatedTag(e.X, tags); ok {
+		if t, ok := negatedTag(e.X, tags, negated); ok {
 			return t, ok
 		}
-		return negatedTag(e.Y, tags)
+		return negatedTag(e.Y, tags, negated)
 	case *constraint.OrExpr:
-		if t, ok := negatedTag(e.X, tags); ok {
+		if t, ok := negatedTag(e.X, tags, negated); ok {
 			return t, ok
 		}
-		return negatedTag(e.Y, tags)
+		return negatedTag(e.Y, tags, negated)
 	}
 	return "", false
 }
 
-// preCommitVetTags は .pre-commit-config.yaml の go-vet の hook の entry に渡す -tags の一覧を返す。hook がちょうど 1 つでなければエラーにする
+// golangciBuildTags は .golangci.yml の run.build-tags を並べ替えて重複を除いて返す
+func golangciBuildTags(src []byte) ([]string, error) {
+	var config struct {
+		Run struct {
+			BuildTags []string `yaml:"build-tags"`
+		} `yaml:"run"`
+	}
+	if err := yaml.Unmarshal(src, &config); err != nil {
+		return nil, err
+	}
+	return slices.Compact(slices.Sorted(slices.Values(config.Run.BuildTags))), nil
+}
+
+// preCommitVetTags は .pre-commit-config.yaml の go-vet の hook の entry と args に渡す -tags の一覧を返す。hook がちょうど 1 つでなければエラーにする
 func preCommitVetTags(src []byte) ([]string, error) {
 	var config struct {
 		Repos []struct {
 			Hooks []struct {
-				ID    string `yaml:"id"`
-				Entry string `yaml:"entry"`
+				ID    string   `yaml:"id"`
+				Entry string   `yaml:"entry"`
+				Args  []string `yaml:"args"`
 			} `yaml:"hooks"`
 		} `yaml:"repos"`
 	}
@@ -335,7 +346,8 @@ func preCommitVetTags(src []byte) ([]string, error) {
 	for _, r := range config.Repos {
 		for _, h := range r.Hooks {
 			if h.ID == "go-vet" {
-				entries = append(entries, h.Entry)
+				// pre-commit は entry の後ろに args を足して撃つので、args の -tags も効く
+				entries = append(entries, strings.Join(append([]string{h.Entry}, h.Args...), " "))
 			}
 		}
 	}
@@ -371,20 +383,17 @@ func workflowVetTags(src []byte) ([][]string, error) {
 	return lists, nil
 }
 
-// vetTags は go vet のコマンド行の -tags (`-tags x,y`・`-tags=x,y`) の一覧を並べ替えて返す。-tags が無ければ空。2 回以上あればエラーにする
+// vetTags は go vet のコマンド行の `-tags x,y` の一覧を並べ替えて重複を除いて返す。-tags が無ければ空。
+// 他の書き方 (`-tags=x` 等) は読まないので、空の一覧として他の箇所とずれて落ちる。-tags が 2 回あればエラーにする
 func vetTags(cmd string) ([]string, error) {
 	fields := strings.Fields(cmd)
 	var values []string
 	for i, f := range fields {
-		switch {
-		case f == "-tags" || f == "--tags":
+		if f == "-tags" {
 			if i+1 == len(fields) {
 				return nil, fmt.Errorf("%q の -tags に値が無い", cmd)
 			}
 			values = append(values, fields[i+1])
-		case strings.HasPrefix(f, "-tags=") || strings.HasPrefix(f, "--tags="):
-			_, v, _ := strings.Cut(f, "=")
-			values = append(values, v)
 		}
 	}
 	if len(values) > 1 {
@@ -392,13 +401,9 @@ func vetTags(cmd string) ([]string, error) {
 	}
 	var tags []string
 	if len(values) == 1 {
-		for t := range strings.SplitSeq(values[0], ",") {
-			if t != "" {
-				tags = append(tags, t)
-			}
-		}
+		tags = strings.Split(values[0], ",")
 	}
-	return slices.Sorted(slices.Values(tags)), nil
+	return slices.Compact(slices.Sorted(slices.Values(tags))), nil
 }
 
 // duplicateADRNumbers は、先頭の番号が重なる ADR の file 名を、番号ごとに 1 件 1 行で返す。
