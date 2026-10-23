@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/swat9013/claude-dispatcher/internal/target"
+	"github.com/swat9013/claude-dispatcher/internal/trigger"
 	"github.com/swat9013/claude-dispatcher/internal/workflow"
 )
 
@@ -66,16 +67,22 @@ func TestValidDefinitionIsRead(t *testing.T) {
 }
 
 func TestTriggerIsLookedUpByNameFromTheDeclaration(t *testing.T) {
-	def, err := load(t, valid, nil)
-	if err != nil {
-		t.Fatal(err)
+	def := workflow.Definition{Triggers: []trigger.Trigger{{Name: "implement"}, {Name: "fix-ci"}}}
+
+	got, ok := def.Trigger("fix-ci")
+
+	if !ok || got.Name != "fix-ci" {
+		t.Errorf("Trigger(fix-ci) = %+v, %v, want 2 つ目に宣言した fix-ci", got, ok)
 	}
+}
 
-	got, ok := def.Trigger("implement")
-	_, missing := def.Trigger("nothing")
+func TestTriggerNotInTheDeclarationIsNotFound(t *testing.T) {
+	def := workflow.Definition{Triggers: []trigger.Trigger{{Name: "implement"}}}
 
-	if !ok || got.Name != "implement" || missing {
-		t.Errorf("Trigger(implement) = %+v, %v / Trigger(nothing) の ok = %v, want 宣言にある名前だけ引ける", got, ok, missing)
+	_, ok := def.Trigger("nothing")
+
+	if ok {
+		t.Error("宣言に無い名前の trigger を引けた")
 	}
 }
 

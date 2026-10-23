@@ -62,3 +62,24 @@ func TestWaitReportsAnUnkillableClaudeOnceAndReturnsOnlyAfterItExits(t *testing.
 		t.Errorf("result = %+v, want Stopped・StopError なし (送れなかった理由は知らせが運ぶ)", result)
 	}
 }
+
+func TestUnstoppedAliveIsTrueOnlyWhileAnUnstoppedClaudeHasNotExited(t *testing.T) {
+	exited, closed := make(chan struct{}), make(chan struct{})
+	close(closed)
+	cases := []struct {
+		name   string
+		exited <-chan struct{}
+		want   bool
+	}{
+		{"止められなかった claude がいない", nil, false},
+		{"claude がまだ終わっていない", exited, true},
+		{"claude が終わった", closed, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := UnstoppedAlive(c.exited); got != c.want {
+				t.Errorf("UnstoppedAlive = %v, want %v", got, c.want)
+			}
+		})
+	}
+}

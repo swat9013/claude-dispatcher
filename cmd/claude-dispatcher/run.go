@@ -90,7 +90,7 @@ func runOnce(args []string, stdout, stderr io.Writer) int {
 		return failureExit(err)
 	}
 	if observed := t.Observe(item); observed != trigger.ObservedStillMatches {
-		fmt.Fprintf(stderr, "%s は %s に当たっていないので起動しない (%s)\n", ref, t.Name, observed.Screen())
+		fmt.Fprintf(stderr, "%s は %s に当たっていないので起動しない (%s)\n", ref, t.Name, loop.ObservationScreen(observed))
 		return exitNotLaunched
 	}
 	party, code := e.join(def, remote, stderr)
@@ -163,7 +163,7 @@ func (o once) await(sessionID string, run *worker.Run, events <-chan worker.Even
 		case sig := <-signals:
 			stops++
 			switch {
-			case loop.UnstoppedAlive(exited):
+			case worker.UnstoppedAlive(exited):
 				// 止められない claude の終わりは待たない
 				fmt.Fprintf(o.stderr, "停止要求 %s: 止められない claude を残して終える\n", loop.SignalName(sig))
 				return unstoppedEnd()
@@ -182,7 +182,7 @@ func (o once) await(sessionID string, run *worker.Run, events <-chan worker.Even
 			case worker.Unstopped:
 				fmt.Fprintln(o.stderr, printable.Line("claude を止められない: "+ev.StopError))
 				exited = ev.Exited
-				if stops >= 1 && loop.UnstoppedAlive(exited) {
+				if stops >= 1 && worker.UnstoppedAlive(exited) {
 					return unstoppedEnd()
 				}
 			case worker.Ended:
@@ -234,10 +234,10 @@ func (o once) ended(result worker.Result, started, stopped bool) int {
 				fmt.Fprintln(o.stderr, printable.Line(err.Error()))
 			}
 		}
-		fmt.Fprintf(o.stdout, "終了: %s 完了 (%s)\n", o.ref, observed.Screen())
+		fmt.Fprintf(o.stdout, "終了: %s 完了 (%s)\n", o.ref, loop.ObservationScreen(observed))
 		return 0
 	}
-	fmt.Fprintf(o.stdout, "終了: %s 未完了 (%s)\n", o.ref, observed.Screen())
+	fmt.Fprintf(o.stdout, "終了: %s 未完了 (%s)\n", o.ref, loop.ObservationScreen(observed))
 	return exitNotCompleted
 }
 

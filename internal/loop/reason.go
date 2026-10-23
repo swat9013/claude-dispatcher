@@ -29,14 +29,14 @@ const reasonEarlierTrigger Reason = "earlier_trigger"
 // 着手宣言が乗っ取られて worker を止めた・claim を解いた理由 (formats.md §12)
 const reasonTakenOver Reason = "taken_over"
 
-// screens は理由の token から人が読む行に出す文への対応 (formats.md §4 の reason の表)。観測に当たる理由の文は trigger.Observation が持つ
+// screens は理由の token から人が読む行に出す文への対応 (formats.md §4 の reason の表)
 var screens = map[Reason]string{
-	reasonTerminal:       trigger.ObservedTerminal.Screen(),
-	reasonLeftTrigger:    trigger.ObservedLeftTrigger.Screen(),
-	reasonStillMatches:   trigger.ObservedStillMatches.Screen(),
+	reasonTerminal:       "終端",
+	reasonLeftTrigger:    "trigger から外れた",
+	reasonStillMatches:   "trigger に当たったまま",
 	reasonStopRequested:  "停止要求",
 	reasonTriggerRemoved: "trigger が workflow 定義から消えた",
-	reasonUndecided:      trigger.ObservedUndecided.Screen(),
+	reasonUndecided:      "当たるかをまだ決められない",
 	reasonEarlierTrigger: "宣言順で先の trigger に当たる",
 	reasonTakenOver:      "着手宣言が乗っ取られた",
 }
@@ -48,4 +48,9 @@ func (r Reason) screen() string {
 		panic("loop: 画面の文の無い理由 " + string(r))
 	}
 	return s
+}
+
+// ObservationScreen は観測を人が読む行に出す文 (その観測の理由の文)。
+func ObservationScreen(observed trigger.Observation) string {
+	return reasonOf(observed).screen()
 }

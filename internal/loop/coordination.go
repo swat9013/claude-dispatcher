@@ -10,6 +10,7 @@ import (
 	"github.com/swat9013/claude-dispatcher/internal/coord"
 	"github.com/swat9013/claude-dispatcher/internal/status"
 	"github.com/swat9013/claude-dispatcher/internal/target"
+	"github.com/swat9013/claude-dispatcher/internal/worker"
 )
 
 // マシンを跨いだ分担 (system.md §4・§7、formats.md §12): 調停 remote の着手宣言と生存報告を読み、自分の着手宣言の乗っ取りを
@@ -457,7 +458,7 @@ func (l *loop) cleanupDeadLoops() {
 			// 作業対象と、生きている orphan の作業対象 (inheritOrphanClaims が引き継ぐ) の着手宣言は消さない
 			h := r.holders[ref]
 			c, claimed := l.claims[ref]
-			if mine := claimed && (c.claimSHA != "" || UnstoppedAlive(c.exited)); h.loop != loop || !h.dead || mine || l.orphans[ref] {
+			if mine := claimed && (c.claimSHA != "" || worker.UnstoppedAlive(c.exited)); h.loop != loop || !h.dead || mine || l.orphans[ref] {
 				continue
 			}
 			if remove(ref, r.c.ClaimRef(ref), h.sha) {
@@ -518,7 +519,7 @@ func (l *loop) leaveRemote() {
 	for _, ref := range sortedRefs(l.claims) {
 		// 止められない claude が生きている claim の着手宣言は残す。claude が作業を続けうるので、他のマシンの loop には、
 		// 生存報告が途絶えてから死を判定するまで起動させない (system.md §9)
-		if c := l.claims[ref]; UnstoppedAlive(c.exited) {
+		if c := l.claims[ref]; worker.UnstoppedAlive(c.exited) {
 			claudeLeft = true
 		} else {
 			l.releaseRemote(ref, c)

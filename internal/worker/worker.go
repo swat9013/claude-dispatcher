@@ -66,6 +66,20 @@ func (Started) isEvent()   {}
 func (Unstopped) isEvent() {}
 func (Ended) isEvent()     {}
 
+// UnstoppedAlive は、止められなかった claude がまだ終わっていないか。exited は Unstopped.Exited (nil なら止められなかった
+// claude はいない)。
+func UnstoppedAlive(exited <-chan struct{}) bool {
+	if exited == nil {
+		return false
+	}
+	select {
+	case <-exited:
+		return false
+	default:
+		return true
+	}
+}
+
 // Result は worker 1 回分の終わり方。
 type Result struct {
 	// Failure は attempt の失敗の理由 (hook・描画・起動の失敗、異常終了)。失敗でなければ ""

@@ -208,15 +208,3 @@ func TestTheStopWaitsForAnUnstoppedWorkerWhoseClaudeHasExited(t *testing.T) {
 		}
 	}
 }
-
-func TestUnstoppedAliveIsTrueOnlyWhileAnUnstoppedClaudeHasNotExited(t *testing.T) {
-	exited := make(chan struct{})
-
-	before := loop.UnstoppedAlive(exited)
-	close(exited)
-	after := loop.UnstoppedAlive(exited)
-
-	if loop.UnstoppedAlive(nil) || !before || after {
-		t.Errorf("UnstoppedAlive = nil: %v, 終わる前: %v, 終わった後: %v, want false, true, false", loop.UnstoppedAlive(nil), before, after)
-	}
-}

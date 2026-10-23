@@ -2,7 +2,6 @@
 package trigger
 
 import (
-	"fmt"
 	"path"
 	"slices"
 	"sort"
@@ -54,21 +53,6 @@ const (
 	// ObservedUndecided は当たるか未決
 	ObservedUndecided
 )
-
-// Screen は観測の画面の文 (formats.md §4 の reason の画面の文)。
-func (o Observation) Screen() string {
-	switch o {
-	case ObservedStillMatches:
-		return "trigger に当たったまま"
-	case ObservedTerminal:
-		return "終端"
-	case ObservedLeftTrigger:
-		return "trigger から外れた"
-	case ObservedUndecided:
-		return "当たるかをまだ決められない"
-	}
-	panic(fmt.Sprintf("trigger.Observation の値 %d を写せない", o))
-}
 
 // Observe は読み直した作業対象を trigger に照らし、4 つの観測のどれかを返す。判定の順は「終端 → 未決 → 外れた →
 // 当たったまま」に固定する (終端の CL は conflict を計算しないので、未決より先に見る)。副作用を持たない。
