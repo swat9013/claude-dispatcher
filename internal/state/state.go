@@ -31,7 +31,7 @@ var unsafeRune = regexp.MustCompile(`[^a-z0-9._-]`)
 func Sanitize(s string) string { return unsafeRune.ReplaceAllString(strings.ToLower(s), "_") }
 
 // DirName は scope key の scope dir: 無害化した scope key に、scope key の sha256 の先頭 8 文字を足した名前。
-// hash を足すのは、無害化で別の scope key が同じ綴りになっても置き場を分けるため。state dir と調停 remote の ref (formats.md §12)
+// hash を足すのは、無害化で別の scope key が同じ綴りになっても置き場を分けるため。state dir と coordination board の ref (formats.md §12)
 // が同じ名前を使う。
 func DirName(scopeKey string) string {
 	sum := sha256.Sum256([]byte(scopeKey))

@@ -197,7 +197,7 @@ type Options struct {
 	// StartupSlowKinds は、起動時の確認で一覧の読み出しが SlowListing を超えた置き場の種類 (読んだ順)。確認は log.jsonl を
 	// 開く前に読むので、loop_start の後に slow_listing の行として書く。人が読む行は確認のときに出ているので出さない
 	StartupSlowKinds []target.Kind
-	// Coordination は調停 remote の口 (system.md §4 のマシンを跨いだ分担)。調停 remote を指さない project では nil。
+	// Coordination は coordination board の口 (system.md §4 のマシンを跨いだ分担)。coordination board を指さない project では nil。
 	// 最初の生存報告は呼び出し側が起動時の検査として置いてから渡す
 	Coordination Coordination
 	// HeartbeatAfter は d 後に届く、次の生存報告の時計 (time.After。テストは差し替える)。Coordination があるときだけ使う
@@ -268,7 +268,7 @@ type claim struct {
 	// pid と workspace は今の attempt で起動した claude の pid と workspace の path (止められない claude を人が探すため)
 	pid       int
 	workspace string
-	// claimSHA は調停 remote に置いた自分の着手宣言の sha。調停 remote を指さない project と、乗っ取られた後は ""
+	// claimSHA は coordination board に置いた自分の着手宣言の sha。coordination board を指さない project と、乗っ取られた後は ""
 	claimSHA string
 	// takenOver は着手宣言を乗っ取られたか。乗っ取られた worker は、終われば終わりを確かめずに claim を解く (system.md §7)
 	takenOver bool
@@ -303,7 +303,7 @@ type loop struct {
 	orphansUnknown bool
 	// board は状態 file にだけ使う状態。loop の判断には使わない
 	board board
-	// mediation は調停 remote を指した loop の調停の記憶。指さなければ nil
+	// mediation は coordination board を指した loop が coordination board について持つ記憶。指さなければ nil
 	mediation *mediation
 }
 
@@ -896,7 +896,7 @@ func (l *loop) launch(def workflow.Definition, c trigger.Candidate) bool {
 		l.rec.error(ref, err.Error())
 		return false
 	}
-	// 着手宣言は claim を立てる直前に置く。負けたら claim を立てない (system.md §7 の調停 remote の突き合わせ)
+	// 着手宣言は claim を立てる直前に置く。負けたら claim を立てない (system.md §7 の coordination board の突き合わせ)
 	claimSHA, ok := l.claimRemote(ref, c.Trigger.Name)
 	if !ok {
 		return false

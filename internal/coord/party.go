@@ -9,7 +9,7 @@ import (
 	"github.com/swat9013/claude-dispatcher/internal/target"
 )
 
-// Party は 1 つの loop (か単発起動) として調停 remote に着手宣言と生存報告を置く口。読んだ commit message を sha ごとに
+// Party は 1 つの loop (か単発起動) として coordination board に着手宣言と生存報告を置く口。読んだ commit message を sha ごとに
 // 覚え、新しく見た sha だけを fetch する。生存報告は tick と別の goroutine から置き直すので、記憶は mu で守る。
 type Party struct {
 	Remote Remote
@@ -24,7 +24,7 @@ type Party struct {
 	messages  map[string]Message
 }
 
-// View は調停 remote の scope dir の下の ref を、読んだ形にしたもの。
+// View は coordination board の scope dir の下の ref を、読んだ形にしたもの。
 type View struct {
 	// Claims は着手宣言の作業対象ごとの sha
 	Claims map[target.Ref]string
@@ -70,7 +70,7 @@ func (p *Party) remember(sha string, m Message) {
 func (p *Party) Observe() (View, error) {
 	refs, err := p.Remote.List()
 	if err != nil {
-		return View{}, fmt.Errorf("調停 remote %s の ref を読めない: %w", p.Remote.Name, err)
+		return View{}, fmt.Errorf("coordination board の remote %s の ref を読めない: %w", p.Remote.Name, err)
 	}
 	v := View{Claims: map[target.Ref]string{}, Loops: map[string]string{}, Messages: map[string]Message{}}
 	claims, loops := p.Remote.prefix()+"claims/", p.Remote.prefix()+"loops/"

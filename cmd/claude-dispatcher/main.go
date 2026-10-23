@@ -289,7 +289,7 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 		show(kind)
 		startupSlow = append(startupSlow, kind)
 	}
-	// 調停 remote の口は確認と生存報告で共有し、ssh の撃ち方の判定を run の間 1 回にする
+	// coordination board の口は確認と生存報告で共有し、ssh の撃ち方の判定を run の間 1 回にする
 	remote := e.coordinationRemote(def)
 	if code := e.confirmLaunchable(def, remote, stderr, slow); code != 0 {
 		return code
@@ -381,7 +381,7 @@ func (e environment) confirmLaunchable(def workflow.Definition, remote coord.Rem
 	return 0
 }
 
-// coordinationRemote は workflow 定義の調停 remote (formats.md §12)。git は workflow 定義のある dir から撃ち、remote の URL と
+// coordinationRemote は workflow 定義の coordination board (formats.md §12)。git は workflow 定義のある dir から撃ち、remote の URL と
 // 認証はその clone の設定をそのまま使う。
 func (e environment) coordinationRemote(def workflow.Definition) coord.Remote {
 	git, err := deps.Lookup("git", e.env)
@@ -392,7 +392,7 @@ func (e environment) coordinationRemote(def workflow.Definition) coord.Remote {
 	return coord.NewRemote(def.CoordinationRemote, state.DirName(places.ScopeKey(def)), proc.Command{Path: git, Env: e.env, Dir: def.Dir, Timeout: commandTimeout})
 }
 
-// join は、調停 remote を指した project で loop 名を決め、最初の生存報告を置く (formats.md §12 の起動時の確認)。指さない
+// join は、coordination board を指した project で loop 名を決め、最初の生存報告を置く (formats.md §12 の起動時の確認)。指さない
 // project では nil。置けなければ stderr に理由を出して exit code を返す。
 func (e environment) join(def workflow.Definition, remote coord.Remote, stderr io.Writer) (*coord.Party, int) {
 	if def.CoordinationRemote == "" {
@@ -405,7 +405,7 @@ func (e environment) join(def workflow.Definition, remote coord.Remote, stderr i
 	}
 	party := &coord.Party{Remote: remote, Loop: name}
 	if err := party.Heartbeat(coord.HeartbeatInterval(def.Interval)); err != nil {
-		fmt.Fprintf(stderr, "調停 remote %s に生存報告を置けない: %s\n", def.CoordinationRemote, printable.Line(err.Error()))
+		fmt.Fprintf(stderr, "coordination board の remote %s に生存報告を置けない: %s\n", def.CoordinationRemote, printable.Line(err.Error()))
 		return nil, exitFailed
 	}
 	return party, 0

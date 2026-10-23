@@ -141,20 +141,20 @@ _Avoid_: zombie (終わったが回収されていない process の意味に定
 
 ## マシンを跨いだ分担
 
-**調停 remote**:
-別々のマシンの loop が同じ issue 置き場を分担するときに、着手宣言と生存報告を置き合う実装 repo の git remote。workflow 定義で指したときだけ使う。tracker には置かない。
-_Avoid_: 共有スレッド, 連絡 issue, lock server
+**coordination board**:
+別々のマシンの loop が同じ issue 置き場を分担するときに、着手宣言と生存報告を置き合い、読み合う場。実装 repo の git remote に置き、workflow 定義で指したときだけ使う。tracker には置かない。常に「coordination board」の全体で書く。
+_Avoid_: 調停 remote (旧称。ADR の本文に残る), board (単独では Jira・GitHub Projects の board と紛れる), 共有スレッド, 連絡 issue, lock server
 
 **loop 名**:
-調停 remote の上で loop を見分ける名前。loop を起動するたびに新しくなるので、起動し直した loop は前の loop とは別の者として扱う。
+coordination board の上で loop を見分ける名前。loop を起動するたびに新しくなるので、起動し直した loop は前の loop とは別の者として扱う。
 _Avoid_: machine id, host 名 (同じマシンでも起動ごとに変わる)
 
 **着手宣言**:
-loop が作業対象を引き受けたことを調停 remote に示したもの。1 つの作業対象には 1 つしか立たず、worker を起動してよいのは着手宣言の持ち主の loop だけ。ふつうは立てた loop の claim の写しにあたり、その loop が claim を解くまで残る (claim はその loop の記憶にある)。引き継ぎで置き換えたものは claim の写しではない (引き継ぎを参照)。
+loop が作業対象を引き受けたことを coordination board に示したもの。1 つの作業対象には 1 つしか立たず、worker を起動してよいのは着手宣言の持ち主の loop だけ。ふつうは立てた loop の claim の写しにあたり、その loop が claim を解くまで残る (claim はその loop の記憶にある)。引き継ぎで置き換えたものは claim の写しではない (引き継ぎを参照)。
 _Avoid_: 取得, lock, 予約
 
 **生存報告**:
-loop が生きていることを調停 remote に示す、周期ごとに新しくなる合図。新しくならなくなった loop は死んだとみなされる。
+loop が生きていることを coordination board に示す、周期ごとに新しくなる合図。新しくならなくなった loop は死んだとみなされる。
 _Avoid_: heartbeat (worker の stream の通知行と紛れる), ping
 
 **乗っ取り**:

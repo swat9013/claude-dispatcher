@@ -74,7 +74,7 @@ func (l *loop) retry(store Store, v *view) {
 			continue
 		}
 		if l.mediation != nil && v == outsideTick {
-			// 調停 remote を指した loop は、乗っ取られたかを tick の突き合わせで確かめてから再起動する (system.md §7)
+			// coordination board を指した loop は、乗っ取られたかを tick の突き合わせで確かめてから再起動する (system.md §7)
 			continue
 		}
 		if ref.Kind == target.KindCL && v == outsideTick {
@@ -97,7 +97,7 @@ func (l *loop) retry(store Store, v *view) {
 			// 事前検査に落ちている trigger は、直るまで attempt を進めずに待ち直す (tick が確かめ直す)
 			h = hindrancePrecheck
 		} else if l.newerFormatSeen() {
-			// 調停 remote に新しい版の ref がある間は、attempt を進めずに待ち直す (formats.md §12)
+			// coordination board に新しい版の ref がある間は、attempt を進めずに待ち直す (formats.md §12)
 			h = hindranceNewerFormat
 		}
 		l.apply(ref, c, c.backoffElapsed(ref, h, item, l.env()))

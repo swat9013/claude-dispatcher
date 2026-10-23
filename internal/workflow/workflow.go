@@ -44,7 +44,7 @@ type Definition struct {
 	StallTimeout time.Duration
 	RunTimeout   time.Duration
 	Claude       Claude
-	// CoordinationRemote は調停 remote (system.md §4 のマシンを跨いだ分担) の、workflow 定義のある clone の git remote の
+	// CoordinationRemote は coordination board (system.md §4 のマシンを跨いだ分担) の、workflow 定義のある clone の git remote の
 	// 名前。書かれていなければ ""
 	CoordinationRemote string
 	Triggers           []trigger.Trigger

@@ -211,7 +211,7 @@ func TestClaimTransitions(t *testing.T) {
 }
 
 // 止めている claim が乗っ取られていれば、worker がどう終わっても終わりを確かめずに claim を解く (statechart の
-// worker終了・stall上限・上限時間 の [乗っ取られた] の遷移)。乗っ取られた着手宣言を消さないことは、調停 remote の fake の
+// worker終了・stall上限・上限時間 の [乗っ取られた] の遷移)。乗っ取られた着手宣言を消さないことは、coordination board の fake の
 // Delete の呼び出しで TestATakenOverWorkerIsStoppedAndItsClaimIsNotDeleted が確かめる。
 func TestATakenOverWorkerIsReleasedHoweverItEnds(t *testing.T) {
 	ref := target.Ref{Kind: target.KindIssue, Number: 1}

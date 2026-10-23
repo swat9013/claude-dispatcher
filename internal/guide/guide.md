@@ -31,13 +31,13 @@ claude-dispatcher は、tracker (GitHub・GitLab・Jira Cloud) の issue と CL 
 2. **自分の project に合わせて書く**: trigger の述語・action・hooks を直し、repo に commit する。書ける項目は下の「workflow 定義の書き方」
    - worker が作業を終えたら作業対象を trigger から外すよう、action か本文 (共通 prompt) に書く (下の「action が守る約束」)
    - workspace の置き場 (`workspace.root`) が clone の中なら、`.gitignore` に足す。既定の `.claude-dispatcher/workspaces` は clone の中に入る。`setup` は `.gitignore` を書かない
-   - **チームで分担するなら、調停 remote を宣言する**: 同じ issue 置き場を複数のマシンの loop で分け合うなら、`WORKFLOW.md` に `coordination.remote: origin` (clone の git remote の名前) を書いて commit する。書かなければ 1 台で回す
+   - **チームで分担するなら、coordination board を宣言する**: 同じ issue 置き場を複数のマシンの loop で分け合うなら、`WORKFLOW.md` に `coordination.remote: origin` (coordination board にする、clone の git remote の名前) を書いて commit する。書かなければ 1 台で回す
      - loop は、その remote の `refs/dispatcher/` の下に、作業対象ごとの着手宣言と loop ごとの生存報告を置き合い、先に置けた loop だけが worker を起動する。branch・CL・tracker には書かない
      - loop を回す各マシンの clone から、その remote へ push できる必要がある (認証は clone の git の設定をそのまま使う)。読む URL と書く URL が 1 本ずつの同じ URL の remote を指す (`pushurl` を別の repo に向けた remote や、URL が複数の remote は起動時に落ちる。その clone では別の remote 名を足して指す)。ssh の remote は、passphrase や host key の確認を出さない ssh (`ssh -o BatchMode=yes`) で撃つので、agent か鍵の設定で prompt なしに通るようにしておく。`core.sshCommand`・`GIT_SSH_COMMAND`・`GIT_SSH` のどれかを設定していれば、dispatcher は何も足さずにその設定を使う。push は `--no-verify` で撃つので、実装 repo の pre-push hook は通らない
      - 落ちたマシンの作業対象は、生存報告の間隔 (`polling.interval` と 1 分の長いほう) の 3 倍の後に、生きている loop が拾い直す。ただし落ちた loop の claude (orphan) がまだ動いている作業対象は、同じマシンで loop を起動し直せば、その loop が着手宣言を引き継いで守る。起動し直さない間は、別のマシンが拾い直して作業が重なりうる。network が切れたマシンの worker は、戻ったときに乗っ取られていれば止まり、`要対処` に出る
      - attempt と打ち切りはマシンごとに数える。あるマシンで打ち切った作業対象を、別のマシンが拾い直しうる
      - 版はチームで揃えて上げる。新しい版の loop が置いた ref を見た古い版の loop は、worker を起動せずに `要対処` に出す
-     - 試運転 (`loop --dry-run`) は調停 remote を読まないので、他のマシンが作業している作業対象も示しうる。`doctor` は調停 remote を読めるかを確かめる (push は撃たない)
+     - 試運転 (`loop --dry-run`) は coordination board を読まないので、他のマシンが作業している作業対象も示しうる。`doctor` は coordination board を読めるかを確かめる (push は撃たない)
 3. **試運転**: `claude-dispatcher loop --dry-run` が workflow 定義を検査し、起動するはずの作業対象と trigger を 1 件 1 行で示す。何も起動せず、何も書かない
    - action まで確かめるなら、`claude-dispatcher run <trigger> <作業対象>` (作業対象は `issue#<番号>` か `cl#<番号>` と書く) で、その作業対象に worker を 1 回だけ起動する (単発起動)。作業対象が trigger に当たっているときだけ起動し、終わった後に trigger から外れていれば exit 0、起動しなかったら exit 5、起動したが当たったままなら exit 6 で終わる。retry はしない。同じ issue 置き場の loop が走っている間は撃てない (exit 3)。workspace・hooks・時間の上限・Ctrl+C の扱い (1 回目は待つ、2 回目は止める) は loop と同じ。workspace は作業対象が閉じていなければ残り、後の loop がそのまま使う。`coordination.remote` (上の 2) を書いた project では、走っている間は loop と同じく着手宣言と生存報告を置き、他のマシンの loop が作業している作業対象では起動しない (exit 5)
 4. **導入を確かめる**: `claude-dispatcher doctor` が workflow 定義・issue 置き場・依存 CLI・事前検査を確かめ、利用者の約束に頼る宣言を警告する。Claude Code の settings (`permissions.allow`) に要りそうな entry も示すので、自分で足す (CLI は settings を書かない)
@@ -60,7 +60,7 @@ workflow 定義に誤りがあれば、試運転・`loop` の起動・`doctor` �
   - loop を回したまま変えるなら、別の端末で `claude-dispatcher max-concurrent <N>` を撃つ。次の tick から効き、loop を止めるまで続く。走っている worker の数より下げても、走っている worker は止めず、空きが出るまで新しい起動を待つ。loop が立っていなければ何も書かずに exit 1 で終わる
   - loop を起動し直すと、`max-concurrent` で変えた値は消え、`--max-concurrent` の値 (省けば 1) から始まる
 - 同じ issue 置き場の loop は、同じマシンで 1 本しか起動できない (2 本目と、`run` が走っている間の loop は exit 3 で止まる)。マシンを跨いで分け合うなら `coordination.remote` を書く (上の「導入の流れ」の 2)。書かなければマシンを跨いだ排他は持たないので、1 つの issue 置き場は 1 台から回す
-- `coordination.remote` を書いた project では、loop の起動時に調停 remote を解いて読めて、生存報告を置けることを確かめる。落ちれば exit 1 で起動しない
+- `coordination.remote` を書いた project では、loop の起動時に coordination board の remote を解いて読めて、生存報告を置けることを確かめる。落ちれば exit 1 で起動しない
 - loop は自分では起き直さない。端末を閉じた・マシンを再起動した・binary を入れ替えた (走っている loop は起動した時点の binary で回り続ける) ときは、同じコマンドを撃ち直す
 
 ### 見る
@@ -90,7 +90,7 @@ workflow 定義に誤りがあれば、試運転・`loop` の起動・`doctor` �
 
 1. loop に停止要求を送る (端末なら Ctrl+C。SIGINT・SIGTERM・SIGHUP のどれでもよい)。新しい起動と再起動をやめ、走っている worker が終わるのを待って止まる。worker が走っていなければすぐ止まる
 2. 待てないときは、もう一度停止要求を送る。走っている worker を止めて止まる
-   - claude に SIGKILL を送れず止められなかった worker は、claude が終わるまでは終わりを待たない。log.jsonl に `claude を止められない` の `error` の行が出て、claude の pid と workspace の path が載る。loop が止まるまでに claude が終われば、止めた worker と同じく後始末をして止まる。終わらなければ `claude を止められないまま止まる` の `error` の行も出る (止まる間際に claude が終わったときは、pid の無い `after_run を待たずに止まる` の行が出る。その workspace は片付ける)。`止められないまま止まる` の行が出ても、loop は起動し直してよい。残った claude (orphan) が終わるまで、次の loop はその workspace を消さず、その作業対象で worker を起動しない。急ぐならその pid の claude を止める。loop が落ちて claude が残ったときも同じ。調停 remote を指していて `orphan のために引き継いだ着手宣言を残して止まる` の行が出たら、同じマシンで早めに loop を起動し直す。起動し直さないと、生存報告の間隔の 3 倍の後に別のマシンの loop がその作業対象を拾い、orphan と作業が重なりうる
+   - claude に SIGKILL を送れず止められなかった worker は、claude が終わるまでは終わりを待たない。log.jsonl に `claude を止められない` の `error` の行が出て、claude の pid と workspace の path が載る。loop が止まるまでに claude が終われば、止めた worker と同じく後始末をして止まる。終わらなければ `claude を止められないまま止まる` の `error` の行も出る (止まる間際に claude が終わったときは、pid の無い `after_run を待たずに止まる` の行が出る。その workspace は片付ける)。`止められないまま止まる` の行が出ても、loop は起動し直してよい。残った claude (orphan) が終わるまで、次の loop はその workspace を消さず、その作業対象で worker を起動しない。急ぐならその pid の claude を止める。loop が落ちて claude が残ったときも同じ。coordination board を指していて `orphan のために引き継いだ着手宣言を残して止まる` の行が出たら、同じマシンで早めに loop を起動し直す。起動し直さないと、生存報告の間隔の 3 倍の後に別のマシンの loop がその作業対象を拾い、orphan と作業が重なりうる
    - worker が途中まで書いた成果は workspace と remote branch に残る
    - 作業対象が trigger に当たったままなら、次に起動した loop が同じ workspace で worker を起動し直す。session は新しく、attempt も 1 から数え直す。前の成果を拾わせるなら、共通 prompt にそう書く
 3. 使うのをやめるなら、`paths --json` が返す `state_dir` と `workspace_root` を消す (workspace が worktree なら、消した後に clone で `git worktree prune` を撃つ)。tracker の label は残る
@@ -206,7 +206,7 @@ triggers:                    # 必須。1 つ以上
 | `limits.max_retry_backoff` | 文字列 | backoff の上限。Go の duration の綴りで、0 より長い。既定 5m |
 | `limits.stall_timeout` | 文字列 | worker の stream (stdout の stream-json) に progress (heartbeat (`tool_progress`)・rate limit の通知・読めない行を除いた行) が書かれなくなってから、止めて失敗とするまでの時間。既定 15m。`0s` で無効。claude が行を書かない区間 (長い build や test などの tool の実行・API の retry の backoff・compaction) より長くする |
 | `limits.run_timeout` | 文字列 | worker 1 回分の上限時間。起動からの経過が超えたら止めて失敗とする。既定 1h。`0s` で無効 |
-| `coordination.remote` | 文字列 | 同じ issue 置き場を複数のマシンの loop で分け合うときの調停 remote。workflow 定義のある clone の git remote の名前 (`origin` など) で書く。綴りは `[A-Za-z0-9._/-]+` で、`-` で始めない。その remote の `refs/dispatcher/` の下に着手宣言と生存報告を置き合う (上の「導入の流れ」の 2)。URL と認証は clone の git の設定を使う。省くと調停 remote を読みも書きもせず、1 台で回す |
+| `coordination.remote` | 文字列 | 同じ issue 置き場を複数のマシンの loop で分け合うときに、coordination board (着手宣言と生存報告を置き合い、読み合う場) にする git remote。workflow 定義のある clone の git remote の名前 (`origin` など) で書く。綴りは `[A-Za-z0-9._/-]+` で、`-` で始めない。その remote の `refs/dispatcher/` の下に着手宣言と生存報告を置き合う (上の「導入の流れ」の 2)。URL と認証は clone の git の設定を使う。省くと coordination board を読みも書きもせず、1 台で回す |
 | `claude.command` | 文字列 | worker として起動する command。PATH から探す。既定 `claude` |
 | `claude.args` | 文字列の列 | command に、dispatcher が渡す引数 (上の「action が守る約束」の起動のコマンド) より前に渡す引数。既定は空。permission の扱い (`--permission-mode` など) はここで決める。再入の仕組み (`ScheduleWakeup`・`CronCreate`・`CronList`・`CronDelete`・`Monitor`) を `--disallowedTools` で塞ぐことを勧める (理由と見分け方は表の下の「再入の仕組みを塞ぐ」) |
 | `triggers` | 列 | trigger の宣言。1 つ以上。宣言順が起動の優先順 (先頭の trigger ほど先に起動する) |

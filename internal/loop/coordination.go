@@ -12,11 +12,11 @@ import (
 	"github.com/swat9013/claude-dispatcher/internal/target"
 )
 
-// マシンを跨いだ分担 (system.md §4・§7、formats.md §12): 調停 remote の着手宣言と生存報告を読み、自分の着手宣言の乗っ取りを
+// マシンを跨いだ分担 (system.md §4・§7、formats.md §12): coordination board の着手宣言と生存報告を読み、自分の着手宣言の乗っ取りを
 // 見つけ、他の生きている loop の着手宣言のある作業対象を候補から外し、死んだ loop の ref を片付ける。死んだ loop の判定は、
 // sha が変わったのを最後に見た時刻からの経過を loop 自身の時計で数える。
 
-// Coordination は調停 remote の口。本番は coord.Party、テストは fake。
+// Coordination は coordination board の口。本番は coord.Party、テストは fake。
 type Coordination interface {
 	LoopName() string
 	ClaimRef(ref target.Ref) string
@@ -48,7 +48,7 @@ type holder struct {
 	dead bool
 }
 
-// mediation は調停 remote を指した loop の、調停の記憶。
+// mediation は coordination board を指した loop が、coordination board について持つ記憶。
 type mediation struct {
 	c Coordination
 	// seen は ref の名前ごとの直近の sha と、その sha を初めて見た時刻
@@ -106,7 +106,7 @@ func (m *mediation) startBeating(after func(time.Duration) <-chan time.Time) {
 	})
 }
 
-// beats は生存報告の置き直しの結果が届く channel。調停 remote を指さない loop では nil (届かない)。
+// beats は生存報告の置き直しの結果が届く channel。coordination board を指さない loop では nil (届かない)。
 func (l *loop) beats() <-chan error {
 	if l.mediation == nil {
 		return nil
@@ -132,7 +132,7 @@ func (l *loop) noteDropped() {
 	}
 }
 
-// coordinate は調停 remote の突き合わせ (formats.md §12 の 1–5)。ref を読めなければ error を返す (その tick は掃除も起動も
+// coordinate は coordination board の突き合わせ (formats.md §12 の 1–5)。ref を読めなければ error を返す (その tick は掃除も起動も
 // しない)。
 func (l *loop) coordinate() error {
 	m := l.mediation
@@ -247,7 +247,7 @@ func (l *loop) judgeDeadLoops(v coord.View, now time.Time) {
 	}
 }
 
-// newerFormatSeen は、調停 remote に自分の知る版より新しい版の ref を直近の tick で見たか (その間は起動しない。formats.md §12)。
+// newerFormatSeen は、coordination board に自分の知る版より新しい版の ref を直近の tick で見たか (その間は起動しない。formats.md §12)。
 func (l *loop) newerFormatSeen() bool {
 	return l.mediation != nil && l.mediation.newer != nil
 }

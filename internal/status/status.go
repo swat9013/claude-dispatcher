@@ -41,13 +41,13 @@ type Snapshot struct {
 	// Orphans は直近に確かめられた tick で生きていた orphan (前の loop が起動した claude。system.md §7)。key を足す前の版が
 	// 書いた状態 file を読むと nil
 	Orphans []Orphan `json:"orphans"`
-	// Loop は loop 名 (formats.md §12)。調停 remote を指した project だけ
+	// Loop は loop 名 (formats.md §12)。coordination board を指した project だけ
 	Loop string `json:"loop,omitempty"`
 	// TakenOver は着手宣言を乗っ取られた作業対象。loop を起動し直すまで残す
 	TakenOver []TakenOver `json:"taken_over,omitempty"`
 	// HeartbeatFailures は生存報告の置き直しが 2 回以上続けて落ちている間だけ持つ
 	HeartbeatFailures *HeartbeatFailures `json:"heartbeat_failures,omitempty"`
-	// NewerFormat は直近の tick で、調停 remote に自分の知る版より新しい版の ref を見た間だけ持つ
+	// NewerFormat は直近の tick で、coordination board に自分の知る版より新しい版の ref を見た間だけ持つ
 	NewerFormat *NewerFormat `json:"newer_format,omitempty"`
 }
 
@@ -77,7 +77,7 @@ type HeartbeatFailures struct {
 	Error string `json:"error"`
 }
 
-// NewerFormat は調停 remote に見た新しい版。版を読めなければ Format は nil。
+// NewerFormat は coordination board に見た新しい版。版を読めなければ Format は nil。
 type NewerFormat struct {
 	Format *int `json:"format"`
 }
@@ -372,7 +372,7 @@ func needsAttention(s Snapshot) [][]Span {
 		if n.Format != nil {
 			found = fmt.Sprintf("版 %d の ref がある", *n.Format)
 		}
-		lines = append(lines, []Span{{Red, "新しい版の ref"}, {Plain, fmt.Sprintf(" 調停 remote に%s: この scope では worker を起動しない。dispatcher を上げる", found)}})
+		lines = append(lines, []Span{{Red, "新しい版の ref"}, {Plain, fmt.Sprintf(" coordination board に%s: この scope では worker を起動しない。dispatcher を上げる", found)}})
 	}
 	return lines
 }
