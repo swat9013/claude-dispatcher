@@ -48,7 +48,7 @@ type holder struct {
 	dead bool
 }
 
-// mediation は coordination board を指した loop の、coordination board の記憶。
+// mediation は coordination board を指した loop が、coordination board について持つ記憶。
 type mediation struct {
 	c Coordination
 	// seen は ref の名前ごとの直近の sha と、その sha を初めて見た時刻

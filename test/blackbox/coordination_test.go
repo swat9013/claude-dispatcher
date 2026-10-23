@@ -194,7 +194,7 @@ func TestLoopCallsGitFromTheCloneOfTheWorkflowDefinition(t *testing.T) {
 	}
 }
 
-func TestEveryGitCallToTheCoordinationRemoteDisablesTheTerminalPrompt(t *testing.T) {
+func TestEveryGitCallToTheCoordinationBoardDisablesTheTerminalPrompt(t *testing.T) {
 	s := newSandbox(t)
 
 	s.runOneWorker()
@@ -396,7 +396,7 @@ func TestDryRunWithACoordinationRemoteDoesNotTouchTheRemote(t *testing.T) {
 	}
 }
 
-func TestLoopFailsToStartWhenTheCoordinationRemoteCannotBeUsed(t *testing.T) {
+func TestLoopFailsToStartWhenTheCoordinationBoardCannotBeUsed(t *testing.T) {
 	cases := []struct {
 		name string
 		rule stubwire.Rule
@@ -475,7 +475,7 @@ func TestRunDoesNotLaunchATargetClaimedByAnotherLoop(t *testing.T) {
 	}
 }
 
-func TestDoctorShowsAReadableCoordinationRemoteWithoutPushing(t *testing.T) {
+func TestDoctorShowsAReadableCoordinationBoardWithoutPushing(t *testing.T) {
 	s := newSandbox(t)
 	s.writeWorkflowWithCommands(s.workerWorkflow(coordinated))
 	s.respondAll("git", s.gitRules(nil))
@@ -492,7 +492,7 @@ func TestDoctorShowsAReadableCoordinationRemoteWithoutPushing(t *testing.T) {
 	s.assertEveryGitCallDisablesTheTerminalPrompt()
 }
 
-func TestDoctorFailsOnAnUnreadableCoordinationRemoteWithoutPushing(t *testing.T) {
+func TestDoctorFailsOnAnUnreadableCoordinationBoardWithoutPushing(t *testing.T) {
 	s := newSandbox(t)
 	s.writeWorkflowWithCommands(s.workerWorkflow(coordinated))
 	s.respondAll("git", s.gitRules(nil, stubwire.Rule{ArgsPrefix: []string{"ls-remote"}, Exit: 128, Stderr: "fatal: unable to access\n"}))

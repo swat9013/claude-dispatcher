@@ -303,7 +303,7 @@ type loop struct {
 	orphansUnknown bool
 	// board は状態 file にだけ使う状態。loop の判断には使わない
 	board board
-	// mediation は coordination board を指した loop の coordination board の記憶。指さなければ nil
+	// mediation は coordination board を指した loop が coordination board について持つ記憶。指さなければ nil
 	mediation *mediation
 }
 
