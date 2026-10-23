@@ -1,4 +1,4 @@
-// Package coord は調停 remote の部品 (system.md §4 の「マシンを跨いだ分担」・§13、formats.md §12)。実装 repo の git
+// Package coord は coordination board の部品 (system.md §4 の「マシンを跨いだ分担」・§13、formats.md §12)。実装 repo の git
 // remote の `refs/dispatcher/<scope dir>/` の下に、着手宣言と生存報告を git で置き・読み・消す。時計は持たず、死んだ
 // loop の判定は呼び出し側 (loop) が行う。
 package coord
@@ -112,7 +112,7 @@ func LoopHost(name string) string {
 	return name[:i]
 }
 
-// Remote は、workflow 定義のある clone から撃つ git で調停 remote を読み書きする口。
+// Remote は、workflow 定義のある clone から撃つ git で coordination board を読み書きする口。
 type Remote struct {
 	// Name は coordination.remote (clone の git remote の名前)
 	Name string
@@ -130,7 +130,7 @@ type sshChoice struct {
 	set   bool
 }
 
-// NewRemote は調停 remote の口を作る。ssh の撃ち方の判定 (core.sshCommand の読み出し) は、読めたらこの口とその写しの間で持ち、以後は読み直さない。
+// NewRemote は coordination board の口を作る。ssh の撃ち方の判定 (core.sshCommand の読み出し) は、読めたらこの口とその写しの間で持ち、以後は読み直さない。
 func NewRemote(name, scopeDir string, git proc.Command) Remote {
 	return Remote{Name: name, ScopeDir: scopeDir, Git: git, ssh: &sshChoice{}}
 }
@@ -196,23 +196,23 @@ func (r Remote) ClaimRef(ref target.Ref) string { return r.prefix() + "claims/" 
 // HeartbeatRef は loop の生存報告の ref。
 func (r Remote) HeartbeatRef(loop string) string { return r.prefix() + "loops/" + loop }
 
-// Confirm は起動時の調停 remote の確認 (formats.md §12): remote を解き、ref を読めることを確かめ、remote の URL を返す。
+// Confirm は起動時の coordination board の確認 (formats.md §12): remote を解き、ref を読めることを確かめ、remote の URL を返す。
 func (r Remote) Confirm() (string, error) {
 	url, err := r.git().Output("remote", "get-url", "--all", r.Name)
 	if err != nil {
-		return "", fmt.Errorf("調停 remote %s を解けない: %w", r.Name, err)
+		return "", fmt.Errorf("coordination board の remote %s を解けない: %w", r.Name, err)
 	}
 	push, err := r.git().Output("remote", "get-url", "--push", "--all", r.Name)
 	if err != nil {
-		return "", fmt.Errorf("調停 remote %s を解けない: %w", r.Name, err)
+		return "", fmt.Errorf("coordination board の remote %s を解けない: %w", r.Name, err)
 	}
 	// 読む URL と書く URL が違うか複数あると、自分の置いた ref を読めないか、push の勝ち負けが読む URL の状態と食い違う
 	url, push = strings.TrimSpace(url), strings.TrimSpace(push)
 	if url != push || strings.Contains(url, "\n") {
-		return "", fmt.Errorf("調停 remote %s の読む URL と書く URL が違う: %s と %s", r.Name, strings.ReplaceAll(url, "\n", ", "), strings.ReplaceAll(push, "\n", ", "))
+		return "", fmt.Errorf("coordination board の remote %s の読む URL と書く URL が違う: %s と %s", r.Name, strings.ReplaceAll(url, "\n", ", "), strings.ReplaceAll(push, "\n", ", "))
 	}
 	if _, err := r.List(); err != nil {
-		return "", fmt.Errorf("調停 remote %s を読めない: %w", r.Name, err)
+		return "", fmt.Errorf("coordination board の remote %s を読めない: %w", r.Name, err)
 	}
 	return url, nil
 }
@@ -241,13 +241,13 @@ func (r Remote) Read(shas []string) (map[string]Message, error) {
 	}
 	args := append([]string{"fetch", "--no-tags", "--no-write-fetch-head", r.Name}, shas...)
 	if _, err := r.git().Output(args...); err != nil {
-		return messages, fmt.Errorf("調停 remote %s の commit を fetch できない: %w", r.Name, err)
+		return messages, fmt.Errorf("coordination board の remote %s の commit を fetch できない: %w", r.Name, err)
 	}
 	var errs []error
 	for _, sha := range shas {
 		raw, err := r.git().Output("cat-file", "commit", sha)
 		if err != nil {
-			errs = append(errs, fmt.Errorf("調停 remote の commit %s を読めない: %w", sha, err))
+			errs = append(errs, fmt.Errorf("coordination board の commit %s を読めない: %w", sha, err))
 			continue
 		}
 		messages[sha] = ParseCommit(raw)

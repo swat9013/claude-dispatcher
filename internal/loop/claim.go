@@ -249,7 +249,7 @@ const (
 	hindranceDefinitionUnavailable
 	// hindranceTriggerRemoved は起動した trigger が workflow 定義から消えた
 	hindranceTriggerRemoved
-	// hindranceNewerFormat は調停 remote に自分の知る版より新しい版の ref がある
+	// hindranceNewerFormat は coordination board に自分の知る版より新しい版の ref がある
 	hindranceNewerFormat
 )
 
@@ -284,7 +284,7 @@ func (c *claim) backoffElapsed(ref target.Ref, h hindrance, item target.Item, en
 }
 
 // takenOverBy は、自分の着手宣言が乗っ取られた (sha が変わったか消えた) ことを受ける。走っている worker は止め、止めている
-// worker は終われば claim を解く。終わりを確かめ待ちと再起動待ちの claim はその場で解く (system.md §7 の調停 remote の突き合わせ)。
+// worker は終われば claim を解く。終わりを確かめ待ちと再起動待ちの claim はその場で解く (system.md §7 の coordination board の突き合わせ)。
 func (c *claim) takenOverBy(ref target.Ref, by string) effect {
 	c.claimSHA, c.takenOver = "", true
 	line := logLine{
@@ -309,7 +309,7 @@ func newClaim(item target.Item, t trigger.Trigger, sessionID, workspaceRoot, cla
 
 // loopEnded は loop の終了を受ける。claim を持ったまま止まることを error の行に残す。
 func (c *claim) loopEnded() effect {
-	if c.claudeAlive() {
+	if worker.UnstoppedAlive(c.exited) {
 		return effect{lines: []logLine{errorLine(fmt.Sprintf("claude を止められないまま止まる (pid %d, workspace %s)", c.pid, c.workspace))}}
 	}
 	if c.exited != nil {
@@ -320,20 +320,6 @@ func (c *claim) loopEnded() effect {
 		return effect{lines: []logLine{errorLine(fmt.Sprintf("再起動を待ったまま止まる (%s, attempt %d まで)", c.trigger.Name, c.attempt))}}
 	}
 	return effect{lines: []logLine{errorLine(fmt.Sprintf("終わり方を確かめられないまま止まる (%s)", c.trigger.Name))}}
-}
-
-// claudeAlive は、止められなかった claude がまだ終わっていないか。終わっていれば、worker は after_run を撃ってから終わりを
-// 送るので、loop の停止はその終わりを待てる。
-func (c *claim) claudeAlive() bool {
-	if c.exited == nil {
-		return false
-	}
-	select {
-	case <-c.exited:
-		return false
-	default:
-		return true
-	}
 }
 
 func errorLine(message string) logLine { return logLine{errorMessage: message} }

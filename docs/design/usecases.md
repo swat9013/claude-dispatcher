@@ -235,21 +235,21 @@ Cockburn『ユースケース実践ガイド』(Writing Effective Use Cases) の
 - **Scope**: dispatcher (機械システム)
 - **Level**: user-goal (sea)
 - **Trigger**: チームが、同じ issue 置き場を複数のマシンの loop で二重に起動せずに分け合いたい
-- **事前条件**: workflow 定義に調停 remote (`coordination.remote`) が commit されている。各マシンの clone が、その名前の git remote へ push できる
+- **事前条件**: workflow 定義に、coordination board にする git remote の名前 (`coordination.remote`) が commit されている。各マシンの clone が、その名前の git remote へ push できる
 - **成功保証**: 1 つの作業対象の worker は、どの時点でもいずれか 1 台の loop だけが起動する (乗っ取りの直後の、まれな二重実行を除く)。落ちたマシンの作業対象は、生存報告の間隔の 3 倍の後に、生きている loop が拾い直す。ただし落ちた loop の orphan の claude が生きている作業対象は、同じマシンで起動し直した loop が着手宣言を引き継ぎ、別のマシンの loop は拾わない (同じマシンで起動し直さない間は拾いうる。ADR 0027)
 
 **Main Success Scenario**
 
 1. 各メンバーが自分のマシンで loop を起動する
-2. dispatcher (各マシンの loop) が調停 remote を解いて読めることを確かめ、生存報告を置き、以後は間隔ごとに置き直す
-3. dispatcher が tick ごとに調停 remote の ref を読み、他の生きている loop の着手宣言が立っている作業対象を候補から外す
+2. dispatcher (各マシンの loop) が coordination board の remote を解いて読めることを確かめ、生存報告を置き、以後は間隔ごとに置き直す
+3. dispatcher が tick ごとに coordination board の ref を読み、他の生きている loop の着手宣言が立っている作業対象を候補から外す
 4. dispatcher が候補に着手宣言を条件付きで push し、通ったマシンの loop だけが claim を立てて worker を起動する
 5. dispatcher が claim を解いたときに、自分の着手宣言を消す
 6. 運用者が loop を止めると、dispatcher が自分の着手宣言と生存報告を消して止まる
 
 **Extensions**
 
-- **2a.** 調停 remote を解けないか読めない、または生存報告を置けない
+- **2a.** coordination board の remote を解けないか読めない、または生存報告を置けない
   - 2a1. dispatcher は loop の起動を失敗させる。運用者は remote の名前と push の権限を直して step 1 へ戻る
 - **4a.** 他のマシンの loop が先に着手宣言を push した
   - 4a1. dispatcher は claim を立てず、log に行を残すだけで step 3 へ戻る
@@ -257,7 +257,7 @@ Cockburn『ユースケース実践ガイド』(Writing Effective Use Cases) の
   - 3a1. dispatcher はその loop を死んだとみなす。その着手宣言の作業対象が候補になれば、旧 sha を期待値にした置き換えで乗っ取って起動し、残りの着手宣言と生存報告を消す。そのマシンで起動し直した loop が、生きている orphan の作業対象の着手宣言を引き継いでいれば、引き継いだ loop は生きているので乗っ取らない
 - **3b.** 自分の着手宣言が乗っ取られていた (network が切れて、生きたまま死んだとみなされた)
   - 3b1. dispatcher はその作業対象の worker を止めて claim を解き、要対処に出す。運用者は止まる前に push された成果を確かめる
-- **3c.** 調停 remote に、自分の知る版より新しい版の ref がある (他のメンバーが dispatcher を先に上げた)
+- **3c.** coordination board に、自分の知る版より新しい版の ref がある (他のメンバーが dispatcher を先に上げた)
   - 3c1. dispatcher はその scope で worker を起動せず、要対処に出す。運用者は dispatcher を上げて step 1 へ戻る
 - **2b.** 生存報告の置き直しが続けて落ちる
   - 2b1. dispatcher は要対処に出す。他のマシンの loop に乗っ取られうることを運用者が知る

@@ -44,7 +44,7 @@ type Definition struct {
 	StallTimeout time.Duration
 	RunTimeout   time.Duration
 	Claude       Claude
-	// CoordinationRemote は調停 remote (system.md §4 のマシンを跨いだ分担) の、workflow 定義のある clone の git remote の
+	// CoordinationRemote は coordination board (system.md §4 のマシンを跨いだ分担) の、workflow 定義のある clone の git remote の
 	// 名前。書かれていなければ ""
 	CoordinationRemote string
 	Triggers           []trigger.Trigger
@@ -76,6 +76,16 @@ func (d Definition) Kinds() []target.Kind {
 		}
 	}
 	return kinds
+}
+
+// Trigger は名前の trigger を宣言から引く。
+func (d Definition) Trigger(name string) (trigger.Trigger, bool) {
+	for _, t := range d.Triggers {
+		if t.Name == name {
+			return t, true
+		}
+	}
+	return trigger.Trigger{}, false
 }
 
 // Tracker は issue 置き場の設定。

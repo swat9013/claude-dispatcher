@@ -10,13 +10,14 @@ import (
 	"github.com/swat9013/claude-dispatcher/internal/coord"
 	"github.com/swat9013/claude-dispatcher/internal/status"
 	"github.com/swat9013/claude-dispatcher/internal/target"
+	"github.com/swat9013/claude-dispatcher/internal/worker"
 )
 
-// マシンを跨いだ分担 (system.md §4・§7、formats.md §12): 調停 remote の着手宣言と生存報告を読み、自分の着手宣言の乗っ取りを
+// マシンを跨いだ分担 (system.md §4・§7、formats.md §12): coordination board の着手宣言と生存報告を読み、自分の着手宣言の乗っ取りを
 // 見つけ、他の生きている loop の着手宣言のある作業対象を候補から外し、死んだ loop の ref を片付ける。死んだ loop の判定は、
 // sha が変わったのを最後に見た時刻からの経過を loop 自身の時計で数える。
 
-// Coordination は調停 remote の口。本番は coord.Party、テストは fake。
+// Coordination は coordination board の口。本番は coord.Party、テストは fake。
 type Coordination interface {
 	LoopName() string
 	ClaimRef(ref target.Ref) string
@@ -48,7 +49,7 @@ type holder struct {
 	dead bool
 }
 
-// mediation は調停 remote を指した loop の、調停の記憶。
+// mediation は coordination board を指した loop が、coordination board について持つ記憶。
 type mediation struct {
 	c Coordination
 	// seen は ref の名前ごとの直近の sha と、その sha を初めて見た時刻
@@ -106,7 +107,7 @@ func (m *mediation) startBeating(after func(time.Duration) <-chan time.Time) {
 	})
 }
 
-// beats は生存報告の置き直しの結果が届く channel。調停 remote を指さない loop では nil (届かない)。
+// beats は生存報告の置き直しの結果が届く channel。coordination board を指さない loop では nil (届かない)。
 func (l *loop) beats() <-chan error {
 	if l.mediation == nil {
 		return nil
@@ -132,7 +133,7 @@ func (l *loop) noteDropped() {
 	}
 }
 
-// coordinate は調停 remote の突き合わせ (formats.md §12 の 1–5)。ref を読めなければ error を返す (その tick は掃除も起動も
+// coordinate は coordination board の突き合わせ (formats.md §12 の 1–5)。ref を読めなければ error を返す (その tick は掃除も起動も
 // しない)。
 func (l *loop) coordinate() error {
 	m := l.mediation
@@ -247,7 +248,7 @@ func (l *loop) judgeDeadLoops(v coord.View, now time.Time) {
 	}
 }
 
-// newerFormatSeen は、調停 remote に自分の知る版より新しい版の ref を直近の tick で見たか (その間は起動しない。formats.md §12)。
+// newerFormatSeen は、coordination board に自分の知る版より新しい版の ref を直近の tick で見たか (その間は起動しない。formats.md §12)。
 func (l *loop) newerFormatSeen() bool {
 	return l.mediation != nil && l.mediation.newer != nil
 }
@@ -457,7 +458,7 @@ func (l *loop) cleanupDeadLoops() {
 			// 作業対象と、生きている orphan の作業対象 (inheritOrphanClaims が引き継ぐ) の着手宣言は消さない
 			h := r.holders[ref]
 			c, claimed := l.claims[ref]
-			if mine := claimed && (c.claimSHA != "" || c.claudeAlive()); h.loop != loop || !h.dead || mine || l.orphans[ref] {
+			if mine := claimed && (c.claimSHA != "" || worker.UnstoppedAlive(c.exited)); h.loop != loop || !h.dead || mine || l.orphans[ref] {
 				continue
 			}
 			if remove(ref, r.c.ClaimRef(ref), h.sha) {
@@ -518,7 +519,7 @@ func (l *loop) leaveRemote() {
 	for _, ref := range sortedRefs(l.claims) {
 		// 止められない claude が生きている claim の着手宣言は残す。claude が作業を続けうるので、他のマシンの loop には、
 		// 生存報告が途絶えてから死を判定するまで起動させない (system.md §9)
-		if c := l.claims[ref]; c.claudeAlive() {
+		if c := l.claims[ref]; worker.UnstoppedAlive(c.exited) {
 			claudeLeft = true
 		} else {
 			l.releaseRemote(ref, c)

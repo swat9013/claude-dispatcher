@@ -18,11 +18,11 @@ import (
 )
 
 // マシンを跨いだ分担 (system.md §4・§7、formats.md §12)。死んだ loop の判定は分の単位の経過を数えるので、black-box テストは
-// 待てない。ここでは fake の時計と in-memory の調停 remote で見る。
+// 待てない。ここでは fake の時計と in-memory の coordination board で見る。
 
 const me = "me-00000001"
 
-// memoryRemote は in-memory の調停 remote。条件付きの push を server と同じく照合する。
+// memoryRemote は in-memory の coordination board。条件付きの push を server と同じく照合する。
 type memoryRemote struct {
 	claims   map[target.Ref]string
 	loops    map[string]string
@@ -135,7 +135,7 @@ func expected(current string) string {
 
 var issue42 = target.Ref{Kind: target.KindIssue, Number: 42}
 
-// coordinatedRun は、issue 42 が当たり続ける置き場で、remote を調停 remote にして周期 1 分の loop を ticks 回の tick
+// coordinatedRun は、issue 42 が当たり続ける置き場で、remote を coordination board にして周期 1 分の loop を ticks 回の tick
 // だけ回す。worker は script のとおりに振る舞う。
 func coordinatedRun(t *testing.T, remote *memoryRemote, ticks int, script func(worker.Job) workerScript) *rig {
 	t.Helper()
@@ -512,7 +512,7 @@ func TestATakeoverByAClaimWithoutItsOwnerIsShownAsUnreadable(t *testing.T) {
 	}
 }
 
-// unreadableOnce は、最初の Observe でだけ sha の commit message を読ませない調停 remote (fetch が一度落ちた)。
+// unreadableOnce は、最初の Observe でだけ sha の commit message を読ませない coordination board (fetch が一度落ちた)。
 type unreadableOnce struct {
 	*memoryRemote
 	sha string
@@ -699,7 +699,7 @@ func TestALoopWithACoordinationRemoteRelaunchesOnlyInATick(t *testing.T) {
 	}
 }
 
-// beatSignal は、生存報告の置き直しを beats へ知らせる調停 remote (remote の表は書き換えない)。
+// beatSignal は、生存報告の置き直しを beats へ知らせる coordination board (remote の表は書き換えない)。
 type beatSignal struct {
 	*memoryRemote
 	beats chan struct{}

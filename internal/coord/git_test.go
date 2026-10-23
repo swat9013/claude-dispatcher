@@ -14,7 +14,7 @@ import (
 	"github.com/swat9013/claude-dispatcher/internal/target"
 )
 
-// 実物の git で、一時 dir の bare repo を調停 remote にして撃つ (formats.md §12 の git の撃ち方)。
+// 実物の git で、一時 dir の bare repo を coordination board にして撃つ (formats.md §12 の git の撃ち方)。
 
 // remoteForTest は bare repo を origin に持つ clone を作り、その clone から撃つ Remote を返す。
 func remoteForTest(t *testing.T) Remote {

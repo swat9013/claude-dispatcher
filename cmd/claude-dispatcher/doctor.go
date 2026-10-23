@@ -143,7 +143,7 @@ func checkPrecheck(e environment, def workflow.Definition, stdout io.Writer) boo
 	return true
 }
 
-// checkCoordination は、調停 remote を指した project で、loop の起動時と同じく調停 remote を解いて読めるかを確かめる
+// checkCoordination は、coordination board を指した project で、loop の起動時と同じく coordination board の remote を解いて読めるかを確かめる
 // (formats.md §12)。push は撃たない。指さなければ何も出さない。
 func checkCoordination(e environment, def workflow.Definition, stdout io.Writer) bool {
 	if def.CoordinationRemote == "" {
@@ -154,7 +154,7 @@ func checkCoordination(e environment, def workflow.Definition, stdout io.Writer)
 		fmt.Fprintf(stdout, "NG   %s\n", printable.Line(err.Error()))
 		return false
 	}
-	fmt.Fprintf(stdout, "ok   調停 remote %s (%s)\n", def.CoordinationRemote, printable.Line(url))
+	fmt.Fprintf(stdout, "ok   coordination board の remote %s (%s)\n", def.CoordinationRemote, printable.Line(url))
 	return true
 }
 

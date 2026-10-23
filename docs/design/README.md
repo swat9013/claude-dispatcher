@@ -41,7 +41,7 @@
 
 正本は [`domain.puml`](domain.puml)。`domain.svg` はそこから描いた生成物なので、直すのは `.puml` の側で、直したら `plantuml -tsvg docs/design/domain.puml` で描き直して対で commit する。描く plantuml は `scripts/plantuml.version` の版に固定している。構文 (`plantuml --check-syntax` の exit code。`-tsvg` は構文の誤りでも誤りの画像を出して exit 0 を返しうる) と、svg が固定した版で今の `.puml` から描かれたかは、commit 時の hook と CI が検査する (CONTRIBUTING.md の「gate」)。
 
-entity に付けた印は、その entity の正本がどこにあるかを表す。`«外部 store»` の entity (issue・CL と、その置き場) は worker と人が書き、dispatcher は読むだけなので、正本は dispatcher の外にある。adapter は読むたびにそれを作業対象へ写すだけで、写しを持ち越さない (`system.md` §13)。dispatcher が書くものは 3 つ。loop の process と寿命を共にする `«loop の記憶»` (claim・打ち切り)、disk に残る `«CLI の disk»` (workspace)、調停 remote を指した project でだけ実装 repo の git remote の独自 ref に置く `«調停 remote»` (着手宣言・生存報告。ADR 0011)。`«調停 remote»` は外部 store に機械が書く唯一の entity で、正本は remote の ref にあり、loop は他のマシンの loop との調停のためだけに読む (claim を remote から読み戻さない)。
+entity に付けた印は、その entity の正本がどこにあるかを表す。`«外部 store»` の entity (issue・CL と、その置き場) は worker と人が書き、dispatcher は読むだけなので、正本は dispatcher の外にある。adapter は読むたびにそれを作業対象へ写すだけで、写しを持ち越さない (`system.md` §13)。dispatcher が書くものは 3 つ。loop の process と寿命を共にする `«loop の記憶»` (claim・打ち切り)、disk に残る `«CLI の disk»` (workspace)、coordination board を指した project でだけ実装 repo の git remote の独自 ref に置く `«coordination board»` (着手宣言・生存報告。ADR 0011)。`«coordination board»` は外部 store に機械が書く唯一の entity で、正本は remote の ref にあり、loop は他のマシンの loop との分担のためだけに読む (claim を remote から読み戻さない)。
 
 ## 検証シナリオ
 
@@ -60,7 +60,7 @@ entity に付けた印は、その entity の正本がどこにあるかを表�
    1. loop A に claim (`issue#44`, 走っている) と打ち切り (`issue#45`) がある。2 回の停止要求で worker を止め、loop A が止まる。claim と打ち切りは loop の記憶なので消える。workspace `issue-44` は disk に残る
    2. 同じ scope key で loop B を起動する。loop A がまだ動いていれば、scope key の lock で loop B は起動時に止まる (project 1 ─ 0..1 loop)
    3. loop B は起動時に終端の作業対象の workspace を掃除する。`issue#44` は open なので残す。`issue#44` が `implement` に当たったままなら、新しい claim (attempt 1) が立ち、同じ workspace の path で起動する。`issue#45` の打ち切りは消えているので、当たっていれば再び候補になる
-   4. 別の場合: loop A が `issue#46` の worker の claude を止められないまま止まった (か、loop A が落ちた)。claim は loop A の記憶と一緒に消えるが、claude (orphan) は workspace `issue-46` を使い続ける。loop B の tick は、claim の無い workspace `issue-46` の orphan が生きているのを見て、`issue#46` が終端でも workspace を消さず、trigger に当たっていても claim を立てない。調停 remote を指していれば、loop A の残した `issue#46` の着手宣言を、旧 sha を期待値にした置き換えで loop B の名前に引き継ぎ (claim は立てない)、別のマシンの loop に乗っ取らせない。orphan は claim でも打ち切りでもないので、作業対象 1 ─ 0..1 claim の多重度は崩れない
+   4. 別の場合: loop A が `issue#46` の worker の claude を止められないまま止まった (か、loop A が落ちた)。claim は loop A の記憶と一緒に消えるが、claude (orphan) は workspace `issue-46` を使い続ける。loop B の tick は、claim の無い workspace `issue-46` の orphan が生きているのを見て、`issue#46` が終端でも workspace を消さず、trigger に当たっていても claim を立てない。coordination board を指していれば、loop A の残した `issue#46` の着手宣言を、旧 sha を期待値にした置き換えで loop B の名前に引き継ぎ (claim は立てない)、別のマシンの loop に乗っ取らせない。orphan は claim でも打ち切りでもないので、作業対象 1 ─ 0..1 claim の多重度は崩れない
    5. orphan が終わる。次の tick から `issue#46` は普通の掃除と候補の扱いに戻り (引き継いだ着手宣言は候補の起動の前に消す)、終端なら workspace を消し、当たっていれば claim (attempt 1) が立つ
 
 4. **境界: マシンを跨いだ分担** (`coordination.remote: origin`)
@@ -70,7 +70,7 @@ entity に付けた印は、その entity の正本がどこにあるかを表�
    4. `issue#47` が当たったままなら、B は旧 sha を期待値にした置き換えで着手宣言を乗っ取り、claim (attempt 1) を立てる。attempt は A の数を引き継がない。B は A の生存報告を消す
    5. 別の場合: A は network が切れていただけで生きていた。network が戻った A は、自分の着手宣言の sha が変わったのを見て、`issue#47` の worker を止めて claim を解き、要対処に出す。A は B の着手宣言を消さない
 
-4 シナリオとも、図の多重度 (作業対象 1 ─ 0..1 claim / 0..1 打ち切り / 0..1 workspace) と集約の境界 (loop の記憶は loop と共に消え、workspace と調停 remote の ref は残る) のまま表せる。起動は claim (loop 集約) と workspace を続けて作るが、両者をまたぐ不変条件は無い (シナリオ 3 のとおり、claim の無い workspace は普通に在る)。そのため、2 つを別々の集約のままにしておける。orphan の生死 (シナリオ 3 の 4・5) は図の entity でも集約でもなく、kernel が持つ worker log の flock にある。図には、候補の定義式と workspace の不変条件の注記にだけ現れる。シナリオ 3 の 4 の、orphan のために引き継いだ着手宣言は claim を持たない。図の Claim 0..1 ─ 0..1 着手宣言の、claim の側が 0 の場合に当たる。
+4 シナリオとも、図の多重度 (作業対象 1 ─ 0..1 claim / 0..1 打ち切り / 0..1 workspace) と集約の境界 (loop の記憶は loop と共に消え、workspace と coordination board の ref は残る) のまま表せる。起動は claim (loop 集約) と workspace を続けて作るが、両者をまたぐ不変条件は無い (シナリオ 3 のとおり、claim の無い workspace は普通に在る)。そのため、2 つを別々の集約のままにしておける。orphan の生死 (シナリオ 3 の 4・5) は図の entity でも集約でもなく、kernel が持つ worker log の flock にある。図には、候補の定義式と workspace の不変条件の注記にだけ現れる。シナリオ 3 の 4 の、orphan のために引き継いだ着手宣言は claim を持たない。図の Claim 0..1 ─ 0..1 着手宣言の、claim の側が 0 の場合に当たる。
 
 ## claim の状態機械図
 
