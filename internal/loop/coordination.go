@@ -279,8 +279,15 @@ func (l *loop) detectTakeovers(v coord.View) {
 // deleteStaleClaims は、自分の loop 名の着手宣言のうち claim の無い作業対象のもの (消し損ねた着手宣言) を消す。
 func (l *loop) deleteStaleClaims(v coord.View) {
 	r := l.mediation
-	// 結果の分からなかった引き継ぎは、この View で確かめる (届いていれば下で inherited に覚え直す)
-	r.unsureInherits = nil
+	// 結果の分からなかった引き継ぎは、この View で決着したものだけ忘れる (届いていれば下で inherited に覚え直す)。着手宣言の
+	// commit message を読めなかったものは、届いたかを決められないので覚えたままにする
+	for ref := range r.unsureInherits {
+		if sha, held := v.Claims[ref]; !held {
+			delete(r.unsureInherits, ref)
+		} else if _, read := v.Messages[sha]; read {
+			delete(r.unsureInherits, ref)
+		}
+	}
 	for ref, sha := range r.inherited {
 		if v.Claims[ref] != sha {
 			// 引き継いだ着手宣言が置き換わったか消えた。claim が無いので止める worker は無く、忘れる。orphan はまだ動きうるので、
@@ -529,14 +536,13 @@ func (l *loop) leaveRemote() {
 	// 作業を続けうる)
 	l.releaseInherited()
 	// 結果の分からなかった引き継ぎは、届いていたものとして引き継いだ着手宣言と同じに扱う (sha を知らないので消せない)
-	left := map[target.Ref]bool{}
-	for ref := range l.mediation.inherited {
-		left[ref] = true
+	for _, ref := range sortedRefs(l.mediation.unsureInherits) {
+		if l.orphans[ref] {
+			claudeLeft = true
+			l.rec.error(ref, "orphan のために引き継いだかもしれない着手宣言を残して止まる (引き継ぎの結果が分からず、orphan の claude が作業を続けうる)")
+		}
 	}
-	for ref := range l.mediation.unsureInherits {
-		left[ref] = true
-	}
-	for _, ref := range sortedRefs(left) {
+	for _, ref := range sortedRefs(l.mediation.inherited) {
 		reason := "orphan は終わったが消せなかった"
 		if l.orphans[ref] {
 			// orphan が作業を続けうる間だけ、生存報告も残す

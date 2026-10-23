@@ -70,7 +70,11 @@ func (m *memoryRemote) Observe() (coord.View, error) {
 	}
 	v := coord.View{Claims: map[target.Ref]string{}, Loops: map[string]string{}, Messages: map[string]coord.Message{}}
 	for ref, sha := range m.claims {
-		v.Claims[ref], v.Messages[sha] = sha, m.messages[sha]
+		v.Claims[ref] = sha
+		// 消した message は読めなかった commit message の代役 (View に載せない)
+		if msg, read := m.messages[sha]; read {
+			v.Messages[sha] = msg
+		}
 	}
 	for loop, sha := range m.loops {
 		v.Loops[loop], v.Messages[sha] = sha, m.messages[sha]
@@ -292,13 +296,34 @@ func TestTheSameMachinesPreviousLoopsClaimIsInheritedWithoutWaitingForItsDeath(t
 	}
 }
 
-func TestAnInheritWithAnUnknownResultKeepsThePresenceWhenTheLoopStopsBeforeTheNextTick(t *testing.T) {
+func TestAnInheritWithAnUnknownResultKeepsTheHeartbeatWhenTheLoopStopsBeforeTheNextTick(t *testing.T) {
 	remote := newMemoryRemote()
 	remote.put(nil, coord.Message{Kind: coord.KindHeartbeat, Format: coord.Format, Loop: "me-00000009", Interval: time.Minute})
 	remote.put(&issue42, coord.Message{Kind: coord.KindClaim, Format: coord.Format, Loop: "me-00000009", Target: "issue#42"})
 	// push は remote に届いたが、結果の分からない失敗を返す
 	remote.claimErr = errors.New("connection reset")
 	r := tickRig(1)
+	unsureInheritRun(t, r, remote)
+}
+
+func TestAnInheritWithAnUnknownResultIsKeptWhileTheNextTickCannotReadTheClaim(t *testing.T) {
+	remote := newMemoryRemote()
+	remote.put(nil, coord.Message{Kind: coord.KindHeartbeat, Format: coord.Format, Loop: "me-00000009", Interval: time.Minute})
+	remote.put(&issue42, coord.Message{Kind: coord.KindClaim, Format: coord.Format, Loop: "me-00000009", Target: "issue#42"})
+	remote.claimErr = errors.New("connection reset")
+	// 2 tick 目は、届いていた着手宣言の commit message を読めない
+	remote.onObserve = func(m *memoryRemote, times int) {
+		if times == 2 {
+			delete(m.messages, m.claims[issue42])
+		}
+	}
+	r := tickRig(2)
+	unsureInheritRun(t, r, remote)
+}
+
+// unsureInheritRun は、結果の分からない引き継ぎの後に loop を止め、生存報告を消さずに止まったかを見る。
+func unsureInheritRun(t *testing.T, r *rig, remote *memoryRemote) {
+	t.Helper()
 
 	r.run(t, loop.Options{
 		Definition: definition(time.Minute, 1), Coordination: remote, Store: matchingStore,
@@ -308,10 +333,10 @@ func TestAnInheritWithAnUnknownResultKeepsThePresenceWhenTheLoopStopsBeforeTheNe
 	})
 
 	// 次の tick で覚え直す前に止まっても、引き継いだものと同じに扱い、生存報告を消さない
-	if remote.left != 0 || remote.messages[remote.claims[issue42]].Loop != me {
-		t.Fatalf("Leave %d 回 (着手宣言の持ち主 %q), want 生存報告を消さずに止まる", remote.left, remote.messages[remote.claims[issue42]].Loop)
+	if remote.left != 0 {
+		t.Fatalf("Leave %d 回, want 生存報告を消さずに止まる", remote.left)
 	}
-	if !strings.Contains(r.log.String(), "orphan のために引き継いだ着手宣言を残して止まる (orphan の claude が作業を続けうる)") {
+	if !strings.Contains(r.log.String(), "orphan のために引き継いだかもしれない着手宣言を残して止まる (引き継ぎの結果が分からず、orphan の claude が作業を続けうる)") {
 		t.Fatalf("log = %q, want 残して止まる error の行", r.log.String())
 	}
 }
