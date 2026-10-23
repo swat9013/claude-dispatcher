@@ -34,7 +34,7 @@ claude-dispatcher は、tracker (GitHub・GitLab・Jira Cloud) の issue と CL 
    - **チームで分担するなら、調停 remote を宣言する**: 同じ issue 置き場を複数のマシンの loop で分け合うなら、`WORKFLOW.md` に `coordination.remote: origin` (clone の git remote の名前) を書いて commit する。書かなければ 1 台で回す
      - loop は、その remote の `refs/dispatcher/` の下に、作業対象ごとの着手宣言と loop ごとの生存報告を置き合い、先に置けた loop だけが worker を起動する。branch・CL・tracker には書かない
      - loop を回す各マシンの clone から、その remote へ push できる必要がある (認証は clone の git の設定をそのまま使う)。読む URL と書く URL が 1 本ずつの同じ URL の remote を指す (`pushurl` を別の repo に向けた remote や、URL が複数の remote は起動時に落ちる。その clone では別の remote 名を足して指す)。ssh の remote は、passphrase や host key の確認を出さない ssh (`ssh -o BatchMode=yes`) で撃つので、agent か鍵の設定で prompt なしに通るようにしておく。`core.sshCommand`・`GIT_SSH_COMMAND`・`GIT_SSH` のどれかを設定していれば、dispatcher は何も足さずにその設定を使う。push は `--no-verify` で撃つので、実装 repo の pre-push hook は通らない
-     - 落ちたマシンの作業対象は、生存報告の間隔 (`polling.interval` と 1 分の長いほう) の 3 倍の後に、生きている loop が拾い直す。network が切れたマシンの worker は、戻ったときに乗っ取られていれば止まり、`要対処` に出る
+     - 落ちたマシンの作業対象は、生存報告の間隔 (`polling.interval` と 1 分の長いほう) の 3 倍の後に、生きている loop が拾い直す。ただし落ちた loop の claude (orphan) がまだ動いている作業対象は、同じマシンで loop を起動し直せば、その loop が着手宣言を引き継いで守る。起動し直さない間は、別のマシンが拾い直して作業が重なりうる。network が切れたマシンの worker は、戻ったときに乗っ取られていれば止まり、`要対処` に出る
      - attempt と打ち切りはマシンごとに数える。あるマシンで打ち切った作業対象を、別のマシンが拾い直しうる
      - 版はチームで揃えて上げる。新しい版の loop が置いた ref を見た古い版の loop は、worker を起動せずに `要対処` に出す
      - 試運転 (`loop --dry-run`) は調停 remote を読まないので、他のマシンが作業している作業対象も示しうる。`doctor` は調停 remote を読めるかを確かめる (push は撃たない)
@@ -90,7 +90,7 @@ workflow 定義に誤りがあれば、試運転・`loop` の起動・`doctor` �
 
 1. loop に停止要求を送る (端末なら Ctrl+C。SIGINT・SIGTERM・SIGHUP のどれでもよい)。新しい起動と再起動をやめ、走っている worker が終わるのを待って止まる。worker が走っていなければすぐ止まる
 2. 待てないときは、もう一度停止要求を送る。走っている worker を止めて止まる
-   - claude に SIGKILL を送れず止められなかった worker は、claude が終わるまでは終わりを待たない。log.jsonl に `claude を止められない` の `error` の行が出て、claude の pid と workspace の path が載る。loop が止まるまでに claude が終われば、止めた worker と同じく後始末をして止まる。終わらなければ `claude を止められないまま止まる` の `error` の行も出る (止まる間際に claude が終わったときは、pid の無い `after_run を待たずに止まる` の行が出る。その workspace は片付ける)。`止められないまま止まる` の行が出ても、loop は起動し直してよい。残った claude (orphan) が終わるまで、次の loop はその workspace を消さず、その作業対象で worker を起動しない。急ぐならその pid の claude を止める。loop が落ちて claude が残ったときも同じ
+   - claude に SIGKILL を送れず止められなかった worker は、claude が終わるまでは終わりを待たない。log.jsonl に `claude を止められない` の `error` の行が出て、claude の pid と workspace の path が載る。loop が止まるまでに claude が終われば、止めた worker と同じく後始末をして止まる。終わらなければ `claude を止められないまま止まる` の `error` の行も出る (止まる間際に claude が終わったときは、pid の無い `after_run を待たずに止まる` の行が出る。その workspace は片付ける)。`止められないまま止まる` の行が出ても、loop は起動し直してよい。残った claude (orphan) が終わるまで、次の loop はその workspace を消さず、その作業対象で worker を起動しない。急ぐならその pid の claude を止める。loop が落ちて claude が残ったときも同じ。調停 remote を指していて `orphan のために引き継いだ着手宣言を残して止まる` の行が出たら、同じマシンで早めに loop を起動し直す。起動し直さないと、生存報告の間隔の 3 倍の後に別のマシンの loop がその作業対象を拾い、orphan と作業が重なりうる
    - worker が途中まで書いた成果は workspace と remote branch に残る
    - 作業対象が trigger に当たったままなら、次に起動した loop が同じ workspace で worker を起動し直す。session は新しく、attempt も 1 から数え直す。前の成果を拾わせるなら、共通 prompt にそう書く
 3. 使うのをやめるなら、`paths --json` が返す `state_dir` と `workspace_root` を消す (workspace が worktree なら、消した後に clone で `git worktree prune` を撃つ)。tracker の label は残る
