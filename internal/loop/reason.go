@@ -1,5 +1,7 @@
 package loop
 
+import "github.com/swat9013/claude-dispatcher/internal/trigger"
+
 // Reason は log.jsonl の reason の値 (formats.md §4)。言語に依らない token で書き、人が読む行には screen の文を出す
 // (ADR 0013)。
 type Reason string
@@ -46,4 +48,9 @@ func (r Reason) screen() string {
 		panic("loop: 画面の文の無い理由 " + string(r))
 	}
 	return s
+}
+
+// ObservationScreen は観測を人が読む行に出す文 (その観測の理由の文)。
+func ObservationScreen(observed trigger.Observation) string {
+	return reasonOf(observed).screen()
 }

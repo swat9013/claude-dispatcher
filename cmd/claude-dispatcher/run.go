@@ -10,6 +10,7 @@ import (
 
 	"github.com/swat9013/claude-dispatcher/internal/coord"
 	"github.com/swat9013/claude-dispatcher/internal/loop"
+	"github.com/swat9013/claude-dispatcher/internal/places"
 	"github.com/swat9013/claude-dispatcher/internal/printable"
 	"github.com/swat9013/claude-dispatcher/internal/state"
 	"github.com/swat9013/claude-dispatcher/internal/target"
@@ -55,7 +56,7 @@ func runOnce(args []string, stdout, stderr io.Writer) int {
 	if code := e.confirmLaunchable(def, remote, stderr, slowToStderr(def, stderr)); code != 0 {
 		return code
 	}
-	t, ok := namedTrigger(def, triggerName)
+	t, ok := def.Trigger(triggerName)
 	if !ok {
 		fmt.Fprintf(stderr, "trigger %s が workflow 定義に無い\n", triggerName)
 		return exitUsage
@@ -89,7 +90,7 @@ func runOnce(args []string, stdout, stderr io.Writer) int {
 		return failureExit(err)
 	}
 	if observed := t.Observe(item); observed != trigger.ObservedStillMatches {
-		fmt.Fprintf(stderr, "%s は %s に当たっていないので起動しない (%s)\n", ref, t.Name, observationText(observed))
+		fmt.Fprintf(stderr, "%s は %s に当たっていないので起動しない (%s)\n", ref, t.Name, loop.ObservationScreen(observed))
 		return exitNotLaunched
 	}
 	board, code := e.join(def, remote, stderr)
@@ -134,7 +135,7 @@ func runOnce(args []string, stdout, stderr io.Writer) int {
 
 // once は単発起動の 1 回分の、終わりを待って確かめるのに使うもの。
 type once struct {
-	store      loop.Store
+	store      places.Store
 	workspaces workspace.Manager
 	stateDir   string
 	trigger    trigger.Trigger
@@ -151,18 +152,6 @@ func (o once) await(sessionID string, run *worker.Run, events <-chan worker.Even
 	stops, started := 0, false
 	// exited は止められない claude の終わりで閉じる。nil なら止められない claude はいない
 	var exited <-chan struct{}
-	// unstoppedAlive は、止められない claude がまだ終わっていないか (loop の claudeAlive と同じ。system.md §7)
-	unstoppedAlive := func() bool {
-		if exited == nil {
-			return false
-		}
-		select {
-		case <-exited:
-			return false
-		default:
-			return true
-		}
-	}
 	unstoppedEnd := func() int {
 		*o.claudeLeft = true
 		fmt.Fprintf(o.stdout, "終了: %s 未完了 (claude を止められない)\n", o.ref)
@@ -173,7 +162,7 @@ func (o once) await(sessionID string, run *worker.Run, events <-chan worker.Even
 		case sig := <-signals:
 			stops++
 			switch {
-			case unstoppedAlive():
+			case worker.UnstoppedAlive(exited):
 				// 止められない claude の終わりは待たない
 				fmt.Fprintf(o.stderr, "停止要求 %s: 止められない claude を残して終える\n", loop.SignalName(sig))
 				return unstoppedEnd()
@@ -192,7 +181,7 @@ func (o once) await(sessionID string, run *worker.Run, events <-chan worker.Even
 			case worker.Unstopped:
 				fmt.Fprintln(o.stderr, printable.Line("claude を止められない: "+ev.StopError))
 				exited = ev.Exited
-				if stops >= 1 && unstoppedAlive() {
+				if stops >= 1 && worker.UnstoppedAlive(exited) {
 					return unstoppedEnd()
 				}
 			case worker.Ended:
@@ -244,10 +233,10 @@ func (o once) ended(result worker.Result, started, stopped bool) int {
 				fmt.Fprintln(o.stderr, printable.Line(err.Error()))
 			}
 		}
-		fmt.Fprintf(o.stdout, "終了: %s 完了 (%s)\n", o.ref, observationText(observed))
+		fmt.Fprintf(o.stdout, "終了: %s 完了 (%s)\n", o.ref, loop.ObservationScreen(observed))
 		return 0
 	}
-	fmt.Fprintf(o.stdout, "終了: %s 未完了 (%s)\n", o.ref, observationText(observed))
+	fmt.Fprintf(o.stdout, "終了: %s 未完了 (%s)\n", o.ref, loop.ObservationScreen(observed))
 	return exitNotCompleted
 }
 
@@ -314,29 +303,4 @@ func leaveOnce(board *coord.Board, stderr io.Writer) {
 			fmt.Fprintf(stderr, "後片付けの結果として知らない値 %T\n", o)
 		}
 	}
-}
-
-// namedTrigger は workflow 定義の trigger を名前で引く。
-func namedTrigger(def workflow.Definition, name string) (trigger.Trigger, bool) {
-	for _, t := range def.Triggers {
-		if t.Name == name {
-			return t, true
-		}
-	}
-	return trigger.Trigger{}, false
-}
-
-// observationText は観測の画面の文 (formats.md §4 の reason の画面の文と同じ綴り)。
-func observationText(o trigger.Observation) string {
-	switch o {
-	case trigger.ObservedStillMatches:
-		return "trigger に当たったまま"
-	case trigger.ObservedTerminal:
-		return "終端"
-	case trigger.ObservedLeftTrigger:
-		return "trigger から外れた"
-	case trigger.ObservedUndecided:
-		return "当たるかをまだ決められない"
-	}
-	panic(fmt.Sprintf("trigger.Observation の値 %d を写せない", o))
 }

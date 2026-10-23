@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/swat9013/claude-dispatcher/internal/loop"
+	"github.com/swat9013/claude-dispatcher/internal/places"
 	"github.com/swat9013/claude-dispatcher/internal/precheck"
 	"github.com/swat9013/claude-dispatcher/internal/provider"
 	"github.com/swat9013/claude-dispatcher/internal/status"
@@ -99,7 +100,7 @@ func (h *harness) run(t *testing.T) []string {
 			}
 			return problems
 		},
-		Store: func(workflow.Definition) loop.Store {
+		Store: func(workflow.Definition) places.Store {
 			// 観測は、その tick が読み直した workflow 定義の plan で答える
 			return memoryStore{observe: func() ([]target.Item, error) {
 				plan := h.plans[tick-1]

@@ -1,6 +1,7 @@
 package loop
 
 import (
+	"github.com/swat9013/claude-dispatcher/internal/places"
 	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/trigger"
 )
@@ -35,7 +36,7 @@ func (l *loop) apply(ref target.Ref, c *claim, e effect) {
 }
 
 // read は作業対象を置き場から読み直し、observe で観測する。読み直せなければ読み直しの失敗の観測で、item は nil。
-func (l *loop) read(store Store, ref target.Ref, observe func(target.Item) trigger.Observation) (observation, target.Item) {
+func (l *loop) read(store places.Store, ref target.Ref, observe func(target.Item) trigger.Observation) (observation, target.Item) {
 	item, err := store.Read(ref)
 	if err != nil {
 		return observation{readErr: err}, nil

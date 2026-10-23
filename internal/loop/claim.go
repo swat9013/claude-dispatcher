@@ -309,7 +309,7 @@ func newClaim(item target.Item, t trigger.Trigger, sessionID, workspaceRoot stri
 
 // loopEnded は loop の終了を受ける。claim を持ったまま止まることを error の行に残す。
 func (c *claim) loopEnded() effect {
-	if c.claudeAlive() {
+	if worker.UnstoppedAlive(c.exited) {
 		return effect{lines: []logLine{errorLine(fmt.Sprintf("claude を止められないまま止まる (pid %d, workspace %s)", c.pid, c.workspace))}}
 	}
 	if c.exited != nil {
@@ -320,20 +320,6 @@ func (c *claim) loopEnded() effect {
 		return effect{lines: []logLine{errorLine(fmt.Sprintf("再起動を待ったまま止まる (%s, attempt %d まで)", c.trigger.Name, c.attempt))}}
 	}
 	return effect{lines: []logLine{errorLine(fmt.Sprintf("終わり方を確かめられないまま止まる (%s)", c.trigger.Name))}}
-}
-
-// claudeAlive は、止められなかった claude がまだ終わっていないか。終わっていれば、worker は after_run を撃ってから終わりを
-// 送るので、loop の停止はその終わりを待てる。
-func (c *claim) claudeAlive() bool {
-	if c.exited == nil {
-		return false
-	}
-	select {
-	case <-c.exited:
-		return false
-	default:
-		return true
-	}
 }
 
 func errorLine(message string) logLine { return logLine{errorMessage: message} }

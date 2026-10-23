@@ -7,6 +7,7 @@ import (
 	"github.com/swat9013/claude-dispatcher/internal/coord"
 	"github.com/swat9013/claude-dispatcher/internal/status"
 	"github.com/swat9013/claude-dispatcher/internal/target"
+	"github.com/swat9013/claude-dispatcher/internal/worker"
 )
 
 // マシンを跨いだ分担 (system.md §4・§7、formats.md §12): coordination board の着手宣言と生存報告の読み方・持ち主と生死の判定・
@@ -82,7 +83,7 @@ func (l *loop) deliverBeat(err error) bool {
 func (l *loop) unstopped() map[target.Ref]bool {
 	refs := map[target.Ref]bool{}
 	for ref, c := range l.claims {
-		if c.claudeAlive() {
+		if worker.UnstoppedAlive(c.exited) {
 			refs[ref] = true
 		}
 	}
