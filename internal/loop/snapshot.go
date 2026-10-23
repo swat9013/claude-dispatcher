@@ -11,8 +11,8 @@ import (
 	"github.com/swat9013/claude-dispatcher/internal/worker"
 )
 
-// board は状態 file にだけ使う状態: loop を始めた時刻・次の tick の予定・直近の tick と、その tick の曖昧な CL。
-type board struct {
+// published は状態 file にだけ使う状態: loop を始めた時刻・次の tick の予定・直近の tick と、その tick の曖昧な CL。
+type published struct {
 	startedAt  time.Time
 	nextTickAt time.Time
 	lastTick   *status.Tick
@@ -23,8 +23,8 @@ type board struct {
 
 // tickFailed は tick の失敗を tick の行に書き、状態 file の直近の tick に残す。失敗した tick は曖昧な CL を数えていない。
 func (l *loop) tickFailed(message string) {
-	l.board.lastTick = &status.Tick{At: l.o.Now(), Result: status.TickError, Error: message}
-	l.board.ambiguous = nil
+	l.published.lastTick = &status.Tick{At: l.o.Now(), Result: status.TickError, Error: message}
+	l.published.ambiguous = nil
 	l.rec.tickError(message)
 }
 
@@ -35,10 +35,10 @@ func (l *loop) publish() {
 	if err := l.o.Publish(l.snapshot()); err != nil {
 		message = oneLine(err)
 	}
-	if message != "" && message != l.board.publishError {
+	if message != "" && message != l.published.publishError {
 		l.rec.error(target.Ref{}, message)
 	}
-	l.board.publishError = message
+	l.published.publishError = message
 }
 
 // phases は claim の段階を状態 file の綴りに写す
@@ -49,15 +49,15 @@ var phases = map[phase]status.Phase{
 // snapshot は状態 file の中身 (formats.md §7.1)。作業対象は種類と番号の順に並べる。
 func (l *loop) snapshot() status.Snapshot {
 	s := status.Snapshot{
-		Scope: l.o.ScopeKey, Workflow: l.o.Workflow, StartedAt: l.board.startedAt, Version: l.o.Build.Version, Commit: l.o.Build.Commit, UpdatedAt: l.o.Now(),
-		Stopping: l.stop.requested(), MaxConcurrent: l.def.MaxConcurrent, LastTick: l.board.lastTick,
+		Scope: l.o.ScopeKey, Workflow: l.o.Workflow, StartedAt: l.published.startedAt, Version: l.o.Build.Version, Commit: l.o.Build.Commit, UpdatedAt: l.o.Now(),
+		Stopping: l.stop.requested(), MaxConcurrent: l.def.MaxConcurrent, LastTick: l.published.lastTick,
 		Workers: []status.Worker{}, Abandoned: []status.Abandoned{}, Ambiguous: []status.Ambiguous{}, Blocked: []status.Blocked{}, Orphans: []status.Orphan{},
 	}
 	for _, ref := range sortedRefs(l.orphans) {
 		s.Orphans = append(s.Orphans, status.Orphan{Target: ref.String(), Log: worker.LogFile("", ref)})
 	}
-	if !l.stop.requested() && !l.board.nextTickAt.IsZero() {
-		next := l.board.nextTickAt
+	if !l.stop.requested() && !l.published.nextTickAt.IsZero() {
+		next := l.published.nextTickAt
 		s.NextTickAt = &next
 	}
 	for _, ref := range sortedRefs(l.claims) {
@@ -83,7 +83,7 @@ func (l *loop) snapshot() status.Snapshot {
 	for _, ref := range sortedRefs(l.abandoned) {
 		s.Abandoned = append(s.Abandoned, status.Abandoned{Target: ref.String(), Trigger: l.abandoned[ref]})
 	}
-	for _, a := range l.board.ambiguous {
+	for _, a := range l.published.ambiguous {
 		s.Ambiguous = append(s.Ambiguous, status.Ambiguous{Head: a.Head, Targets: refNames(a.Targets)})
 	}
 	for _, p := range l.blocked {

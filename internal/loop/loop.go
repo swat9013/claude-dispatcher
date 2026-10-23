@@ -301,8 +301,8 @@ type loop struct {
 	orphans map[target.Ref]bool
 	// orphansUnknown は、直近の tick で orphan を確かめられなかったか。次に確かめられる tick まで、tick の外の再起動もしない
 	orphansUnknown bool
-	// board は状態 file にだけ使う状態。loop の判断には使わない
-	board board
+	// published は状態 file にだけ使う状態。loop の判断には使わない
+	published published
 	// mediation は coordination board を指した loop が coordination board について持つ記憶。指さなければ nil
 	mediation *mediation
 }
@@ -333,7 +333,7 @@ func (l *loop) fixedAtStartChanged(def workflow.Definition) string {
 func Run(o Options) int {
 	l := &loop{
 		o: o, def: o.Definition, claims: map[target.Ref]*claim{}, abandoned: map[target.Ref]string{}, events: make(chan worker.Event),
-		rec: recorder{log: o.Log, output: o.Output, now: o.Now, scope: o.ScopeKey}, board: board{startedAt: o.Now()},
+		rec: recorder{log: o.Log, output: o.Output, now: o.Now, scope: o.ScopeKey}, published: published{startedAt: o.Now()},
 	}
 	var next <-chan time.Time
 	start := map[string]any{"version": o.Build.Version, "commit": o.Build.Commit}
@@ -362,7 +362,7 @@ func Run(o Options) int {
 		}
 		if next == nil {
 			next = o.After(l.def.Interval)
-			l.board.nextTickAt = o.Now().Add(l.def.Interval)
+			l.published.nextTickAt = o.Now().Add(l.def.Interval)
 		}
 		l.arm()
 		l.publish()
@@ -570,8 +570,8 @@ func (l *loop) tick() {
 		l.inheritOrphanClaims()
 		l.cleanupDeadLoops()
 	}
-	l.board.lastTick = &status.Tick{At: l.o.Now(), Result: status.TickOK, Candidates: len(candidates)}
-	l.board.ambiguous = ambiguous
+	l.published.lastTick = &status.Tick{At: l.o.Now(), Result: status.TickOK, Candidates: len(candidates)}
+	l.published.ambiguous = ambiguous
 	l.rec.event("tick", map[string]any{"result": status.TickOK, "candidates": len(candidates), "launched": nonNil(launched), "ambiguous": ambiguousFields(ambiguous), "blocked": blockedFields(l.blocked),
 		"running": running, "waiting_retry": waitingRetry, "orphans": orphans, "max_concurrent": def.MaxConcurrent},
 		LineTickOK, "tick ok", " · %s%s%s", Summary(candidates, def), ambiguousSummary(ambiguous), blockedSummary(l.blocked))
