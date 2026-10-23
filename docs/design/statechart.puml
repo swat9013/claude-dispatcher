@@ -94,7 +94,7 @@ Abandoned --> [*] : loopの終了
 ' uncovered: NoClaim x 停止要求2回目 — claim が無いので止める worker が無い
 ' uncovered: NoClaim x 先のtriggerに当たる — その tick では起動せず、次の tick の評価が先の trigger で拾う (§7 の tick の手順 5)
 ' uncovered: NoClaim x triggerの削除 — claim も打ち切りも無いので変わる記憶が無い。消えた trigger は評価しないので、その trigger では候補にならないだけ
-' uncovered: NoClaim x 乗っ取られた — claim が無いので自分の着手宣言が無い。消し損ねた自分の着手宣言は消すだけ (§7 の調停 remote の突き合わせ)
+' uncovered: NoClaim x 乗っ取られた — claim が無いので止める worker が無い。orphan のために引き継いだ着手宣言は忘れる (置き換わっていたら error の行を残す)。消し損ねた自分の着手宣言は消すだけ (§7 の調停 remote の突き合わせ)
 ' uncovered: NoClaim x 新しい版のref — その tick は候補を起動しないので、claim は立たない (§7 の調停 remote の突き合わせ)
 ' 走っている
 ' uncovered: Running x 候補になる — claim されている作業対象は候補にならない (§4 の候補の定義)

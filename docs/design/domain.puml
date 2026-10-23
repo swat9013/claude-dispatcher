@@ -107,7 +107,7 @@ Workspace "0..1" ..> "1" WorkTarget : ID参照 Ref
 Claim "*" ..> "1" Trigger : ID参照 名前 (起動した trigger)
 Project "1" ..> "0..1" Coordination : ID参照 coordination.remote
 Loop "1" -- "0..1" Heartbeat : 調停 remote を指した project だけ
-Claim "1" -- "0..1" ClaimRef : 調停 remote を指した project では 1
+Claim "0..1" -- "0..1" ClaimRef : 調停 remote を指した project では claim に 1。orphan のために引き継いだ着手宣言は claim を持たない (ADR 0027)
 ClaimRef "*" ..> "1" Heartbeat : ID参照 loop 名 (持ち主)
 ClaimRef "0..1" ..> "1" WorkTarget : ID参照 Ref
 Abandoned "*" ..> "1" Trigger : ID参照 名前 (打ち切ったときの trigger)
@@ -141,7 +141,8 @@ note bottom of Coordination
   空の tree の commit を指し、形式の版・持ち主・間隔は commit message に書く (ADR 0023)。
   1 つの作業対象の着手宣言は 1 本 (条件付きの push で先着の loop だけが置く)。
   マシンを跨いだ複数の loop が、生存報告を 1 本ずつ置いて同じ issue 置き場を分け合う。
-  生存報告が間隔の 3 倍新しくならない loop の着手宣言は、他の loop が乗っ取るか消す
+  生存報告が間隔の 3 倍新しくならない loop の着手宣言は、他の loop が乗っ取るか消す。
+  ただし生きている orphan の作業対象のものは、同じマシンの loop が claim を立てずに引き継ぐ (ADR 0027)
 end note
 
 note bottom of Workspace
