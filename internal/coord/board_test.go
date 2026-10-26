@@ -941,7 +941,7 @@ func TestObservingFailsWhenTheRefsCannotBeReadAndChangesNothing(t *testing.T) {
 	}
 }
 
-func TestTheClockIsReadAfterTheRefsAreRead(t *testing.T) {
+func TestTheClockIsReadBeforeAndAfterTheRefsAreRead(t *testing.T) {
 	r := &countingRefs{Memory: coordtest.NewMemory(me)}
 	board := coord.NewBoard(r, beat)
 	r.Put(&issue42, claimBy(other, issue42))
@@ -951,8 +951,38 @@ func TestTheClockIsReadAfterTheRefsAreRead(t *testing.T) {
 		return start
 	}, nil)
 
-	if err != nil || !slices.Equal(r.readsWhenClockWasRead, []int{1}) {
-		t.Fatalf("時計を読んだときの ref の読み出しの回数 = %v (%v), want ref を読み終えた後に 1 回", r.readsWhenClockWasRead, err)
+	if err != nil || !slices.Equal(r.readsWhenClockWasRead, []int{0, 1}) {
+		t.Fatalf("時計を読んだときの ref の読み出しの回数 = %v (%v), want ref を読む前と読み終えた後に 1 回ずつ", r.readsWhenClockWasRead, err)
+	}
+}
+
+func TestASlowReadOfTheRefsDoesNotLengthenTheElapsedTimeOfTheJudgement(t *testing.T) {
+	r := &slowRefs{Memory: coordtest.NewMemory(me)}
+	board := coord.NewBoard(r, beat)
+	// 他の loop の生存報告と着手宣言は t=0 に置いたまま変わらない (置き直しの push が遅れている)
+	r.Put(nil, beatOf(other, time.Minute))
+	r.Put(&issue42, claimBy(other, issue42))
+	observe := func(at, readTakes time.Duration) {
+		t.Helper()
+		r.now, r.readTakes = start.Add(at), readTakes
+		out, err := board.Observe(func() time.Time { return r.now }, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, o := range out {
+			if _, takenOver := o.(coord.TakenOver); takenOver {
+				t.Fatalf("Observe(%v) = %v, want 乗っ取りなし", at, out)
+			}
+		}
+	}
+
+	observe(0, 0)
+	observe(time.Minute, 0)
+	// ref の snapshot の時点の経過は 2 分 (生きている)。その後の fetch が 70 秒止まる
+	observe(2*time.Minute, 70*time.Second)
+
+	if out := board.Claim(issue42); out != (coord.ClaimLost{}) {
+		t.Fatalf("Claim = %#v, want ClaimLost (snapshot の時点で生きている loop の着手宣言を乗っ取らない)", out)
 	}
 }
 
@@ -966,6 +996,20 @@ type countingRefs struct {
 func (r *countingRefs) Observe() (coord.View, error) {
 	r.reads++
 	return r.Memory.Observe()
+}
+
+// slowRefs は、ref の snapshot (Memory.Observe) を返した後に readTakes だけ時計 now を進める coordination board (知らない sha の
+// commit message の fetch が遅い)。
+type slowRefs struct {
+	*coordtest.Memory
+	now       time.Time
+	readTakes time.Duration
+}
+
+func (r *slowRefs) Observe() (coord.View, error) {
+	v, err := r.Memory.Observe()
+	r.now = r.now.Add(r.readTakes)
+	return v, err
 }
 
 // unreadableRefs は ref の一覧を読めない coordination board。

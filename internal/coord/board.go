@@ -137,20 +137,23 @@ func (b *Board) Holder(ref target.Ref) string {
 // 見た時刻を覚え直し、自分の着手宣言の乗っ取りを見つけ、消し損ねた自分の着手宣言を消し、他の loop の着手宣言と死んだ loop を
 // 判定する。ref を読めなければ error を返し、何も変えない。
 //
-// now は時計で、ref を読み終えた後に 1 回だけ読む (読む前に取ると、読みが遅いときに sha を見た時刻が早くなり、生きている loop を
-// 早く死んだとみなす)。orphans は前の tick に生きていた orphan の作業対象で、消し損ねた着手宣言の掃除が、引き継いだ着手宣言との
-// 見分けに使う (この tick の orphan の確かめより前に撃つため)。返す Outcome は log に残す順に並ぶ。
+// clock は ref を読む前と読み終えた後に 1 回ずつ読む。死の判定は読む前の時刻で、新しく見た sha を見た時刻は読み終えた後の時刻で
+// 数える。逆にすると、判定する tick の読みの遅さ (commit message の fetch) が経過に足されるか、前の tick の読みの遅さの分だけ
+// sha を見た時刻が早くなり、どちらも生きている loop を早く死んだとみなす。orphans は前の tick に生きていた orphan の作業対象で、
+// 消し損ねた着手宣言の掃除が、引き継いだ着手宣言との見分けに使う (この tick の orphan の確かめより前に撃つため)。返す Outcome は
+// log に残す順に並ぶ。
 func (b *Board) Observe(clock func() time.Time, orphans map[target.Ref]bool) ([]Outcome, error) {
+	judgedAt := clock()
 	v, err := b.refs.Observe()
 	if err != nil {
 		return nil, err
 	}
-	now := clock()
+	seenAt := clock()
 	var out []Outcome
 	if v.Unread != nil {
 		out = append(out, Unread{v.Unread})
 	}
-	out = append(out, b.noteSightings(v, now)...)
+	out = append(out, b.noteSightings(v, seenAt)...)
 	out = append(out, b.detectTakeovers(v)...)
 	out = append(out, b.deleteStaleClaims(v, orphans)...)
 	b.newer = newerFormatIn(v)
@@ -158,7 +161,7 @@ func (b *Board) Observe(clock func() time.Time, orphans map[target.Ref]bool) ([]
 	b.deadLoops = map[string]string{}
 	if b.newer == nil {
 		// 読めない形の生存報告を死んだとみなさない
-		b.judgeDeadLoops(v, now)
+		b.judgeDeadLoops(v, judgedAt)
 	}
 	return out, nil
 }
