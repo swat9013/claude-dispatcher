@@ -12,7 +12,7 @@ ADR 0027 では、同じマシンで起動し直した loop が、生きてい�
 
 後者で着手宣言が remote に届いていると、自分の名前で生存報告の無い着手宣言が remote に残る。他の loop は、持ち主の生存報告が無い着手宣言として、持ち主を死んだとみなすまで (formats.md §12 の 5) その作業対象を起動しない。
 
-今の tick の順では、着手宣言の commit message を読める限りこの経路に届かない (理由は formats.md §12 の 8)。commit message を読めないまま orphan が終わり、その後に loop が止まると届く。
+この決定の時点の tick の順では、着手宣言の commit message を読める限りこの経路に届かない。結果の分からない引き継ぎを覚えるのは orphan が生きている tick だけで、orphan の生死は、次の tick で覚えたものを決着させた後に確かめ直す。突き合わせが落ちた tick は orphan を確かめずに直前の生死を残す。このため、覚えたものが決着しないまま orphan が終わったと分かるのは、commit message を読めない tick が続いている間だけになる。commit message を読めないまま orphan が終わり、その後に loop が止まると、この経路に届く。
 
 ## Decision
 
