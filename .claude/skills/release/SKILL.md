@@ -98,5 +98,4 @@ gh release view <版> --json url,body
 ```
 
 - 成功: Release の url を返す。要約が空でなければ、`body` が確定した要約で始まるかも見る。始まらなければ (release workflow が tag の本文を読めていない)、そのことと `body` の先頭を url に添えて返す
-- 失敗: `gh run view <databaseId>` を撃ち、
 - 失敗: `gh run view <databaseId>` を撃ち、run の url と、出力の `X` の付いた job・step と `ANNOTATIONS` の行をそのまま返す。release.yml は失敗の理由と次の手順を `::error::` に書いており、それが `ANNOTATIONS` に出る。tag は消さずに残し、消すかどうかは user に委ねる (Release が半端に出ていることがあるため)
