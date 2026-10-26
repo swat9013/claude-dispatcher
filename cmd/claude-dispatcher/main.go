@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -87,7 +88,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 	switch {
-	case helpFlag.accepts(args[0]):
+	case args[0] == helpFlag.word && len(args) > 1:
+		// guide の後ろの引数と同じく誤りにする (formats.md §10)
+		return usageError(stderr, "引数が多い: %s", args[1])
+	case helpFlag.accepts(args[0]),
+		// command の後ろの -h・--help は、command と他の引数を読まない
+		isCommand(args[0]) && slices.ContainsFunc(args[1:], helpFlag.acceptsAfterCommand):
 		fmt.Fprint(stdout, usage)
 		return 0
 	case versionFlag.accepts(args[0]):
