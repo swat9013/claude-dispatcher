@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -177,34 +176,56 @@ func (s startingFailingIssues) OpenIssues() ([]target.Item, error) {
 	return nil, &target.Failure{Kind: target.Auth, Place: "acme/widgets", Err: errors.New("401 issue")}
 }
 
-// endingCLs は、issue の一覧の読み出しが始まるまで待ってから、読み終えたことを ended に残して致命的な失敗を返す CL 置き場の部品。
+// endingCLs は、issue の一覧の読み出しが始まるまで待ってから、致命的な失敗を返す CL 置き場の部品。
 type endingCLs struct {
 	clsOnly
 	issueStarted <-chan struct{}
-	ended        *atomic.Bool
 }
 
 func (e endingCLs) OpenCLs() ([]target.Item, error) {
 	<-e.issueStarted
-	e.ended.Store(true)
 	return nil, &target.Failure{Kind: target.Auth, Place: "acme/widgets", Err: errors.New("401 cl")}
 }
 
-func TestOpenItemsReturnsOnlyAfterEveryListingHasEnded(t *testing.T) {
-	started, ended := make(chan struct{}), new(atomic.Bool)
-	store := places.Store{Issues: startingFailingIssues{started: started}, CLs: endingCLs{issueStarted: started, ended: ended}}
+func TestOpenItemsWaitsForTheOtherListingAfterTheFirstKindFailsAndThenReturnsThatFailure(t *testing.T) {
+	issueStarted, clReleased := make(chan struct{}), make(chan struct{})
+	// issue の一覧はすぐ致命的に失敗し、CL の一覧は clReleased が閉じるまで読み終わらない (読み終われば CL 1 件を返す)
+	store := places.Store{Issues: startingFailingIssues{started: issueStarted}, CLs: heldCLs{release: clReleased}}
+	type result struct {
+		items []target.Item
+		err   error
+	}
+	returned := make(chan result, 1)
+	go func() {
+		items, err := places.OpenItems(store, issueFirst)
+		returned <- result{items, err}
+	}()
+	<-issueStarted
 
-	_, _ = openItemsWithin(t, store, issueFirst)
+	// 先の失敗の時点で返す実装なら、CL を握っている 100ms の間に返る。待つ実装はこの待ち時間で落ちない
+	select {
+	case r := <-returned:
+		t.Fatalf("OpenItems が CL の一覧を読み終わる前に返った: items = %v, err = %v", r.items, r.err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(clReleased)
+	var r result
+	select {
+	case r = <-returned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("OpenItems が CL の一覧を読み終えても 5 秒で返らない")
+	}
 
-	if !ended.Load() {
-		t.Fatal("OpenItems が CL の一覧を読み終わる前に返った")
+	var failure *target.Failure
+	if r.items != nil || !errors.As(r.err, &failure) || !strings.Contains(r.err.Error(), "401 issue") {
+		t.Fatalf("items = %v, err = %v, want 後から読み終えた CL を捨てて、作業対象なしで issue の認証の失敗", r.items, r.err)
 	}
 }
 
 func TestOpenItemsReturnsTheFailureOfTheFirstKindWhenEveryListingFails(t *testing.T) {
 	started := make(chan struct{})
 	// CL の失敗は issue の読み出しが始まってから返るが、返すのは種類の順で先の issue の失敗だけ
-	store := places.Store{Issues: startingFailingIssues{started: started}, CLs: endingCLs{issueStarted: started, ended: new(atomic.Bool)}}
+	store := places.Store{Issues: startingFailingIssues{started: started}, CLs: endingCLs{issueStarted: started}}
 
 	items, err := openItemsWithin(t, store, issueFirst)
 
