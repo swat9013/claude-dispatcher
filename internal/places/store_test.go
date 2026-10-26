@@ -213,6 +213,43 @@ func TestOpenItemsReturnsTheFailureOfTheFirstKindWhenEveryListingFails(t *testin
 	}
 }
 
+// failedIssues は、致命的な失敗を返すときに failed を閉じる issue 置き場の部品。
+type failedIssues struct {
+	issuesOnly
+	failed chan<- struct{}
+}
+
+func (f failedIssues) OpenIssues() ([]target.Item, error) {
+	defer close(f.failed)
+	return nil, &target.Failure{Kind: target.Auth, Place: "acme/widgets", Err: errors.New("401 issue")}
+}
+
+// clsEndingAfterIssueFailed は、issue の一覧が失敗を返すまで待ってから、読み終えたことを ended に残して CL を返す
+// CL 置き場の部品 (例: issue 置き場の認証が切れた tick の、遅いが読める CL の一覧)。
+type clsEndingAfterIssueFailed struct {
+	clsOnly
+	issueFailed <-chan struct{}
+	ended       *atomic.Bool
+}
+
+func (c clsEndingAfterIssueFailed) OpenCLs() ([]target.Item, error) {
+	<-c.issueFailed
+	c.ended.Store(true)
+	return c.clsOnly.OpenCLs()
+}
+
+func TestOpenItemsWaitsForTheOtherListingAfterTheFirstKindFailsAndReturnsThatFailure(t *testing.T) {
+	failed, ended := make(chan struct{}), new(atomic.Bool)
+	store := places.Store{Issues: failedIssues{failed: failed}, CLs: clsEndingAfterIssueFailed{issueFailed: failed, ended: ended}}
+
+	items, err := openItemsWithin(t, store, issueFirst)
+
+	var failure *target.Failure
+	if !ended.Load() || items != nil || !errors.As(err, &failure) || !strings.Contains(err.Error(), "401 issue") {
+		t.Fatalf("ended = %v, items = %v, err = %v, want CL の一覧を読み終えてから、作業対象なしで issue の認証の失敗", ended.Load(), items, err)
+	}
+}
+
 // waitingIssuesWithNonFatal は、CL の一覧の読み出しが始まるまで待ってから、issue 1 件と処理を続けられる失敗を返す
 // issue 置き場の部品。
 type waitingIssuesWithNonFatal struct {
