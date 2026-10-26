@@ -42,74 +42,38 @@ func beatOf(loop string, interval time.Duration) coord.Message {
 	return coord.Message{Kind: coord.KindHeartbeat, Format: coord.Format, Loop: loop, Interval: interval}
 }
 
-// faulty は coordtest.Memory に、撃たれた push と削除の記録と、失敗の注入を足した adapter。
-type faulty struct {
+// recorded は coordtest.Memory に、撃たれた push と削除と Leave の記録を足した adapter。失敗の注入は coordtest.Memory が持つ。
+type recorded struct {
 	*coordtest.Memory
 	// claimed と deleted は Claim と DeleteClaim・DeleteHeartbeat の呼び出し (`<作業対象> <期待値>`・`<ref の名前> <sha>`)
 	claimed, deleted []string
 	// left は Leave の呼び出しの回数
 	left int
-	// claimErr は着手宣言の push を通したうえで返す失敗 (結果の分からない失敗)。deleteErr は ref の削除を落とす失敗 (負けではない)。
-	// heartbeatErr は生存報告の置き直しを落とす失敗。leaveErr は Leave を落とす失敗
-	claimErr, deleteErr, heartbeatErr, leaveErr error
-	// unread の sha の commit message は、読めなかったものとして View から外す
-	unread map[string]bool
 }
 
-func (f *faulty) Observe() (coord.View, error) {
-	v, err := f.Memory.Observe()
-	for sha := range f.unread {
-		if _, ok := v.Messages[sha]; ok {
-			delete(v.Messages, sha)
-			v.Unread = errFetch
-		}
-	}
-	return v, err
+func (r *recorded) Claim(ref target.Ref, expect coord.Expect) (string, error) {
+	r.claimed = append(r.claimed, ref.String()+" "+expect.String())
+	return r.Memory.Claim(ref, expect)
 }
 
-func (f *faulty) Claim(ref target.Ref, expect coord.Expect) (string, error) {
-	f.claimed = append(f.claimed, ref.String()+" "+expect.String())
-	sha, err := f.Memory.Claim(ref, expect)
-	if err == nil && f.claimErr != nil {
-		return "", f.claimErr
-	}
-	return sha, err
+func (r *recorded) DeleteClaim(ref target.Ref, sha string) error {
+	r.deleted = append(r.deleted, coordtest.ClaimName(ref)+" "+sha)
+	return r.Memory.DeleteClaim(ref, sha)
 }
 
-func (f *faulty) DeleteClaim(ref target.Ref, sha string) error {
-	f.deleted = append(f.deleted, "claims/"+ref.FileName()+" "+sha)
-	if f.deleteErr != nil {
-		return f.deleteErr
-	}
-	return f.Memory.DeleteClaim(ref, sha)
+func (r *recorded) DeleteHeartbeat(loop, sha string) error {
+	r.deleted = append(r.deleted, coordtest.HeartbeatName(loop)+" "+sha)
+	return r.Memory.DeleteHeartbeat(loop, sha)
 }
 
-func (f *faulty) DeleteHeartbeat(loop, sha string) error {
-	f.deleted = append(f.deleted, "loops/"+loop+" "+sha)
-	if f.deleteErr != nil {
-		return f.deleteErr
-	}
-	return f.Memory.DeleteHeartbeat(loop, sha)
-}
-
-func (f *faulty) Heartbeat(interval time.Duration) error {
-	if f.heartbeatErr != nil {
-		return f.heartbeatErr
-	}
-	return f.Memory.Heartbeat(interval)
-}
-
-func (f *faulty) Leave() error {
-	f.left++
-	if f.leaveErr != nil {
-		return f.leaveErr
-	}
-	return f.Memory.Leave()
+func (r *recorded) Leave() error {
+	r.left++
+	return r.Memory.Leave()
 }
 
 // world は Board と、それが読み書きする coordination board。
 type world struct {
-	*faulty
+	*recorded
 	t     *testing.T
 	board *coord.Board
 }
@@ -117,8 +81,8 @@ type world struct {
 func newWorld(t *testing.T) *world { return newWorldOf(t, me) }
 
 func newWorldOf(t *testing.T, loop string) *world {
-	f := &faulty{Memory: coordtest.NewMemory(loop), unread: map[string]bool{}}
-	return &world{faulty: f, t: t, board: coord.NewBoard(f, beat)}
+	r := &recorded{Memory: coordtest.NewMemory(loop)}
+	return &world{recorded: r, t: t, board: coord.NewBoard(r, beat)}
 }
 
 func set(refs []target.Ref) map[target.Ref]bool {
@@ -313,7 +277,7 @@ func TestClaimPushesWithTheExpectationThatMatchesTheHolder(t *testing.T) {
 	t.Run("負け以外の失敗は着手宣言を置いたことにしない", func(t *testing.T) {
 		w := newWorld(t)
 		w.observe(0)
-		w.claimErr = errPush
+		w.FailClaim(errPush)
 
 		out := w.board.Claim(issue42)
 
@@ -325,7 +289,7 @@ func TestClaimPushesWithTheExpectationThatMatchesTheHolder(t *testing.T) {
 	})
 }
 
-func TestReleaseDeletesOnlyTheClaimItPlacedAndReportsAFailure(t *testing.T) {
+func TestReleaseDeletesOnlyTheClaimItPlaced(t *testing.T) {
 	w := newWorld(t)
 	w.observe(0)
 	w.claim(issue42)
@@ -334,14 +298,19 @@ func TestReleaseDeletesOnlyTheClaimItPlacedAndReportsAFailure(t *testing.T) {
 	wantOutcomes(t, w.board.Release(issue42))
 	wantOutcomes(t, w.board.Release(issue42))
 
-	wantDeleted(t, w, "claims/issue-42 "+sha)
+	wantDeleted(t, w, coordtest.ClaimName(issue42)+" "+sha)
 	if len(w.Claims()) != 0 {
 		t.Fatalf("着手宣言 = %v, want 消えている", w.Claims())
 	}
+}
 
-	w.claim(issue7)
-	w.deleteErr = errPush
-	wantOutcomes(t, w.board.Release(issue7), coord.ClaimReleaseFailed{Ref: issue7, Err: errPush})
+func TestAFailedDeleteIsReturnedAsAFailedReleaseWhenReleasing(t *testing.T) {
+	w := newWorld(t)
+	w.observe(0)
+	w.claim(issue42)
+	w.FailDelete(errPush)
+
+	wantOutcomes(t, w.board.Release(issue42), coord.ClaimReleaseFailed{Ref: issue42, Err: errPush})
 }
 
 func TestALostDeleteIsReturnedAsALostReleaseWhenReleasing(t *testing.T) {
@@ -365,9 +334,9 @@ func TestAClaimThatWasTakenOverIsReportedOnceAndNeverDeleted(t *testing.T) {
 		{"着手宣言が消えていた", func(w *world, mine string) { _ = w.Memory.DeleteClaim(issue42, mine) },
 			[]coord.Outcome{coord.TakenOver{Ref: issue42}}},
 		{"持ち主を読めない着手宣言に置き換わった", func(w *world, _ string) { w.Put(&issue42, claimBy("", issue42)) },
-			[]coord.Outcome{coord.OwnerUnreadable{Ref: issue42, Name: "claims/issue-42"}, unreadable}},
+			[]coord.Outcome{coord.OwnerUnreadable{Ref: issue42, Name: coordtest.ClaimName(issue42)}, unreadable}},
 		{"commit message を読めない着手宣言に置き換わった", func(w *world, _ string) {
-			w.unread[w.Put(&issue42, claimBy(other, issue42))] = true
+			w.Unreadable(errFetch, w.Put(&issue42, claimBy(other, issue42)))
 		}, []coord.Outcome{coord.Unread{Err: errFetch}, unreadable}},
 	}
 	for _, c := range cases {
@@ -385,7 +354,7 @@ func TestAClaimThatWasTakenOverIsReportedOnceAndNeverDeleted(t *testing.T) {
 				t.Fatalf("要対処の乗っ取られた作業対象 = %v, want %v", a.TakenOver, taken)
 			}
 			wantOutcomes(t, w.board.Release(issue42))
-			clear(w.unread)
+			w.Unreadable(nil)
 			wantOutcomes(t, w.observe(2*beat))
 			wantDeleted(t, w)
 		})
@@ -413,7 +382,7 @@ func TestALeftoverClaimOfMyOwnIsDeletedUnlessItIsInUse(t *testing.T) {
 			func(string) []coord.Outcome { return nil }, false},
 		{"持ち主を読めない着手宣言は消さない", func(w *world) string { return w.Put(&issue7, claimBy("", issue7)) }, nil, nil,
 			func(string) []coord.Outcome {
-				return []coord.Outcome{coord.OwnerUnreadable{Ref: issue7, Name: "claims/issue-7"}}
+				return []coord.Outcome{coord.OwnerUnreadable{Ref: issue7, Name: coordtest.ClaimName(issue7)}}
 			}, false},
 		{"前の tick に生きていた orphan の作業対象のものは、引き継いだものとして覚えて消さない", func(w *world) string { return w.Put(&issue7, claimBy(me, issue7)) },
 			[]target.Ref{issue7}, nil, func(string) []coord.Outcome { return nil }, false},
@@ -422,13 +391,13 @@ func TestALeftoverClaimOfMyOwnIsDeletedUnlessItIsInUse(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			w := newWorld(t)
 			sha := c.setup(w)
-			w.deleteErr = c.err
+			w.FailDelete(c.err)
 
 			got := w.observe(0, c.orphans...)
 
 			wantOutcomes(t, got, c.want(sha)...)
 			if c.deleted {
-				wantDeleted(t, w, "claims/issue-7 "+sha)
+				wantDeleted(t, w, coordtest.ClaimName(issue7)+" "+sha)
 			} else {
 				wantDeleted(t, w)
 			}
@@ -473,7 +442,7 @@ func TestAnOrphansDeadHoldersClaimIsInheritedOnlyWhereTheOrphanWorks(t *testing.
 		{name: "hostname の前半だけが同じ別のマシンの生きている loop の着手宣言は引き継がない", me: hyphenated, holder: "s-watanabe-0000ffff", heartbeat: true, at: []time.Duration{0}, orphans: orphan42},
 		{name: "別のマシンの生きている loop の着手宣言は引き継がない", me: me, holder: other, heartbeat: true, at: []time.Duration{0}, orphans: orphan42},
 		{name: "orphan が生きていない作業対象の着手宣言は引き継がず、死んだ loop のものとして消す", me: me, holder: dead, at: deadAt,
-			others: []coord.Outcome{coord.DeadLoopCleaned{Loop: dead, Refs: []string{"claims/issue-42"}, Claims: 1}}},
+			others: []coord.Outcome{coord.DeadLoopCleaned{Loop: dead, Refs: []string{coordtest.ClaimName(issue42)}, Claims: 1}}},
 		{name: "新しい版の ref がある間は引き継がない", me: me, holder: dead, newer: true, at: deadAt, orphans: orphan42},
 		{name: "新しい版の ref がある間は、同じマシンの前の loop の着手宣言も引き継がない", me: me, holder: "me-00000009", heartbeat: true, newer: true, at: []time.Duration{0}, orphans: orphan42},
 		{name: "持ち主を読めない着手宣言は引き継がない", me: me, holder: "", at: deadAt, orphans: orphan42},
@@ -541,9 +510,9 @@ func TestAnInheritWithAnUnknownResultIsRememberedAndSettledByTheNextObservation(
 		old := w.Put(&issue42, claimBy("me-00000009", issue42))
 		w.observe(0, issue42)
 		// push は remote に届いたが、結果の分からない失敗を返す
-		w.claimErr = errPush
+		w.FailClaim(errPush)
 		wantOutcomes(t, w.board.Tidy(set([]target.Ref{issue42}), nil), coord.InheritFailed{Ref: issue42, Err: errPush})
-		w.claimErr = nil
+		w.FailClaim(nil)
 		if !slices.Equal(w.claimed, []string{"issue#42 holding " + old}) {
 			t.Fatalf("着手宣言の push = %v", w.claimed)
 		}
@@ -560,7 +529,7 @@ func TestAnInheritWithAnUnknownResultIsRememberedAndSettledByTheNextObservation(
 	})
 	t.Run("次の突き合わせで着手宣言の commit message を読めない間は覚えたまま", func(t *testing.T) {
 		w, _ := inheritUnsure(t)
-		w.unread[w.ownClaim(issue42)] = true
+		w.Unreadable(errFetch, w.ownClaim(issue42))
 
 		wantOutcomes(t, w.observe(beat, issue42), coord.Unread{Err: errFetch})
 
@@ -625,7 +594,7 @@ func TestAnInheritedClaimIsDeletedWhenTheOrphanEnds(t *testing.T) {
 
 	wantOutcomes(t, w.board.ReleaseInherited(nil))
 
-	wantDeleted(t, w, "claims/issue-42 "+sha)
+	wantDeleted(t, w, coordtest.ClaimName(issue42)+" "+sha)
 	if w.board.Held(issue42) {
 		t.Fatal("orphan が終わって消したら、起動できる")
 	}
@@ -645,14 +614,14 @@ func TestAnInheritedClaimIsNotDeletedAsAStaleClaimEvenAfterTheOrphanEnded(t *tes
 
 func TestAnInheritedClaimThatCannotBeDeletedKeepsTheTargetFromLaunching(t *testing.T) {
 	w, _ := inherited(t)
-	w.deleteErr = errPush
+	w.FailDelete(errPush)
 
 	wantOutcomes(t, w.board.ReleaseInherited(nil), coord.InheritedReleaseFailed{Ref: issue42, Err: errPush})
 
 	if !w.board.Held(issue42) {
 		t.Fatal("消せなかった引き継いだ着手宣言が残る間は、起動しない")
 	}
-	w.deleteErr = nil
+	w.FailDelete(nil)
 	wantOutcomes(t, w.board.ReleaseInherited(nil))
 	if w.board.Held(issue42) {
 		t.Fatal("消し直したら、起動できる")
@@ -696,8 +665,8 @@ func TestTheDeadLoopsRefsAreDeletedExceptTheOnesInUse(t *testing.T) {
 
 		got := w.board.Tidy(nil, nil)
 
-		wantOutcomes(t, got, coord.DeadLoopCleaned{Loop: dead, Refs: []string{"claims/cl-3", "claims/issue-7", "claims/issue-42", "loops/" + dead}, Heartbeat: true, Claims: 3})
-		wantDeleted(t, w, "claims/cl-3 "+claimCL, "claims/issue-7 "+claim7, "claims/issue-42 "+claim42, "loops/"+dead+" "+heartbeat)
+		wantOutcomes(t, got, coord.DeadLoopCleaned{Loop: dead, Refs: []string{coordtest.ClaimName(cl3), coordtest.ClaimName(issue7), coordtest.ClaimName(issue42), coordtest.HeartbeatName(dead)}, Heartbeat: true, Claims: 3})
+		wantDeleted(t, w, coordtest.ClaimName(cl3)+" "+claimCL, coordtest.ClaimName(issue7)+" "+claim7, coordtest.ClaimName(issue42)+" "+claim42, coordtest.HeartbeatName(dead)+" "+heartbeat)
 		wantOutcomes(t, w.board.Tidy(nil, nil))
 	})
 	t.Run("自分が着手宣言を置いた作業対象と、claude が作業を続けている作業対象と、orphan の作業対象は消さない", func(t *testing.T) {
@@ -711,8 +680,8 @@ func TestTheDeadLoopsRefsAreDeletedExceptTheOnesInUse(t *testing.T) {
 		got := w.board.Tidy(set([]target.Ref{issue42}), set([]target.Ref{cl3}))
 
 		// orphan の作業対象の着手宣言は、消さずに引き継ぐ
-		wantOutcomes(t, got, coord.Inherited{Ref: issue42, From: dead}, coord.DeadLoopCleaned{Loop: dead, Refs: []string{"loops/" + dead}, Heartbeat: true})
-		wantDeleted(t, w, "loops/"+dead+" "+heartbeat)
+		wantOutcomes(t, got, coord.Inherited{Ref: issue42, From: dead}, coord.DeadLoopCleaned{Loop: dead, Refs: []string{coordtest.HeartbeatName(dead)}, Heartbeat: true})
+		wantDeleted(t, w, coordtest.HeartbeatName(dead)+" "+heartbeat)
 	})
 	t.Run("生存報告の無い loop の着手宣言だけを消す", func(t *testing.T) {
 		w := newWorld(t)
@@ -722,13 +691,13 @@ func TestTheDeadLoopsRefsAreDeletedExceptTheOnesInUse(t *testing.T) {
 
 		got := w.board.Tidy(nil, nil)
 
-		wantOutcomes(t, got, coord.DeadLoopCleaned{Loop: dead, Refs: []string{"claims/issue-7"}, Claims: 1})
-		wantDeleted(t, w, "claims/issue-7 "+claim)
+		wantOutcomes(t, got, coord.DeadLoopCleaned{Loop: dead, Refs: []string{coordtest.ClaimName(issue7)}, Claims: 1})
+		wantDeleted(t, w, coordtest.ClaimName(issue7)+" "+claim)
 	})
 	t.Run("消せなければ Outcome を返し、消した ref が無ければ dead_loop にしない", func(t *testing.T) {
 		w := newWorld(t)
 		setup(w)
-		w.deleteErr = errPush
+		w.FailDelete(errPush)
 
 		got := w.board.Tidy(nil, nil)
 
@@ -747,7 +716,7 @@ func TestTheDeadLoopsRefsAreDeletedExceptTheOnesInUse(t *testing.T) {
 
 		got := w.board.Tidy(nil, nil)
 
-		wantOutcomes(t, got, coord.DeadLoopCleaned{Loop: dead, Refs: []string{"claims/cl-3"}, Claims: 1})
+		wantOutcomes(t, got, coord.DeadLoopCleaned{Loop: dead, Refs: []string{coordtest.ClaimName(cl3)}, Claims: 1})
 	})
 	t.Run("新しい版の ref がある間は、死んだ loop を判定せず消さない", func(t *testing.T) {
 		w := newWorld(t)
@@ -770,7 +739,7 @@ func TestLeaveDeletesTheClaimsAndTheHeartbeatExceptWhereAClaudeMayStillWork(t *t
 
 		wantOutcomes(t, w.board.Leave(nil, nil))
 
-		wantDeleted(t, w, "claims/cl-3 "+b, "claims/issue-42 "+a)
+		wantDeleted(t, w, coordtest.ClaimName(cl3)+" "+b, coordtest.ClaimName(issue42)+" "+a)
 		if len(w.Claims()) != 0 || len(w.Loops()) != 0 || w.left != 1 {
 			t.Fatalf("残った着手宣言 %v・生存報告 %v (Leave %d 回)", w.Claims(), w.Loops(), w.left)
 		}
@@ -795,7 +764,7 @@ func TestLeaveDeletesTheClaimsAndTheHeartbeatExceptWhereAClaudeMayStillWork(t *t
 		w := newWorld(t)
 		w.observe(0)
 		w.claim(issue42)
-		w.deleteErr = errPush
+		w.FailDelete(errPush)
 
 		wantOutcomes(t, w.board.Leave(nil, nil), coord.ClaimReleaseFailed{Ref: issue42, Err: errPush})
 
@@ -812,7 +781,7 @@ func TestLeaveDeletesTheClaimsAndTheHeartbeatExceptWhereAClaudeMayStillWork(t *t
 	})
 	t.Run("生存報告を消せなければ Outcome を返す", func(t *testing.T) {
 		w := newWorld(t)
-		w.leaveErr = errPush
+		w.FailLeave(errPush)
 
 		wantOutcomes(t, w.board.Leave(nil, nil), coord.LeaveFailed{Err: errPush})
 	})
@@ -827,7 +796,7 @@ func TestLeaveDeletesTheClaimsAndTheHeartbeatExceptWhereAClaudeMayStillWork(t *t
 	})
 	t.Run("orphan は終わったが消せなかった引き継いだ着手宣言は、生存報告を消して止まる", func(t *testing.T) {
 		w, _ := inherited(t)
-		w.deleteErr = errPush
+		w.FailDelete(errPush)
 
 		got := w.board.Leave(nil, nil)
 
@@ -841,7 +810,7 @@ func TestLeaveDeletesTheClaimsAndTheHeartbeatExceptWhereAClaudeMayStillWork(t *t
 
 		wantOutcomes(t, w.board.Leave(nil, nil))
 
-		wantDeleted(t, w, "claims/issue-42 "+sha)
+		wantDeleted(t, w, coordtest.ClaimName(issue42)+" "+sha)
 		if w.left != 1 {
 			t.Fatalf("Leave %d 回, want 1", w.left)
 		}
@@ -853,19 +822,19 @@ func TestARefThatCannotBeReadIsReportedOnce(t *testing.T) {
 		w := newWorld(t)
 		sha := w.Put(&issue42, claimBy("", issue42))
 
-		wantOutcomes(t, w.observe(0), coord.OwnerUnreadable{Ref: issue42, Name: "claims/issue-42"})
+		wantOutcomes(t, w.observe(0), coord.OwnerUnreadable{Ref: issue42, Name: coordtest.ClaimName(issue42)})
 		wantOutcomes(t, w.observe(beat))
 		w.Put(&issue42, claimBy("", issue42))
 		if got := w.Claims()[issue42]; got == sha {
 			t.Fatal("sha が変わっていない")
 		}
-		wantOutcomes(t, w.observe(2*beat), coord.OwnerUnreadable{Ref: issue42, Name: "claims/issue-42"})
+		wantOutcomes(t, w.observe(2*beat), coord.OwnerUnreadable{Ref: issue42, Name: coordtest.ClaimName(issue42)})
 	})
 	t.Run("間隔を読めない生存報告", func(t *testing.T) {
 		w := newWorld(t)
 		w.Put(nil, beatOf("odd-00000004", 0))
 
-		wantOutcomes(t, w.observe(0), coord.IntervalUnreadable{Loop: "odd-00000004", Name: "loops/odd-00000004"})
+		wantOutcomes(t, w.observe(0), coord.IntervalUnreadable{Loop: "odd-00000004", Name: coordtest.HeartbeatName("odd-00000004")})
 		wantOutcomes(t, w.observe(beat))
 	})
 	t.Run("自分の生存報告と新しい版の生存報告は、間隔を読めなくても返さない", func(t *testing.T) {
@@ -878,12 +847,12 @@ func TestARefThatCannotBeReadIsReportedOnce(t *testing.T) {
 	t.Run("commit message を読めなかった tick の後、初めて読めた tick に 1 回だけ返す", func(t *testing.T) {
 		w := newWorld(t)
 		sha := w.Put(nil, beatOf("odd-00000004", 0))
-		w.unread[sha] = true
+		w.Unreadable(errFetch, sha)
 
 		wantOutcomes(t, w.observe(0), coord.Unread{Err: errFetch})
 		wantOutcomes(t, w.observe(beat), coord.Unread{Err: errFetch})
-		delete(w.unread, sha)
-		wantOutcomes(t, w.observe(2*beat), coord.IntervalUnreadable{Loop: "odd-00000004", Name: "loops/odd-00000004"})
+		w.Unreadable(nil)
+		wantOutcomes(t, w.observe(2*beat), coord.IntervalUnreadable{Loop: "odd-00000004", Name: coordtest.HeartbeatName("odd-00000004")})
 		wantOutcomes(t, w.observe(3*beat))
 	})
 }

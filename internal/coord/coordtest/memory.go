@@ -12,8 +12,9 @@ import (
 )
 
 // Memory は ref と条件付きの更新だけを持つ、in-memory の coord.Refs。着手宣言と生存報告の ref を持ち、条件付きの更新
-// (無いときだけ作る・旧 sha を期待値に置き換える・sha を指しているときだけ消す) を server と同じく照合する。生存報告は
-// 別の goroutine から置き直すので、表は mu で守る。
+// (無いときだけ作る・旧 sha を期待値に置き換える・sha を指しているときだけ消す) を server と同じく照合する。テストが注入する
+// 失敗 (FailClaim・FailDelete・FailHeartbeat・FailLeave・Unreadable) も持つ。生存報告は別の goroutine から置き直すので、
+// 表と注入した失敗は mu で守る。
 type Memory struct {
 	loop string
 
@@ -24,17 +25,71 @@ type Memory struct {
 	n        int
 	// heartbeat は自分が最後に置けた生存報告の sha。無ければ ""
 	heartbeat string
+
+	// claimErr・deleteErr・heartbeatErr・leaveErr は注入した失敗 (FailClaim・FailDelete・FailHeartbeat・FailLeave)。nil なら落とさない
+	claimErr, deleteErr, heartbeatErr, leaveErr error
+	// unread の sha の commit message は、読めなかったものとして View から外し、View.Unread に unreadErr を置く (Unreadable)
+	unread    map[string]bool
+	unreadErr error
 }
 
 var _ coord.Refs = (*Memory)(nil)
+
+// board は ref の名前の綴りを引く coordination board の remote。綴りは本番の coord.Remote だけが持つ。
+var board = coord.Remote{ScopeDir: "coordtest"}
+
+// ClaimName は Memory が View に載せる、作業対象 ref の着手宣言の ref の名前。
+func ClaimName(ref target.Ref) string { return board.ClaimRef(ref) }
+
+// HeartbeatName は Memory が View に載せる、loop の生存報告の ref の名前。
+func HeartbeatName(loop string) string { return board.HeartbeatRef(loop) }
 
 // NewMemory は loop 名 loop の持ち主として coordination board を読み書きする、空の Memory を作る。
 func NewMemory(loop string) *Memory {
 	return &Memory{loop: loop, claims: map[target.Ref]string{}, loops: map[string]string{}, messages: map[string]coord.Message{}}
 }
 
+// FailClaim は以後の着手宣言の push を通したうえで err を返させる (結果の分からない失敗)。nil を渡すと戻す。
+func (m *Memory) FailClaim(err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.claimErr = err
+}
+
+// FailDelete は以後の着手宣言と生存報告の削除を、ref を変えずに err で落とす (負けではない失敗)。nil を渡すと戻す。
+func (m *Memory) FailDelete(err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.deleteErr = err
+}
+
+// FailHeartbeat は以後の生存報告の置き直しを、ref を変えずに err で落とす。nil を渡すと戻す。
+func (m *Memory) FailHeartbeat(err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.heartbeatErr = err
+}
+
+// FailLeave は以後の Leave を、生存報告を消さずに err で落とす。nil を渡すと戻す。
+func (m *Memory) FailLeave(err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.leaveErr = err
+}
+
+// Unreadable は以後の Observe で、shas の commit message を読めなかったものとして View から外し、外したものがあれば
+// View.Unread に err を置く。呼ぶたびに前の指定を置き換え、shas を渡さなければ戻す。
+func (m *Memory) Unreadable(err error, shas ...string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.unread, m.unreadErr = map[string]bool{}, err
+	for _, sha := range shas {
+		m.unread[sha] = true
+	}
+}
+
 // Put は他の loop の着手宣言か生存報告を置き、置いた commit の sha を返す。ref が nil なら msg.Loop の生存報告、nil でなければ
-// ref の着手宣言を、条件を付けずに置き換える。
+// ref の着手宣言を、条件を付けずに置き換える。注入した失敗は効かない。
 func (m *Memory) Put(ref *target.Ref, msg coord.Message) string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -83,10 +138,16 @@ func (m *Memory) Observe() (coord.View, error) {
 		Claims: map[target.Ref]coord.RefState{}, Loops: map[string]coord.RefState{}, Messages: map[string]coord.Message{},
 	}
 	for ref, sha := range m.claims {
-		v.Claims[ref], v.Messages[sha] = coord.RefState{SHA: sha, Name: "claims/" + ref.FileName()}, m.messages[sha]
+		v.Claims[ref], v.Messages[sha] = coord.RefState{SHA: sha, Name: ClaimName(ref)}, m.messages[sha]
 	}
 	for loop, sha := range m.loops {
-		v.Loops[loop], v.Messages[sha] = coord.RefState{SHA: sha, Name: "loops/" + loop}, m.messages[sha]
+		v.Loops[loop], v.Messages[sha] = coord.RefState{SHA: sha, Name: HeartbeatName(loop)}, m.messages[sha]
+	}
+	for sha := range m.unread {
+		if _, ok := v.Messages[sha]; ok {
+			delete(v.Messages, sha)
+			v.Unread = m.unreadErr
+		}
 	}
 	return v, nil
 }
@@ -97,12 +158,19 @@ func (m *Memory) Claim(ref target.Ref, expect coord.Expect) (string, error) {
 	if expect.String() != expected(m.claims[ref]) {
 		return "", coord.ErrLost
 	}
-	return m.put(&ref, coord.Message{Kind: coord.KindClaim, Format: coord.Format, Loop: m.loop, Target: ref.String()}), nil
+	sha := m.put(&ref, coord.Message{Kind: coord.KindClaim, Format: coord.Format, Loop: m.loop, Target: ref.String()})
+	if m.claimErr != nil {
+		return "", m.claimErr
+	}
+	return sha, nil
 }
 
 func (m *Memory) DeleteClaim(ref target.Ref, sha string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.deleteErr != nil {
+		return m.deleteErr
+	}
 	if current, ok := m.claims[ref]; !ok || current != sha {
 		return coord.ErrLost
 	}
@@ -113,6 +181,9 @@ func (m *Memory) DeleteClaim(ref target.Ref, sha string) error {
 func (m *Memory) DeleteHeartbeat(loop, sha string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.deleteErr != nil {
+		return m.deleteErr
+	}
 	if current, ok := m.loops[loop]; !ok || current != sha {
 		return coord.ErrLost
 	}
@@ -123,6 +194,9 @@ func (m *Memory) DeleteHeartbeat(loop, sha string) error {
 func (m *Memory) Heartbeat(interval time.Duration) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.heartbeatErr != nil {
+		return m.heartbeatErr
+	}
 	m.heartbeat = m.put(nil, coord.Message{Kind: coord.KindHeartbeat, Format: coord.Format, Loop: m.loop, Interval: interval})
 	return nil
 }
@@ -131,6 +205,9 @@ func (m *Memory) Heartbeat(interval time.Duration) error {
 func (m *Memory) Leave() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.leaveErr != nil {
+		return m.leaveErr
+	}
 	if m.heartbeat == "" {
 		return nil
 	}

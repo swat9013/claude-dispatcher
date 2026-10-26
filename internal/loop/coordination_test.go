@@ -30,7 +30,8 @@ var (
 	issue7  = target.Ref{Kind: target.KindIssue, Number: 7}
 )
 
-// flaky は coordtest.Memory に、他のマシンの loop の書き込みと失敗の注入を足した coordination board。
+// flaky は coordtest.Memory に、他のマシンの loop の書き込みと生存報告の置き直しの知らせを足した coordination board。
+// 失敗の注入は coordtest.Memory が持つ。
 type flaky struct {
 	*coordtest.Memory
 	// onObserve は Observe の回数ごとに、読ませる前に呼ぶ (他のマシンの loop の書き込みの代役)
@@ -38,12 +39,6 @@ type flaky struct {
 	observed  int
 	// beforeClaim は着手宣言の push の直前に呼ぶ (他のマシンの loop に先を越される代役)
 	beforeClaim func()
-	// claimErr が nil でなければ、着手宣言の push を通したうえでこの失敗を返す (結果の分からない失敗)
-	claimErr error
-	// deleteErr が nil でなければ、着手宣言の削除をこの失敗で落とす (負けではない失敗)
-	deleteErr error
-	// heartbeatErr が nil でなければ、生存報告の置き直しをこの失敗で落とす
-	heartbeatErr error
 	// renewed は、生存報告の置き直しがあったことを知らせる
 	renewed chan struct{}
 }
@@ -62,18 +57,7 @@ func (f *flaky) Claim(ref target.Ref, expect coord.Expect) (string, error) {
 	if f.beforeClaim != nil {
 		f.beforeClaim()
 	}
-	sha, err := f.Memory.Claim(ref, expect)
-	if err == nil && f.claimErr != nil {
-		return "", f.claimErr
-	}
-	return sha, err
-}
-
-func (f *flaky) DeleteClaim(ref target.Ref, sha string) error {
-	if f.deleteErr != nil {
-		return f.deleteErr
-	}
-	return f.Memory.DeleteClaim(ref, sha)
+	return f.Memory.Claim(ref, expect)
 }
 
 func (f *flaky) Heartbeat(interval time.Duration) error {
@@ -82,9 +66,6 @@ func (f *flaky) Heartbeat(interval time.Duration) error {
 		case f.renewed <- struct{}{}:
 		default:
 		}
-	}
-	if f.heartbeatErr != nil {
-		return f.heartbeatErr
 	}
 	return f.Memory.Heartbeat(interval)
 }
@@ -203,7 +184,7 @@ func TestADeadLoopsClaimIsTakenOverAndItsHeartbeatIsDeleted(t *testing.T) {
 		t.Fatalf("生存報告 = %v, want 死んだ loop の生存報告を消す", remote.Loops())
 	}
 	dead := r.logEvents(t, "dead_loop")
-	if len(dead) != 1 || dead[0]["loop"] != "dead-00000002" || !slices.Equal(toStrings(dead[0]["refs"]), []string{"loops/dead-00000002"}) {
+	if len(dead) != 1 || dead[0]["loop"] != "dead-00000002" || !slices.Equal(toStrings(dead[0]["refs"]), []string{coordtest.HeartbeatName("dead-00000002")}) {
 		t.Fatalf("dead_loop の行 = %v", dead)
 	}
 	if !strings.Contains(r.stdout.String(), "死んだ loop dead-00000002: 生存報告を消した") {
@@ -279,7 +260,7 @@ func TestAnInheritWithAnUnknownResultKeepsTheHeartbeatWhenTheLoopStopsBeforeTheN
 	remote.Put(nil, heartbeatOf("me-00000009"))
 	remote.Put(&issue42, claimBy("me-00000009", issue42))
 	// push は remote に届いたが、結果の分からない失敗を返す
-	remote.claimErr = errors.New("connection reset")
+	remote.FailClaim(errors.New("connection reset"))
 
 	r := orphanedRun(t, remote, 1, always)
 
@@ -303,7 +284,7 @@ func TestAnInheritWithAnUnknownResultIsKeptAsInheritedByTheNextTick(t *testing.T
 	remote.Put(nil, heartbeatOf("me-00000009"))
 	remote.Put(&issue42, claimBy("me-00000009", issue42))
 	// push は remote に届いたが、結果の分からない失敗を返す
-	remote.claimErr = errors.New("connection reset")
+	remote.FailClaim(errors.New("connection reset"))
 
 	r := orphanedRun(t, remote, 2, always)
 
@@ -337,7 +318,7 @@ func TestALostClaimWritesAClaimLostLineAndDoesNotLaunch(t *testing.T) {
 
 func TestAClaimThatCannotBePlacedWritesAnErrorLineAndDoesNotLaunch(t *testing.T) {
 	remote := newFlaky()
-	remote.claimErr = errors.New("push が落ちた")
+	remote.FailClaim(errors.New("push が落ちた"))
 
 	r := coordinatedRun(t, remote, 1, nil)
 
@@ -407,7 +388,7 @@ func TestATakeoverByAClaimWithoutItsOwnerIsShownAsUnreadable(t *testing.T) {
 	if taken := r.logEvents(t, "taken_over"); len(taken) != 1 || taken[0]["by"] != "?" {
 		t.Fatalf("taken_over の行 = %v, want 持ち主を読めない ?", taken)
 	}
-	if !hasErrorLine(t, r, "issue#42", "持ち主の loop を読めない着手宣言がある (この作業対象は起動しない): claims/issue-42") || len(r.logEvents(t, "error")) != 1 {
+	if !hasErrorLine(t, r, "issue#42", "持ち主の loop を読めない着手宣言がある (この作業対象は起動しない): "+coordtest.ClaimName(issue42)) || len(r.logEvents(t, "error")) != 1 {
 		t.Fatalf("error の行 = %v, want 持ち主を読めない着手宣言の行を 1 回", r.logEvents(t, "error"))
 	}
 }
@@ -467,7 +448,7 @@ func TestALeftoverClaimRefOfMyOwnIsDeleted(t *testing.T) {
 func TestALeftoverClaimRefOfMyOwnThatCannotBeDeletedLeavesAnErrorLine(t *testing.T) {
 	remote := newFlaky()
 	remote.Put(&issue7, claimBy(me, issue7))
-	remote.deleteErr = errors.New("push が落ちた")
+	remote.FailDelete(errors.New("push が落ちた"))
 	r := tickRig(2)
 
 	r.run(t, loop.Options{Definition: definition(time.Minute, 1), Coordination: boardOf(remote), HeartbeatAfter: noRenewal})
@@ -479,7 +460,7 @@ func TestALeftoverClaimRefOfMyOwnThatCannotBeDeletedLeavesAnErrorLine(t *testing
 
 func TestAReleasedClaimThatCannotBeDeletedLeavesAnErrorLine(t *testing.T) {
 	remote := newFlaky()
-	remote.deleteErr = errors.New("push が落ちた")
+	remote.FailDelete(errors.New("push が落ちた"))
 
 	r := coordinatedRun(t, remote, 2, nil)
 
@@ -500,7 +481,7 @@ func hasErrorLine(t *testing.T, r *rig, ref, want string) bool {
 
 func TestHeartbeatFailingTwiceInARowNeedsAttention(t *testing.T) {
 	remote := newFlaky()
-	remote.heartbeatErr = errors.New("push が落ちた")
+	remote.FailHeartbeat(errors.New("push が落ちた"))
 	r := newRig()
 	r.timer = func(timerKind, time.Duration) timing { return timing{fate: neverFires} }
 	beats := 0
