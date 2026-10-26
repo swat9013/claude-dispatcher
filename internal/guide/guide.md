@@ -95,7 +95,7 @@ workflow 定義に誤りがあれば、試運転・`loop` の起動・`doctor` �
      - 括弧の中が orphan の claude が作業を続けうると言う行 (`orphan の claude が作業を続けうる`・`引き継ぎの結果が分からず、orphan の claude が作業を続けうる`) なら、同じマシンで早めに loop を起動し直す。起動し直さないと、生存報告の間隔の 3 倍の後に別のマシンの loop がその作業対象を拾い、orphan と作業が重なりうる
      - 括弧の中が orphan は終わったと言う行 (`引き継ぎの結果が分からず、orphan は終わっていた`・`orphan は終わったが消せなかった`) なら、orphan は終わっているので作業は重ならない。その後どうなるかは行ごとに次のとおり
        - `引き継ぎの結果が分からず、orphan は終わっていた`: 引き継ぎが coordination board に届いていれば、生存報告の間隔の 3 倍の後に他の loop がその作業対象を拾うまで、その作業対象は起動されない。待てば拾われるので、することは無い
-       - `orphan は終わったが消せなかった`: 着手宣言が coordination board に残る。起動し直した loop (loop 名は起動ごとに新しい) にも他のマシンの loop にも、持ち主の死んだ着手宣言に見え、orphan が終わっているので引き継がれない。生存報告の間隔の 3 倍の後に生きている loop がそれを消すまで、その作業対象は起動されない。生きている loop が他に無ければ、loop を起動し直すと、その loop が消す
+       - `orphan は終わったが消せなかった`: 着手宣言が coordination board に残る。起動し直した loop (loop 名は起動ごとに新しい) にも他のマシンの loop にも、持ち主の死んだ着手宣言に見え、orphan が終わっているので引き継がれない。生存報告の間隔の 3 倍の後に生きている loop がそれを消すまで、その作業対象は起動されない。生きている loop が他に無ければ、loop を起動し直すと、その loop が消す。生きている loop が他にあれば、起動し直しても早くは消えないので、することは無い
    - worker が途中まで書いた成果は workspace と remote branch に残る
    - 作業対象が trigger に当たったままなら、次に起動した loop が同じ workspace で worker を起動し直す。session は新しく、attempt も 1 から数え直す。前の成果を拾わせるなら、共通 prompt にそう書く
 3. 使うのをやめるなら、`paths --json` が返す `state_dir` と `workspace_root` を消す (workspace が worktree なら、消した後に clone で `git worktree prune` を撃つ)。tracker の label は残る
