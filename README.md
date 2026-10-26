@@ -134,6 +134,8 @@ binary は署名していない。macOS でブラウザから取った archive �
    ```
 
 2. **自分の project に合わせて書く**: trigger・action・hooks を直し、repo に commit する。書き方は `claude-dispatcher guide` の「workflow 定義の書き方」と「action が守る約束」(Claude Code に読ませて手伝わせてもよい)。この repo 自身の例は [`WORKFLOW.md`](WORKFLOW.md)
+
+   2 台以上のマシンで、同じ場所に置いた issue を分け合うなら、`WORKFLOW.md` に `coordination.remote` (各マシンの loop が、どの issue や CL を引き受けたかを置き合う git remote の名前) を書く。書かなければ 1 台から回す (書かずに 2 台で回すと、同じ issue に worker が 2 つ起動しうる)。書き方は `claude-dispatcher guide` の「導入の流れ」
 3. **試運転**: 何も起動せずに、worker を起動するはずの issue や CL を、当たる trigger と組にして示す
 
    ```sh
