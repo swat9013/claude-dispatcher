@@ -1,6 +1,6 @@
 ---
 name: release
-description: 最新の tag から版を上げた tag を origin/main の commit に打って push し、release workflow の完了まで見届ける
+description: 最新の tag から版を上げた tag を、人が確かめた利用者向けの要約を本文にして origin/main の commit に打って push し、release workflow の完了まで見届ける
 disable-model-invocation: true
 argument-hint: "<patch|minor|major>"
 allowed-tools: Bash(git fetch:*), Bash(git rev-parse:*), Bash(git tag -l:*), Bash(git log:*), Bash(git diff:*), Bash(gh run list:*), Bash(gh run watch:*), Bash(gh run view:*), Bash(gh release view:*)
@@ -8,7 +8,7 @@ allowed-tools: Bash(git fetch:*), Bash(git rev-parse:*), Bash(git tag -l:*), Bas
 
 # release
 
-`v*` の tag を push すると、release workflow ([.github/workflows/release.yml](../../../.github/workflows/release.yml)) が gate を通してから GitHub Releases と tap `swat9013/homebrew-tap` の cask を更新する。方針の正本は [CONTRIBUTING.md](../../../CONTRIBUTING.md) の「release」。この skill は tag を打って push し、run を見届けるところまでを受け持つ。
+`v*` の tag を push すると、release workflow ([.github/workflows/release.yml](../../../.github/workflows/release.yml)) が gate を通してから GitHub Releases と tap `swat9013/homebrew-tap` の cask を更新する。方針の正本は [CONTRIBUTING.md](../../../CONTRIBUTING.md) の「release」。この skill は要約の下書きを作って人に確かめてもらい、tag を打って push し、run を見届けるところまでを受け持つ。
 
 - 版は tag だけが持つ (GoReleaser が ldflags で binary に埋める)。版を書いた file は無いので、release の commit は作らない
 - tag は **origin/main の commit** に打つ。手元の HEAD は worktree や古い main のことがあり、release workflow の `on-main` job は tag の commit が main に無いと止まる
@@ -52,7 +52,7 @@ release workflow は gate を撃ち直すので、ここで落ちていても pu
 git diff <前回の版>..<sha> -- internal/guide/guide.md docs/design/formats.md
 ```
 
-この差分だけを材料に、CONTRIBUTING.md の「release」が挙げる節の順で要約を書く。各節は節の名前を `## ` の見出しにし、中身の無い節は出さない。差分が空か、利用者に見える変化が無ければ、要約は空にする (Release の本文は PR の一覧と比較の link だけになる)。
+この差分だけを材料に、CONTRIBUTING.md の「release」が挙げる節の順で要約を書く。各節は、CONTRIBUTING.md が「」で括った節の名前を括弧書きまでそのまま `## ` の見出しにし、中身の無い節は出さない。差分が空か、利用者に見える変化が無ければ、要約は空にする (Release の本文は PR の一覧と比較の link だけになる)。
 
 ### 5. 人の確認を取る
 
@@ -76,7 +76,7 @@ git tag -l --format='%(contents:body)' <版>
 git push origin refs/tags/<版>
 ```
 
-push の前に、`git tag -l` が出す tag の本文が確定した要約と同じかを見る (Release の本文の先頭にそのまま載る)。違えば `git tag -d <版>` で消して打ち直す。
+push の前に、`git tag -l` が出す tag の本文が確定した要約と同じかを見る (Release の本文の先頭にそのまま載る)。違えば push せず、`git tag -d <版>` で消してから、確定した要約と `git tag -l` の出力を並べて見せて終える (打ち直しても同じ手順は同じずれを生む)。
 
 push が失敗したら、手元の tag を `git tag -d <版>` で消してから、失敗の出力をそのまま見せて終える (残すと次の実行で「既に在る」になる)。
 
@@ -94,8 +94,9 @@ gh run list --workflow release.yml --commit <sha> --event push --json databaseId
 
 ```sh
 gh run watch <databaseId> --exit-status
-gh release view <版> --json url
+gh release view <版> --json url,body
 ```
 
-- 成功: Release の url を返す
+- 成功: Release の url を返す。要約が空でなければ、`body` が確定した要約で始まるかも見る。始まらなければ (release workflow が tag の本文を読めていない)、そのことと `body` の先頭を url に添えて返す
+- 失敗: `gh run view <databaseId>` を撃ち、
 - 失敗: `gh run view <databaseId>` を撃ち、run の url と、出力の `X` の付いた job・step と `ANNOTATIONS` の行をそのまま返す。release.yml は失敗の理由と次の手順を `::error::` に書いており、それが `ANNOTATIONS` に出る。tag は消さずに残し、消すかどうかは user に委ねる (Release が半端に出ていることがあるため)
