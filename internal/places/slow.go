@@ -2,6 +2,7 @@ package places
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/swat9013/claude-dispatcher/internal/target"
@@ -11,8 +12,9 @@ import (
 // SlowListing は 1 つの置き場の一覧を 1 回読む時間の目標。超えたら、読み終わる前に 1 行出す (formats.md §6 の「遅い一覧」)。
 const SlowListing = 15 * time.Second
 
-// SlowNotice は、一覧の読み出しが SlowListing を超えたことを、読み終わる前に 1 回だけ知らせる口。After か Notify が nil
-// なら知らせない。Notify は見張りの goroutine で呼び、Watch (Store.Open も Watch を通る) は Notify が終わるまで返らない。
+// SlowNotice は、一覧の読み出しが SlowListing を超えたことを、読み終わる前に読み出し 1 回につき 1 回だけ知らせる口。After か
+// Notify が nil なら知らせない。Notify は見張りの goroutine で呼び、Watch (Store.Open も Watch を通る) は Notify が終わる
+// まで返らない。Notify は同時には呼ばない (OpenItems が一覧を並べて読んでも 1 つずつ呼ぶ) ので、行の書き手は lock を要らない。
 type SlowNotice struct {
 	// After は d 後に届く channel を返す (time.After。テストは差し替える)
 	After  func(d time.Duration) <-chan time.Time
@@ -42,6 +44,21 @@ func (n SlowNotice) Watch(kind target.Kind, read func()) {
 		<-watching
 	}()
 	read()
+}
+
+// oneAtATime は、Notify を同時に呼ばない口。並べて読む一覧 (OpenItems) の知らせが、書き手の側で行を混ぜないようにする。
+func (n SlowNotice) oneAtATime() SlowNotice {
+	if n.Notify == nil {
+		return n
+	}
+	var mu sync.Mutex
+	notify := n.Notify
+	n.Notify = func(kind target.Kind) {
+		mu.Lock()
+		defer mu.Unlock()
+		notify(kind)
+	}
+	return n
 }
 
 // SlowListingLine は、kind の置き場の一覧の読み出しが SlowListing を超えたときに出す 1 行。

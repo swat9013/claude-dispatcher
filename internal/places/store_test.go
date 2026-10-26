@@ -2,7 +2,10 @@ package places_test
 
 import (
 	"errors"
+	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/swat9013/claude-dispatcher/internal/places"
 	"github.com/swat9013/claude-dispatcher/internal/target"
@@ -90,5 +93,121 @@ func TestOpenItemsFailsWhenALaterKindFailsAfterANonFatalFailure(t *testing.T) {
 	var failure *target.Failure
 	if !errors.As(err, &failure) || failure.Kind != target.Auth || items != nil {
 		t.Fatalf("items = %v, err = %v, want 認証の失敗だけ", items, err)
+	}
+}
+
+// issueFirst は issue と CL の両方の trigger を持ち、issue を先に読む workflow 定義。
+var issueFirst = workflow.Definition{Triggers: []trigger.Trigger{{On: target.KindIssue}, {On: target.KindCL}}}
+
+// waitingIssues は、CL の一覧の読み出しが始まるまで一覧を返さない issue 置き場の部品。
+type waitingIssues struct {
+	issuesOnly
+	clStarted <-chan struct{}
+}
+
+func (w waitingIssues) OpenIssues() ([]target.Item, error) {
+	<-w.clStarted
+	return w.issuesOnly.OpenIssues()
+}
+
+// startingCLs は、一覧の読み出しが始まったら started を閉じる CL 置き場の部品。
+type startingCLs struct {
+	clsOnly
+	started chan<- struct{}
+}
+
+func (s startingCLs) OpenCLs() ([]target.Item, error) {
+	close(s.started)
+	return s.clsOnly.OpenCLs()
+}
+
+// openItemsWithin は OpenItems を呼び、5 秒で返らなければ落とす (1 つずつ読むと、互いを待つ部品で返らなくなる)。
+func openItemsWithin(t *testing.T, store places.Store, def workflow.Definition) ([]target.Item, error) {
+	t.Helper()
+	type result struct {
+		items []target.Item
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		items, err := places.OpenItems(store, def)
+		done <- result{items, err}
+	}()
+	select {
+	case r := <-done:
+		return r.items, r.err
+	case <-time.After(5 * time.Second):
+		t.Fatal("OpenItems が 5 秒で返らない: 一覧を 1 つずつ読んでいる")
+		return nil, nil
+	}
+}
+
+func TestOpenItemsReadsTheListingsOfEveryKindSideBySide(t *testing.T) {
+	started := make(chan struct{})
+	store := places.Store{Issues: waitingIssues{clStarted: started}, CLs: startingCLs{started: started}}
+
+	items, err := openItemsWithin(t, store, issueFirst)
+
+	if err != nil || len(items) != 2 {
+		t.Fatalf("items = %v, err = %v, want issue と CL の 1 件ずつ", items, err)
+	}
+}
+
+func TestOpenItemsReturnsTheItemsInTheOrderOfTheKindsWhicheverListingEndsFirst(t *testing.T) {
+	started := make(chan struct{})
+	// issue の一覧は CL の読み出しが始まるまで返らないので、CL より後に読み終わる
+	store := places.Store{Issues: waitingIssues{clStarted: started}, CLs: startingCLs{started: started}}
+
+	items, _ := openItemsWithin(t, store, issueFirst)
+
+	if len(items) != 2 || items[0].Ref().Kind != target.KindIssue || items[1].Ref().Kind != target.KindCL {
+		t.Fatalf("items = %v, want issue → CL の順", items)
+	}
+}
+
+// startingFailingIssues は、一覧の読み出しが始まったら started を閉じ、致命的な失敗を返す issue 置き場の部品。
+type startingFailingIssues struct {
+	issuesOnly
+	started chan<- struct{}
+}
+
+func (s startingFailingIssues) OpenIssues() ([]target.Item, error) {
+	close(s.started)
+	return nil, &target.Failure{Kind: target.Auth, Place: "acme/widgets", Err: errors.New("401 issue")}
+}
+
+// endingCLs は、issue の一覧の読み出しが始まるまで待ってから、読み終えたことを ended に残して致命的な失敗を返す CL 置き場の部品。
+type endingCLs struct {
+	clsOnly
+	issueStarted <-chan struct{}
+	ended        *atomic.Bool
+}
+
+func (e endingCLs) OpenCLs() ([]target.Item, error) {
+	<-e.issueStarted
+	e.ended.Store(true)
+	return nil, &target.Failure{Kind: target.Auth, Place: "acme/widgets", Err: errors.New("401 cl")}
+}
+
+func TestOpenItemsReturnsOnlyAfterEveryListingHasEnded(t *testing.T) {
+	started, ended := make(chan struct{}), new(atomic.Bool)
+	store := places.Store{Issues: startingFailingIssues{started: started}, CLs: endingCLs{issueStarted: started, ended: ended}}
+
+	_, _ = openItemsWithin(t, store, issueFirst)
+
+	if !ended.Load() {
+		t.Fatal("OpenItems が CL の一覧を読み終わる前に返った")
+	}
+}
+
+func TestOpenItemsReturnsTheFailureOfTheFirstKindWhenEveryListingFails(t *testing.T) {
+	started := make(chan struct{})
+	// CL の失敗は issue の読み出しが始まってから返るが、返すのは先に読む種類 (issue) の失敗だけ
+	store := places.Store{Issues: startingFailingIssues{started: started}, CLs: endingCLs{issueStarted: started, ended: new(atomic.Bool)}}
+
+	items, err := openItemsWithin(t, store, issueFirst)
+
+	if items != nil || err == nil || !strings.Contains(err.Error(), "401 issue") || strings.Contains(err.Error(), "401 cl") {
+		t.Fatalf("items = %v, err = %v, want issue の認証の失敗だけ", items, err)
 	}
 }
