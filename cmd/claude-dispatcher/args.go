@@ -9,7 +9,7 @@ import (
 	"github.com/swat9013/claude-dispatcher/internal/provider"
 )
 
-// 引数の宣言の表。subcommand ごとの flag と位置引数、command の代わりに書く flag をここに書き、parser (parse と run の
+// 引数の宣言の表。subcommand ごとの flag と位置引数、command の代わりに書く flag (と、そのうち command の後ろにも書けるもの) をここに書き、parser (parse と run の
 // 振り分け) と usage の Usage 節の command の代わりの形 (usageForms) と Options 節 (usageForms・options) が同じ表を読む。command の代わりの flag
 // ごとの処理は run が helpFlag・versionFlag を名指しで持つ。flag の一覧と規則の正本は
 // formats.md §10 (と §6・§7) で、この表はそれに合わせる側。setup の --kind が受ける種類と案内の綴りは provider の表も持つ。
@@ -76,13 +76,15 @@ var commandSpecs = []commandSpec{
 	{name: "guide", arguments: noArguments},
 }
 
-// globalFlag は command の代わりに書く flag の宣言。
+// globalFlag は command の代わりに書く flag の宣言。afterCommand なら command の後ろにも書ける。
 type globalFlag struct {
 	// spellings は受ける flag の綴り。usage の Options 節には `, ` で並べる
 	spellings []string
 	// word は flag と同じに受ける、`-` の無い綴り。無ければ空
 	word string
-	help string
+	// afterCommand は spellings を command の後ろにも書けるか。書けば command と他の引数を読まずにこの flag の処理をする
+	afterCommand bool
+	help         string
 }
 
 // allSpellings は受ける綴りすべて: flag の綴りと、あれば word。
@@ -96,12 +98,44 @@ func (g globalFlag) allSpellings() []string {
 // accepts は arg がこの flag の綴りか。
 func (g globalFlag) accepts(arg string) bool { return slices.Contains(g.allSpellings(), arg) }
 
+// acceptsAfterCommand は command の後ろの arg がこの flag の綴りか。word は command の後ろでは受けない。
+func (g globalFlag) acceptsAfterCommand(arg string) bool {
+	return g.afterCommand && slices.Contains(g.spellings, arg)
+}
+
+// moveFlagAfterCommandToFront は、command の後ろに afterCommand の flag があれば、command と他の引数を捨てて
+// その flag だけを command の代わりに書いた形の引数を返す。無ければ args のまま。
+func moveFlagAfterCommandToFront(args []string) []string {
+	if !isCommand(args[0]) {
+		return args
+	}
+	for _, g := range globalFlags {
+		if i := slices.IndexFunc(args[1:], g.acceptsAfterCommand); i >= 0 {
+			return []string{args[1+i]}
+		}
+	}
+	return args
+}
+
+// placement は usage の Options 節で説明の頭に書く、flag を書ける位置。
+func (g globalFlag) placement() string {
+	if g.afterCommand {
+		return "command の代わりか後ろ"
+	}
+	return "command の代わり"
+}
+
 var (
-	helpFlag    = globalFlag{spellings: []string{"-h", "--help"}, word: "help", help: "この一覧を出す。help でも同じ"}
+	helpFlag    = globalFlag{spellings: []string{"-h", "--help"}, word: "help", afterCommand: true, help: "この一覧を出す。command の代わりには help でも同じ"}
 	versionFlag = globalFlag{spellings: []string{"--version"}, help: "版を出す"}
-	// globalFlags は command の代わりに書く flag。並びは usage の Usage 節と Options 節の並び
+	// globalFlags は command の代わり (afterCommand なら後ろにも) に書く flag。並びは usage の Usage 節と Options 節の並び
 	globalFlags = []globalFlag{helpFlag, versionFlag}
 )
+
+// isCommand は name が宣言した subcommand か。
+func isCommand(name string) bool {
+	return slices.ContainsFunc(commandSpecs, func(c commandSpec) bool { return c.name == name })
+}
 
 // commandSpecOf は subcommand の宣言。宣言に無い名前は呼び出し側の誤りなので panic する。
 func commandSpecOf(name string) commandSpec {
@@ -251,7 +285,7 @@ func usageForms() string {
 	return b.String()
 }
 
-// options は usage の Options 節の行。宣言の並びで、説明の頭に subcommand か `command の代わり` を書く。
+// options は usage の Options 節の行。宣言の並びで、説明の頭に subcommand か flag を書ける位置を書く。
 func options() string {
 	type line struct{ label, help string }
 	var lines []line
@@ -265,7 +299,7 @@ func options() string {
 		}
 	}
 	for _, g := range globalFlags {
-		lines = append(lines, line{strings.Join(g.spellings, ", "), "(command の代わり) " + g.help})
+		lines = append(lines, line{strings.Join(g.spellings, ", "), "(" + g.placement() + ") " + g.help})
 	}
 	width := 0
 	for _, l := range lines {

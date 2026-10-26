@@ -105,6 +105,57 @@ func TestUsageWithoutArgumentsGoesToStderrWithExit2(t *testing.T) {
 	}
 }
 
+func TestHelpFlagAfterAnyCommandPrintsTheSameUsageWithoutReadingTheRest(t *testing.T) {
+	// command の後ろの -h・--help は command と他の flag・引数を読まない (formats.md §10)。読めば誤りになる引数を前に置く
+	s := newSandbox(t)
+	want := s.run("--help")
+	commands := regexp.MustCompile(`(?m)^  ([a-z-]+) `).FindAllStringSubmatch(usageSection(t, want.stdout, "Commands"), -1)
+	if len(commands) == 0 {
+		t.Fatalf("usage から subcommand を読めない:\n%s", want.stdout)
+	}
+	for _, c := range commands {
+		for _, spelling := range []string{"-h", "--help"} {
+			t.Run(c[1]+" "+spelling, func(t *testing.T) {
+				r := s.run(c[1], "--no-such-flag", "extra", spelling)
+
+				assertExit(t, r, 0)
+				if r.stdout != want.stdout || r.stderr != "" {
+					t.Fatalf("--help と同じ一覧を stdout だけに出していない: stderr = %q\nstdout:\n%s", r.stderr, r.stdout)
+				}
+			})
+		}
+	}
+	s.assertNoGh("command の後ろの -h・--help は")
+}
+
+func TestHelpWithAnArgumentIsAnArgumentErrorFollowedByTheUsage(t *testing.T) {
+	s := newSandbox(t)
+	usage := s.run("--help")
+
+	r := s.run("help", "loop")
+
+	assertExit(t, r, 2)
+	errLine, rest, _ := strings.Cut(r.stderr, "\n")
+	if r.stdout != "" || !strings.Contains(errLine, "loop") || rest != usage.stdout {
+		t.Fatalf("誤りの行の後ろに同じ一覧を stderr に出していない: stdout = %q\nstderr:\n%s", r.stdout, r.stderr)
+	}
+}
+
+func TestUsageMarksHelpFlagAsWritableInPlaceOfOrAfterACommand(t *testing.T) {
+	s := newSandbox(t)
+
+	r := s.run("--help")
+
+	assertExit(t, r, 0)
+	options := usageSection(t, r.stdout, "Options")
+	for spelling, mark := range map[string]string{"-h, --help": "(command の代わりか後ろ) ", "--version": "(command の代わり) "} {
+		help := regexp.MustCompile(`(?m)^  ` + regexp.QuoteMeta(spelling) + ` +(.*)$`).FindStringSubmatch(options)
+		if help == nil || !strings.HasPrefix(help[1], mark) {
+			t.Errorf("Options の %s の説明が %q で始まらない:\n%s", spelling, mark, options)
+		}
+	}
+}
+
 func TestGuideCoversEverySubcommandInTheUsage(t *testing.T) {
 	// 利用者の手元には README が無いので、usage に並ぶ subcommand の使い方は案内にしか無い
 	s := newSandbox(t)
