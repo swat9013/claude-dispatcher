@@ -499,10 +499,8 @@ func (b *Board) Leave(w Working) []Outcome {
 	out = append(out, b.ReleaseInherited(w.Orphans)...)
 	// 結果の分からなかった引き継ぎは、届いていたものとして引き継いだ着手宣言と同じに扱う (sha を知らないので消せない)
 	for _, ref := range target.SortedRefs(b.unsure) {
-		if w.Orphans[ref] {
-			claudeLeft = true
-			out = append(out, UnsureInheritKept{ref})
-		}
+		claudeLeft = claudeLeft || w.Orphans[ref]
+		out = append(out, UnsureInheritKept{Ref: ref, OrphanAlive: w.Orphans[ref]})
 	}
 	for _, ref := range target.SortedRefs(b.inherited) {
 		// orphan が作業を続けうる間だけ、生存報告も残す

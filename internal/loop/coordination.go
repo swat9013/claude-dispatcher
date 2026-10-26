@@ -127,7 +127,11 @@ func (l *loop) report(outcomes []coord.Outcome) {
 			}
 			l.rec.error(o.Ref, "orphan のために引き継いだ着手宣言を残して止まる ("+reason+")")
 		case coord.UnsureInheritKept:
-			l.rec.error(o.Ref, "orphan のために引き継いだかもしれない着手宣言を残して止まる (引き継ぎの結果が分からず、orphan の claude が作業を続けうる)")
+			reason := "orphan は終わっていた"
+			if o.OrphanAlive {
+				reason = "orphan の claude が作業を続けうる"
+			}
+			l.rec.error(o.Ref, "orphan のために引き継いだかもしれない着手宣言を残して止まる (引き継ぎの結果が分からず、"+reason+")")
 		case coord.LeaveFailed:
 			l.rec.error(target.Ref{}, "生存報告を消せない: "+oneLine(o.Err))
 		case coord.BeatFailed:

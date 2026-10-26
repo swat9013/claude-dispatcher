@@ -356,8 +356,40 @@ func TestOrphansAreCheckedOnlyAfterTheBoardSettlesAnInheritWithAnUnknownResult(t
 	if _, beating := remote.Loops()[me]; !beating {
 		t.Fatalf("生存報告 = %v, want 届いていたかもしれない着手宣言の持ち主として生存報告を残す", remote.Loops())
 	}
-	if !hasErrorLine(t, r, "issue#42", "orphan のために引き継いだかもしれない着手宣言を残して止まる") {
-		t.Fatalf("error の行 = %v, want 引き継いだかもしれない着手宣言を残して止まる行", r.logEvents(t, "error"))
+	if !hasErrorLine(t, r, "issue#42", "orphan のために引き継いだかもしれない着手宣言を残して止まる (引き継ぎの結果が分からず、orphan の claude が作業を続けうる)") {
+		t.Fatalf("error の行 = %v, want orphan が作業を続けうるとして引き継いだかもしれない着手宣言を残して止まる行", r.logEvents(t, "error"))
+	}
+}
+
+// 着手宣言の commit message を読めないまま orphan が終わってから止まると、届いていた着手宣言が生存報告の無いまま残る
+// (formats.md §12 の 8 が受け入れた経路)。その作業対象がしばらく起動されない理由を log から読めるよう、error の行を書く。
+func TestAnInheritWithAnUnknownResultLeavesAnErrorLineWhenTheOrphanHasEndedBeforeTheLoopStops(t *testing.T) {
+	remote := newFlaky()
+	remote.beating(t)
+	remote.Put(nil, heartbeatOf("me-00000009"))
+	remote.Put(&issue42, claimBy("me-00000009", issue42))
+	// 1 tick 目の引き継ぎの push は remote に届いたが、結果の分からない失敗を返す
+	remote.FailClaim(errors.New("connection reset"))
+	// 2 tick 目の突き合わせは、届いていた着手宣言の commit message を読めない
+	remote.onObserve = func(times int) {
+		if times == 2 {
+			remote.Unreadable(remote.Claims()[issue42], errors.New("fetch が落ちた"))
+		}
+	}
+	// orphan は 1 回目の確かめでだけ生きている
+	checks := 0
+	alive := func() bool { checks++; return checks == 1 }
+
+	r := orphanedRun(t, remote, 2, alive)
+
+	if owner := remote.Message(remote.Claims()[issue42]).Loop; owner != me {
+		t.Fatalf("着手宣言の持ち主 %q, want 届いていた着手宣言が残る", owner)
+	}
+	if _, beating := remote.Loops()[me]; beating {
+		t.Fatalf("生存報告 = %v, want orphan は終わっているので生存報告を消す", remote.Loops())
+	}
+	if !hasErrorLine(t, r, "issue#42", "orphan のために引き継いだかもしれない着手宣言を残して止まる (引き継ぎの結果が分からず、orphan は終わっていた)") {
+		t.Fatalf("error の行 = %v, want orphan は終わっていたとして引き継いだかもしれない着手宣言を残して止まる行", r.logEvents(t, "error"))
 	}
 }
 
