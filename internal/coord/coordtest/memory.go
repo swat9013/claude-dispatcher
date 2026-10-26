@@ -4,6 +4,7 @@ package coordtest
 import (
 	"fmt"
 	"maps"
+	"slices"
 	"sync"
 	"time"
 
@@ -85,8 +86,9 @@ func (m *Memory) FailLeave(err error) {
 	m.leaveErr = err
 }
 
-// Unreadable は以後の Observe で、sha の commit message を読めなかったものとして View から外し、View.Unread に err を置く。
-// ReadAll で戻す。err が nil なら、読めない message を外しながら失敗を返さない状態になるので panic する。
+// Unreadable は以後の Observe で、sha が View に載っていれば、その commit message を読めなかったものとして View から外し、
+// View.Unread に err を置く。外した sha が複数なら、sha の辞書順で最後のものの err を置く。ClearUnreadable で戻す。
+// err が nil なら、読めない message を外しながら失敗を返さない状態になるので panic する。
 func (m *Memory) Unreadable(sha string, err error) {
 	if err == nil {
 		panic("coordtest: Unreadable に nil の error を渡した")
@@ -99,8 +101,8 @@ func (m *Memory) Unreadable(sha string, err error) {
 	m.unread[sha] = err
 }
 
-// ReadAll は Unreadable の指定をすべて戻し、以後の Observe で commit message を読めるようにする。
-func (m *Memory) ReadAll() {
+// ClearUnreadable は Unreadable の指定をすべて戻し、以後の Observe で commit message を読めるようにする。
+func (m *Memory) ClearUnreadable() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.unread = nil
@@ -161,10 +163,11 @@ func (m *Memory) Observe() (coord.View, error) {
 	for loop, sha := range m.loops {
 		v.Loops[loop], v.Messages[sha] = coord.RefState{SHA: sha, Name: HeartbeatName(loop)}, m.messages[sha]
 	}
-	for sha, err := range m.unread {
+	// map の走査順は決まらないので、View.Unread に置く err が実行ごとに変わらないよう sha の順に見る
+	for _, sha := range slices.Sorted(maps.Keys(m.unread)) {
 		if _, ok := v.Messages[sha]; ok {
 			delete(v.Messages, sha)
-			v.Unread = err
+			v.Unread = m.unread[sha]
 		}
 	}
 	return v, nil
