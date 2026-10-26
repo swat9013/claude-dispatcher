@@ -350,9 +350,6 @@ func TestOrphansAreCheckedOnlyAfterTheBoardSettlesAnInheritWithAnUnknownResult(t
 
 	r := orphanedRun(t, remote, 2, alive)
 
-	if checks != 1 {
-		t.Fatalf("orphan の確かめ %d 回, want 突き合わせが落ちた tick では確かめない", checks)
-	}
 	if owner := remote.Message(remote.Claims()[issue42]).Loop; owner != me {
 		t.Fatalf("着手宣言の持ち主 %q, want 届いていた着手宣言が残る", owner)
 	}

@@ -56,7 +56,8 @@ type Inherited struct {
 	From string
 }
 
-// InheritFailed は、引き継ぎの push が結果の分からない失敗をしたこと。remote に届いていたかもしれないので、Board は覚えておく。
+// InheritFailed は、引き継ぎの着手宣言を置けなかったこと (負けを除く)。push が結果の分からない失敗をしたときは、remote に
+// 届いていたかもしれないので Board は覚えておく。push より前に落ちた (ErrNotPushed) ときは覚えない。
 type InheritFailed struct {
 	Ref target.Ref
 	Err error
