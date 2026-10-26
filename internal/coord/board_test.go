@@ -541,6 +541,23 @@ func TestAnInheritWithAnUnknownResultIsRememberedAndSettledByTheNextObservation(
 			t.Fatalf("Leave %d 回, want 生存報告を消さずに止まる", w.left)
 		}
 	})
+	t.Run("着手宣言の commit message を読めないまま orphan が終わって止まるときは、届いていた着手宣言を残して生存報告を消す", func(t *testing.T) {
+		// 受け入れた経路 (formats.md §12 の 8)。読めない突き合わせの後も覚えたままであることは「読めない間は覚えたまま」が
+		// 確かめる (orphan の終わった Leave からは覚えているかが見えない)
+		w, _ := inheritUnsure(t)
+		sha := w.ownClaim(issue42)
+		w.Unreadable(sha, errFetch)
+		wantOutcomes(t, w.observe(beat, issue42), coord.Unread{Err: errFetch})
+
+		wantOutcomes(t, w.board.Leave(coord.Working{}))
+
+		if w.left != 1 {
+			t.Fatalf("Leave %d 回, want 生存報告を消す", w.left)
+		}
+		if got := w.ownClaim(issue42); got != sha {
+			t.Fatalf("着手宣言 = %q, want 届いていた着手宣言 %q を消さずに残す", got, sha)
+		}
+	})
 	t.Run("次の突き合わせで届いていた着手宣言を読めたら、引き継いだものとして覚え直す", func(t *testing.T) {
 		w, _ := inheritUnsure(t)
 
