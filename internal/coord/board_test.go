@@ -42,8 +42,8 @@ func beatOf(loop string, interval time.Duration) coord.Message {
 	return coord.Message{Kind: coord.KindHeartbeat, Format: coord.Format, Loop: loop, Interval: interval}
 }
 
-// recorded は coordtest.Memory に、撃たれた push と削除と Leave の記録を足した adapter。失敗の注入は coordtest.Memory が持つ。
-type recorded struct {
+// recorder は coordtest.Memory に、撃たれた push と削除と Leave の記録を足した adapter。失敗の注入は coordtest.Memory が持つ。
+type recorder struct {
 	*coordtest.Memory
 	// claimed と deleted は Claim と DeleteClaim・DeleteHeartbeat の呼び出し (`<作業対象> <期待値>`・`<ref の名前> <sha>`)
 	claimed, deleted []string
@@ -51,29 +51,29 @@ type recorded struct {
 	left int
 }
 
-func (r *recorded) Claim(ref target.Ref, expect coord.Expect) (string, error) {
+func (r *recorder) Claim(ref target.Ref, expect coord.Expect) (string, error) {
 	r.claimed = append(r.claimed, ref.String()+" "+expect.String())
 	return r.Memory.Claim(ref, expect)
 }
 
-func (r *recorded) DeleteClaim(ref target.Ref, sha string) error {
+func (r *recorder) DeleteClaim(ref target.Ref, sha string) error {
 	r.deleted = append(r.deleted, coordtest.ClaimName(ref)+" "+sha)
 	return r.Memory.DeleteClaim(ref, sha)
 }
 
-func (r *recorded) DeleteHeartbeat(loop, sha string) error {
+func (r *recorder) DeleteHeartbeat(loop, sha string) error {
 	r.deleted = append(r.deleted, coordtest.HeartbeatName(loop)+" "+sha)
 	return r.Memory.DeleteHeartbeat(loop, sha)
 }
 
-func (r *recorded) Leave() error {
+func (r *recorder) Leave() error {
 	r.left++
 	return r.Memory.Leave()
 }
 
 // world は Board と、それが読み書きする coordination board。
 type world struct {
-	*recorded
+	*recorder
 	t     *testing.T
 	board *coord.Board
 }
@@ -81,8 +81,8 @@ type world struct {
 func newWorld(t *testing.T) *world { return newWorldOf(t, me) }
 
 func newWorldOf(t *testing.T, loop string) *world {
-	r := &recorded{Memory: coordtest.NewMemory(loop)}
-	return &world{recorded: r, t: t, board: coord.NewBoard(r, beat)}
+	r := &recorder{Memory: coordtest.NewMemory(loop)}
+	return &world{recorder: r, t: t, board: coord.NewBoard(r, beat)}
 }
 
 func set(refs []target.Ref) map[target.Ref]bool {
@@ -307,10 +307,13 @@ func TestReleaseDeletesOnlyTheClaimItPlaced(t *testing.T) {
 func TestAFailedDeleteIsReturnedAsAFailedReleaseWhenReleasing(t *testing.T) {
 	w := newWorld(t)
 	w.observe(0)
+	// 先に解いて消せた着手宣言があっても、後の削除の失敗はその作業対象の失敗として返す
 	w.claim(issue42)
+	wantOutcomes(t, w.board.Release(issue42))
+	w.claim(issue7)
 	w.FailDelete(errPush)
 
-	wantOutcomes(t, w.board.Release(issue42), coord.ClaimReleaseFailed{Ref: issue42, Err: errPush})
+	wantOutcomes(t, w.board.Release(issue7), coord.ClaimReleaseFailed{Ref: issue7, Err: errPush})
 }
 
 func TestALostDeleteIsReturnedAsALostReleaseWhenReleasing(t *testing.T) {
@@ -336,7 +339,7 @@ func TestAClaimThatWasTakenOverIsReportedOnceAndNeverDeleted(t *testing.T) {
 		{"持ち主を読めない着手宣言に置き換わった", func(w *world, _ string) { w.Put(&issue42, claimBy("", issue42)) },
 			[]coord.Outcome{coord.OwnerUnreadable{Ref: issue42, Name: coordtest.ClaimName(issue42)}, unreadable}},
 		{"commit message を読めない着手宣言に置き換わった", func(w *world, _ string) {
-			w.Unreadable(errFetch, w.Put(&issue42, claimBy(other, issue42)))
+			w.Unreadable(w.Put(&issue42, claimBy(other, issue42)), errFetch)
 		}, []coord.Outcome{coord.Unread{Err: errFetch}, unreadable}},
 	}
 	for _, c := range cases {
@@ -354,7 +357,7 @@ func TestAClaimThatWasTakenOverIsReportedOnceAndNeverDeleted(t *testing.T) {
 				t.Fatalf("要対処の乗っ取られた作業対象 = %v, want %v", a.TakenOver, taken)
 			}
 			wantOutcomes(t, w.board.Release(issue42))
-			w.Unreadable(nil)
+			w.ReadAll()
 			wantOutcomes(t, w.observe(2*beat))
 			wantDeleted(t, w)
 		})
@@ -529,7 +532,7 @@ func TestAnInheritWithAnUnknownResultIsRememberedAndSettledByTheNextObservation(
 	})
 	t.Run("次の突き合わせで着手宣言の commit message を読めない間は覚えたまま", func(t *testing.T) {
 		w, _ := inheritUnsure(t)
-		w.Unreadable(errFetch, w.ownClaim(issue42))
+		w.Unreadable(w.ownClaim(issue42), errFetch)
 
 		wantOutcomes(t, w.observe(beat, issue42), coord.Unread{Err: errFetch})
 
@@ -887,11 +890,11 @@ func TestARefThatCannotBeReadIsReportedOnce(t *testing.T) {
 	t.Run("commit message を読めなかった tick の後、初めて読めた tick に 1 回だけ返す", func(t *testing.T) {
 		w := newWorld(t)
 		sha := w.Put(nil, beatOf("odd-00000004", 0))
-		w.Unreadable(errFetch, sha)
+		w.Unreadable(sha, errFetch)
 
 		wantOutcomes(t, w.observe(0), coord.Unread{Err: errFetch})
 		wantOutcomes(t, w.observe(beat), coord.Unread{Err: errFetch})
-		w.Unreadable(nil)
+		w.ReadAll()
 		wantOutcomes(t, w.observe(2*beat), coord.IntervalUnreadable{Loop: "odd-00000004", Name: coordtest.HeartbeatName("odd-00000004")})
 		wantOutcomes(t, w.observe(3*beat))
 	})

@@ -13,8 +13,7 @@ import (
 
 // Memory は ref と条件付きの更新だけを持つ、in-memory の coord.Refs。着手宣言と生存報告の ref を持ち、条件付きの更新
 // (無いときだけ作る・旧 sha を期待値に置き換える・sha を指しているときだけ消す) を server と同じく照合する。テストが注入する
-// 失敗 (FailClaim・FailClaimBeforePush・FailDelete・FailHeartbeat・FailLeave・Unreadable) も持つ。生存報告は別の goroutine から置き直すので、
-// 表と注入した失敗は mu で守る。
+// 失敗も持つ。生存報告は別の goroutine から置き直すので、表と注入した失敗は mu で守る。
 type Memory struct {
 	loop string
 
@@ -30,21 +29,20 @@ type Memory struct {
 	claimErr, deleteErr, heartbeatErr, leaveErr error
 	// claimUnpushedErr は注入した push より前の失敗 (FailClaimBeforePush)。nil なら落とさない
 	claimUnpushedErr error
-	// unread の sha の commit message は、読めなかったものとして View から外し、View.Unread に unreadErr を置く (Unreadable)
-	unread    map[string]bool
-	unreadErr error
+	// unread の sha の commit message は、読めなかったものとして View から外し、View.Unread にその error を置く (Unreadable)
+	unread map[string]error
 }
 
 var _ coord.Refs = (*Memory)(nil)
 
-// board は ref の名前の綴りを引く coordination board の remote。綴りは本番の coord.Remote だけが持つ。
-var board = coord.Remote{ScopeDir: "coordtest"}
+// remote は ref の名前の綴りを引く coordination board の remote。綴りは本番の coord.Remote だけが持つ。
+var remote = coord.Remote{ScopeDir: "coordtest"}
 
 // ClaimName は Memory が View に載せる、作業対象 ref の着手宣言の ref の名前。
-func ClaimName(ref target.Ref) string { return board.ClaimRef(ref) }
+func ClaimName(ref target.Ref) string { return remote.ClaimRef(ref) }
 
 // HeartbeatName は Memory が View に載せる、loop の生存報告の ref の名前。
-func HeartbeatName(loop string) string { return board.HeartbeatRef(loop) }
+func HeartbeatName(loop string) string { return remote.HeartbeatRef(loop) }
 
 // NewMemory は loop 名 loop の持ち主として coordination board を読み書きする、空の Memory を作る。
 func NewMemory(loop string) *Memory {
@@ -87,15 +85,25 @@ func (m *Memory) FailLeave(err error) {
 	m.leaveErr = err
 }
 
-// Unreadable は以後の Observe で、shas の commit message を読めなかったものとして View から外し、外したものがあれば
-// View.Unread に err を置く。呼ぶたびに前の指定を置き換え、shas を渡さなければ戻す。
-func (m *Memory) Unreadable(err error, shas ...string) {
+// Unreadable は以後の Observe で、sha の commit message を読めなかったものとして View から外し、View.Unread に err を置く。
+// ReadAll で戻す。err が nil なら、読めない message を外しながら失敗を返さない状態になるので panic する。
+func (m *Memory) Unreadable(sha string, err error) {
+	if err == nil {
+		panic("coordtest: Unreadable に nil の error を渡した")
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.unread, m.unreadErr = map[string]bool{}, err
-	for _, sha := range shas {
-		m.unread[sha] = true
+	if m.unread == nil {
+		m.unread = map[string]error{}
 	}
+	m.unread[sha] = err
+}
+
+// ReadAll は Unreadable の指定をすべて戻し、以後の Observe で commit message を読めるようにする。
+func (m *Memory) ReadAll() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.unread = nil
 }
 
 // Put は他の loop の着手宣言か生存報告を置き、置いた commit の sha を返す。ref が nil なら msg.Loop の生存報告、nil でなければ
@@ -153,10 +161,10 @@ func (m *Memory) Observe() (coord.View, error) {
 	for loop, sha := range m.loops {
 		v.Loops[loop], v.Messages[sha] = coord.RefState{SHA: sha, Name: HeartbeatName(loop)}, m.messages[sha]
 	}
-	for sha := range m.unread {
+	for sha, err := range m.unread {
 		if _, ok := v.Messages[sha]; ok {
 			delete(v.Messages, sha)
-			v.Unread = m.unreadErr
+			v.Unread = err
 		}
 	}
 	return v, nil
