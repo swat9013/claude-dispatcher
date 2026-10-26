@@ -542,8 +542,8 @@ func TestAnInheritWithAnUnknownResultIsRememberedAndSettledByTheNextObservation(
 		}
 	})
 	t.Run("着手宣言の commit message を読めないまま orphan が終わって止まるときは、届いていた着手宣言を残して生存報告を消す", func(t *testing.T) {
-		// 受け入れた経路 (formats.md §12 の 8): orphan の終わった着手宣言を残しても、生存報告を残しても、他の loop が起動を
-		// 待つ長さは変わらない
+		// 受け入れた経路 (formats.md §12 の 8)。読めない突き合わせの後も覚えたままであることは「読めない間は覚えたまま」が
+		// 確かめる (orphan の終わった Leave からは覚えているかが見えない)
 		w, _ := inheritUnsure(t)
 		sha := w.ownClaim(issue42)
 		w.Unreadable(sha, errFetch)
