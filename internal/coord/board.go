@@ -72,9 +72,8 @@ type holder struct {
 	dead bool
 }
 
-// Working は、claude がまだ作業を続けうる作業対象。Tidy と Leave は、その作業対象の着手宣言を消さない (Tidy は Orphans の作業対象
-// の死んだ loop の着手宣言を引き継ぎ、Leave は Orphans の作業対象の引き継いだ着手宣言と Unstopped の作業対象の自分の着手宣言を
-// 残す)。
+// Working は、claude がまだ作業を続けうる作業対象。Tidy と Leave は、Orphans と Unstopped のどちらの作業対象の着手宣言も消さない
+// (Tidy は加えて Orphans の作業対象の死んだ loop の着手宣言を引き継ぐ)。
 type Working struct {
 	// Orphans は生きている orphan の作業対象
 	Orphans map[target.Ref]bool
