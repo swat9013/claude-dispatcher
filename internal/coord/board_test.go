@@ -524,7 +524,7 @@ func TestAnInheritWithAnUnknownResultIsRememberedAndSettledByTheNextObservation(
 	t.Run("次の突き合わせの前に止まっても、引き継いだものと同じに扱って生存報告を消さない", func(t *testing.T) {
 		w, _ := inheritUnsure(t)
 
-		wantOutcomes(t, w.board.Leave(coord.Working{Orphans: set([]target.Ref{issue42})}), coord.UnsureInheritKept{Ref: issue42})
+		wantOutcomes(t, w.board.Leave(coord.Working{Orphans: set([]target.Ref{issue42})}), coord.UnsureInheritKept{Ref: issue42, OrphanAlive: true})
 
 		if w.left != 0 {
 			t.Fatalf("Leave %d 回, want 生存報告を消さずに止まる", w.left)
@@ -536,20 +536,19 @@ func TestAnInheritWithAnUnknownResultIsRememberedAndSettledByTheNextObservation(
 
 		wantOutcomes(t, w.observe(beat, issue42), coord.Unread{Err: errFetch})
 
-		wantOutcomes(t, w.board.Leave(coord.Working{Orphans: set([]target.Ref{issue42})}), coord.UnsureInheritKept{Ref: issue42})
+		wantOutcomes(t, w.board.Leave(coord.Working{Orphans: set([]target.Ref{issue42})}), coord.UnsureInheritKept{Ref: issue42, OrphanAlive: true})
 		if w.left != 0 {
 			t.Fatalf("Leave %d 回, want 生存報告を消さずに止まる", w.left)
 		}
 	})
-	t.Run("着手宣言の commit message を読めないまま orphan が終わって止まるときは、届いていた着手宣言を残して生存報告を消す", func(t *testing.T) {
-		// 受け入れた経路 (formats.md §12 の 8)。読めない突き合わせの後も覚えたままであることは「読めない間は覚えたまま」が
-		// 確かめる (orphan の終わった Leave からは覚えているかが見えない)
+	t.Run("着手宣言の commit message を読めないまま orphan が終わって止まるときは、届いていた着手宣言を残したかもしれないと返して生存報告を消す", func(t *testing.T) {
+		// 受け入れた経路 (formats.md §12 の 8)
 		w, _ := inheritUnsure(t)
 		sha := w.ownClaim(issue42)
 		w.Unreadable(sha, errFetch)
 		wantOutcomes(t, w.observe(beat, issue42), coord.Unread{Err: errFetch})
 
-		wantOutcomes(t, w.board.Leave(coord.Working{}))
+		wantOutcomes(t, w.board.Leave(coord.Working{}), coord.UnsureInheritKept{Ref: issue42, OrphanAlive: false})
 
 		if w.left != 1 {
 			t.Fatalf("Leave %d 回, want 生存報告を消す", w.left)
@@ -580,10 +579,10 @@ func TestAnInheritWithAnUnknownResultIsRememberedAndSettledByTheNextObservation(
 			t.Fatalf("Leave %d 回, want 生存報告を消す", w.left)
 		}
 	})
-	t.Run("止まるときに orphan が終わっていれば、覚えていても生存報告を消す", func(t *testing.T) {
+	t.Run("止まるときに orphan が終わっていれば、覚えていても生存報告を消し、残したかもしれないことは返す", func(t *testing.T) {
 		w, _ := inheritUnsure(t)
 
-		wantOutcomes(t, w.board.Leave(coord.Working{}))
+		wantOutcomes(t, w.board.Leave(coord.Working{}), coord.UnsureInheritKept{Ref: issue42, OrphanAlive: false})
 
 		if w.left != 1 {
 			t.Fatalf("Leave %d 回, want 生存報告を消す", w.left)

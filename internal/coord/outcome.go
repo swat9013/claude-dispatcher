@@ -93,13 +93,18 @@ type ClaimReleaseFailed struct {
 }
 
 // InheritKept は、止まるときに引き継いだ着手宣言を残したこと。OrphanAlive は orphan がまだ生きている (作業を続けうる) か。
-// 生きていなければ、orphan は終わったが消せなかった。UnsureInheritKept は引き継ぎの結果が分からないまま、orphan が生きていて残したこと。
+// 生きていなければ、orphan は終わったが消せなかった。UnsureInheritKept は引き継ぎの結果が分からないまま、届いていたかもしれない
+// 着手宣言を残したこと。OrphanAlive は orphan がまだ生きているか。生きていなければ orphan は終わっていたが、sha を知らないので
+// 消そうとしていない (消し損ねた InheritKept とは違う)。
 type (
 	InheritKept struct {
 		Ref         target.Ref
 		OrphanAlive bool
 	}
-	UnsureInheritKept struct{ Ref target.Ref }
+	UnsureInheritKept struct {
+		Ref         target.Ref
+		OrphanAlive bool
+	}
 )
 
 // ClaimReleaseLost は、claim を解いた作業対象の自分の着手宣言の削除に負けたこと (他の loop が先に消したか乗っ取った)。消し直さない。
