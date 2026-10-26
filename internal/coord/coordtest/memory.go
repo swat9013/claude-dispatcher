@@ -13,7 +13,7 @@ import (
 
 // Memory は ref と条件付きの更新だけを持つ、in-memory の coord.Refs。着手宣言と生存報告の ref を持ち、条件付きの更新
 // (無いときだけ作る・旧 sha を期待値に置き換える・sha を指しているときだけ消す) を server と同じく照合する。テストが注入する
-// 失敗 (FailClaim・FailDelete・FailHeartbeat・FailLeave・Unreadable) も持つ。生存報告は別の goroutine から置き直すので、
+// 失敗 (FailClaim・FailClaimBeforePush・FailDelete・FailHeartbeat・FailLeave・Unreadable) も持つ。生存報告は別の goroutine から置き直すので、
 // 表と注入した失敗は mu で守る。
 type Memory struct {
 	loop string
@@ -28,6 +28,8 @@ type Memory struct {
 
 	// claimErr・deleteErr・heartbeatErr・leaveErr は注入した失敗 (FailClaim・FailDelete・FailHeartbeat・FailLeave)。nil なら落とさない
 	claimErr, deleteErr, heartbeatErr, leaveErr error
+	// claimUnpushedErr は注入した push より前の失敗 (FailClaimBeforePush)。nil なら落とさない
+	claimUnpushedErr error
 	// unread の sha の commit message は、読めなかったものとして View から外し、View.Unread に unreadErr を置く (Unreadable)
 	unread    map[string]bool
 	unreadErr error
@@ -54,6 +56,14 @@ func (m *Memory) FailClaim(err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.claimErr = err
+}
+
+// FailClaimBeforePush は以後の着手宣言を、push せずに coord.ErrNotPushed と err を包んだ error で落とす (remote に届いて
+// いない失敗)。nil を渡すと戻す。
+func (m *Memory) FailClaimBeforePush(err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.claimUnpushedErr = err
 }
 
 // FailDelete は以後の着手宣言と生存報告の削除を、ref を変えずに err で落とす (負けではない失敗)。nil を渡すと戻す。
@@ -155,6 +165,10 @@ func (m *Memory) Observe() (coord.View, error) {
 func (m *Memory) Claim(ref target.Ref, expect coord.Expect) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.claimUnpushedErr != nil {
+		// 本番 (coord.Party) と同じく、commit を作れなければ期待値を照合する push まで行かない
+		return "", fmt.Errorf("%w: %w", coord.ErrNotPushed, m.claimUnpushedErr)
+	}
 	if expect.String() != expected(m.claims[ref]) {
 		return "", coord.ErrLost
 	}

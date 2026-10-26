@@ -311,3 +311,43 @@ func TestLeaveKeepsAHeartbeatItDidNotPlace(t *testing.T) {
 		t.Fatalf("ref = %v (%v), want 自分の置いていない生存報告 %s が残る", refs, err, theirs)
 	}
 }
+
+// failingGit は r の git を、引数に sub を含むと git を撃たずに落ち、それ以外は実物の git を呼ぶ script に差し替える。
+func failingGit(t *testing.T, r *Remote, sub string) {
+	t.Helper()
+	wrapper := filepath.Join(t.TempDir(), "git")
+	script := "#!/bin/sh\nfor a in \"$@\"; do if [ \"$a\" = " + shQuote(sub) + " ]; then echo " + shQuote(sub+" が落ちた") +
+		" >&2; exit 1; fi; done\nexec " + shQuote(r.Git.Path) + " \"$@\"\n"
+	if err := os.WriteFile(wrapper, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r.Git.Path = wrapper
+}
+
+func TestAClaimThatFailsBeforePushIsToldApartFromAFailedPush(t *testing.T) {
+	t.Run("着手宣言の commit を作れなければ、push より前の失敗を返して push しない", func(t *testing.T) {
+		r := remoteForTest(t)
+		failingGit(t, &r, "commit-tree")
+		var me Refs = &Party{Remote: r, Loop: "me-00000001"}
+
+		_, err := me.Claim(issue42, Absent())
+
+		if !errors.Is(err, ErrNotPushed) {
+			t.Fatalf("Claim = %v, want push より前の失敗", err)
+		}
+		if refs, err := r.List(); err != nil || len(refs) != 0 {
+			t.Fatalf("ref = %v (%v), want 何も置かない", refs, err)
+		}
+	})
+	t.Run("push が負け以外で落ちれば、push より前の失敗にしない", func(t *testing.T) {
+		r := remoteForTest(t)
+		failingGit(t, &r, "push")
+		var me Refs = &Party{Remote: r, Loop: "me-00000001"}
+
+		_, err := me.Claim(issue42, Absent())
+
+		if err == nil || errors.Is(err, ErrNotPushed) || errors.Is(err, ErrLost) {
+			t.Fatalf("Claim = %v, want 結果の分からない push の失敗", err)
+		}
+	})
+}
