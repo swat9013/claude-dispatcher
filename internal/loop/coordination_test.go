@@ -37,6 +37,8 @@ type flaky struct {
 	// onObserve は Observe の回数ごとに、読ませる前に呼ぶ (他のマシンの loop の書き込みの代役)
 	onObserve func(times int)
 	observed  int
+	// unlisted が nil でなければ、Observe は ref の一覧を読めずにこれで落ちる (onObserve の後に見る)
+	unlisted error
 	// beforeClaim は着手宣言の push の直前に呼ぶ (他のマシンの loop に先を越される代役)
 	beforeClaim func()
 	// renewed は、生存報告の置き直しがあったことを知らせる
@@ -49,6 +51,9 @@ func (f *flaky) Observe() (coord.View, error) {
 	f.observed++
 	if f.onObserve != nil {
 		f.onObserve(f.observed)
+	}
+	if f.unlisted != nil {
+		return coord.View{}, f.unlisted
 	}
 	return f.Memory.Observe()
 }
@@ -297,6 +302,62 @@ func TestAnInheritWithAnUnknownResultIsKeptAsInheritedByTheNextTick(t *testing.T
 	}
 	if !hasErrorLine(t, r, "issue#42", "orphan のために引き継いだ着手宣言を残して止まる (orphan の claude が作業を続けうる)") {
 		t.Fatalf("error の行 = %v, want 引き継いだものとして残して止まる行", r.logEvents(t, "error"))
+	}
+}
+
+func TestAnInheritThatFailedBeforePushDeletesTheHeartbeatWhenTheLoopStops(t *testing.T) {
+	remote := newFlaky()
+	remote.beating(t)
+	remote.Put(nil, heartbeatOf("me-00000009"))
+	theirs := remote.Put(&issue42, claimBy("me-00000009", issue42))
+	// 着手宣言の commit を作れず、remote には届いていない
+	remote.FailClaimBeforePush(errors.New("disk full"))
+
+	r := orphanedRun(t, remote, 1, always)
+
+	// 引き継いだかもしれない着手宣言は無いので、orphan が生きていても生存報告を消して止まる
+	if _, beating := remote.Loops()[me]; beating || remote.Claims()[issue42] != theirs {
+		t.Fatalf("生存報告 = %v・着手宣言 %v, want 着手宣言を触らずに生存報告を消す", remote.Loops(), remote.Claims())
+	}
+	if !hasErrorLine(t, r, "issue#42", "orphan の作業対象の着手宣言を引き継げない (次の tick で試み直す): ") ||
+		!hasErrorLine(t, r, "issue#42", "disk full") {
+		t.Fatalf("error の行 = %v, want 引き継げない行", r.logEvents(t, "error"))
+	}
+	if hasErrorLine(t, r, "issue#42", "引き継いだかもしれない") {
+		t.Fatalf("error の行 = %v, want 引き継いだかもしれない着手宣言を残す行を書かない", r.logEvents(t, "error"))
+	}
+}
+
+// 結果の分からない引き継ぎを覚えるのは orphan が生きている tick だけで、orphan の生死は次の tick の突き合わせで覚えたものを
+// 決着させた後に確かめ直す (formats.md §12 の 8)。突き合わせが落ちた tick は orphan を確かめず、直近の生死を残す。この順を
+// 変えて orphan を先に確かめると、止まるときに orphan が終わったとみなし、届いていた着手宣言を生存報告の無いまま残す。
+func TestOrphansAreCheckedOnlyAfterTheBoardSettlesAnInheritWithAnUnknownResult(t *testing.T) {
+	remote := newFlaky()
+	remote.beating(t)
+	remote.Put(nil, heartbeatOf("me-00000009"))
+	remote.Put(&issue42, claimBy("me-00000009", issue42))
+	// 1 tick 目の引き継ぎの push は remote に届いたが、結果の分からない失敗を返す
+	remote.FailClaim(errors.New("connection reset"))
+	// 2 tick 目の突き合わせは ref を読めない
+	remote.onObserve = func(times int) {
+		if times == 2 {
+			remote.unlisted = errors.New("ls-remote が落ちた")
+		}
+	}
+	// orphan は 1 回目の確かめでだけ生きている (2 回目に確かめれば終わっている)
+	checks := 0
+	alive := func() bool { checks++; return checks == 1 }
+
+	r := orphanedRun(t, remote, 2, alive)
+
+	if owner := remote.Message(remote.Claims()[issue42]).Loop; owner != me {
+		t.Fatalf("着手宣言の持ち主 %q, want 届いていた着手宣言が残る", owner)
+	}
+	if _, beating := remote.Loops()[me]; !beating {
+		t.Fatalf("生存報告 = %v, want 届いていたかもしれない着手宣言の持ち主として生存報告を残す", remote.Loops())
+	}
+	if !hasErrorLine(t, r, "issue#42", "orphan のために引き継いだかもしれない着手宣言を残して止まる") {
+		t.Fatalf("error の行 = %v, want 引き継いだかもしれない着手宣言を残して止まる行", r.logEvents(t, "error"))
 	}
 }
 

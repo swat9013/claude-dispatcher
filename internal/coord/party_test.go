@@ -21,17 +21,11 @@ var issue42 = target.Ref{Kind: target.KindIssue, Number: 42}
 // 落ちる) ので、数えられない状態が 0 回に見えることは無い。
 func countingFetches(t *testing.T, r *Remote) func() int {
 	t.Helper()
-	dir := t.TempDir()
-	log, wrapper := filepath.Join(dir, "fetches"), filepath.Join(dir, "git")
+	log := filepath.Join(t.TempDir(), "fetches")
 	if err := os.WriteFile(log, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	script := "#!/bin/sh\nset -e\n: >> " + shQuote(log) + "\nfor a in \"$@\"; do if [ \"$a\" = fetch ]; then echo >> " + shQuote(log) +
-		"; fi; done\nexec " + shQuote(r.Git.Path) + " \"$@\"\n"
-	if err := os.WriteFile(wrapper, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	r.Git.Path = wrapper
+	wrapGit(t, r, "set -e\n: >> "+shQuote(log)+"\n", "fetch", "echo >> "+shQuote(log))
 	return func() int {
 		b, err := os.ReadFile(log)
 		if err != nil {
@@ -39,6 +33,18 @@ func countingFetches(t *testing.T, r *Remote) func() int {
 		}
 		return bytes.Count(b, []byte("\n"))
 	}
+}
+
+// wrapGit は r の git を、prelude を撃ってから、引数に sub を含めば onMatch を撃ち、実物の git を呼ぶ sh の script に差し替える。
+func wrapGit(t *testing.T, r *Remote, prelude, sub, onMatch string) {
+	t.Helper()
+	wrapper := filepath.Join(t.TempDir(), "git")
+	script := "#!/bin/sh\n" + prelude + "for a in \"$@\"; do if [ \"$a\" = " + shQuote(sub) + " ]; then " + onMatch +
+		"; fi; done\nexec " + shQuote(r.Git.Path) + " \"$@\"\n"
+	if err := os.WriteFile(wrapper, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r.Git.Path = wrapper
 }
 
 // shQuote は s を sh の single quote で囲む。
@@ -310,4 +316,38 @@ func TestLeaveKeepsAHeartbeatItDidNotPlace(t *testing.T) {
 	if refs, err := r.List(); err != nil || refs[name] != theirs {
 		t.Fatalf("ref = %v (%v), want 自分の置いていない生存報告 %s が残る", refs, err, theirs)
 	}
+}
+
+// failingGit は r の git を、引数に sub を含むと git を撃たずに落ち、それ以外は実物の git を呼ぶ script に差し替える。
+func failingGit(t *testing.T, r *Remote, sub string) {
+	t.Helper()
+	wrapGit(t, r, "", sub, "echo "+shQuote(sub+" が落ちた")+" >&2; exit 1")
+}
+
+func TestAClaimThatFailsBeforePushIsToldApartFromAFailedPush(t *testing.T) {
+	t.Run("着手宣言の commit を作れなければ、push より前の失敗を返して push しない", func(t *testing.T) {
+		r := remoteForTest(t)
+		failingGit(t, &r, "commit-tree")
+		var me Refs = &Party{Remote: r, Loop: "me-00000001"}
+
+		_, err := me.Claim(issue42, Absent())
+
+		if !errors.Is(err, ErrNotPushed) {
+			t.Fatalf("Claim = %v, want push より前の失敗", err)
+		}
+		if refs, err := r.List(); err != nil || len(refs) != 0 {
+			t.Fatalf("ref = %v (%v), want 何も置かない", refs, err)
+		}
+	})
+	t.Run("push が負け以外で落ちれば、push より前の失敗にしない", func(t *testing.T) {
+		r := remoteForTest(t)
+		failingGit(t, &r, "push")
+		var me Refs = &Party{Remote: r, Loop: "me-00000001"}
+
+		_, err := me.Claim(issue42, Absent())
+
+		if err == nil || errors.Is(err, ErrNotPushed) || errors.Is(err, ErrLost) {
+			t.Fatalf("Claim = %v, want 結果の分からない push の失敗", err)
+		}
+	})
 }

@@ -33,8 +33,9 @@ type Board struct {
 	// inherited は、生きている orphan の作業対象のために死んだ loop から引き継いだ自分の着手宣言の sha (claim は立てない。
 	// ADR 0027)
 	inherited map[target.Ref]string
-	// unsure は、引き継ぎの push が結果の分からない失敗をした作業対象。remote に届いていたかは次の Observe が確かめる。それより
-	// 前に止まるときは inherited と同じに扱う
+	// unsure は、引き継ぎの push が結果の分からない失敗をした作業対象 (push より前に落ちたものは含めない)。remote に届いて
+	// いたかは次の Observe が確かめる。それより前に止まるときは、orphan が生きていれば inherited と同じく残し、終わっていれば
+	// sha を知らないので消せない
 	unsure map[target.Ref]bool
 	// takenOver は乗っ取られた作業対象。loop を起動し直すまで残す
 	takenOver []TakenOver
@@ -414,6 +415,9 @@ func (b *Board) inherit(ref target.Ref, h *holder) []Outcome {
 	switch {
 	case errors.Is(err, ErrLost):
 		return nil
+	case errors.Is(err, ErrNotPushed):
+		// remote に届いていない。覚えずに次の tick で試み直す
+		return []Outcome{InheritFailed{ref, err}}
 	case err != nil:
 		// remote に届いていたかもしれない。次の Observe で確かめる前に止まるときのために覚えておく
 		b.unsure[ref] = true

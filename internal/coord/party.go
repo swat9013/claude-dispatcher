@@ -1,6 +1,7 @@
 package coord
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -15,7 +16,8 @@ type Refs interface {
 	LoopName() string
 	// Observe は ref と、読めた commit message を返す。ref を読めなければ error
 	Observe() (View, error)
-	// Claim は着手宣言を expect を条件に置き、置いた sha を返す。負けたら ErrLost を包む
+	// Claim は着手宣言を expect を条件に置き、置いた sha を返す。負けたら ErrLost を、push より前に落ちたら (remote に届いて
+	// いない) ErrNotPushed を包む
 	Claim(ref target.Ref, expect Expect) (string, error)
 	// DeleteClaim は作業対象の着手宣言を、sha を指しているときだけ消す。負けたら ErrLost を包む
 	DeleteClaim(ref target.Ref, sha string) error
@@ -28,6 +30,9 @@ type Refs interface {
 }
 
 var _ Refs = (*Party)(nil)
+
+// ErrNotPushed は、着手宣言が push より前に落ちたこと。remote に届いていないことが確定している (push の失敗は届いたかが分からない)。
+var ErrNotPushed = errors.New("push する前に落ちた")
 
 // Party は 1 つの loop (か単発起動) として coordination board に着手宣言と生存報告を置く口。読んだ commit message を sha ごとに
 // 覚え、新しく見た sha だけを fetch する。生存報告は tick と別の goroutine から置き直すので、記憶は mu で守る。
@@ -142,12 +147,13 @@ func (p *Party) Observe() (View, error) {
 	return v, nil
 }
 
-// Claim は作業対象の着手宣言を、expect を条件にして置き、置いた sha を返す。負けたら ErrLost を包んで返す。
+// Claim は作業対象の着手宣言を、expect を条件にして置き、置いた sha を返す。負けたら ErrLost を、commit を作れなければ
+// ErrNotPushed を包んで返す。
 func (p *Party) Claim(ref target.Ref, expect Expect) (string, error) {
 	m := Message{Kind: KindClaim, Format: Format, Loop: p.Loop, Target: ref.String()}
 	sha, err := p.Remote.Commit(m)
 	if err != nil {
-		return "", fmt.Errorf("着手宣言の commit を作れない: %w", err)
+		return "", fmt.Errorf("着手宣言の commit を作れない (%w): %w", ErrNotPushed, err)
 	}
 	if err := p.Remote.Push(p.Remote.ClaimRef(ref), sha, expect); err != nil {
 		return "", err

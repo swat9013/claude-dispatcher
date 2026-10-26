@@ -28,6 +28,8 @@ type Memory struct {
 
 	// claimErr・deleteErr・heartbeatErr・leaveErr は注入した失敗 (FailClaim・FailDelete・FailHeartbeat・FailLeave)。nil なら落とさない
 	claimErr, deleteErr, heartbeatErr, leaveErr error
+	// claimUnpushedErr は注入した push より前の失敗 (FailClaimBeforePush)。nil なら落とさない
+	claimUnpushedErr error
 	// unread の sha の commit message は、読めなかったものとして View から外し、View.Unread にその error を置く (Unreadable)
 	unread map[string]error
 }
@@ -53,6 +55,14 @@ func (m *Memory) FailClaim(err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.claimErr = err
+}
+
+// FailClaimBeforePush は以後の着手宣言を、push せずに coord.ErrNotPushed と err を包んだ error で落とす (remote に届いて
+// いない失敗)。nil を渡すと戻す。
+func (m *Memory) FailClaimBeforePush(err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.claimUnpushedErr = err
 }
 
 // FailDelete は以後の着手宣言と生存報告の削除を、ref を変えずに err で落とす (負けではない失敗)。nil を渡すと戻す。
@@ -166,6 +176,10 @@ func (m *Memory) Observe() (coord.View, error) {
 func (m *Memory) Claim(ref target.Ref, expect coord.Expect) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.claimUnpushedErr != nil {
+		// 本番 (coord.Party) と同じく、commit を作れなければ期待値を照合する push まで行かない
+		return "", fmt.Errorf("%w: %w", coord.ErrNotPushed, m.claimUnpushedErr)
+	}
 	if expect.String() != expected(m.claims[ref]) {
 		return "", coord.ErrLost
 	}
