@@ -160,7 +160,7 @@ limits:
   stall_timeout: 15m         # 任意。worker の progress が途絶えてから止めるまで。既定 15m。0 で無効
   run_timeout: 1h            # 任意。worker 1 回分の上限時間。既定 1h。0 で無効
 coordination:
-  remote: origin             # 任意。2 台以上のマシンの loop で同じ issue 置き場を分け合うときだけ書く。各マシンの loop が、引き受けた作業対象を push し合う git remote の名前。省くと 1 台で回す
+  remote: origin             # 任意。2 台以上のマシンの loop で同じ issue 置き場を分け合うときだけ書く (項目の表の `coordination.remote`)
 claude:
   command: claude            # 任意。既定 claude
   # 任意。既定は空。再入の仕組みを塞ぐ (理由は項目の表の下の注記「再入の仕組みを塞ぐ」)。
