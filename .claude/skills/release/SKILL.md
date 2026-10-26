@@ -53,7 +53,7 @@ git diff <前回の版>..<sha> -- internal/guide/guide.md docs/design/formats.md
 git diff <前回の版>..<sha> -- go.mod
 ```
 
-主な材料に、CONTRIBUTING.md の「release」が挙げる補助の材料を加え、同じ節が挙げる節の順で要約を書く。補助の材料は、CONTRIBUTING.md がそれぞれの候補とする節に書く。各節は、CONTRIBUTING.md が要約の節として挙げる名前を括弧書きまでそのまま `## ` の見出しにし、中身の無い節は出さない。補助の材料は次のように引く。
+主な材料に、CONTRIBUTING.md の「release」が挙げる補助の材料を加え、同じ節が挙げる節の順で要約を書く。補助の材料は、CONTRIBUTING.md がそれぞれの候補とする節に書く。各節は、CONTRIBUTING.md が要約の節として挙げる名前 (括弧書きの説明は除く) をそのまま `## ` の見出しにし、中身の無い節は出さない。補助の材料は次のように引く。
 
 - commit 一覧: 手順 1 の `git log` をそのまま使う。題名は開発者の語なので、利用者に見える修正だけを選び、利用者の語に書き直す。どれを残すかは手順 5 で人が commit 一覧と見比べて決める
 - go.mod の `go` 行: 上の go.mod の差分に `-go <前の版>` と `+go <後の版>` の対があれば、`go install` に要る Go の版が前の版から後の版へ上がったことを書く。go.mod の他の行 (`require`・`toolchain` 等) は材料にしない
