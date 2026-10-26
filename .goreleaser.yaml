@@ -26,12 +26,15 @@ archives:
 checksum:
   name_template: checksums.txt
 
+# Release の本文は、release.header の要約の下に、GitHub が生成する PR の一覧と比較の link を置く (CONTRIBUTING.md の「release」)
 changelog:
-  use: github
+  use: github-native
 
-# prerelease の tag (v1.2.0-rc.1 等) の Release を prerelease にし、Latest にしない (tap の skip_upload: auto と揃える)
 release:
+  # prerelease の tag (v1.2.0-rc.1 等) の Release を prerelease にし、Latest にしない (tap の skip_upload: auto と揃える)
   prerelease: auto
+  # annotated tag の本文 (1 行目の版の後ろ) に書いた利用者向けの要約を、Release の本文の先頭に写す。本文が空なら何も足さない
+  header: "{{ .TagBody }}"
 
 # 形の決定は docs/adr/0007-homebrew-tap-cask.md、token と prerelease の扱いは CONTRIBUTING.md の「release」
 homebrew_casks:
