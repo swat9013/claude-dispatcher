@@ -41,6 +41,8 @@ type flaky struct {
 	unlisted error
 	// beforeClaim は着手宣言の push の直前に呼ぶ (他のマシンの loop に先を越される代役)
 	beforeClaim func()
+	// undelivered が nil でなければ、着手宣言の push を remote に届けずにこれを返す (届いたかの分からない失敗)
+	undelivered error
 	// renewed は、生存報告の置き直しがあったことを知らせる
 	renewed chan struct{}
 }
@@ -61,6 +63,9 @@ func (f *flaky) Observe() (coord.View, error) {
 func (f *flaky) Claim(ref target.Ref, expect coord.Expect) (string, error) {
 	if f.beforeClaim != nil {
 		f.beforeClaim()
+	}
+	if f.undelivered != nil {
+		return "", f.undelivered
 	}
 	return f.Memory.Claim(ref, expect)
 }
@@ -390,6 +395,52 @@ func TestAnInheritWithAnUnknownResultLeavesAnErrorLineWhenTheOrphanHasEndedBefor
 	}
 	if !hasErrorLine(t, r, "issue#42", "orphan のために引き継いだかもしれない着手宣言を残して止まる (引き継ぎの結果が分からず、orphan は終わっていた)") {
 		t.Fatalf("error の行 = %v, want orphan は終わっていたとして引き継いだかもしれない着手宣言を残して止まる行", r.logEvents(t, "error"))
+	}
+}
+
+// 引き継ぎの push が remote に届かずに結果の分からない失敗を返し、remote が死んだ持ち主の着手宣言のままなら、その commit message を
+// 読めなくても、次の tick で旧 sha と比べて届いていないと決着させる (formats.md §12 の 8・ADR 0031)。止まるときに、引き継いだ
+// かもしれない着手宣言を残したとは書かない。
+func TestAnInheritWithAnUnknownResultThatDidNotReachTheRemoteIsSettledByTheOldSHA(t *testing.T) {
+	cases := []struct {
+		name  string
+		alive func() func() bool
+	}{
+		{"orphan が生きていて止まる", func() func() bool { return always }},
+		{"orphan が終わっていて止まる", func() func() bool {
+			// orphan は 1 回目の確かめでだけ生きている
+			checks := 0
+			return func() bool { checks++; return checks == 1 }
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			remote := newFlaky()
+			remote.beating(t)
+			remote.Put(nil, heartbeatOf("me-00000009"))
+			theirs := remote.Put(&issue42, claimBy("me-00000009", issue42))
+			// 1 tick 目の引き継ぎの push は remote に届かず、結果の分からない失敗を返す
+			remote.undelivered = errors.New("connection reset")
+			// 2 tick 目の突き合わせは、remote に残った元の着手宣言の commit message を読めない
+			remote.onObserve = func(times int) {
+				if times == 2 {
+					remote.undelivered = nil
+					remote.Unreadable(theirs, errors.New("fetch が落ちた"))
+				}
+			}
+
+			r := orphanedRun(t, remote, 2, c.alive())
+
+			if got := remote.Claims()[issue42]; got != theirs {
+				t.Fatalf("着手宣言 = %q, want 元の着手宣言 %q のまま", got, theirs)
+			}
+			if hasErrorLine(t, r, "issue#42", "引き継いだかもしれない") {
+				t.Fatalf("error の行 = %v, want 届いていないと決着させ、引き継いだかもしれない着手宣言を残す行を書かない", r.logEvents(t, "error"))
+			}
+			if _, beating := remote.Loops()[me]; beating {
+				t.Fatalf("生存報告 = %v, want 引き継いだかもしれない着手宣言は無いので生存報告を消す", remote.Loops())
+			}
+		})
 	}
 }
 

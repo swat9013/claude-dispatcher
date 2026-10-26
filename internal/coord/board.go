@@ -33,10 +33,10 @@ type Board struct {
 	// inherited は、生きている orphan の作業対象のために死んだ loop から引き継いだ自分の着手宣言の sha (claim は立てない。
 	// ADR 0027)
 	inherited map[target.Ref]string
-	// unsure は、引き継ぎの push が結果の分からない失敗をした作業対象 (push より前に落ちたものは含めない)。remote に届いて
-	// いたかは次の Observe が確かめる。それより前に止まるときは、orphan が生きていれば inherited と同じく残し、終わっていれば
-	// sha を知らないので消せない
-	unsure map[target.Ref]bool
+	// unsure は、引き継ぎの push が結果の分からない失敗をした作業対象と、push の期待値にした旧 sha (push より前に落ちたものは
+	// 含めない)。remote に届いていたかは次の Observe が確かめる。それより前に止まるときは、orphan が生きていれば inherited と
+	// 同じく残し、終わっていれば届いた着手宣言の sha を知らないので消せない
+	unsure map[target.Ref]string
 	// takenOver は乗っ取られた作業対象。loop を起動し直すまで残す
 	takenOver []TakenOver
 	// failures は続けて落ちた生存報告の置き直しの回数と直近の理由
@@ -52,7 +52,7 @@ const missedBeats = 3
 func NewBoard(refs Refs, interval time.Duration) *Board {
 	return &Board{
 		refs: refs, interval: interval, claimSeen: map[target.Ref]sighting{}, loopSeen: map[string]sighting{},
-		mine: map[target.Ref]string{}, inherited: map[target.Ref]string{}, unsure: map[target.Ref]bool{},
+		mine: map[target.Ref]string{}, inherited: map[target.Ref]string{}, unsure: map[target.Ref]string{},
 	}
 }
 
@@ -292,10 +292,10 @@ func (b *Board) detectTakeovers(v View) []Outcome {
 // を消す。
 func (b *Board) deleteStaleClaims(v View, orphans map[target.Ref]bool) []Outcome {
 	var out []Outcome
-	// 結果の分からなかった引き継ぎは、この View で決着したものだけ忘れる (届いていれば下で inherited に覚え直す)。着手宣言の
-	// commit message を読めなかったものは、届いたかを決められないので覚えたままにする
-	for ref := range b.unsure {
-		if state, held := v.Claims[ref]; !held {
+	// 結果の分からなかった引き継ぎは、この View で決着したものだけ忘れる (届いていれば下で inherited に覚え直す)。ref が旧 sha の
+	// ままなら届いていない。旧 sha と違う着手宣言の commit message を読めなかったものは、届いたかを決められないので覚えたままにする
+	for ref, old := range b.unsure {
+		if state, held := v.Claims[ref]; !held || state.SHA == old {
 			delete(b.unsure, ref)
 		} else if _, read := v.Messages[state.SHA]; read {
 			delete(b.unsure, ref)
@@ -430,7 +430,7 @@ func (b *Board) inherit(ref target.Ref, h *holder) []Outcome {
 		return []Outcome{InheritFailed{ref, err}}
 	case err != nil:
 		// remote に届いていたかもしれない。次の Observe で確かめる前に止まるときのために覚えておく
-		b.unsure[ref] = true
+		b.unsure[ref] = h.sha
 		return []Outcome{InheritFailed{ref, err}}
 	}
 	b.inherited[ref] = sha
@@ -497,7 +497,7 @@ func (b *Board) Leave(w Working) []Outcome {
 	}
 	// orphan のために引き継いだ着手宣言は、直近の tick で orphan が終わっていたものを消し、生きていたものは残す
 	out = append(out, b.ReleaseInherited(w.Orphans)...)
-	// 結果の分からなかった引き継ぎは、届いていたものとして引き継いだ着手宣言と同じに扱う (sha を知らないので消せない)
+	// 結果の分からなかった引き継ぎは、届いていたものとして引き継いだ着手宣言と同じに扱う (届いた着手宣言の sha を知らないので消せない)
 	for _, ref := range target.SortedRefs(b.unsure) {
 		claudeLeft = claudeLeft || w.Orphans[ref]
 		out = append(out, UnsureInheritKept{Ref: ref, OrphanAlive: w.Orphans[ref]})
