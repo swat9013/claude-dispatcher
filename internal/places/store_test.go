@@ -156,7 +156,7 @@ func TestOpenItemsReadsTheListingsOfEveryKindSideBySide(t *testing.T) {
 
 func TestOpenItemsReturnsTheItemsInTheOrderOfTheKindsWhicheverListingEndsFirst(t *testing.T) {
 	started := make(chan struct{})
-	// issue の一覧は CL の読み出しが始まるまで返らないので、CL より後に読み終わる
+	// issue の一覧は CL の読み出しが始まるまで返らない。どちらの結果が先に届いても、並びは種類の順
 	store := places.Store{Issues: waitingIssues{clStarted: started}, CLs: startingCLs{started: started}}
 
 	items, _ := openItemsWithin(t, store, issueFirst)
@@ -238,7 +238,7 @@ func (s startingCLsWithNonFatal) OpenCLs() ([]target.Item, error) {
 
 func TestOpenItemsJoinsTheNonFatalFailuresOfEveryKindInTheOrderOfTheKinds(t *testing.T) {
 	started := make(chan struct{})
-	// issue の失敗は CL の読み出しが始まってから返るので、CL の失敗より後に届く
+	// issue の失敗は CL の読み出しが始まってから返る。どちらの失敗が先に届いても、まとめる順は種類の順
 	store := places.Store{Issues: waitingIssuesWithNonFatal{clStarted: started}, CLs: startingCLsWithNonFatal{started: started}}
 
 	items, err := openItemsWithin(t, store, issueFirst)
