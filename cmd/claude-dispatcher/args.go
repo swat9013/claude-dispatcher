@@ -103,9 +103,9 @@ func (g globalFlag) acceptsAfterCommand(arg string) bool {
 	return g.afterCommand && slices.Contains(g.spellings, arg)
 }
 
-// inPlaceOfCommand は、command の後ろに afterCommand の flag があれば、その flag を command の代わりに書いた形の引数を返す。
-// command と他の引数は読まない。無ければ args のまま。
-func inPlaceOfCommand(args []string) []string {
+// moveFlagAfterCommandToFront は、command の後ろに afterCommand の flag があれば、command と他の引数を捨てて
+// その flag だけを command の代わりに書いた形の引数を返す。無ければ args のまま。
+func moveFlagAfterCommandToFront(args []string) []string {
 	if !isCommand(args[0]) {
 		return args
 	}

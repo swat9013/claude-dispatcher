@@ -86,7 +86,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stderr, usage)
 		return exitUsage
 	}
-	args = inPlaceOfCommand(args)
+	args = moveFlagAfterCommandToFront(args)
 	switch {
 	case args[0] == helpFlag.word && len(args) > 1:
 		// guide の後ろの引数と同じく誤りにする (formats.md §10)

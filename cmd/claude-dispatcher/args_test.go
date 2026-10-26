@@ -60,24 +60,51 @@ func TestEveryDeclaredGlobalFlagIsAcceptedInPlaceOfACommand(t *testing.T) {
 	}
 }
 
-func TestOnlyGlobalFlagsDeclaredAfterCommandActAfterACommand(t *testing.T) {
-	// Options 節が示す位置 (afterCommand) と振る舞いが同じ宣言から決まる
+// globalFlagsWhere は afterCommand が want の globalFlag の綴り。0 件なら test の前提が崩れているので落とす。
+func globalFlagsWhere(t *testing.T, want bool) []string {
+	t.Helper()
+	var spellings []string
 	for _, g := range globalFlags {
-		for _, spelling := range g.spellings {
-			t.Run(spelling, func(t *testing.T) {
-				var inPlace, after, stderr bytes.Buffer
-				run([]string{spelling}, &inPlace, &stderr)
-
-				code := run([]string{"status", "--no-such-flag", spelling}, &after, &stderr)
-
-				if g.afterCommand && (code != 0 || after.String() != inPlace.String()) {
-					t.Fatalf("command の後ろの %s が command の代わりと同じに振る舞わない: exit %d", spelling, code)
-				}
-				if !g.afterCommand && code != exitUsage {
-					t.Fatalf("command の後ろに書けない %s を受けた: exit %d", spelling, code)
-				}
-			})
+		if g.afterCommand == want {
+			spellings = append(spellings, g.spellings...)
 		}
+	}
+	if len(spellings) == 0 {
+		t.Fatalf("afterCommand が %v の globalFlag が無い", want)
+	}
+	return spellings
+}
+
+func TestGlobalFlagDeclaredAfterCommandActsAfterACommandAsInPlaceOfIt(t *testing.T) {
+	// Options 節が示す位置 (afterCommand) と振る舞いが同じ宣言から決まる
+	for _, spelling := range globalFlagsWhere(t, true) {
+		t.Run(spelling, func(t *testing.T) {
+			var want, wantErr bytes.Buffer
+			if code := run([]string{spelling}, &want, &wantErr); code != 0 {
+				t.Fatalf("command の代わりの %s の exit = %d", spelling, code)
+			}
+			var stdout, stderr bytes.Buffer
+
+			code := run([]string{"status", "--no-such-flag", spelling}, &stdout, &stderr)
+
+			if code != 0 || stdout.String() != want.String() || stderr.Len() != 0 {
+				t.Fatalf("command の後ろの %s が command の代わりと同じに振る舞わない: exit %d, stderr %q", spelling, code, stderr.String())
+			}
+		})
+	}
+}
+
+func TestGlobalFlagNotDeclaredAfterCommandIsAnArgumentErrorAfterACommand(t *testing.T) {
+	for _, spelling := range globalFlagsWhere(t, false) {
+		t.Run(spelling, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+
+			code := run([]string{"status", spelling}, &stdout, &stderr)
+
+			if code != exitUsage || stdout.Len() != 0 {
+				t.Fatalf("command の後ろに書けない %s を受けた: exit %d, stdout %q", spelling, code, stdout.String())
+			}
+		})
 	}
 }
 
