@@ -330,6 +330,7 @@ claude-dispatcher loop [--max-concurrent <N>] [<workflow の path>]
 - 閾値は 15 秒の固定値で、workflow 定義では変えられない
 - loop は (起動時の確認でも) 人が読む行 (下の「画面」) に出す。tick の読み出しと loop の起動時の確認の読み出しでは、加えて log.jsonl (§4) に `slow_listing` の行を書く (§4 の冒頭の規則で、目標を超えた読み出しは後から辿る側に入る)。tick の読み出しの行は、その tick の画面の行と同じときに書く。起動時の確認は `loop.lock` を取って log.jsonl を開く前に読むので、その行は loop が起動できたとき (`loop_start` の行を書いたとき) だけ、`loop_start` の行の直後に書く (`ts` は書いた時刻)。起動に落ちた loop は書かない (lock を取れなかった loop の書く先は、その state dir を持つ他の loop の log.jsonl になる)。試運転 (§5)・`doctor` (§7.4)・単発起動 (§11) は stderr に出す
 - 掛けるのは tick の手順 3 の snapshot と、試運転・`doctor` が置き場を読む一覧の読み出しと、起動時の確認 (上。`jira` の issue 置き場の確認の手順 2 と、`cl:` の CL 置き場の確認) が読む open な一覧
+- 一覧を 2 つ読むとき (issue と CL の両方の種類の trigger がある) は並べて読み、片方の一覧が致命的に失敗しても、もう片方を読み終わるまで待ってから失敗を返す。そのため、致命的な失敗の tick でも、もう片方の読み出しが 15 秒を超えれば、その置き場の行 (log.jsonl の `slow_listing` の行を含む) が、その tick の error の行 (画面の `tick error` の行と、log.jsonl の `result` が `error` の `tick` の行) より前に出うる。error の行の中身は変わらない。試運転と `doctor` でも、同じく stderr にその行が出うる
 
 1. 突き合わせ: 走っている worker の作業対象を読み直し、終端 (issue の close、CL の merge か close) になっていれば worker を止め、`after_run` と `before_remove` を撃って workspace を消す。trigger から外れただけでは止めない
 2. 終わった worker のうち、作業対象を読み直せなかったものを読み直す
