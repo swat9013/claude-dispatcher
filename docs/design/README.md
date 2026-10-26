@@ -29,9 +29,9 @@
 | claim の段階と遷移 (どの段階でどの出来事にどの遷移があるか) | `statechart.puml` (直したら `statechart.svg` を描き直して対で commit する。網羅は gate が検査する)。遷移の条件と効果を決める規則は `system.md` §7 |
 | 外から観測できる形式 | `formats.md` |
 | workflow 定義の書き方 (項目・述語・template・何が誤りになるか・事前検査がどこを探すか) | `internal/guide/guide.md` (検査で CLI が何を出すかは `formats.md` §2.8・§2.9) |
-| 利用者向けの導入の流れ・loop の回し方と見方と止め方・action が守る約束 | `internal/guide/guide.md` (仕組みの規則は `system.md` §7、ユースケースは `usecases.md` の UC-5・UC-6、`setup`・`doctor` の形式は `formats.md` §7.4、loop の画面・`status`・`paths` の形式は `formats.md` §6・§7.1–§7.3 が正本で、案内はそれを利用者の語で書く) |
+| 利用者向けの導入の流れ・loop の回し方と見方と止め方・action が守る約束 | `internal/guide/guide.md` (仕組みの規則は `system.md`、ユースケースは `usecases.md`、形式は `formats.md` が正本で、案内はそれを利用者の語で書く) |
 
-`system.md` §7・`usecases.md` の UC-5・UC-6 を直して、案内の「導入の流れ」「回す・見る・止める」「action が守る約束」に書いた振る舞いが変わるなら、同じ CL で案内も直す。`formats.md` §6・§7.1–§7.3 を直して、案内の「見る」に書いた観測形式が変わるときも、同じ CL で案内も直す。`formats.md` §7.4 を直して、案内の「導入の流れ」に書いた `setup` の雛形の埋まり方・`doctor` が確かめるもの・警告する宣言をはじめ、振る舞いや形式が変わるときも、同じ CL で案内も直す。
+`system.md`・`usecases.md`・`formats.md` を直して、利用者が撃つ手順・利用者に見える振る舞いと形式・action が守る約束のどれかが変わるなら、同じ CL で案内も直す。案内にまだ無いものが利用者に見えるようになる (subcommand・flag・workflow 定義の項目・loop の画面や `status` の行が増える) ときは、案内の当たる節に足す。正本の節を限らないのは、節を列挙すると機能を足すたびに列挙が古くなり、列挙から漏れた機能の案内が書かれないまま残るため。機械では検査しない (正本の差分が利用者に見える振る舞いを変えるかは機械で決まらず、変えない差分でも検査が落ちるため)。
 
 振る舞いの変わらないリファクタリング・bug fix・実装内部だけの変更は先に直さなくてよい。迷ったら先に直す。決定を覆すときは ADR を新しく起こす (既存 ADR の本文は書き換えない)。
 
