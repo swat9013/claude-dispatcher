@@ -469,7 +469,7 @@ func TestAnOrphansDeadHoldersClaimIsInheritedOnlyWhereTheOrphanWorks(t *testing.
 				c.race(w)
 			}
 
-			got := w.board.Tidy(set(c.orphans), nil)
+			got := w.board.Tidy(coord.Working{Orphans: set(c.orphans)})
 
 			if c.from == "" {
 				wantOutcomes(t, got, c.others...)
@@ -499,7 +499,7 @@ func TestAClaimIPlacedOnAnOrphansTargetIsNotInherited(t *testing.T) {
 	}
 	w.claimed = nil
 
-	wantOutcomes(t, w.board.Tidy(set([]target.Ref{issue42}), nil))
+	wantOutcomes(t, w.board.Tidy(coord.Working{Orphans: set([]target.Ref{issue42})}))
 
 	if len(w.claimed) != 0 {
 		t.Fatalf("着手宣言の push = %v, want 自分の着手宣言の作業対象は引き継がない", w.claimed)
@@ -514,7 +514,7 @@ func TestAnInheritWithAnUnknownResultIsRememberedAndSettledByTheNextObservation(
 		w.observe(0, issue42)
 		// push は remote に届いたが、結果の分からない失敗を返す
 		w.FailClaim(errPush)
-		wantOutcomes(t, w.board.Tidy(set([]target.Ref{issue42}), nil), coord.InheritFailed{Ref: issue42, Err: errPush})
+		wantOutcomes(t, w.board.Tidy(coord.Working{Orphans: set([]target.Ref{issue42})}), coord.InheritFailed{Ref: issue42, Err: errPush})
 		w.FailClaim(nil)
 		if !slices.Equal(w.claimed, []string{"issue#42 holding " + old}) {
 			t.Fatalf("着手宣言の push = %v", w.claimed)
@@ -524,7 +524,7 @@ func TestAnInheritWithAnUnknownResultIsRememberedAndSettledByTheNextObservation(
 	t.Run("次の突き合わせの前に止まっても、引き継いだものと同じに扱って生存報告を消さない", func(t *testing.T) {
 		w, _ := inheritUnsure(t)
 
-		wantOutcomes(t, w.board.Leave(set([]target.Ref{issue42}), nil), coord.UnsureInheritKept{Ref: issue42})
+		wantOutcomes(t, w.board.Leave(coord.Working{Orphans: set([]target.Ref{issue42})}), coord.UnsureInheritKept{Ref: issue42})
 
 		if w.left != 0 {
 			t.Fatalf("Leave %d 回, want 生存報告を消さずに止まる", w.left)
@@ -536,7 +536,7 @@ func TestAnInheritWithAnUnknownResultIsRememberedAndSettledByTheNextObservation(
 
 		wantOutcomes(t, w.observe(beat, issue42), coord.Unread{Err: errFetch})
 
-		wantOutcomes(t, w.board.Leave(set([]target.Ref{issue42}), nil), coord.UnsureInheritKept{Ref: issue42})
+		wantOutcomes(t, w.board.Leave(coord.Working{Orphans: set([]target.Ref{issue42})}), coord.UnsureInheritKept{Ref: issue42})
 		if w.left != 0 {
 			t.Fatalf("Leave %d 回, want 生存報告を消さずに止まる", w.left)
 		}
@@ -550,7 +550,7 @@ func TestAnInheritWithAnUnknownResultIsRememberedAndSettledByTheNextObservation(
 			t.Fatal("引き継いだものとして覚え直した着手宣言が残る間は、起動しない")
 		}
 		wantDeleted(t, w)
-		wantOutcomes(t, w.board.Leave(set([]target.Ref{issue42}), nil), coord.InheritKept{Ref: issue42, OrphanAlive: true})
+		wantOutcomes(t, w.board.Leave(coord.Working{Orphans: set([]target.Ref{issue42})}), coord.InheritKept{Ref: issue42, OrphanAlive: true})
 	})
 	t.Run("次の突き合わせで着手宣言が無ければ忘れる", func(t *testing.T) {
 		w, _ := inheritUnsure(t)
@@ -558,7 +558,7 @@ func TestAnInheritWithAnUnknownResultIsRememberedAndSettledByTheNextObservation(
 
 		wantOutcomes(t, w.observe(beat, issue42))
 
-		wantOutcomes(t, w.board.Leave(set([]target.Ref{issue42}), nil))
+		wantOutcomes(t, w.board.Leave(coord.Working{Orphans: set([]target.Ref{issue42})}))
 		if w.left != 1 {
 			t.Fatalf("Leave %d 回, want 生存報告を消す", w.left)
 		}
@@ -566,7 +566,7 @@ func TestAnInheritWithAnUnknownResultIsRememberedAndSettledByTheNextObservation(
 	t.Run("止まるときに orphan が終わっていれば、覚えていても生存報告を消す", func(t *testing.T) {
 		w, _ := inheritUnsure(t)
 
-		wantOutcomes(t, w.board.Leave(nil, nil))
+		wantOutcomes(t, w.board.Leave(coord.Working{}))
 
 		if w.left != 1 {
 			t.Fatalf("Leave %d 回, want 生存報告を消す", w.left)
@@ -583,7 +583,7 @@ func TestAnInheritThatFailedBeforePushIsNotRemembered(t *testing.T) {
 		// 着手宣言の commit を作れず、remote には届いていない
 		w.FailClaimBeforePush(errPush)
 
-		got := w.board.Tidy(set([]target.Ref{issue42}), nil)
+		got := w.board.Tidy(coord.Working{Orphans: set([]target.Ref{issue42})})
 
 		w.FailClaimBeforePush(nil)
 		if len(got) != 1 {
@@ -600,7 +600,7 @@ func TestAnInheritThatFailedBeforePushIsNotRemembered(t *testing.T) {
 	t.Run("止まるときに orphan が生きていても、引き継いだかもしれないものとして残さず生存報告を消す", func(t *testing.T) {
 		w := inheritUnpushed(t)
 
-		wantOutcomes(t, w.board.Leave(set([]target.Ref{issue42}), nil))
+		wantOutcomes(t, w.board.Leave(coord.Working{Orphans: set([]target.Ref{issue42})}))
 
 		if w.left != 1 {
 			t.Fatalf("Leave %d 回, want 生存報告を消す", w.left)
@@ -610,7 +610,7 @@ func TestAnInheritThatFailedBeforePushIsNotRemembered(t *testing.T) {
 		w := inheritUnpushed(t)
 		w.observe(beat, issue42)
 
-		wantOutcomes(t, w.board.Tidy(set([]target.Ref{issue42}), nil), coord.Inherited{Ref: issue42, From: "me-00000009"})
+		wantOutcomes(t, w.board.Tidy(coord.Working{Orphans: set([]target.Ref{issue42})}), coord.Inherited{Ref: issue42, From: "me-00000009"})
 	})
 }
 
@@ -621,7 +621,7 @@ func inherited(t *testing.T) (*world, string) {
 	w.Put(&issue42, claimBy(dead, issue42))
 	w.observe(0, issue42)
 	w.observe(3*beat, issue42)
-	wantOutcomes(t, w.board.Tidy(set([]target.Ref{issue42}), nil), coord.Inherited{Ref: issue42, From: dead})
+	wantOutcomes(t, w.board.Tidy(coord.Working{Orphans: set([]target.Ref{issue42})}), coord.Inherited{Ref: issue42, From: dead})
 	w.claimed, w.deleted = nil, nil
 	return w, w.ownClaim(issue42)
 }
@@ -678,7 +678,7 @@ func TestAnInheritedClaimIsForgottenWhenItsSHAChanges(t *testing.T) {
 
 		wantOutcomes(t, w.observe(4*beat, issue42), coord.InheritReplaced{Ref: issue42})
 
-		wantOutcomes(t, w.board.Leave(set([]target.Ref{issue42}), nil))
+		wantOutcomes(t, w.board.Leave(coord.Working{Orphans: set([]target.Ref{issue42})}))
 		wantDeleted(t, w)
 	})
 	t.Run("消えていたら何も返さずに忘れる", func(t *testing.T) {
@@ -687,7 +687,7 @@ func TestAnInheritedClaimIsForgottenWhenItsSHAChanges(t *testing.T) {
 
 		wantOutcomes(t, w.observe(4*beat, issue42))
 
-		wantOutcomes(t, w.board.Leave(set([]target.Ref{issue42}), nil))
+		wantOutcomes(t, w.board.Leave(coord.Working{Orphans: set([]target.Ref{issue42})}))
 		wantDeleted(t, w)
 	})
 }
@@ -706,11 +706,11 @@ func TestTheDeadLoopsRefsAreDeletedExceptTheOnesInUse(t *testing.T) {
 		w := newWorld(t)
 		heartbeat, claim7, claim42, claimCL := setup(w)
 
-		got := w.board.Tidy(nil, nil)
+		got := w.board.Tidy(coord.Working{})
 
 		wantOutcomes(t, got, coord.DeadLoopCleaned{Loop: dead, Refs: []string{coordtest.ClaimName(cl3), coordtest.ClaimName(issue7), coordtest.ClaimName(issue42), coordtest.HeartbeatName(dead)}, Heartbeat: true, Claims: 3})
 		wantDeleted(t, w, coordtest.ClaimName(cl3)+" "+claimCL, coordtest.ClaimName(issue7)+" "+claim7, coordtest.ClaimName(issue42)+" "+claim42, coordtest.HeartbeatName(dead)+" "+heartbeat)
-		wantOutcomes(t, w.board.Tidy(nil, nil))
+		wantOutcomes(t, w.board.Tidy(coord.Working{}))
 	})
 	t.Run("自分が着手宣言を置いた作業対象と、claude が作業を続けている作業対象と、orphan の作業対象は消さない", func(t *testing.T) {
 		w := newWorld(t)
@@ -720,7 +720,7 @@ func TestTheDeadLoopsRefsAreDeletedExceptTheOnesInUse(t *testing.T) {
 		}
 		w.claimed = nil
 
-		got := w.board.Tidy(set([]target.Ref{issue42}), set([]target.Ref{cl3}))
+		got := w.board.Tidy(coord.Working{Orphans: set([]target.Ref{issue42}), Unstopped: set([]target.Ref{cl3})})
 
 		// orphan の作業対象の着手宣言は、消さずに引き継ぐ
 		wantOutcomes(t, got, coord.Inherited{Ref: issue42, From: dead}, coord.DeadLoopCleaned{Loop: dead, Refs: []string{coordtest.HeartbeatName(dead)}, Heartbeat: true})
@@ -732,7 +732,7 @@ func TestTheDeadLoopsRefsAreDeletedExceptTheOnesInUse(t *testing.T) {
 		w.observe(0)
 		w.observe(3 * beat)
 
-		got := w.board.Tidy(nil, nil)
+		got := w.board.Tidy(coord.Working{})
 
 		wantOutcomes(t, got, coord.DeadLoopCleaned{Loop: dead, Refs: []string{coordtest.ClaimName(issue7)}, Claims: 1})
 		wantDeleted(t, w, coordtest.ClaimName(issue7)+" "+claim)
@@ -742,7 +742,7 @@ func TestTheDeadLoopsRefsAreDeletedExceptTheOnesInUse(t *testing.T) {
 		setup(w)
 		w.FailDelete(errPush)
 
-		got := w.board.Tidy(nil, nil)
+		got := w.board.Tidy(coord.Working{})
 
 		wantOutcomes(t, got,
 			coord.DeadRefDeleteFailed{Ref: cl3, Loop: dead, Err: errPush},
@@ -757,7 +757,7 @@ func TestTheDeadLoopsRefsAreDeletedExceptTheOnesInUse(t *testing.T) {
 		w.Put(&issue42, claimBy(other, issue42))
 		w.Put(nil, beatOf(dead, beat))
 
-		got := w.board.Tidy(nil, nil)
+		got := w.board.Tidy(coord.Working{})
 
 		wantOutcomes(t, got, coord.DeadLoopCleaned{Loop: dead, Refs: []string{coordtest.ClaimName(cl3)}, Claims: 1})
 	})
@@ -766,7 +766,7 @@ func TestTheDeadLoopsRefsAreDeletedExceptTheOnesInUse(t *testing.T) {
 		w.Put(nil, coord.Message{Kind: coord.KindHeartbeat, Format: coord.Format + 1, Loop: "newer-00000004", Interval: beat})
 		setup(w)
 
-		wantOutcomes(t, w.board.Tidy(nil, nil))
+		wantOutcomes(t, w.board.Tidy(coord.Working{}))
 		wantDeleted(t, w)
 	})
 }
@@ -780,7 +780,7 @@ func TestLeaveDeletesTheClaimsAndTheHeartbeatExceptWhereAClaudeMayStillWork(t *t
 		w.beating()
 		a, b := w.ownClaim(issue42), w.ownClaim(cl3)
 
-		wantOutcomes(t, w.board.Leave(nil, nil))
+		wantOutcomes(t, w.board.Leave(coord.Working{}))
 
 		wantDeleted(t, w, coordtest.ClaimName(cl3)+" "+b, coordtest.ClaimName(issue42)+" "+a)
 		if len(w.Claims()) != 0 || len(w.Loops()) != 0 || w.left != 1 {
@@ -794,7 +794,7 @@ func TestLeaveDeletesTheClaimsAndTheHeartbeatExceptWhereAClaudeMayStillWork(t *t
 		w.claim(cl3)
 		w.beating()
 
-		wantOutcomes(t, w.board.Leave(nil, set([]target.Ref{issue42})))
+		wantOutcomes(t, w.board.Leave(coord.Working{Unstopped: set([]target.Ref{issue42})}))
 
 		if _, kept := w.Claims()[issue42]; !kept || len(w.Claims()) != 1 {
 			t.Fatalf("着手宣言 = %v, want 止められない claude の作業対象だけ残す", w.Claims())
@@ -809,7 +809,7 @@ func TestLeaveDeletesTheClaimsAndTheHeartbeatExceptWhereAClaudeMayStillWork(t *t
 		w.claim(issue42)
 		w.FailDelete(errPush)
 
-		wantOutcomes(t, w.board.Leave(nil, nil), coord.ClaimReleaseFailed{Ref: issue42, Err: errPush})
+		wantOutcomes(t, w.board.Leave(coord.Working{}), coord.ClaimReleaseFailed{Ref: issue42, Err: errPush})
 
 		if w.left != 1 {
 			t.Fatalf("Leave %d 回, want 1", w.left)
@@ -820,18 +820,18 @@ func TestLeaveDeletesTheClaimsAndTheHeartbeatExceptWhereAClaudeMayStillWork(t *t
 		w.beating()
 		w.Put(nil, beatOf(me, beat))
 
-		wantOutcomes(t, w.board.Leave(nil, nil), coord.LeaveFailed{Err: coord.ErrLost})
+		wantOutcomes(t, w.board.Leave(coord.Working{}), coord.LeaveFailed{Err: coord.ErrLost})
 	})
 	t.Run("生存報告を消せなければ Outcome を返す", func(t *testing.T) {
 		w := newWorld(t)
 		w.FailLeave(errPush)
 
-		wantOutcomes(t, w.board.Leave(nil, nil), coord.LeaveFailed{Err: errPush})
+		wantOutcomes(t, w.board.Leave(coord.Working{}), coord.LeaveFailed{Err: errPush})
 	})
 	t.Run("orphan が生きている引き継いだ着手宣言は残し、生存報告も残す", func(t *testing.T) {
 		w, _ := inherited(t)
 
-		wantOutcomes(t, w.board.Leave(set([]target.Ref{issue42}), nil), coord.InheritKept{Ref: issue42, OrphanAlive: true})
+		wantOutcomes(t, w.board.Leave(coord.Working{Orphans: set([]target.Ref{issue42})}), coord.InheritKept{Ref: issue42, OrphanAlive: true})
 
 		if len(w.Claims()) != 1 || w.left != 0 {
 			t.Fatalf("着手宣言 %v・Leave %d 回, want 引き継いだ着手宣言も生存報告も残す", w.Claims(), w.left)
@@ -841,7 +841,7 @@ func TestLeaveDeletesTheClaimsAndTheHeartbeatExceptWhereAClaudeMayStillWork(t *t
 		w, _ := inherited(t)
 		w.FailDelete(errPush)
 
-		got := w.board.Leave(nil, nil)
+		got := w.board.Leave(coord.Working{})
 
 		wantOutcomes(t, got, coord.InheritedReleaseFailed{Ref: issue42, Err: errPush}, coord.InheritKept{Ref: issue42})
 		if w.left != 1 {
@@ -851,7 +851,7 @@ func TestLeaveDeletesTheClaimsAndTheHeartbeatExceptWhereAClaudeMayStillWork(t *t
 	t.Run("orphan が終わっていれば引き継いだ着手宣言を消して止まる", func(t *testing.T) {
 		w, sha := inherited(t)
 
-		wantOutcomes(t, w.board.Leave(nil, nil))
+		wantOutcomes(t, w.board.Leave(coord.Working{}))
 
 		wantDeleted(t, w, coordtest.ClaimName(issue42)+" "+sha)
 		if w.left != 1 {

@@ -248,6 +248,10 @@ func claimOnce(board *coord.Board, ref target.Ref, stderr io.Writer) int {
 		fmt.Fprintln(stderr, printable.Line(err.Error()))
 		return exitFailed
 	}
+	// Unread 以外の結果は捨ててよい。単発起動は起動ごとに新しい loop 名で新しい Board を作るので、自分の前の着手宣言・引き継ぎに
+	// 由来する結果 (TakenOver・StaleDeleteFailed・InheritReplaced) は出ない。読めない項目の結果 (OwnerUnreadable・
+	// IntervalUnreadable) は出うるが、持ち主を読めない着手宣言は下の Held が起動しない側に倒し、間隔を読めない生存報告は死の判定に
+	// しか効かない (単発起動は死んだ loop を判定しない)
 	for _, outcome := range outcomes {
 		if unread, ok := outcome.(coord.Unread); ok {
 			fmt.Fprintln(stderr, printable.Line(unread.Err.Error()))
@@ -290,7 +294,7 @@ func keepReporting(board *coord.Board, after func(time.Duration) <-chan time.Tim
 
 // leaveOnce は、単発起動が置いた着手宣言 (置けていれば) と生存報告を消す。消せなければ stderr に出す。
 func leaveOnce(board *coord.Board, stderr io.Writer) {
-	for _, outcome := range board.Leave(nil, nil) {
+	for _, outcome := range board.Leave(coord.Working{}) {
 		switch o := outcome.(type) {
 		case coord.ClaimReleaseFailed:
 			fmt.Fprintf(stderr, "%s の着手宣言を消せない: %s\n", o.Ref, printable.Line(o.Err.Error()))
