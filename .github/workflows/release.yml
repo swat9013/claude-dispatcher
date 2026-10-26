@@ -57,9 +57,13 @@ jobs:
       # GoReleaser の既定は直前の tag なので、prerelease の tag (v1.2.0-rc.1 等) を挟むとそこからになる。安定版が無ければ空で、既定に任せる
       - name: 前回の安定版の tag を引く
         id: previous
-        run: echo "tag=$(git tag -l 'v*' --merged "$GITHUB_SHA" --no-contains "$GITHUB_SHA" --sort=-v:refname | awk '!/-/' | head -n 1)" >> "$GITHUB_OUTPUT"
+        run: |
+          tag=$(git tag -l 'v*' --merged "$GITHUB_SHA" --no-contains "$GITHUB_SHA" --sort=-v:refname | awk '!/-/ {print; exit}')
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
       - run: goreleaser release --clean
         env:
+          # 同じ commit に prerelease の tag もあると、GoReleaser の既定は version の並びでそちらを今回の tag に選ぶ。push された tag に固定する
+          GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
           GORELEASER_PREVIOUS_TAG: ${{ steps.previous.outputs.tag }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}

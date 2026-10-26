@@ -22,11 +22,11 @@ allowed-tools: Bash(git fetch:*), Bash(git rev-parse:*), Bash(git tag -l:*), Bas
 ```sh
 git fetch origin main --tags
 git rev-parse origin/main
-git tag -l 'v*' --sort=-v:refname
+git tag -l 'v*' --merged <sha> --sort=-v:refname
 ```
 
 - `sha` は `git rev-parse origin/main` の出力 (40 桁のまま使う。`gh run list --commit` は短縮した SHA だと何も返さない)
-- 前回の版は、tag 一覧の先頭から見て最初の安定版 (`-` を含まない `vX.Y.Z`)。prerelease の tag (`v1.2.0-rc.1` 等) は上げる元にしない
+- 前回の版は、`sha` の祖先にある tag の一覧の先頭から見て最初の安定版 (`-` を含まない `vX.Y.Z`)。prerelease の tag (`v1.2.0-rc.1` 等) は上げる元にしない。祖先に限るのは、release workflow が Release の PR の一覧の起点に渡す前回の安定版と同じ tag を選ぶため
 - 前回からの commit 一覧は `git log --oneline <前回の版>..<sha>`。merge の形 (merge commit・squash・rebase) によらず、release に入る commit が全部出る。空なら `sha` は前回の版と同じ commit なので、「前回から変更が無い」と告げて終える
 
 ### 2. 新しい版を決める
@@ -52,7 +52,7 @@ release workflow は gate を撃ち直すので、ここで落ちていても pu
 git diff <前回の版>..<sha> -- internal/guide/guide.md docs/design/formats.md
 ```
 
-この差分だけを材料に、CONTRIBUTING.md の「release」が挙げる節の順で要約を書く。各節は、CONTRIBUTING.md が「」で括った節の名前を括弧書きまでそのまま `## ` の見出しにし、中身の無い節は出さない。差分が空か、利用者に見える変化が無ければ、要約は空にする (Release の本文は PR の一覧と比較の link だけになる)。
+この差分だけを材料に、CONTRIBUTING.md の「release」が挙げる節の順で要約を書く。各節は、CONTRIBUTING.md が要約の節として挙げる名前を括弧書きまでそのまま `## ` の見出しにし、中身の無い節は出さない。差分が空か、利用者に見える変化が無ければ、要約は空にする (Release の本文は PR の一覧と比較の link だけになる)。
 
 ### 5. 人の確認を取る
 
@@ -78,7 +78,7 @@ git push origin refs/tags/<版>
 
 push の前に、`git tag -l` が出す tag の本文が確定した要約と同じかを見る (Release の本文の先頭にそのまま載る)。違えば push せず、`git tag -d <版>` で消してから、確定した要約と `git tag -l` の出力を並べて見せて終える (打ち直しても同じ手順は同じずれを生む)。
 
-push が失敗したら、手元の tag を `git tag -d <版>` で消してから、失敗の出力をそのまま見せて終える (残すと次の実行で「既に在る」になる)。
+push を撃てなかったら (失敗した・permission の確認で断られた)、手元の tag を `git tag -d <版>` で消してから、失敗の出力をそのまま見せて終える (残すと次の実行で「既に在る」になる)。
 
 ### 7. release workflow を見届ける
 
@@ -97,5 +97,5 @@ gh run watch <databaseId> --exit-status
 gh release view <版> --json url,body
 ```
 
-- 成功: Release の url を返す。要約が空でなければ、`body` が確定した要約で始まるかも見る。始まらなければ (release workflow が tag の本文を読めていない)、そのことと `body` の先頭を url に添えて返す
+- 成功: Release の url を返す。要約が空でなければ、`body` が確定した要約で始まるかも見る (改行コードの違いと、各行の行末と全体の前後の空白は無視して比べる)。始まらなければ (release workflow が tag の本文を読めていない)、そのことと `body` の先頭を url に添えて返す
 - 失敗: `gh run view <databaseId>` を撃ち、run の url と、出力の `X` の付いた job・step と `ANNOTATIONS` の行をそのまま返す。release.yml は失敗の理由と次の手順を `::error::` に書いており、それが `ANNOTATIONS` に出る。tag は消さずに残し、消すかどうかは user に委ねる (Release が半端に出ていることがあるため)
