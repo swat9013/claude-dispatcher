@@ -34,7 +34,8 @@ type Board struct {
 	// ADR 0027)
 	inherited map[target.Ref]string
 	// unsure は、引き継ぎの push が結果の分からない失敗をした作業対象 (push より前に落ちたものは含めない)。remote に届いて
-	// いたかは次の Observe が確かめる。それより前に止まるときは inherited と同じに扱う
+	// いたかは次の Observe が確かめる。それより前に止まるときは、orphan が生きていれば inherited と同じく残し、終わっていれば
+	// sha を知らないので消せない
 	unsure map[target.Ref]bool
 	// takenOver は乗っ取られた作業対象。loop を起動し直すまで残す
 	takenOver []TakenOver

@@ -575,17 +575,22 @@ func TestAnInheritWithAnUnknownResultIsRememberedAndSettledByTheNextObservation(
 }
 
 func TestAnInheritThatFailedBeforePushIsNotRemembered(t *testing.T) {
-	inheritUnpushed := func(t *testing.T) *world {
+	// inheritUnpushed は、同じマシンの前の loop の着手宣言を orphan のために引き継ごうとして push より前に落ちた world と、
+	// Tidy の結果と、元の着手宣言の sha を返す
+	inheritUnpushed := func(t *testing.T) (*world, []coord.Outcome, string) {
 		w := newWorldOf(t, me)
 		w.Put(nil, beatOf("me-00000009", beat))
 		old := w.Put(&issue42, claimBy("me-00000009", issue42))
 		w.observe(0, issue42)
 		// 着手宣言の commit を作れず、remote には届いていない
 		w.FailClaimBeforePush(errPush)
-
 		got := w.board.Tidy(coord.Working{Orphans: set([]target.Ref{issue42})})
-
 		w.FailClaimBeforePush(nil)
+		return w, got, old
+	}
+	t.Run("引き継げなかったことを返し、着手宣言を置き換えない", func(t *testing.T) {
+		w, got, old := inheritUnpushed(t)
+
 		if len(got) != 1 {
 			t.Fatalf("outcomes = %#v, want InheritFailed だけ", got)
 		}
@@ -595,10 +600,9 @@ func TestAnInheritThatFailedBeforePushIsNotRemembered(t *testing.T) {
 		if w.ownClaim(issue42) != old {
 			t.Fatal("push より前に落ちた引き継ぎが、着手宣言を置き換えた")
 		}
-		return w
-	}
+	})
 	t.Run("止まるときに orphan が生きていても、引き継いだかもしれないものとして残さず生存報告を消す", func(t *testing.T) {
-		w := inheritUnpushed(t)
+		w, _, _ := inheritUnpushed(t)
 
 		wantOutcomes(t, w.board.Leave(coord.Working{Orphans: set([]target.Ref{issue42})}))
 
@@ -607,7 +611,7 @@ func TestAnInheritThatFailedBeforePushIsNotRemembered(t *testing.T) {
 		}
 	})
 	t.Run("次の tick で引き継ぎを試み直す", func(t *testing.T) {
-		w := inheritUnpushed(t)
+		w, _, _ := inheritUnpushed(t)
 		w.observe(beat, issue42)
 
 		wantOutcomes(t, w.board.Tidy(coord.Working{Orphans: set([]target.Ref{issue42})}), coord.Inherited{Ref: issue42, From: "me-00000009"})
