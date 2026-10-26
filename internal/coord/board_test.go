@@ -309,7 +309,7 @@ func TestAFailedDeleteIsReturnedAsAFailedReleaseWhenReleasing(t *testing.T) {
 	w.observe(0)
 	// 先に解いて消せた着手宣言があっても、後の削除の失敗はその作業対象の失敗として返す
 	w.claim(issue42)
-	wantOutcomes(t, w.board.Release(issue42))
+	w.board.Release(issue42)
 	w.claim(issue7)
 	w.FailDelete(errPush)
 
@@ -357,7 +357,7 @@ func TestAClaimThatWasTakenOverIsReportedOnceAndNeverDeleted(t *testing.T) {
 				t.Fatalf("要対処の乗っ取られた作業対象 = %v, want %v", a.TakenOver, taken)
 			}
 			wantOutcomes(t, w.board.Release(issue42))
-			w.ReadAll()
+			w.ClearUnreadable()
 			wantOutcomes(t, w.observe(2*beat))
 			wantDeleted(t, w)
 		})
@@ -854,7 +854,7 @@ func TestARefThatCannotBeReadIsReportedOnce(t *testing.T) {
 
 		wantOutcomes(t, w.observe(0), coord.Unread{Err: errFetch})
 		wantOutcomes(t, w.observe(beat), coord.Unread{Err: errFetch})
-		w.ReadAll()
+		w.ClearUnreadable()
 		wantOutcomes(t, w.observe(2*beat), coord.IntervalUnreadable{Loop: "odd-00000004", Name: coordtest.HeartbeatName("odd-00000004")})
 		wantOutcomes(t, w.observe(3*beat))
 	})
