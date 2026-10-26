@@ -72,7 +72,9 @@ type holder struct {
 	dead bool
 }
 
-// Working は、claude がまだ作業を続けうる作業対象 (Tidy と Leave が、その着手宣言を消さずに残す)。
+// Working は、claude がまだ作業を続けうる作業対象。Tidy と Leave は、その作業対象の着手宣言を消さない (Tidy は Orphans の作業対象
+// の死んだ loop の着手宣言を引き継ぎ、Leave は Orphans の作業対象の引き継いだ着手宣言と Unstopped の作業対象の自分の着手宣言を
+// 残す)。
 type Working struct {
 	// Orphans は生きている orphan の作業対象
 	Orphans map[target.Ref]bool
@@ -146,8 +148,7 @@ func (b *Board) Holder(ref target.Ref) string {
 // 判定する。ref を読めなければ error を返し、何も変えない。
 //
 // clock は ref を読む前と読み終えた後に 1 回ずつ読む。死の判定は読む前の時刻で、新しく見た sha を見た時刻は読み終えた後の時刻で
-// 数える。逆にすると、判定する tick の読みの遅さ (commit message の fetch) が経過に足されるか、前の tick の読みの遅さの分だけ
-// sha を見た時刻が早くなり、どちらも生きている loop を早く死んだとみなす。orphans は前の tick に生きていた orphan の作業対象で、
+// 数える (理由は system.md §13)。orphans は前の tick に生きていた orphan の作業対象で、
 // 消し損ねた着手宣言の掃除が、引き継いだ着手宣言との見分けに使う (この tick の orphan の確かめより前に撃つため)。返す Outcome は
 // log に残す順に並ぶ。
 func (b *Board) Observe(clock func() time.Time, orphans map[target.Ref]bool) ([]Outcome, error) {

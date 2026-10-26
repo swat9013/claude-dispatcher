@@ -941,61 +941,46 @@ func TestObservingFailsWhenTheRefsCannotBeReadAndChangesNothing(t *testing.T) {
 	}
 }
 
-func TestTheClockIsReadBeforeAndAfterTheRefsAreRead(t *testing.T) {
-	r := &countingRefs{Memory: coordtest.NewMemory(me)}
-	board := coord.NewBoard(r, beat)
-	r.Put(&issue42, claimBy(other, issue42))
-
-	_, err := board.Observe(func() time.Time {
-		r.readsWhenClockWasRead = append(r.readsWhenClockWasRead, r.reads)
-		return start
-	}, nil)
-
-	if err != nil || !slices.Equal(r.readsWhenClockWasRead, []int{0, 1}) {
-		t.Fatalf("時計を読んだときの ref の読み出しの回数 = %v (%v), want ref を読む前と読み終えた後に 1 回ずつ", r.readsWhenClockWasRead, err)
-	}
-}
-
 func TestASlowReadOfTheRefsDoesNotLengthenTheElapsedTimeOfTheJudgement(t *testing.T) {
-	r := &slowRefs{Memory: coordtest.NewMemory(me)}
-	board := coord.NewBoard(r, beat)
-	// 他の loop の生存報告と着手宣言は t=0 に置いたまま変わらない (置き直しの push が遅れている)
-	r.Put(nil, beatOf(other, time.Minute))
-	r.Put(&issue42, claimBy(other, issue42))
-	observe := func(at, readTakes time.Duration) {
-		t.Helper()
-		r.now, r.readTakes = start.Add(at), readTakes
-		out, err := board.Observe(func() time.Time { return r.now }, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, o := range out {
-			if _, takenOver := o.(coord.TakenOver); takenOver {
-				t.Fatalf("Observe(%v) = %v, want 乗っ取りなし", at, out)
-			}
-		}
-	}
+	board, observe := slowBoard(t)
 
 	observe(0, 0)
 	observe(time.Minute, 0)
 	// ref の snapshot の時点の経過は 2 分 (生きている)。その後の fetch が 70 秒止まる
 	observe(2*time.Minute, 70*time.Second)
 
+	// 乗っ取りは候補の起動の Claim で起きる。生きている loop の着手宣言なので負ける
 	if out := board.Claim(issue42); out != (coord.ClaimLost{}) {
 		t.Fatalf("Claim = %#v, want ClaimLost (snapshot の時点で生きている loop の着手宣言を乗っ取らない)", out)
 	}
 }
 
-// countingRefs は ref を読んだ回数を数える coordination board。
-type countingRefs struct {
-	*coordtest.Memory
-	reads                 int
-	readsWhenClockWasRead []int
+func TestASlowReadOfTheRefsDoesNotMakeTheSHAsFirstSightingEarlier(t *testing.T) {
+	board, observe := slowBoard(t)
+
+	// 初めて見た tick の fetch が 70 秒止まる。sha を見た時刻は読み終えた後 (1:10) なので、3:05 の経過は 1 分 55 秒
+	observe(0, 70*time.Second)
+	observe(3*time.Minute+5*time.Second, 0)
+
+	if out := board.Claim(issue42); out != (coord.ClaimLost{}) {
+		t.Fatalf("Claim = %#v, want ClaimLost (生きている loop の着手宣言を乗っ取らない)", out)
+	}
 }
 
-func (r *countingRefs) Observe() (coord.View, error) {
-	r.reads++
-	return r.Memory.Observe()
+// slowBoard は、他の loop の生存報告 (間隔 1 分) と issue42 の着手宣言を t=0 に置いたまま変えない (置き直しの push が遅れている)
+// coordination board の Board と、起動から at 経った時刻に、ref の snapshot の後に readTakes 掛かる突き合わせを撃つ関数を返す。
+func slowBoard(t *testing.T) (*coord.Board, func(at, readTakes time.Duration)) {
+	r := &slowRefs{Memory: coordtest.NewMemory(me)}
+	board := coord.NewBoard(r, beat)
+	r.Put(nil, beatOf(other, time.Minute))
+	r.Put(&issue42, claimBy(other, issue42))
+	return board, func(at, readTakes time.Duration) {
+		t.Helper()
+		r.now, r.readTakes = start.Add(at), readTakes
+		if _, err := board.Observe(func() time.Time { return r.now }, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 // slowRefs は、ref の snapshot (Memory.Observe) を返した後に readTakes だけ時計 now を進める coordination board (知らない sha の

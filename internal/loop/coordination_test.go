@@ -205,7 +205,7 @@ func toStrings(v any) []string {
 	return out
 }
 
-func TestTheDeathOfALoopIsJudgedFromTheTimeAfterTheRefsWereRead(t *testing.T) {
+func TestASlowReadOfTheRefsDoesNotMakeALiveLoopLookDead(t *testing.T) {
 	remote := newFlaky()
 	remote.Put(nil, heartbeatOf("other-00000002"))
 	remote.Put(&issue42, claimBy("other-00000002", issue42))
