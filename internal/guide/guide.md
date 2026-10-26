@@ -159,6 +159,8 @@ limits:
   max_retry_backoff: 5m      # 任意。backoff の上限。既定 5m
   stall_timeout: 15m         # 任意。worker の progress が途絶えてから止めるまで。既定 15m。0 で無効
   run_timeout: 1h            # 任意。worker 1 回分の上限時間。既定 1h。0 で無効
+coordination:
+  remote: origin             # 任意。2 台以上のマシンの loop で同じ issue 置き場を分け合うときだけ書く。各マシンの loop が、引き受けた作業対象を push し合う git remote の名前。省くと 1 台で回す
 claude:
   command: claude            # 任意。既定 claude
   # 任意。既定は空。再入の仕組みを塞ぐ (理由は項目の表の下の注記「再入の仕組みを塞ぐ」)。
@@ -211,7 +213,7 @@ triggers:                    # 必須。1 つ以上
 | `limits.max_retry_backoff` | 文字列 | backoff の上限。Go の duration の綴りで、0 より長い。既定 5m |
 | `limits.stall_timeout` | 文字列 | worker の stream (stdout の stream-json) に progress (heartbeat (`tool_progress`)・rate limit の通知・読めない行を除いた行) が書かれなくなってから、止めて失敗とするまでの時間。既定 15m。`0s` で無効。claude が行を書かない区間 (長い build や test などの tool の実行・API の retry の backoff・compaction) より長くする |
 | `limits.run_timeout` | 文字列 | worker 1 回分の上限時間。起動からの経過が超えたら止めて失敗とする。既定 1h。`0s` で無効 |
-| `coordination.remote` | 文字列 | 同じ issue 置き場を複数のマシンの loop で分け合うときに、coordination board (着手宣言と生存報告を置き合い、読み合う場) にする git remote。workflow 定義のある clone の git remote の名前 (`origin` など) で書く。綴りは `[A-Za-z0-9._/-]+` で、`-` で始めない。その remote の `refs/dispatcher/` の下に着手宣言と生存報告を置き合う (上の「導入の流れ」の 2)。URL と認証は clone の git の設定を使う。省くと coordination board を読みも書きもせず、1 台で回す |
+| `coordination.remote` | 文字列 | 同じ issue 置き場を 2 台以上のマシンの loop で分け合うときだけ書く。値は、workflow 定義のある clone の git remote の名前 (`origin` など。綴りは `[A-Za-z0-9._/-]+` で、`-` で始めない)。名前は各マシンの clone で解くので、どのマシンでもその名前が同じ repo を指すようにする。書くと各マシンの loop は、その remote の `refs/dispatcher/` の下に、どの作業対象を引き受けたか (着手宣言) と、自分が生きていること (生存報告) を push し合い、先に着手宣言を置けた loop だけが worker を起動する。この置き場を coordination board と呼ぶ。branch・CL・tracker には書かない。URL と認証は clone の git の設定をそのまま使うので、各マシンの clone からその remote へ push できる必要がある (細部は「導入の流れ」の 2)。省くとマシンを跨いだ排他を持たないので、1 つの issue 置き場は 1 台から回す (2 台で回すと、同じ作業対象に worker が 2 つ起動しうる) |
 | `claude.command` | 文字列 | worker として起動する command。PATH から探す。既定 `claude` |
 | `claude.args` | 文字列の列 | command に、dispatcher が渡す引数 (上の「action が守る約束」の起動のコマンド) より前に渡す引数。既定は空。permission の扱い (`--permission-mode` など) はここで決める。再入の仕組み (`ScheduleWakeup`・`CronCreate`・`CronList`・`CronDelete`・`Monitor`) を `--disallowedTools` で塞ぐことを勧める (理由と見分け方は表の下の「再入の仕組みを塞ぐ」) |
 | `triggers` | 列 | trigger の宣言。1 つ以上。宣言順が起動の優先順 (先頭の trigger ほど先に起動する) |
