@@ -2,6 +2,7 @@ package places_test
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -71,7 +72,7 @@ func (failingIssues) OpenIssues() ([]target.Item, error) {
 	return nil, &target.Failure{Kind: target.Auth, Place: "acme/widgets", Err: errors.New("401")}
 }
 
-// bothKinds は issue と CL の両方の trigger を持つ workflow 定義。cl を先に読む
+// bothKinds は issue と CL の両方の trigger を持つ workflow 定義。種類の順 (作業対象の並びと返す失敗の順) は cl が先
 var bothKinds = workflow.Definition{Triggers: []trigger.Trigger{{On: target.KindCL}, {On: target.KindIssue}}}
 
 func TestOpenItemsKeepsReadingAfterANonFatalFailureAndReturnsItWithTheItems(t *testing.T) {
@@ -96,7 +97,7 @@ func TestOpenItemsFailsWhenALaterKindFailsAfterANonFatalFailure(t *testing.T) {
 	}
 }
 
-// issueFirst は issue と CL の両方の trigger を持ち、issue を先に読む workflow 定義。
+// issueFirst は issue と CL の両方の trigger を持ち、種類の順 (作業対象の並びと返す失敗の順) が issue から始まる workflow 定義。
 var issueFirst = workflow.Definition{Triggers: []trigger.Trigger{{On: target.KindIssue}, {On: target.KindCL}}}
 
 // waitingIssues は、CL の一覧の読み出しが始まるまで一覧を返さない issue 置き場の部品。
@@ -202,12 +203,48 @@ func TestOpenItemsReturnsOnlyAfterEveryListingHasEnded(t *testing.T) {
 
 func TestOpenItemsReturnsTheFailureOfTheFirstKindWhenEveryListingFails(t *testing.T) {
 	started := make(chan struct{})
-	// CL の失敗は issue の読み出しが始まってから返るが、返すのは先に読む種類 (issue) の失敗だけ
+	// CL の失敗は issue の読み出しが始まってから返るが、返すのは種類の順で先の issue の失敗だけ
 	store := places.Store{Issues: startingFailingIssues{started: started}, CLs: endingCLs{issueStarted: started, ended: new(atomic.Bool)}}
 
 	items, err := openItemsWithin(t, store, issueFirst)
 
 	if items != nil || err == nil || !strings.Contains(err.Error(), "401 issue") || strings.Contains(err.Error(), "401 cl") {
 		t.Fatalf("items = %v, err = %v, want issue の認証の失敗だけ", items, err)
+	}
+}
+
+// waitingIssuesWithNonFatal は、CL の一覧の読み出しが始まるまで待ってから、issue 1 件と処理を続けられる失敗を返す
+// issue 置き場の部品。
+type waitingIssuesWithNonFatal struct {
+	issuesOnly
+	clStarted <-chan struct{}
+}
+
+func (w waitingIssuesWithNonFatal) OpenIssues() ([]target.Item, error) {
+	<-w.clStarted
+	return []target.Item{target.Issue{Number: 1}}, &target.NonFatal{Place: "acme/widgets", Err: errors.New("issue の補助の要求")}
+}
+
+// startingCLsWithNonFatal は、一覧の読み出しが始まったら started を閉じ、CL 1 件と処理を続けられる失敗を返す CL 置き場の部品。
+type startingCLsWithNonFatal struct {
+	clsOnly
+	started chan<- struct{}
+}
+
+func (s startingCLsWithNonFatal) OpenCLs() ([]target.Item, error) {
+	close(s.started)
+	return []target.Item{target.CL{Number: 2}}, &target.NonFatal{Place: "acme/widgets", Err: errors.New("CL の補助の要求")}
+}
+
+func TestOpenItemsJoinsTheNonFatalFailuresOfEveryKindInTheOrderOfTheKinds(t *testing.T) {
+	started := make(chan struct{})
+	// issue の失敗は CL の読み出しが始まってから返るので、CL の失敗より後に届く
+	store := places.Store{Issues: waitingIssuesWithNonFatal{clStarted: started}, CLs: startingCLsWithNonFatal{started: started}}
+
+	items, err := openItemsWithin(t, store, issueFirst)
+
+	issue, cl := strings.Index(fmt.Sprint(err), "issue の補助の要求"), strings.Index(fmt.Sprint(err), "CL の補助の要求")
+	if len(items) != 2 || issue < 0 || cl < 0 || issue > cl {
+		t.Fatalf("items = %v, err = %v, want issue と CL の 1 件ずつと、issue → CL の順にまとめた 2 つの失敗", items, err)
 	}
 }

@@ -20,8 +20,18 @@ type Store struct {
 	slow SlowNotice
 }
 
-// WithSlow は、一覧の読み出しが遅いときの知らせ方を n にした置き場。
+// WithSlow は、一覧の読み出しが遅いときの知らせ方を n にした置き場。返した置き場 (とその写し) は、一覧を並べて読んでも
+// (OpenItems) n.Notify を 1 つずつ呼ぶ。
 func (s Store) WithSlow(n SlowNotice) Store {
+	if n.Notify != nil {
+		var mu sync.Mutex
+		notify := n.Notify
+		n.Notify = func(kind target.Kind) {
+			mu.Lock()
+			defer mu.Unlock()
+			notify(kind)
+		}
+	}
 	s.slow = n
 	return s
 }
@@ -58,11 +68,9 @@ func (s Store) Read(ref target.Ref) (target.Item, error) {
 // OpenItems は、workflow 定義の trigger に現れる種類の open な作業対象を置き場から全件読む。種類ごとの一覧は並べて読み
 // (issue 置き場と CL 置き場が別のサービスでも、待つのは長いほうだけ)、すべて読み終わってから返す。作業対象の並びと、
 // 致命的な失敗のうち返す 1 つは、読み終わった順でなく def.Kinds() の順で決める。置き場の部品が作業対象とともに処理を
-// 続けられる失敗 (*target.NonFatal) を返したら、その失敗をまとめて作業対象とともに返す。遅い一覧の知らせ (WithSlow) は
-// 並べた読み出しから届いても 1 つずつ呼ぶ。
+// 続けられる失敗 (*target.NonFatal) を返したら、その失敗をまとめて作業対象とともに返す。
 func OpenItems(store Store, def workflow.Definition) ([]target.Item, error) {
 	kinds := def.Kinds()
-	store.slow = store.slow.oneAtATime()
 	type listing struct {
 		items []target.Item
 		err   error
