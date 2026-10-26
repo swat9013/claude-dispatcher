@@ -49,10 +49,15 @@ type recorder struct {
 	claimed, deleted []string
 	// left は Leave の呼び出しの回数
 	left int
+	// undelivered が nil でなければ、着手宣言の push を remote に届けずにこれを返す (届いたかの分からない失敗)
+	undelivered error
 }
 
 func (r *recorder) Claim(ref target.Ref, expect coord.Expect) (string, error) {
 	r.claimed = append(r.claimed, ref.String()+" "+expect.String())
+	if r.undelivered != nil {
+		return "", r.undelivered
+	}
 	return r.Memory.Claim(ref, expect)
 }
 
@@ -588,6 +593,43 @@ func TestAnInheritWithAnUnknownResultIsRememberedAndSettledByTheNextObservation(
 			t.Fatalf("Leave %d 回, want 生存報告を消す", w.left)
 		}
 	})
+}
+
+func TestAnInheritWithAnUnknownResultThatDidNotReachTheRemoteIsSettledByTheOldSHA(t *testing.T) {
+	// inheritUndelivered は、同じマシンの前の loop の着手宣言を orphan のために引き継ごうとして、push が remote に届かないまま
+	// 結果の分からない失敗を返し、次の突き合わせで元の着手宣言の commit message を読めない world を返す
+	inheritUndelivered := func(t *testing.T) *world {
+		w := newWorldOf(t, me)
+		w.Put(nil, beatOf("me-00000009", beat))
+		old := w.Put(&issue42, claimBy("me-00000009", issue42))
+		w.observe(0, issue42)
+		w.undelivered = errPush
+		wantOutcomes(t, w.board.Tidy(coord.Working{Orphans: set([]target.Ref{issue42})}), coord.InheritFailed{Ref: issue42, Err: errPush})
+		w.undelivered = nil
+		w.Unreadable(old, errFetch)
+		wantOutcomes(t, w.observe(beat, issue42), coord.Unread{Err: errFetch})
+		if w.ownClaim(issue42) != old {
+			t.Fatalf("着手宣言 = %q, want 元の着手宣言 %q のまま", w.ownClaim(issue42), old)
+		}
+		return w
+	}
+	for _, c := range []struct {
+		name    string
+		orphans []target.Ref
+	}{
+		{"orphan が生きていて止まる", []target.Ref{issue42}},
+		{"orphan が終わっていて止まる", nil},
+	} {
+		t.Run("ref が旧 sha のままなら commit message を読めなくても届いていないと決着させ、"+c.name+"ときに残したかもしれないと返さない", func(t *testing.T) {
+			w := inheritUndelivered(t)
+
+			wantOutcomes(t, w.board.Leave(coord.Working{Orphans: set(c.orphans)}))
+
+			if w.left != 1 {
+				t.Fatalf("Leave %d 回, want 引き継いだかもしれない着手宣言は無いので生存報告を消す", w.left)
+			}
+		})
+	}
 }
 
 func TestAnInheritThatFailedBeforePushIsNotRemembered(t *testing.T) {
