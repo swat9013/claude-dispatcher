@@ -11,8 +11,10 @@ import (
 // SlowListing は 1 つの置き場の一覧を 1 回読む時間の目標。超えたら、読み終わる前に 1 行出す (formats.md §6 の「遅い一覧」)。
 const SlowListing = 15 * time.Second
 
-// SlowNotice は、一覧の読み出しが SlowListing を超えたことを、読み終わる前に 1 回だけ知らせる口。After か Notify が nil
-// なら知らせない。Notify は見張りの goroutine で呼び、Watch (Store.Open も Watch を通る) は Notify が終わるまで返らない。
+// SlowNotice は、一覧の読み出しが SlowListing を超えたことを、読み終わる前に読み出し 1 回につき 1 回だけ知らせる口。After か
+// Notify が nil なら知らせない。Notify は見張りの goroutine で呼び、Watch (Store.Open も Watch を通る) は Notify が終わる
+// まで返らない。一覧を並べて読む (OpenItems) のは Store だけで、Store.WithSlow が Notify を 1 つずつ呼ぶ口にするので、
+// 行の書き手は lock を要らない。Watch を直に並べて呼ぶ側は、Notify を自分で 1 つずつにする。
 type SlowNotice struct {
 	// After は d 後に届く channel を返す (time.After。テストは差し替える)
 	After  func(d time.Duration) <-chan time.Time
