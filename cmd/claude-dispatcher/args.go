@@ -76,7 +76,7 @@ var commandSpecs = []commandSpec{
 	{name: "guide", arguments: noArguments},
 }
 
-// globalFlag は command の代わりに書く flag の宣言。
+// globalFlag は command の代わりに書く flag の宣言。afterCommand なら command の後ろにも書ける。
 type globalFlag struct {
 	// spellings は受ける flag の綴り。usage の Options 節には `, ` で並べる
 	spellings []string
@@ -103,6 +103,20 @@ func (g globalFlag) acceptsAfterCommand(arg string) bool {
 	return g.afterCommand && slices.Contains(g.spellings, arg)
 }
 
+// inPlaceOfCommand は、command の後ろに afterCommand の flag があれば、その flag を command の代わりに書いた形の引数を返す。
+// command と他の引数は読まない。無ければ args のまま。
+func inPlaceOfCommand(args []string) []string {
+	if !isCommand(args[0]) {
+		return args
+	}
+	for _, g := range globalFlags {
+		if i := slices.IndexFunc(args[1:], g.acceptsAfterCommand); i >= 0 {
+			return []string{args[1+i]}
+		}
+	}
+	return args
+}
+
 // placement は usage の Options 節で説明の頭に書く、flag を書ける位置。
 func (g globalFlag) placement() string {
 	if g.afterCommand {
@@ -112,9 +126,9 @@ func (g globalFlag) placement() string {
 }
 
 var (
-	helpFlag    = globalFlag{spellings: []string{"-h", "--help"}, word: "help", afterCommand: true, help: "この一覧を出す。help でも同じ"}
+	helpFlag    = globalFlag{spellings: []string{"-h", "--help"}, word: "help", afterCommand: true, help: "この一覧を出す。command の代わりには help でも同じ"}
 	versionFlag = globalFlag{spellings: []string{"--version"}, help: "版を出す"}
-	// globalFlags は command の代わりに書く flag。並びは usage の Usage 節と Options 節の並び
+	// globalFlags は command の代わり (afterCommand なら後ろにも) に書く flag。並びは usage の Usage 節と Options 節の並び
 	globalFlags = []globalFlag{helpFlag, versionFlag}
 )
 

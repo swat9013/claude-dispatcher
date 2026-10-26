@@ -60,6 +60,27 @@ func TestEveryDeclaredGlobalFlagIsAcceptedInPlaceOfACommand(t *testing.T) {
 	}
 }
 
+func TestOnlyGlobalFlagsDeclaredAfterCommandActAfterACommand(t *testing.T) {
+	// Options 節が示す位置 (afterCommand) と振る舞いが同じ宣言から決まる
+	for _, g := range globalFlags {
+		for _, spelling := range g.spellings {
+			t.Run(spelling, func(t *testing.T) {
+				var inPlace, after, stderr bytes.Buffer
+				run([]string{spelling}, &inPlace, &stderr)
+
+				code := run([]string{"status", "--no-such-flag", spelling}, &after, &stderr)
+
+				if g.afterCommand && (code != 0 || after.String() != inPlace.String()) {
+					t.Fatalf("command の後ろの %s が command の代わりと同じに振る舞わない: exit %d", spelling, code)
+				}
+				if !g.afterCommand && code != exitUsage {
+					t.Fatalf("command の後ろに書けない %s を受けた: exit %d", spelling, code)
+				}
+			})
+		}
+	}
+}
+
 func TestEveryDeclaredValueFlagRejectsAFlagSpellingAsItsValue(t *testing.T) {
 	for _, c := range commandSpecs {
 		for _, f := range c.flags {
