@@ -463,7 +463,7 @@ func (l *loop) tick() {
 			launched = append(launched, ref.String())
 		}
 	}
-	l.report(l.coordination.Tidy(l.orphans, l.unstopped()))
+	l.report(l.coordination.Tidy(l.working()))
 	l.published.lastTick = &status.Tick{At: l.o.Now(), Result: status.TickOK, Candidates: len(candidates)}
 	l.published.ambiguous = ambiguous
 	l.rec.event("tick", map[string]any{"result": status.TickOK, "candidates": len(candidates), "launched": nonNil(launched), "ambiguous": ambiguousFields(ambiguous), "blocked": blockedFields(l.blocked),

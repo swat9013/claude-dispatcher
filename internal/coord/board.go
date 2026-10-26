@@ -73,6 +73,15 @@ type holder struct {
 	dead bool
 }
 
+// Working は、claude がまだ作業を続けうる作業対象。Tidy と Leave は、Orphans と Unstopped のどちらの作業対象の着手宣言も消さない
+// (Tidy は加えて Orphans の作業対象の死んだ loop の着手宣言を引き継ぐ)。
+type Working struct {
+	// Orphans は生きている orphan の作業対象
+	Orphans map[target.Ref]bool
+	// Unstopped は、止められない claude がまだ生きている claim の作業対象
+	Unstopped map[target.Ref]bool
+}
+
 // NewerFormat は coordination board に見た、自分の知る版より新しい版の ref。Format は読んだ版で、版を読めなければ 0。
 type NewerFormat struct{ Format int }
 
@@ -138,20 +147,22 @@ func (b *Board) Holder(ref target.Ref) string {
 // 見た時刻を覚え直し、自分の着手宣言の乗っ取りを見つけ、消し損ねた自分の着手宣言を消し、他の loop の着手宣言と死んだ loop を
 // 判定する。ref を読めなければ error を返し、何も変えない。
 //
-// now は時計で、ref を読み終えた後に 1 回だけ読む (読む前に取ると、読みが遅いときに sha を見た時刻が早くなり、生きている loop を
-// 早く死んだとみなす)。orphans は前の tick に生きていた orphan の作業対象で、消し損ねた着手宣言の掃除が、引き継いだ着手宣言との
-// 見分けに使う (この tick の orphan の確かめより前に撃つため)。返す Outcome は log に残す順に並ぶ。
+// clock は ref を読む前と読み終えた後に 1 回ずつ読む。死の判定は読む前の時刻で、新しく見た sha を見た時刻は読み終えた後の時刻で
+// 数える (理由は system.md §13)。orphans は前の tick に生きていた orphan の作業対象で、
+// 消し損ねた着手宣言の掃除が、引き継いだ着手宣言との見分けに使う (この tick の orphan の確かめより前に撃つため)。返す Outcome は
+// log に残す順に並ぶ。
 func (b *Board) Observe(clock func() time.Time, orphans map[target.Ref]bool) ([]Outcome, error) {
+	judgedAt := clock()
 	v, err := b.refs.Observe()
 	if err != nil {
 		return nil, err
 	}
-	now := clock()
+	seenAt := clock()
 	var out []Outcome
 	if v.Unread != nil {
 		out = append(out, Unread{v.Unread})
 	}
-	out = append(out, b.noteSightings(v, now)...)
+	out = append(out, b.noteSightings(v, seenAt)...)
 	out = append(out, b.detectTakeovers(v)...)
 	out = append(out, b.deleteStaleClaims(v, orphans)...)
 	b.newer = newerFormatIn(v)
@@ -159,7 +170,7 @@ func (b *Board) Observe(clock func() time.Time, orphans map[target.Ref]bool) ([]
 	b.deadLoops = map[string]string{}
 	if b.newer == nil {
 		// 読めない形の生存報告を死んだとみなさない
-		b.judgeDeadLoops(v, now)
+		b.judgeDeadLoops(v, judgedAt)
 	}
 	return out, nil
 }
@@ -383,10 +394,9 @@ func (b *Board) ReleaseInherited(orphans map[target.Ref]bool) []Outcome {
 }
 
 // Tidy は、候補の起動の後に、生きている orphan の作業対象に残った死んだ loop の着手宣言を引き継ぎ (formats.md §12 の 8)、
-// 引き継がなかった死んだ loop の着手宣言と生存報告を消す (同 7)。orphans はこの tick に生きていた orphan、unstopped は止められない
-// claude がまだ生きている claim の作業対象。
-func (b *Board) Tidy(orphans, unstopped map[target.Ref]bool) []Outcome {
-	return append(b.inheritOrphanClaims(orphans), b.cleanupDeadLoops(orphans, unstopped)...)
+// 引き継がなかった死んだ loop の着手宣言と生存報告を消す (同 7)。w の Orphans はこの tick に生きていた orphan。
+func (b *Board) Tidy(w Working) []Outcome {
+	return append(b.inheritOrphanClaims(w.Orphans), b.cleanupDeadLoops(w)...)
 }
 
 // inheritOrphanClaims は、生きている orphan の作業対象に残った、死んだ loop の着手宣言を引き継ぐ。持ち主が同じマシンの別の
@@ -432,7 +442,7 @@ func sameMachine(a, b string) bool { return LoopHost(a) == LoopHost(b) }
 
 // cleanupDeadLoops は、死んだ loop の着手宣言のうち乗っ取らなかったものと、死んだ loop の生存報告を消す。生きている orphan の
 // 作業対象の着手宣言は消さずに引き継ぐ (inheritOrphanClaims)。消すときの負けは読み飛ばす (他の loop が先に消したか乗っ取った)。
-func (b *Board) cleanupDeadLoops(orphans, unstopped map[target.Ref]bool) []Outcome {
+func (b *Board) cleanupDeadLoops(w Working) []Outcome {
 	var out []Outcome
 	for _, loop := range slices.Sorted(maps.Keys(b.deadLoops)) {
 		var refs []string
@@ -442,7 +452,7 @@ func (b *Board) cleanupDeadLoops(orphans, unstopped map[target.Ref]bool) []Outco
 			// 作業対象と、生きている orphan の作業対象 (inheritOrphanClaims が引き継ぐ) の着手宣言は消さない
 			h := b.holders[ref]
 			_, mine := b.mine[ref]
-			if h.loop != loop || !h.dead || mine || unstopped[ref] || orphans[ref] {
+			if h.loop != loop || !h.dead || mine || w.Unstopped[ref] || w.Orphans[ref] {
 				continue
 			}
 			switch err := b.refs.DeleteClaim(ref, h.sha); {
@@ -471,33 +481,33 @@ func (b *Board) cleanupDeadLoops(orphans, unstopped map[target.Ref]bool) []Outco
 	return out
 }
 
-// Leave は loop (か単発起動) が止まるときに、残っている自分の着手宣言と生存報告を消す。orphans は直近の tick に生きていた orphan、
-// unstopped は止められない claude がまだ生きている claim の作業対象。
+// Leave は loop (か単発起動) が止まるときに、残っている自分の着手宣言と生存報告を消す。w の Orphans は直近の tick に生きていた
+// orphan。
 //
 // 止められない claude の作業対象の着手宣言は残す。claude が作業を続けうるので、他のマシンの loop には、生存報告が途絶えてから死を
 // 判定するまで起動させない (system.md §9)。引き継いだ着手宣言も、orphan が作業を続けうる間は残す。着手宣言を残すときは生存報告も
 // 消さずに途絶えさせる。消すと、持ち主の生存報告の無い着手宣言としてすぐに乗っ取られうる。
-func (b *Board) Leave(orphans, unstopped map[target.Ref]bool) []Outcome {
+func (b *Board) Leave(w Working) []Outcome {
 	var out []Outcome
-	claudeLeft := len(unstopped) > 0
+	claudeLeft := len(w.Unstopped) > 0
 	for _, ref := range target.SortedRefs(b.mine) {
-		if !unstopped[ref] {
+		if !w.Unstopped[ref] {
 			out = append(out, b.Release(ref)...)
 		}
 	}
 	// orphan のために引き継いだ着手宣言は、直近の tick で orphan が終わっていたものを消し、生きていたものは残す
-	out = append(out, b.ReleaseInherited(orphans)...)
+	out = append(out, b.ReleaseInherited(w.Orphans)...)
 	// 結果の分からなかった引き継ぎは、届いていたものとして引き継いだ着手宣言と同じに扱う (sha を知らないので消せない)
 	for _, ref := range target.SortedRefs(b.unsure) {
-		if orphans[ref] {
+		if w.Orphans[ref] {
 			claudeLeft = true
 			out = append(out, UnsureInheritKept{ref})
 		}
 	}
 	for _, ref := range target.SortedRefs(b.inherited) {
 		// orphan が作業を続けうる間だけ、生存報告も残す
-		claudeLeft = claudeLeft || orphans[ref]
-		out = append(out, InheritKept{Ref: ref, OrphanAlive: orphans[ref]})
+		claudeLeft = claudeLeft || w.Orphans[ref]
+		out = append(out, InheritKept{Ref: ref, OrphanAlive: w.Orphans[ref]})
 	}
 	if claudeLeft {
 		return out

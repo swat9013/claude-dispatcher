@@ -15,33 +15,20 @@ import (
 // claim を遷移させることを受け持つ。
 
 // Coordination は loop が coordination board について呼ぶ口 (system.md §13)。本番は coord.Board、coordination board を指さない
-// project は何もしない noCoordination。
+// project は何もしない noCoordination。method ごとの振る舞いは coord.Board の同名の method の doc に書く (ここに写さない)。
 type Coordination interface {
 	LoopName() string
-	// Observe は coordination board の突き合わせ。clock は ref を読み終えた後に読む時計、orphans は前の tick に生きていた orphan。
-	// ref を読めなければ error
 	Observe(clock func() time.Time, orphans map[target.Ref]bool) ([]coord.Outcome, error)
-	// Newer は、自分の知る版より新しい版の ref を直近の突き合わせで見たか
 	Newer() bool
-	// Held は、作業対象に他の生きている loop の着手宣言があるか (候補の定義)
 	Held(ref target.Ref) bool
-	// Claim は候補の着手宣言を置く。ClaimPlaced・ClaimTookOver・ClaimLost・ClaimFailed のどれかを返す
 	Claim(ref target.Ref) coord.Outcome
-	// Release は claim を解いた作業対象の自分の着手宣言を消す
 	Release(ref target.Ref) []coord.Outcome
-	// ReleaseInherited は、orphan が終わった作業対象の引き継いだ着手宣言を消す
 	ReleaseInherited(orphans map[target.Ref]bool) []coord.Outcome
-	// Tidy は、生きている orphan の作業対象の着手宣言を引き継ぎ、死んだ loop の ref を消す。unstopped は止められない claude が
-	// まだ生きている claim の作業対象
-	Tidy(orphans, unstopped map[target.Ref]bool) []coord.Outcome
-	// Leave は loop が止まるときに、残っている自分の着手宣言と生存報告を消す
-	Leave(orphans, unstopped map[target.Ref]bool) []coord.Outcome
-	// StartBeating は生存報告を別の goroutine で間隔ごとに置き直し始め、結果を deliver に渡す。返した関数で止める
+	Tidy(w coord.Working) []coord.Outcome
+	Leave(w coord.Working) []coord.Outcome
 	StartBeating(after func(time.Duration) <-chan time.Time, deliver func(error) bool) (stop func())
-	// Beat は受け取った置き直しの結果を数え、Dropped は捨てた結果の数を返す
 	Beat(err error) []coord.Outcome
 	Dropped() []coord.Outcome
-	// Attention は状態 file に出す要対処の元
 	Attention() coord.Attention
 }
 
@@ -60,8 +47,8 @@ func (noCoordination) Held(target.Ref) bool                                 { re
 func (noCoordination) Claim(target.Ref) coord.Outcome                       { return coord.ClaimPlaced{} }
 func (noCoordination) Release(target.Ref) []coord.Outcome                   { return nil }
 func (noCoordination) ReleaseInherited(map[target.Ref]bool) []coord.Outcome { return nil }
-func (noCoordination) Tidy(_, _ map[target.Ref]bool) []coord.Outcome        { return nil }
-func (noCoordination) Leave(_, _ map[target.Ref]bool) []coord.Outcome       { return nil }
+func (noCoordination) Tidy(coord.Working) []coord.Outcome                   { return nil }
+func (noCoordination) Leave(coord.Working) []coord.Outcome                  { return nil }
 func (noCoordination) StartBeating(func(time.Duration) <-chan time.Time, func(error) bool) func() {
 	return func() {}
 }
@@ -79,15 +66,16 @@ func (l *loop) deliverBeat(err error) bool {
 	}
 }
 
-// unstopped は、止められない claude がまだ生きている claim の作業対象。その着手宣言は、claude が作業を続けうるので消さずに残す。
-func (l *loop) unstopped() map[target.Ref]bool {
-	refs := map[target.Ref]bool{}
+// working は、claude がまだ作業を続けうる作業対象: 直近の tick に生きていた orphan と、止められない claude がまだ生きている
+// claim。
+func (l *loop) working() coord.Working {
+	unstopped := map[target.Ref]bool{}
 	for ref, c := range l.claims {
 		if worker.UnstoppedAlive(c.exited) {
-			refs[ref] = true
+			unstopped[ref] = true
 		}
 	}
-	return refs
+	return coord.Working{Orphans: l.orphans, Unstopped: unstopped}
 }
 
 // holderOf は乗っ取った着手宣言の今の持ち主 (status.TakenOver.By の綴り)。
@@ -200,5 +188,5 @@ func (l *loop) leaveCoordination() {
 		}
 	}
 	l.report(l.coordination.Dropped())
-	l.report(l.coordination.Leave(l.orphans, l.unstopped()))
+	l.report(l.coordination.Leave(l.working()))
 }
