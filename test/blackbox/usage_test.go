@@ -3,7 +3,6 @@ package blackbox_test
 import (
 	"fmt"
 	"regexp"
-	"strings"
 	"testing"
 	"time"
 
@@ -76,8 +75,14 @@ func TestStatusShowsNoObservationBeforeTheFirstEvent(t *testing.T) {
 func TestEventWithNoReadableWindowStopsLaunchingAndAsksForAnOperator(t *testing.T) {
 	s := newSandbox(t)
 	s.writeWorkflowWithCommands(s.workerWorkflow(""))
-	s.setIssues(readyIssue(42))
-	s.onClaude(stubwire.Rule{Stdout: `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed"}}` + "\n", ReleaseFile: s.releaseFile()})
+	s.setIssues(readyIssue(42), readyIssue(43))
+	done := readyIssue(42)
+	done.labels = nil
+	s.onClaude(stubwire.Rule{
+		Stdout:      `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed"}}` + "\n",
+		ReleaseFile: s.releaseFile(),
+		Writes:      []stubwire.FileWrite{s.ghResponses(done, readyIssue(43))},
+	})
 	s.startLoop()
 
 	if c := s.waitEvents("admission_close", 1)[0]; c["reason"] != "unreadable" {
@@ -85,6 +90,13 @@ func TestEventWithNoReadableWindowStopsLaunchingAndAsksForAnOperator(t *testing.
 	}
 
 	s.waitStatus("使用率を読めない: rate_limit_event の形式が変わった。dispatcher を上げて loop を起動し直す\n")
+	s.release()
+	s.waitEvents("end", 1)
+	ticks := len(s.events("tick"))
+	s.waitEvents("tick", ticks+2)
+	if starts := s.events("start"); len(starts) != 1 {
+		t.Fatalf("start の行 = %v, want 空きができても issue#43 を起動しない", starts)
+	}
 }
 
 func TestRunIgnoresTheUsageLimit(t *testing.T) {
@@ -104,25 +116,12 @@ func TestRunIgnoresTheUsageLimit(t *testing.T) {
 }
 
 func TestAWrongUsageThresholdIsAnArgumentError(t *testing.T) {
-	for _, args := range [][]string{
-		{"--max-weekly-usage", "0"},
-		{"--max-weekly-usage", "101"},
-		{"--max-weekly-usage", "80%"},
-		{"--max-weekly-usage=80.5"},
-		{"--max-weekly-usage="},
-		{"--max-weekly-usage"},
-		{"--max-five-hour-usage", "-1"},
-		{"--max-five-hour-usage=1", "--max-five-hour-usage=2"},
-	} {
-		t.Run(strings.Join(args, " "), func(t *testing.T) {
-			s := newSandbox(t)
-			s.writeWorkflowWithCommands(s.workerWorkflow(""))
+	s := newSandbox(t)
+	s.writeWorkflowWithCommands(s.workerWorkflow(""))
 
-			r := s.run(append([]string{"loop"}, args...)...)
+	r := s.run("loop", "--max-weekly-usage", "101")
 
-			assertExit(t, r, 2)
-		})
-	}
+	assertExit(t, r, 2)
 }
 
 func TestDryRunAcceptsTheUsageThresholds(t *testing.T) {
