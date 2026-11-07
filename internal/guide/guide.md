@@ -100,6 +100,22 @@ workflow 定義に誤りがあれば、試運転・`loop` の起動・`doctor` �
    - 作業対象が trigger に当たったままなら、次に起動した loop が同じ workspace で worker を起動し直す。session は新しく、attempt も 1 から数え直す。前の成果を拾わせるなら、共通 prompt にそう書く
 3. 使うのをやめるなら、`paths --json` が返す `state_dir` と `workspace_root` を消す (workspace が worktree なら、消した後に clone で `git worktree prune` を撃つ)。tracker の label は残る
 
+### 1 つの repo で複数の issue 置き場を回す
+
+1 つの repo の作業が複数の Jira project に分かれているときは、issue 置き場ごとに workflow 定義の file を置き、file を引数で渡して loop を分ける。
+
+```sh
+claude-dispatcher loop WORKFLOW.widgets.md
+claude-dispatcher loop WORKFLOW.gadgets.md
+```
+
+- file ごとに `tracker.repo`・`workspace.root`・CL 側の trigger の `head` を別の値にする
+- `workspace.root` の既定は定義の dir から決まるので、同じ dir の file どうしでは重なる。重なると、後から起動した loop は起動時に失敗する
+- `head` は重ならない pattern にする (`feature/WIDGETS-*`)。loop どうしは互いの着手を読まないので、同じ CL に当たると worker が重なる
+- branch 名は file ごとに action と hooks に書く。hooks の `CLAUDE_DISPATCHER_NUMBER` は key の数字の部分だけなので、project key は file に書く
+- `status`・`paths`・`doctor`・`max-concurrent` にも同じ file を渡す
+- 別の loop の `after_create` と重なると、clone の ref の lock の競合で attempt を 1 つ失うことがある
+
 ## action が守る約束
 
 worker は action (と本文) の文面どおりに作業する。dispatcher が worker の終わりを判断する規則は次のとおりで、action はこれに合わせて書く。
@@ -203,7 +219,7 @@ triggers:                    # 必須。1 つ以上
 | `cl.host` | 文字列 | `cl.kind: gitlab` でだけ書ける。GitLab の host 名。既定 `gitlab.com`。`$VAR` で書ける。`github` で書くと未知の key |
 | `cl.repo` | 文字列 | 必須。CL 置き場。綴りは `tracker.repo` の `github` (`<owner>/<name>`)・`gitlab` (`<group>/…/<name>`) と同じ。`$VAR` で書ける |
 | `polling.interval` | 文字列 | 周期。Go の duration の綴り (`90s` / `5m` / `1h30m`) で、1s 以上 24h 以下。短い周期は tracker の rate limit を食う |
-| `workspace.root` | 文字列 | workspace (作業対象ごとに worker が作業する dir) を置く dir。相対 path は workflow 定義の dir から、`~/` は HOME から (HOME が絶対 path でなければ失敗)。`$VAR` で書ける。workspace は `<workspace.root>/<作業対象>` (`issue-<番号>` か `cl-<番号>`) に作り、作業対象が終端になるまで残す |
+| `workspace.root` | 文字列 | workspace (作業対象ごとに worker が作業する dir) を置く dir。相対 path は workflow 定義の dir から、`~/` は HOME から (HOME が絶対 path でなければ失敗)。`$VAR` で書ける。workspace は `<workspace.root>/<作業対象>` (`issue-<番号>` か `cl-<番号>`) に作り、作業対象が終端になるまで残す。root は 1 つの issue 置き場の loop が専有する。別の issue 置き場の loop が使っている root では起動時に失敗する (root の下の `.scope-key` で見分ける) |
 | `hooks.after_create` | 文字列 | workspace を作った直後に撃つ shell script。失敗したら workspace を消し、その attempt は失敗。`before_remove` と合わせて、作業対象を跨いで直列に撃つ (同時に 1 本まで)。遅い `after_create` は他の workspace の用意と削除を待たせ、削除を待つ間は loop も停止要求・tick に応えない |
 | `hooks.before_run` | 文字列 | worker を起動する前に毎回撃つ。失敗したら、その attempt は失敗。作業対象を跨いで並列に走りうる (clone を触るなら、hook の中で排他する) |
 | `hooks.after_run` | 文字列 | worker が終わった後 (止めたときも) に毎回撃つ。失敗は log に残して続ける。作業対象を跨いで並列に走りうる (clone を触るなら、hook の中で排他する) |

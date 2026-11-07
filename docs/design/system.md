@@ -302,6 +302,11 @@ SPEC §7・§8・§16 の状態機械を土台にする。claim の段階と打�
   - orphan が生きている workspace は、終端でも消さない (§7 の「orphan」)
   - `after_run` と `before_remove` の失敗は error として log に残し、処理は続ける (SPEC §5.3.4)
   - workspace を消せなかったときは error として log に残し、次の tick で消し直す
+- **workspace root は 1 つの scope key が専有する**。掃除は root の下をすべて自分の project のものとして読むので、別の scope key の loop と共有すると、相手の workspace を終端と読んで消しうる
+  - loop は起動時に `<workspace root>/.scope-key` を読み、無ければ自分の scope key を書く。別の scope key が書いてあれば、起動せずに失敗する。試運転と `doctor` は読むだけで書かず、別の scope key なら同じく失敗する
+  - 却下: 既定の root に scope dir を足す。理由: 既定を使う全利用者の path が変わり、同じ root を明示した場合を防げない
+  - 却下: workspace の名前を key にする。理由: `cl-<番号>` は両方の loop の掃除対象に残り、ADR 0010 を覆す
+  - 見直し条件: 置かない (起きるのは設定の誤りの 1 回ごとで、実行の記録から決定の良し悪しを言える量が無い)
 - **作り方は hooks に任せる**
   - issue なら branch を切った worktree、CL なら head を detach で checkout した worktree、など
   - 雛形は `git worktree add` の例を置く
