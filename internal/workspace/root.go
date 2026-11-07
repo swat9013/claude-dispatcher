@@ -89,11 +89,16 @@ func rootOwner(root string) (string, error) {
 	file := filepath.Join(root, scopeKeyFile)
 	raw, err := os.ReadFile(file)
 	if errors.Is(err, os.ErrNotExist) {
+		info, lerr := os.Lstat(file)
+		if lerr != nil {
+			return "", nil
+		}
 		// 指す先の無い symlink は、読むと無いが link すると既にあるので、書けないまま専有が成り立たない
-		if _, lerr := os.Lstat(file); lerr == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
 			return "", fmt.Errorf("workspace root の scope key を読めない: %s は指す先の無い symlink", file)
 		}
-		return "", nil
+		// 読んだ後に、同時に撃った書き手が置いた
+		return rootOwner(root)
 	}
 	if err != nil {
 		return "", fmt.Errorf("workspace root の scope key を読めない: %w", err)
