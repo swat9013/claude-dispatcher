@@ -163,12 +163,31 @@ func TestUsageThresholdsAcceptTheEndsOfTheirRange(t *testing.T) {
 	}
 }
 
-func TestUsageThresholdOutOfItsRangeNamesTheFlag(t *testing.T) {
-	for _, value := range []string{"0", "101", "-1", "80%", "80.5", "x"} {
-		_, err := loopFlags([]string{"--max-weekly-usage=" + value})
+func TestWrongUsageThresholdIsAnErrorNamingTheFlag(t *testing.T) {
+	for _, name := range []string{"--max-five-hour-usage", "--max-weekly-usage"} {
+		for _, args := range [][]string{
+			{name, "0"},
+			{name, "101"},
+			{name, "80%"},
+			{name, "x"},
+			{name, "-1"},
+			{name + "=0"},
+			{name + "=101"},
+			{name + "=-1"},
+			{name + "=80%"},
+			{name + "=80.5"},
+			{name + "=x"},
+			{name + "="},
+			{name},
+			{name + "=1", name + "=2"},
+		} {
+			t.Run(strings.Join(args, " "), func(t *testing.T) {
+				_, err := loopFlags(args)
 
-		if err == nil || !strings.Contains(err.Error(), "--max-weekly-usage") {
-			t.Errorf("loopFlags(%s) の誤り = %v, want flag を名指しする", value, err)
+				if err == nil || !strings.Contains(err.Error(), name) {
+					t.Fatalf("loopFlags の誤り = %v, want %s を名指しする", err, name)
+				}
+			})
 		}
 	}
 }

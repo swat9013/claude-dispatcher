@@ -49,7 +49,7 @@ type usageLoop struct {
 // usageRun は回した loop の観測。
 type usageRun struct {
 	*rig
-	// launchedAt は起動した worker の attempt と時刻 (起動の順)
+	// launchedAt は worker を起動した時刻 (起動の順)
 	launchedAt []time.Time
 }
 
@@ -169,15 +169,19 @@ func TestUsageThatEqualsAThresholdWithoutAnExactBinaryValueClosesAdmission(t *te
 	}
 }
 
-func TestDefaultThresholdClosesAdmissionOnlyAtTheLimit(t *testing.T) {
-	below := usageLoop{issues: []int{1, 2}, usage: map[int][]worker.UsageObserved{1: {weekly(0.99, 100*time.Hour)}}, periods: 3}.run(t)
-	limit := usageLoop{issues: []int{1, 2}, usage: map[int][]worker.UsageObserved{1: {weekly(1, 100*time.Hour)}}, periods: 3}.run(t)
+func TestUsageJustBelowTheDefaultThresholdLeavesAdmissionOpen(t *testing.T) {
+	r := usageLoop{issues: []int{1, 2}, usage: map[int][]worker.UsageObserved{1: {weekly(0.99, 100*time.Hour)}}, periods: 3}.run(t)
 
-	if got := below.launched(); !slices.Equal(got, []int{1, 2}) {
-		t.Fatalf("99%% の起動 = %v, want 既定の閾値 100%% の手前なら起動する", got)
+	if got := r.launched(); !slices.Equal(got, []int{1, 2}) {
+		t.Fatalf("起動 = %v, want 既定の閾値 100%% の手前なら起動する", got)
 	}
-	if got := limit.launched(); !slices.Equal(got, []int{1}) {
-		t.Fatalf("100%% の起動 = %v, want 上限に達した window では起動しない", got)
+}
+
+func TestUsageAtTheDefaultThresholdClosesAdmission(t *testing.T) {
+	r := usageLoop{issues: []int{1, 2}, usage: map[int][]worker.UsageObserved{1: {weekly(1, 100*time.Hour)}}, periods: 3}.run(t)
+
+	if got := r.launched(); !slices.Equal(got, []int{1}) {
+		t.Fatalf("起動 = %v, want 上限に達した window では起動しない", got)
 	}
 }
 
@@ -210,25 +214,51 @@ func TestCandidateIsLaunchedOnTheFirstTickAfterTheResetWithoutAnOperator(t *test
 	}
 }
 
-func TestClosingAndReopeningEachLeaveOneLine(t *testing.T) {
-	r := usageLoop{
+// closedThenReopened は週の閾値で閉じ、リセットの後の tick で解ける loop を回す。2 つ目の観測は閉じている間に届く。
+func closedThenReopened(t *testing.T) *usageRun {
+	t.Helper()
+	return usageLoop{
 		issues:     []int{1, 2},
 		thresholds: loop.UsageThresholds{FiveHour: 100, Weekly: 80},
 		usage:      map[int][]worker.UsageObserved{1: {weekly(0.81, 150*time.Minute), weekly(0.82, 150*time.Minute)}},
 		periods:    4,
 	}.run(t)
+}
 
-	closes, opens := r.logEvents(t, "admission_close"), r.logEvents(t, "admission_open")
-	if len(closes) != 1 || len(opens) != 1 {
-		t.Fatalf("admission_close = %v, admission_open = %v, want 1 行ずつ", closes, opens)
+func TestClosingAdmissionLeavesOneLogLineWithTheWindowAndItsReset(t *testing.T) {
+	r := closedThenReopened(t)
+
+	closes := r.logEvents(t, "admission_close")
+	if len(closes) != 1 {
+		t.Fatalf("admission_close = %v, want 1 行", closes)
 	}
 	c := closes[0]
 	wantReset := rigStart.Add(150 * time.Minute).UTC().Format(time.RFC3339)
 	if c["reason"] != "usage" || c["window"] != "seven_day" || c["utilization"] != float64(81) || c["threshold"] != float64(80) || c["resets_at"] != wantReset {
 		t.Fatalf("admission_close の行 = %v", c)
 	}
-	if out := r.stdout.String(); !strings.Contains(out, "起動を止める: 週の使用率 81% が閾値 80% 以上 (01/01 02:30 に再開)\n") ||
-		!strings.Contains(out, " 起動を再開する\n") {
+}
+
+func TestReopeningAdmissionLeavesOneLogLine(t *testing.T) {
+	r := closedThenReopened(t)
+
+	if opens := r.logEvents(t, "admission_open"); len(opens) != 1 {
+		t.Fatalf("admission_open = %v, want 1 行", opens)
+	}
+}
+
+func TestClosingAdmissionTellsTheOperatorTheUsageAndWhenItReopens(t *testing.T) {
+	r := closedThenReopened(t)
+
+	if out := r.stdout.String(); !strings.Contains(out, "起動を止める: 週の使用率 81% が閾値 80% 以上 (01/01 02:30 に再開)\n") {
+		t.Fatalf("人が読む行:\n%s", out)
+	}
+}
+
+func TestReopeningAdmissionTellsTheOperator(t *testing.T) {
+	r := closedThenReopened(t)
+
+	if out := r.stdout.String(); !strings.Contains(out, " 起動を再開する\n") {
 		t.Fatalf("人が読む行:\n%s", out)
 	}
 }
@@ -241,17 +271,28 @@ func TestUtilizationTooLargeForAnIntStaysPositiveInTheLine(t *testing.T) {
 	}
 }
 
-func TestFiveHourWindowIsNamedInTheLineThatCloses(t *testing.T) {
-	r := usageLoop{
+// closedByTheFiveHourWindow は 5 時間の閾値で閉じる loop を回す。
+func closedByTheFiveHourWindow(t *testing.T) *usageRun {
+	t.Helper()
+	return usageLoop{
 		issues:     []int{1},
 		thresholds: loop.UsageThresholds{FiveHour: 50, Weekly: 100},
 		usage:      map[int][]worker.UsageObserved{1: {fiveHour(0.5, 100*time.Hour)}},
 		periods:    1,
 	}.run(t)
+}
+
+func TestFiveHourWindowIsNamedInTheLogLineThatCloses(t *testing.T) {
+	r := closedByTheFiveHourWindow(t)
 
 	if c := r.logEvents(t, "admission_close"); len(c) != 1 || c[0]["window"] != "five_hour" {
 		t.Fatalf("admission_close = %v, want five_hour", c)
 	}
+}
+
+func TestFiveHourWindowIsNamedInTheLineForTheOperator(t *testing.T) {
+	r := closedByTheFiveHourWindow(t)
+
 	if out := r.stdout.String(); !strings.Contains(out, "起動を止める: 5 時間の使用率 50% が閾値 50% 以上") {
 		t.Fatalf("人が読む行:\n%s", out)
 	}
@@ -354,15 +395,27 @@ func TestWindowMissingFromAnEventKeepsItsPreviousObservation(t *testing.T) {
 	}
 }
 
-func TestWindowWithoutAnObservationIsNullAndDoesNotCloseAdmission(t *testing.T) {
+func TestStatusFileShowsAWindowWithoutAnObservationAsNull(t *testing.T) {
 	r := usageLoop{issues: []int{1, 2}, periods: 3}.run(t)
 
-	got := r.lastUsage(t)
-	if got.Closed || got.FiveHour.Utilization != nil || got.SevenDay.Utilization != nil || got.SevenDay.ResetsAt != nil {
+	if got := r.lastUsage(t); got.FiveHour.Utilization != nil || got.SevenDay.Utilization != nil || got.SevenDay.ResetsAt != nil {
+		t.Fatalf("usage = %+v, want 未観測の window は null", got)
+	}
+}
+
+func TestStatusFileShowsAdmissionOpenWithoutAnObservation(t *testing.T) {
+	r := usageLoop{issues: []int{1, 2}, periods: 3}.run(t)
+
+	if got := r.lastUsage(t); got.Closed {
 		t.Fatalf("usage = %+v, want 未観測で閉じない", got)
 	}
-	if launched := r.launched(); !slices.Equal(launched, []int{1, 2}) {
-		t.Fatalf("起動 = %v, want 未観測なら起動を止めない", launched)
+}
+
+func TestWindowWithoutAnObservationDoesNotStopLaunching(t *testing.T) {
+	r := usageLoop{issues: []int{1, 2}, periods: 3}.run(t)
+
+	if got := r.launched(); !slices.Equal(got, []int{1, 2}) {
+		t.Fatalf("起動 = %v, want 未観測なら起動を止めない", got)
 	}
 }
 
@@ -379,43 +432,80 @@ func TestObservationPastItsResetIsNoLongerShown(t *testing.T) {
 	}
 }
 
-func TestEventWithNoReadableWindowClosesAdmissionUntilALoopRestart(t *testing.T) {
-	r := usageLoop{
+// closedByAnUnreadableEvent は issue#1 の worker がどの window も読めない event を届ける loop を回す。
+func closedByAnUnreadableEvent(t *testing.T) *usageRun {
+	t.Helper()
+	return usageLoop{
 		issues:  []int{1, 2},
 		usage:   map[int][]worker.UsageObserved{1: {{}}},
 		periods: 3,
 	}.run(t)
+}
+
+func TestCandidateIsNotLaunchedOnTheTicksAfterAnEventWithNoReadableWindow(t *testing.T) {
+	r := closedByAnUnreadableEvent(t)
 
 	if got := r.launched(); !slices.Equal(got, []int{1}) {
 		t.Fatalf("起動 = %v, want 読めない event の後は起動しない", got)
 	}
+}
+
+func TestEventWithNoReadableWindowLeavesOneLogLineWithoutAWindow(t *testing.T) {
+	r := closedByAnUnreadableEvent(t)
+
 	closes := r.logEvents(t, "admission_close")
 	if len(closes) != 1 || closes[0]["reason"] != "unreadable" || closes[0]["window"] != nil {
 		t.Fatalf("admission_close = %v, want reason unreadable の 1 行", closes)
 	}
+}
+
+func TestStatusFileShowsAdmissionClosedByAnUnreadableEventWithoutAReopenTime(t *testing.T) {
+	r := closedByAnUnreadableEvent(t)
+
 	if got := r.lastUsage(t); !got.Closed || !got.Unreadable || got.ReopenAt != nil {
 		t.Fatalf("usage = %+v, want 閉じていて再開の時刻は無い", got)
 	}
+}
+
+func TestEventWithNoReadableWindowTellsTheOperatorItCannotBeRead(t *testing.T) {
+	r := closedByAnUnreadableEvent(t)
+
 	if out := r.stdout.String(); !strings.Contains(out, "起動を止める: rate_limit_event を読めない\n") {
 		t.Fatalf("人が読む行:\n%s", out)
 	}
 }
 
-func TestReadableEventReopensAdmissionClosedByAnUnreadableOne(t *testing.T) {
-	// issue#1 の worker の終わりの判定で閉じた後、並んで走っていた issue#2 の worker が読める event を届ける
-	r := usageLoop{
+// reopenedByAReadableEvent は issue#1 の worker の終わりの判定で閉じた後、並んで走っていた issue#2 の worker が読める event を届ける
+// loop を回す。
+func reopenedByAReadableEvent(t *testing.T) *usageRun {
+	t.Helper()
+	return usageLoop{
 		issues:        []int{1, 2, 3},
 		usage:         map[int][]worker.UsageObserved{1: {{}}, 2: {weekly(0.2, 100*time.Hour)}},
 		periods:       3,
 		maxConcurrent: 2,
 	}.run(t)
+}
+
+func TestReadableEventLetsTheNextCandidateLaunchAfterAnUnreadableOne(t *testing.T) {
+	r := reopenedByAReadableEvent(t)
 
 	if got := r.launched(); !slices.Equal(got, []int{1, 2, 3}) {
 		t.Fatalf("起動 = %v, want 読める event で解ける", got)
 	}
+}
+
+func TestReadableEventLeavesOneLogLineWhenItReopensAdmission(t *testing.T) {
+	r := reopenedByAReadableEvent(t)
+
 	if opens := r.logEvents(t, "admission_open"); len(opens) != 1 {
 		t.Fatalf("admission_open = %v, want 1 行", opens)
 	}
+}
+
+func TestReadableEventClearsTheUnreadableMarkInTheStatusFile(t *testing.T) {
+	r := reopenedByAReadableEvent(t)
+
 	if got := r.lastUsage(t); got.Unreadable {
 		t.Fatalf("usage = %+v, want 読めない印は消える", got)
 	}

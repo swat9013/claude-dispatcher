@@ -3,7 +3,6 @@ package blackbox_test
 import (
 	"fmt"
 	"regexp"
-	"strings"
 	"testing"
 	"time"
 
@@ -73,16 +72,37 @@ func TestStatusShowsNoObservationBeforeTheFirstEvent(t *testing.T) {
 	s.waitStatus("使用率 5 時間 未観測 · 週 未観測\n")
 }
 
-func TestEventWithNoReadableWindowStopsLaunchingAndAsksForAnOperator(t *testing.T) {
+// unreadableEvent はどの window も読めない rate_limit_event の行。
+const unreadableEvent = `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed"}}` + "\n"
+
+func TestEventWithNoReadableWindowStopsLaunching(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflowWithCommands(s.workerWorkflow(""))
+	s.setIssues(readyIssue(42), readyIssue(43))
+	done := readyIssue(42)
+	done.labels = nil
+	s.onClaude(stubwire.Rule{Stdout: unreadableEvent, ReleaseFile: s.releaseFile(), Writes: []stubwire.FileWrite{s.ghResponses(done, readyIssue(43))}})
+	s.startLoop()
+
+	s.waitEvents("admission_close", 1)
+	s.release()
+	s.waitEvents("end", 1)
+	ticks := s.waitEvents("tick", len(s.events("tick"))+2)
+
+	if last := ticks[len(ticks)-1]; last["candidates"] != float64(1) {
+		t.Fatalf("tick の行 = %v, want issue#43 は候補のまま", last)
+	}
+	if starts := s.events("start"); len(starts) != 1 {
+		t.Fatalf("start の行 = %v, want 空きができても issue#43 を起動しない", starts)
+	}
+}
+
+func TestEventWithNoReadableWindowAsksForAnOperator(t *testing.T) {
 	s := newSandbox(t)
 	s.writeWorkflowWithCommands(s.workerWorkflow(""))
 	s.setIssues(readyIssue(42))
-	s.onClaude(stubwire.Rule{Stdout: `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed"}}` + "\n", ReleaseFile: s.releaseFile()})
+	s.onClaude(stubwire.Rule{Stdout: unreadableEvent, ReleaseFile: s.releaseFile()})
 	s.startLoop()
-
-	if c := s.waitEvents("admission_close", 1)[0]; c["reason"] != "unreadable" {
-		t.Fatalf("admission_close の行 = %v", c)
-	}
 
 	s.waitStatus("使用率を読めない: rate_limit_event の形式が変わった。dispatcher を上げて loop を起動し直す\n")
 }
@@ -104,25 +124,12 @@ func TestRunIgnoresTheUsageLimit(t *testing.T) {
 }
 
 func TestAWrongUsageThresholdIsAnArgumentError(t *testing.T) {
-	for _, args := range [][]string{
-		{"--max-weekly-usage", "0"},
-		{"--max-weekly-usage", "101"},
-		{"--max-weekly-usage", "80%"},
-		{"--max-weekly-usage=80.5"},
-		{"--max-weekly-usage="},
-		{"--max-weekly-usage"},
-		{"--max-five-hour-usage", "-1"},
-		{"--max-five-hour-usage=1", "--max-five-hour-usage=2"},
-	} {
-		t.Run(strings.Join(args, " "), func(t *testing.T) {
-			s := newSandbox(t)
-			s.writeWorkflowWithCommands(s.workerWorkflow(""))
+	s := newSandbox(t)
+	s.writeWorkflowWithCommands(s.workerWorkflow(""))
 
-			r := s.run(append([]string{"loop"}, args...)...)
+	r := s.run("loop", "--max-weekly-usage", "101")
 
-			assertExit(t, r, 2)
-		})
-	}
+	assertExit(t, r, 2)
 }
 
 func TestDryRunAcceptsTheUsageThresholds(t *testing.T) {
