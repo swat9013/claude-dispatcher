@@ -72,31 +72,41 @@ func TestStatusShowsNoObservationBeforeTheFirstEvent(t *testing.T) {
 	s.waitStatus("使用率 5 時間 未観測 · 週 未観測\n")
 }
 
-func TestEventWithNoReadableWindowStopsLaunchingAndAsksForAnOperator(t *testing.T) {
+// unreadableEvent はどの window も読めない rate_limit_event の行。
+const unreadableEvent = `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed"}}` + "\n"
+
+func TestEventWithNoReadableWindowStopsLaunching(t *testing.T) {
 	s := newSandbox(t)
 	s.writeWorkflowWithCommands(s.workerWorkflow(""))
 	s.setIssues(readyIssue(42), readyIssue(43))
 	done := readyIssue(42)
 	done.labels = nil
-	s.onClaude(stubwire.Rule{
-		Stdout:      `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed"}}` + "\n",
-		ReleaseFile: s.releaseFile(),
-		Writes:      []stubwire.FileWrite{s.ghResponses(done, readyIssue(43))},
-	})
+	s.onClaude(stubwire.Rule{Stdout: unreadableEvent, ReleaseFile: s.releaseFile(), Writes: []stubwire.FileWrite{s.ghResponses(done, readyIssue(43))}})
 	s.startLoop()
 
 	if c := s.waitEvents("admission_close", 1)[0]; c["reason"] != "unreadable" {
 		t.Fatalf("admission_close の行 = %v", c)
 	}
-
-	s.waitStatus("使用率を読めない: rate_limit_event の形式が変わった。dispatcher を上げて loop を起動し直す\n")
 	s.release()
 	s.waitEvents("end", 1)
-	ticks := len(s.events("tick"))
-	s.waitEvents("tick", ticks+2)
+	ticks := s.waitEvents("tick", len(s.events("tick"))+2)
+
+	if last := ticks[len(ticks)-1]; last["candidates"] != float64(1) {
+		t.Fatalf("tick の行 = %v, want issue#43 は候補のまま", last)
+	}
 	if starts := s.events("start"); len(starts) != 1 {
 		t.Fatalf("start の行 = %v, want 空きができても issue#43 を起動しない", starts)
 	}
+}
+
+func TestEventWithNoReadableWindowAsksForAnOperator(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflowWithCommands(s.workerWorkflow(""))
+	s.setIssues(readyIssue(42))
+	s.onClaude(stubwire.Rule{Stdout: unreadableEvent, ReleaseFile: s.releaseFile()})
+	s.startLoop()
+
+	s.waitStatus("使用率を読めない: rate_limit_event の形式が変わった。dispatcher を上げて loop を起動し直す\n")
 }
 
 func TestRunIgnoresTheUsageLimit(t *testing.T) {

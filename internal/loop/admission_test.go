@@ -271,17 +271,28 @@ func TestUtilizationTooLargeForAnIntStaysPositiveInTheLine(t *testing.T) {
 	}
 }
 
-func TestFiveHourWindowIsNamedInTheLineThatCloses(t *testing.T) {
-	r := usageLoop{
+// closedByTheFiveHourWindow は 5 時間の閾値で閉じる loop を回す。
+func closedByTheFiveHourWindow(t *testing.T) *usageRun {
+	t.Helper()
+	return usageLoop{
 		issues:     []int{1},
 		thresholds: loop.UsageThresholds{FiveHour: 50, Weekly: 100},
 		usage:      map[int][]worker.UsageObserved{1: {fiveHour(0.5, 100*time.Hour)}},
 		periods:    1,
 	}.run(t)
+}
+
+func TestFiveHourWindowIsNamedInTheLogLineThatCloses(t *testing.T) {
+	r := closedByTheFiveHourWindow(t)
 
 	if c := r.logEvents(t, "admission_close"); len(c) != 1 || c[0]["window"] != "five_hour" {
 		t.Fatalf("admission_close = %v, want five_hour", c)
 	}
+}
+
+func TestFiveHourWindowIsNamedInTheLineForTheOperator(t *testing.T) {
+	r := closedByTheFiveHourWindow(t)
+
 	if out := r.stdout.String(); !strings.Contains(out, "起動を止める: 5 時間の使用率 50% が閾値 50% 以上") {
 		t.Fatalf("人が読む行:\n%s", out)
 	}
@@ -384,15 +395,19 @@ func TestWindowMissingFromAnEventKeepsItsPreviousObservation(t *testing.T) {
 	}
 }
 
-func TestWindowWithoutAnObservationIsNullAndDoesNotCloseAdmission(t *testing.T) {
+func TestStatusFileShowsAWindowWithoutAnObservationAsNull(t *testing.T) {
 	r := usageLoop{issues: []int{1, 2}, periods: 3}.run(t)
 
-	got := r.lastUsage(t)
-	if got.Closed || got.FiveHour.Utilization != nil || got.SevenDay.Utilization != nil || got.SevenDay.ResetsAt != nil {
+	if got := r.lastUsage(t); got.Closed || got.FiveHour.Utilization != nil || got.SevenDay.Utilization != nil || got.SevenDay.ResetsAt != nil {
 		t.Fatalf("usage = %+v, want 未観測で閉じない", got)
 	}
-	if launched := r.launched(); !slices.Equal(launched, []int{1, 2}) {
-		t.Fatalf("起動 = %v, want 未観測なら起動を止めない", launched)
+}
+
+func TestWindowWithoutAnObservationDoesNotStopLaunching(t *testing.T) {
+	r := usageLoop{issues: []int{1, 2}, periods: 3}.run(t)
+
+	if got := r.launched(); !slices.Equal(got, []int{1, 2}) {
+		t.Fatalf("起動 = %v, want 未観測なら起動を止めない", got)
 	}
 }
 
@@ -452,21 +467,37 @@ func TestEventWithNoReadableWindowTellsTheOperatorItCannotBeRead(t *testing.T) {
 	}
 }
 
-func TestReadableEventReopensAdmissionClosedByAnUnreadableOne(t *testing.T) {
-	// issue#1 の worker の終わりの判定で閉じた後、並んで走っていた issue#2 の worker が読める event を届ける
-	r := usageLoop{
+// reopenedByAReadableEvent は issue#1 の worker の終わりの判定で閉じた後、並んで走っていた issue#2 の worker が読める event を届ける
+// loop を回す。
+func reopenedByAReadableEvent(t *testing.T) *usageRun {
+	t.Helper()
+	return usageLoop{
 		issues:        []int{1, 2, 3},
 		usage:         map[int][]worker.UsageObserved{1: {{}}, 2: {weekly(0.2, 100*time.Hour)}},
 		periods:       3,
 		maxConcurrent: 2,
 	}.run(t)
+}
+
+func TestReadableEventLetsTheNextCandidateLaunchAfterAnUnreadableOne(t *testing.T) {
+	r := reopenedByAReadableEvent(t)
 
 	if got := r.launched(); !slices.Equal(got, []int{1, 2, 3}) {
 		t.Fatalf("起動 = %v, want 読める event で解ける", got)
 	}
+}
+
+func TestReadableEventLeavesOneLogLineWhenItReopensAdmission(t *testing.T) {
+	r := reopenedByAReadableEvent(t)
+
 	if opens := r.logEvents(t, "admission_open"); len(opens) != 1 {
 		t.Fatalf("admission_open = %v, want 1 行", opens)
 	}
+}
+
+func TestReadableEventClearsTheUnreadableMarkInTheStatusFile(t *testing.T) {
+	r := reopenedByAReadableEvent(t)
+
 	if got := r.lastUsage(t); got.Unreadable {
 		t.Fatalf("usage = %+v, want 読めない印は消える", got)
 	}

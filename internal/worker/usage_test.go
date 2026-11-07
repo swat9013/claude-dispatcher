@@ -2,11 +2,18 @@ package worker
 
 import (
 	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/swat9013/claude-dispatcher/internal/target"
+	"github.com/swat9013/claude-dispatcher/internal/trigger"
+	"github.com/swat9013/claude-dispatcher/internal/workflow"
+	"github.com/swat9013/claude-dispatcher/internal/workspace"
 )
 
 // worker の stream の rate_limit_event から usage limit の使用率を読む (formats.md §6 の admission control)。
@@ -119,34 +126,49 @@ func usageLine(utilization string) string {
 	return `{"type":"rate_limit_event","rate_limit_info":{"unifiedWindows":{"seven_day":{"utilization":` + utilization + `,"resetsAt":1792188000}}}}` + "\n"
 }
 
-// appendToStream は stream の file に、走っている claude が書くように content を足す。
-func appendToStream(t *testing.T, stream *os.File, content string) {
-	t.Helper()
-	f, err := os.OpenFile(stream.Name(), os.O_APPEND|os.O_WRONLY, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
-	if _, err := f.WriteString(content); err != nil {
-		t.Fatal(err)
-	}
+// usageWait は test が watch の応答を待つ上限。watch が応答しなければ、go test の timeout を待たずに落とす。
+const usageWait = 5 * time.Second
+
+// runningWatch は別の goroutine で走る watch。
+type runningWatch struct {
+	t        *testing.T
+	ticks    chan time.Time
+	usage    chan Event
+	returned chan struct{}
+	// result は watch が返した値。returned が閉じてから読む
+	result Result
 }
 
-// watching は w を見る watch を別の goroutine で走らせ、test の終わりに止める。ticks へ送ると確かめ、渡す使用率は usage から受ける。
-func watching(t *testing.T, w *streamWatch) (ticks chan<- time.Time, usage <-chan Event) {
+// watching は w を見る watch を別の goroutine で走らせ、test の終わりに止める。
+func watching(t *testing.T, w *streamWatch) *runningWatch {
 	t.Helper()
-	tick, handed := make(chan time.Time), make(chan Event)
+	r := &runningWatch{t: t, ticks: make(chan time.Time), usage: make(chan Event), returned: make(chan struct{})}
 	run := &Run{stop: make(chan struct{})}
-	returned := make(chan struct{})
 	go func() {
-		defer close(returned)
-		watch(make(chan struct{}), run, w, tick, handed)
+		defer close(r.returned)
+		r.result, _ = watch(make(chan struct{}), run, w, r.ticks, r.usage)
 	}()
 	t.Cleanup(func() {
 		run.Stop()
-		<-returned
+		select {
+		case <-r.returned:
+		case <-time.After(usageWait):
+			t.Error("watch が止まらない")
+		}
 	})
-	return tick, handed
+	return r
+}
+
+// check は watch に now の時点で確かめさせる。watch は 1 つの goroutine なので、返った時点で前の check の確認は終わっている。
+func (r *runningWatch) check(now time.Time) {
+	r.t.Helper()
+	select {
+	case r.ticks <- now:
+	case <-r.returned:
+		r.t.Fatalf("watch が先に終わった: %+v", r.result)
+	case <-time.After(usageWait):
+		r.t.Fatal("watch が確認を受けない")
+	}
 }
 
 // nextWeeklyUsage は usage から次の event を受け、週の使用率を返す。週の使用率を持たない event なら落とす。
@@ -159,7 +181,7 @@ func nextWeeklyUsage(t *testing.T, usage <-chan Event) float64 {
 			t.Fatalf("渡した event = %+v, want 週の使用率", got)
 		}
 		return u.SevenDay.Utilization
-	case <-time.After(5 * time.Second):
+	case <-time.After(usageWait):
 		t.Fatal("使用率が渡されない")
 		return 0
 	}
@@ -167,17 +189,18 @@ func nextWeeklyUsage(t *testing.T, usage <-chan Event) float64 {
 
 func TestWatchHandsOverTheUsageOfEachNewLineOnceOldestFirst(t *testing.T) {
 	started := time.Unix(0, 0)
-	old := usageLine("0.1")
-	stream := streamFile(t, old+usageLine("0.2")+usageLine("0.3"))
-	ticks, usage := watching(t, newStreamWatch(stream, int64(len(old)), started, "/work", limits{}))
+	w := watchFrom(t, usageLine("0.1"), started, limits{})
+	write(t, w, usageLine("0.2")+usageLine("0.3"))
+	r := watching(t, w.streamWatch)
 
-	ticks <- started.Add(time.Second)
-	ticks <- started.Add(2 * time.Second)
-	// 後から足した行が 3 番目に届くことで、先の 2 行を 2 回渡していないことを確かめる
-	appendToStream(t, stream, usageLine("0.4"))
-	ticks <- started.Add(3 * time.Second)
+	r.check(started.Add(time.Second))
+	r.check(started.Add(2 * time.Second))
+	got := []float64{nextWeeklyUsage(t, r.usage), nextWeeklyUsage(t, r.usage)}
+	// 渡し終えた後に足した行が次に届くことで、渡し終えた行を残していないことを確かめる
+	write(t, w, usageLine("0.4"))
+	r.check(started.Add(3 * time.Second))
+	got = append(got, nextWeeklyUsage(t, r.usage))
 
-	got := []float64{nextWeeklyUsage(t, usage), nextWeeklyUsage(t, usage), nextWeeklyUsage(t, usage)}
 	if want := []float64{0.2, 0.3, 0.4}; !slices.Equal(got, want) {
 		t.Fatalf("使用率 = %v, want attempt の後の行を古い順に 1 回ずつ %v", got, want)
 	}
@@ -186,14 +209,17 @@ func TestWatchHandsOverTheUsageOfEachNewLineOnceOldestFirst(t *testing.T) {
 func TestWatchHandsOverARateLimitEventOnlyOnceItsLineIsComplete(t *testing.T) {
 	started := time.Unix(0, 0)
 	line := usageLine("0.2")
-	stream := streamFile(t, line[:len(line)/2])
-	ticks, usage := watching(t, newStreamWatch(stream, 0, started, "/work", limits{}))
+	w := watchFrom(t, "", started, limits{})
+	write(t, w, line[:len(line)/2])
+	r := watching(t, w.streamWatch)
 
-	ticks <- started.Add(time.Second)
-	appendToStream(t, stream, line[len(line)/2:])
-	ticks <- started.Add(2 * time.Second)
+	r.check(started.Add(time.Second))
+	// 次の check が通れば、書きかけの行を読んだ確認は終わっている
+	r.check(started.Add(2 * time.Second))
+	write(t, w, line[len(line)/2:])
+	r.check(started.Add(3 * time.Second))
 
-	if got := nextWeeklyUsage(t, usage); got != 0.2 {
+	if got := nextWeeklyUsage(t, r.usage); got != 0.2 {
 		t.Fatalf("使用率 = %v, want 書きかけの行を読まず、完結した行の 0.2", got)
 	}
 }
@@ -209,28 +235,57 @@ func TestARateLimitEventDoesNotBecomeTheActivity(t *testing.T) {
 
 func TestWatchStopsAWorkerEvenIfNobodyTakesTheUsage(t *testing.T) {
 	started := time.Unix(0, 0)
-	w := newStreamWatch(streamFile(t, usageLine("0.2")), 0, started, "/work", limits{run: time.Second})
-	run := &Run{stop: make(chan struct{})}
-	ticks := make(chan time.Time, 1)
-	ticks <- started.Add(time.Minute)
+	w := watchFrom(t, "", started, limits{run: time.Second})
+	write(t, w, usageLine("0.2"))
+	r := watching(t, w.streamWatch)
 
-	result, ended := watch(make(chan struct{}), run, w, ticks, make(chan Event))
+	// 1 回目で使用率を読み、誰も受けないまま 2 回目で上限時間を超える
+	r.check(started.Add(time.Millisecond))
+	r.check(started.Add(time.Minute))
 
-	if ended || result.Failure == "" {
-		t.Fatalf("watch = %+v, %v, want loop が受けなくても上限時間で止める", result, ended)
+	select {
+	case <-r.returned:
+	case <-time.After(usageWait):
+		t.Fatal("watch が止まらない")
+	}
+	if r.result.Failure == "" {
+		t.Fatalf("watch = %+v, want loop が受けなくても上限時間で止める", r.result)
 	}
 }
 
-func TestUsageNobodyTookIsHandedOverOnceSomebodyTakesIt(t *testing.T) {
-	started := time.Unix(0, 0)
-	w := newStreamWatch(streamFile(t, usageLine("0.2")), 0, started, "/work", limits{run: time.Second})
-	ticks := make(chan time.Time, 1)
-	ticks <- started.Add(time.Minute)
-	watch(make(chan struct{}), &Run{stop: make(chan struct{})}, w, ticks, make(chan Event))
+func TestUsageStillUnsentWhenAWorkerIsStoppedIsHandedOverAtItsEnd(t *testing.T) {
+	dir := t.TempDir()
+	stub := "#!/bin/sh\nprintf '%s' '" + usageLine("0.2") + "'\nexec /bin/sleep 60\n"
+	if err := os.WriteFile(filepath.Join(dir, "claude"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r := Runner{
+		StateDir:   filepath.Join(dir, "state"),
+		Workspaces: workspace.Manager{Root: filepath.Join(dir, "workspaces"), HookLock: &sync.Mutex{}, Env: []string{"PATH=" + dir}},
+		Definition: workflow.Definition{Claude: workflow.Claude{Command: "claude"}},
+	}
+	job := Job{Item: target.Issue{Number: 1}, Trigger: trigger.Trigger{Action: "work"}}
+	run := &Run{stop: make(chan struct{})}
+	usage := make(chan Event)
+	ended := make(chan struct{})
+	go func() {
+		defer close(ended)
+		r.attempt(job, run, notices{started: func(int, string) {}, usage: usage})
+	}()
+	for deadline := time.Now().Add(usageWait); ; time.Sleep(time.Millisecond) {
+		if content, _ := os.ReadFile(LogFile(r.StateDir, job.Item.Ref())); len(content) > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			run.Stop()
+			t.Fatal("claude が使用率を書かない")
+		}
+	}
 
-	_, usage := watching(t, w)
+	run.Stop()
 
 	if got := nextWeeklyUsage(t, usage); got != 0.2 {
-		t.Fatalf("使用率 = %v, want 渡せなかった 0.2", got)
+		t.Fatalf("使用率 = %v, want 止めた worker の 0.2", got)
 	}
+	<-ended
 }
