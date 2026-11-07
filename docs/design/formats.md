@@ -37,7 +37,7 @@ workspace は state dir の外、workflow 定義の `workspace.root` の下に�
 - **scope key**: issue 置き場の役割を担う provider が、読んだ置き場から決める、issue 置き場の識別子 (system.md §13)
   - GitHub は `github.com/<owner>/<name>` を小文字にしたもの (GitHub の owner と repo の名前は大文字と小文字を区別しない)
   - GitLab は `<host>/<path>` を小文字にしたもの (例: `gitlab.example.com/acme/sub/widgets`。GitLab の path は大文字と小文字を区別しない)
-  - Jira は `<site>/<project key>` を小文字にしたもの (例: `acme.atlassian.net/widgets`)。1 つの Jira project は 1 本の loop で回す (同じ project の 2 本目の loop は lock で止まる)。project key を改名したら scope key が変わるので、workflow 定義を書き換えて loop を起動し直す
+  - Jira は `<site>/<project key>` を小文字にしたもの (例: `acme.atlassian.net/widgets`)。1 つの Jira project は 1 本の loop で回す (同じ project の 2 本目の loop は lock で止まる)。project key を改名したら scope key が変わるので、workflow 定義を書き換え、`<workspace root>/.scope-key` を消して loop を起動し直す
 - `jira` の作業対象の番号は、issue の key (`WIDGETS-123`) の数字の部分 (`123`)。`<作業対象>` の綴り・log.jsonl の `target` (§4)・hooks の `CLAUDE_DISPATCHER_NUMBER` (§2.6) は他の kind と同じく番号で書く (ADR 0010)
 - **`<scope dir>`**: scope key を無害化した綴りに、scope key の短い hash を足した名前
   - 無害化: 小文字にし、`[a-z0-9._-]` 以外の文字を `_` に置き換える
@@ -299,7 +299,7 @@ claude-dispatcher loop [--max-concurrent <N>] [<workflow の path>]
 
 - よく使われる置き場は、workflow 定義が撃つ依存 CLI (`tracker.kind` の CLI・`cl.kind` の CLI・claude・git) のどれかが PATH に無いときだけ PATH の前に足す。使わない置き場の CLI が無いことでは PATH を書き換えない (worker と hooks は loop の PATH を継ぐので、足すと worker が撃つ git などが入れ替わりうる)
 - 同じ issue 置き場の 2 本目の loop は、clone や workflow 定義の path が違っても起動時に止まる
-- `.scope-key` の中身は scope key の 1 行。別の scope key が書いてあれば、`workspace.root <path> は scope key <書いてある scope key> が使っている` と名指しして終わる。中身が空の file は読めないときと同じに扱う。project key を改名したら、`.scope-key` を消して起動し直す
+- `.scope-key` の中身は scope key の 1 行。別の scope key が書いてあれば、`workspace.root <path> は scope key <書いてある scope key> が使っている` と名指しして終わる。中身が空の file は読めないときと同じに扱う。scope key が変わったら (project key の改名・`tracker.repo` の書き換え)、`.scope-key` を消して起動し直す
 - `jira` の issue 置き場の確認は、次の順に撃ち、最初に落ちたもので終わる。試運転 (§5) と `doctor` (§7.4) も同じ確認を通す
   1. acli の認証の site: `acli jira auth status` が通り (落ちれば認証の失敗、exit 4)、出力の `Site:` の行の site が `tracker.host` と同じ (大文字と小文字を区別しない)。違うか `Site:` の行を読めなければ exit 2。acli は呼び出しごとに site を指定できず、active な account の site を読むため
   2. open な一覧 (`project = "<project key>" AND statusCategory != Done`) を読める。落ちたら §3 の acli の分類で、認証 (exit 4) か見えない (exit 2)。試運転 (§5) は、ここで読んだ一覧を snapshot に使う

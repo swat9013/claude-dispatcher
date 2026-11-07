@@ -304,9 +304,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。claim の段階と打�
   - workspace を消せなかったときは error として log に残し、次の tick で消し直す
 - **workspace root は 1 つの scope key が専有する**。掃除は root の下をすべて自分の project のものとして読むので、別の scope key の loop と共有すると、相手の workspace を終端と読んで消しうる
   - loop は起動時に `<workspace root>/.scope-key` を読み、無ければ自分の scope key を書く。別の scope key が書いてあれば、起動せずに失敗する。試運転と `doctor` は読むだけで書かず、別の scope key なら同じく失敗する
-  - 却下: 既定の root に scope dir を足す。理由: 既定を使う全利用者の path が変わり、同じ root を明示した場合を防げない
-  - 却下: workspace の名前を key にする。理由: `cl-<番号>` は両方の loop の掃除対象に残り、ADR 0010 を覆す
-  - 見直し条件: 置かない (起きるのは設定の誤りの 1 回ごとで、実行の記録から決定の良し悪しを言える量が無い)
+  - 決定の理由と退けた案は ADR 0032
 - **作り方は hooks に任せる**
   - issue なら branch を切った worktree、CL なら head を detach で checkout した worktree、など
   - 雛形は `git worktree add` の例を置く
@@ -483,7 +481,7 @@ CLI の中で、呼び出し側から中身を隠す部品と、差し替えの�
   - 失敗は 認証 / 見えない / 読み切れない / rate limit に分けて返す (SPEC §11.4)
   - 一覧は読めたが、観測の結果を変えない補助の要求 (GitLab に conflict の計算し直しを求める、など) が落ちたときは、一覧とともに処理を続けられる失敗 (non-fatal) を返す。loop は一覧で tick を続け、その失敗を log.jsonl の `error` の行に残す (formats.md §3)
   - scope key は issue 置き場の役割を担う provider が、読んだ置き場 (Place) から返す。issue 置き場の部品を組まずに得られる (ADR 0021)。tracker ごとの粒度 (GitHub は owner と repo、GitLab は host と repo の path、Jira は site と project key) を provider の外に出さない
-  - Jira の作業対象の番号は issue の key (`WIDGETS-123`) の数字の部分。scope key が project key を含むので、scope の中で一意になる (ADR 0010)。project key を改名したら scope key が変わるので、workflow 定義を書き換えて loop を起動し直す
+  - Jira の作業対象の番号は issue の key (`WIDGETS-123`) の数字の部分。scope key が project key を含むので、scope の中で一意になる (ADR 0010)。project key を改名したら scope key が変わるので、workflow 定義を書き換え、`<workspace root>/.scope-key` を消して loop を起動し直す
   - どの adapter で組み立てるかは、置き場の役割を担う provider が決める。issue 置き場の部品は `tracker.kind` の provider、CL 置き場の部品は CL 置き場の役割を担う provider (github・gitlab では `tracker.kind`、jira では `cl.kind`) が組み立てる
 - **tracker の種類の知識は provider に閉じる**
   - provider はサービス (github / gitlab / jira) ごとに 1 つ持つ。役割 (tracker / CL host) ごとに、支えるもの (設定・述語・template 変数)・作業対象の呼び方 (`#` / `!` / key)・Claude Code の settings の entry を宣言し、置き場の読み方と部品の組み立てを持つ

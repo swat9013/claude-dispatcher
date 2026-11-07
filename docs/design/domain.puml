@@ -89,7 +89,7 @@ package "集約: workspace" as WorkspaceAgg {
 Project "1" -- "1" Definition
 Definition "1" *-- "1..*" Trigger : 宣言順
 Project "1" ..> "1" IssuePlace : ID参照 tracker.repo
-Project "1" ..> "1" CLPlace : ID参照 tracker.repo か cl.repo
+Project "*" ..> "1" CLPlace : ID参照 tracker.repo か cl.repo
 Project "1" -- "0..1" Loop : 同じマシンの中
 
 Tracker "1" -- "*" IssuePlace

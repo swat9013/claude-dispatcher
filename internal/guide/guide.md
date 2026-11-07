@@ -40,7 +40,7 @@ claude-dispatcher は、tracker (GitHub・GitLab・Jira Cloud) の issue と CL 
      - 試運転 (`loop --dry-run`) は coordination board を読まないので、他のマシンが作業している作業対象も示しうる。`doctor` は coordination board を読めるかを確かめる (push は撃たない)
 3. **試運転**: `claude-dispatcher loop --dry-run` が workflow 定義を検査し、起動するはずの作業対象と trigger を 1 件 1 行で示す。何も起動せず、何も書かない
    - action まで確かめるなら、`claude-dispatcher run <trigger> <作業対象>` (作業対象は `issue#<番号>` か `cl#<番号>` と書く) で、その作業対象に worker を 1 回だけ起動する (単発起動)。作業対象が trigger に当たっているときだけ起動し、終わった後に trigger から外れていれば exit 0、起動しなかったら exit 5、起動したが当たったままなら exit 6 で終わる。retry はしない。同じ issue 置き場の loop が走っている間は撃てない (exit 3)。workspace・hooks・時間の上限・Ctrl+C の扱い (1 回目は待つ、2 回目は止める) は loop と同じ。workspace は作業対象が閉じていなければ残り、後の loop がそのまま使う。`coordination.remote` (上の 2) を書いた project では、走っている間は loop と同じく着手宣言と生存報告を置き、他のマシンの loop が作業している作業対象では起動しない (exit 5)
-4. **導入を確かめる**: `claude-dispatcher doctor` が workflow 定義・issue 置き場・依存 CLI・事前検査を確かめ、利用者の約束に頼る宣言を警告する。Claude Code の settings (`permissions.allow`) に要りそうな entry も示すので、自分で足す (CLI は settings を書かない)
+4. **導入を確かめる**: `claude-dispatcher doctor` が workflow 定義・issue 置き場・依存 CLI・事前検査・`workspace.root` を確かめ、利用者の約束に頼る宣言を警告する。Claude Code の settings (`permissions.allow`) に要りそうな entry も示すので、自分で足す (CLI は settings を書かない)
    - 依存 CLI は、gh・glab・acli のどれか・claude・git (git は CL 側の trigger があるときと、`coordination.remote` を書いたとき)
    - `coordination.remote` を書いたなら、その remote を解いて読めることも確かめる
    - 警告する宣言は、承認済みの CL への action と、絞り込みの無い CL 側の trigger
@@ -113,7 +113,7 @@ claude-dispatcher loop WORKFLOW.gadgets.md
 - `workspace.root` の既定は定義の dir から決まるので、同じ dir の file どうしでは重なる。重なると、後から起動した loop は起動時に失敗する
 - `head` は重ならない pattern にする (`feature/WIDGETS-*`)。loop どうしは互いの着手を読まないので、同じ CL に当たると worker が重なる
 - branch 名は file ごとに action と hooks に書く。hooks の `CLAUDE_DISPATCHER_NUMBER` は key の数字の部分だけなので、project key は file に書く
-- `status`・`paths`・`doctor`・`max-concurrent` にも同じ file を渡す
+- `loop --dry-run`・`run`・`status`・`paths`・`doctor`・`max-concurrent` にも同じ file を渡す
 - 別の loop の `after_create` と重なると、clone の ref の lock の競合で attempt を 1 つ失うことがある
 
 ## action が守る約束
@@ -313,7 +313,7 @@ triggers:                    # 必須。1 つ以上
   - status 名は `project = "<project key>" AND status = "<名前>"` の検索の件数を撃ち、JQL の失敗で見分ける。acli は project の status の一覧を返さないので、site の単位の検査にとどまる。他の project にだけある status 名は検査を通る
   - issue type 名は project の issue type (`acli jira project view --key <project key> --json` の `issueTypes`) と比べる
 - `blocked` を書いた trigger があると、tick ごとに open な一覧を読んだ後、その trigger のどれかで `blocked` 以外の条件をすべて満たす issue だけ依存先を読む。依存を持つ open な issue を検索し (`issueLinkType = "is blocked by"`)、そのうち当たった issue を 1 件ずつ読み直して依存先の status の区分を見る。当たる issue が 1 件も無い tick は、依存の検索も撃たない
-- 1 つの Jira project は 1 本の loop と 1 つの実装 repo で回す (同じ project の 2 本目の loop は起動時に止まる)。project key を改名したら、workflow 定義を書き換えて loop を起動し直す
+- 1 つの Jira project は 1 本の loop と 1 つの実装 repo で回す (同じ project の 2 本目の loop は起動時に止まる)。project key を改名したら、workflow 定義を書き換え、`<workspace root>/.scope-key` を消して loop を起動し直す
 - acli は呼び出しごとに site を選べず、active な account の site を読む。`loop` の起動時・試運転・`doctor` で、acli の認証の site が `tracker.host` と違えば止まる (`acli jira auth switch --site <site>` で切り替える)
 - `jira` の issue と `cl:` の CL を、dispatcher は結び付けない。CL を merge しても、closing reference は置き場を跨げないので Jira の issue は終端にならない。status を動かすのは人か worker (action に書く)
 
