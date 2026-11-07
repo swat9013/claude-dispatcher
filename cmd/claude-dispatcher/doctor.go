@@ -12,6 +12,7 @@ import (
 	"github.com/swat9013/claude-dispatcher/internal/printable"
 	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/workflow"
+	"github.com/swat9013/claude-dispatcher/internal/workspace"
 )
 
 // runDoctor は `doctor [<workflow の path>]` を撃つ (formats.md §7.4)。何も書かない。確かめたことを 1 件 1 行で出し、
@@ -41,7 +42,7 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	if !checkCLPlace(e, def, stdout, stderr) {
 		failed = true
 	}
-	for _, check := range []func(environment, workflow.Definition, io.Writer) bool{checkCommands, checkPrecheck, checkCoordination} {
+	for _, check := range []func(environment, workflow.Definition, io.Writer) bool{checkCommands, checkPrecheck, checkWorkspaceRoot, checkCoordination} {
 		if !check(e, def, stdout) {
 			failed = true
 		}
@@ -140,6 +141,16 @@ func checkPrecheck(e environment, def workflow.Definition, stdout io.Writer) boo
 		return false
 	}
 	fmt.Fprintln(stdout, "ok   事前検査")
+	return true
+}
+
+// checkWorkspaceRoot は、workspace root を別の scope key が使っていないかを読むだけで確かめる (formats.md §7.4)。
+func checkWorkspaceRoot(_ environment, def workflow.Definition, stdout io.Writer) bool {
+	if err := workspace.CheckRoot(def.WorkspaceRoot, places.ScopeKey(def)); err != nil {
+		fmt.Fprintf(stdout, "NG   %s\n", printable.Line(err.Error()))
+		return false
+	}
+	fmt.Fprintf(stdout, "ok   workspace.root %s\n", def.WorkspaceRoot)
 	return true
 }
 

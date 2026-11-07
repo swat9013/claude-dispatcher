@@ -66,7 +66,15 @@ func (h *Held) Close() error {
 	return errors.Join(err, h.lock.Close())
 }
 
-// Lock は state dir を作り、loop の生存期間の lock (loop.lock と alive.lock) を取る。返した lock を閉じると外れる — loop が
+// MakeDir は state dir を作る。Lock と LockRun はこの dir に lock file を置く。
+func MakeDir(dir string) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("state dir を作れない (%s): %w", dir, err)
+	}
+	return nil
+}
+
+// Lock は loop の生存期間の lock (loop.lock と alive.lock) を取る。返した lock を閉じると外れる — loop が
 // 終わるまで開いておく。flock は process が消えれば外れるので、落ちた loop の lock が次の起動を塞ぐことはない。
 // loop.lock を取った後、alive.lock を取る前に、前の loop が max-concurrent で渡した並列上限を消す。
 func Lock(dir, scopeKey string) (*Held, error) {
@@ -97,7 +105,7 @@ func Lock(dir, scopeKey string) (*Held, error) {
 	return &Held{lock: lock, alive: alive}, nil
 }
 
-// LockRun は state dir を作り、単発起動の lock (loop.lock だけ。alive.lock は取らない) を取る (formats.md §11)。
+// LockRun は単発起動の lock (loop.lock だけ。alive.lock は取らない) を取る (formats.md §11)。
 func LockRun(dir, scopeKey string) (*Held, error) {
 	lock, err := lockScope(dir, scopeKey)
 	if err != nil {
@@ -106,11 +114,8 @@ func LockRun(dir, scopeKey string) (*Held, error) {
 	return &Held{lock: lock}, nil
 }
 
-// lockScope は state dir を作り、scope key の排他の lock (loop.lock) を待たずに取る。
+// lockScope は scope key の排他の lock (loop.lock) を待たずに取る。
 func lockScope(dir, scopeKey string) (*os.File, error) {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, fmt.Errorf("state dir を作れない (%s): %w", dir, err)
-	}
 	file := filepath.Join(dir, lockFile)
 	lock, err := os.OpenFile(file, os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
