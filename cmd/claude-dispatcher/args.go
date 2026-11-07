@@ -84,7 +84,7 @@ type globalFlag struct {
 	spellings []string
 	// word は flag と同じに受ける、`-` の無い綴り。無ければ空
 	word string
-	// afterCommand は spellings を command の後ろにも書けるか。書けば command と他の引数を読まずにこの flag の処理をする
+	// afterCommand は spellings を command の後ろにも単独で書けるか。書けば command を読まずにこの flag の処理をする
 	afterCommand bool
 	help         string
 }
@@ -105,16 +105,11 @@ func (g globalFlag) acceptsAfterCommand(arg string) bool {
 	return g.afterCommand && slices.Contains(g.spellings, arg)
 }
 
-// moveFlagAfterCommandToFront は、command の後ろに afterCommand の flag があれば、command と他の引数を捨てて
-// その flag だけを command の代わりに書いた形の引数を返す。無ければ args のまま。
-func moveFlagAfterCommandToFront(args []string) []string {
-	if !isCommand(args[0]) {
-		return args
-	}
-	for _, g := range globalFlags {
-		if i := slices.IndexFunc(args[1:], g.acceptsAfterCommand); i >= 0 {
-			return []string{args[1+i]}
-		}
+// moveLoneFlagAfterCommandToFront は、引数が command と afterCommand の flag の 2 つだけなら、その flag を command の代わりに
+// 書いた形の引数を返す。他の引数が一緒なら args のままで、flag は subcommand の parser が誤りにする。
+func moveLoneFlagAfterCommandToFront(args []string) []string {
+	if len(args) == 2 && isCommand(args[0]) && slices.ContainsFunc(globalFlags, func(g globalFlag) bool { return g.acceptsAfterCommand(args[1]) }) {
+		return args[1:]
 	}
 	return args
 }
@@ -128,11 +123,16 @@ func (g globalFlag) placement() string {
 }
 
 var (
-	helpFlag    = globalFlag{spellings: []string{"-h", "--help"}, word: "help", afterCommand: true, help: "この一覧を出す。command の代わりには help でも同じ"}
+	helpFlag    = globalFlag{spellings: []string{"-h", "--help"}, word: "help", afterCommand: true, help: "単独で書くとこの一覧を出す。command の代わりには help でも同じ"}
 	versionFlag = globalFlag{spellings: []string{"--version"}, help: "版を出す"}
 	// globalFlags は command の代わり (afterCommand なら後ろにも) に書く flag。並びは usage の Usage 節と Options 節の並び
 	globalFlags = []globalFlag{helpFlag, versionFlag}
 )
+
+// isGlobalFlag は arg が command の代わりに書く flag の綴りか。
+func isGlobalFlag(arg string) bool {
+	return slices.ContainsFunc(globalFlags, func(g globalFlag) bool { return g.accepts(arg) })
+}
 
 // isCommand は name が宣言した subcommand か。
 func isCommand(name string) bool {
