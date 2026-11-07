@@ -818,7 +818,7 @@ claude-dispatcher v0.3.0 (<commit の hash>)
 - 版: Releases の binary は GoReleaser が埋めた tag (`v0.3.0`)。`go install <module>@<版>` の binary は module の版 (同じ `v0.3.0`)。git の作業ツリーでの `go build` は Go が VCS から刻む pseudo-version (直近の tag の次の patch の `-0.<日時>-<hash>`。例: `v0.1.1-0.20260927163012-aac3e1c06160`、未 commit の変更があれば `+dirty`)。VCS の情報が無い build (`go run`・`-buildvcs=false` 等) は `(devel)`
 - commit: Releases の binary は tag の commit。git の作業ツリーでの `go build` は build 情報の `vcs.revision`。`go install <module>@<版>` の binary は module cache から build するので commit を持たず `unknown`。VCS の情報が無い build も `unknown`
 
-exit: 0。
+exit: 0 / 2 = 引数の誤り (`--version` の後ろに引数を渡した)。
 
 ## 9. `guide`
 
@@ -832,7 +832,7 @@ claude-dispatcher guide
 - `tracker.kind` で出し分けない。置き場のサービスごとの違いは案内の中の表に並べる
 - usage (§10) の末尾に、案内を指す 1 行を出す
 
-exit: 0 / 2 = 引数の誤り (`guide` の後ろに引数を渡した)。
+exit: 0 / 2 = 引数の誤り (`guide` の後ろに引数を渡した。単独の `-h`・`--help` は §10 が一覧として取る)。
 
 ## 10. usage
 
@@ -850,12 +850,16 @@ claude-dispatcher <command> -h
 - `Usage:` は撃ち方の形を 1 つにつき 1 行で並べる: command を取る形 (`<command> [options] [WORKFLOW]`)・単発起動 (`run TRIGGER TARGET [WORKFLOW]`)・並列上限の変更 (`max-concurrent N [WORKFLOW]`)・`-h | --help | help`・`--version`。2 行目からは `claude-dispatcher` の桁を 1 行目に揃える
 - `Commands:` は subcommand 1 つにつき 1 行で、名前と 1 行の説明を桁を揃えて並べる。行は 2 桁の字下げで始める
 - `Options:` は受けるすべての flag (`-h, --help`・`--version` を含む) を 1 つにつき 1 行で並べる。subcommand に限る flag は、説明の頭に `(<subcommand>)` を書く。command の代わりにだけ書ける flag (`--version`) は、説明の頭に `(command の代わり)` を書く。`-h, --help` は command の代わりにも command の後ろにも書けるので、説明の頭に `(command の代わりか後ろ)` を書く
-- command の後ろの `-h`・`--help` は、command と他の flag・引数を読まずに同じ一覧を stdout に出す。subcommand ごとの一覧は持たない。subcommand に限る flag は `(<subcommand>)` の印で同じ一覧に並べてあり、手順の細部は案内 (§9) が持つため
+- `-h`・`--help` は、command の代わりか command の後ろに、他の引数を伴わず単独で書いたときだけ、同じ一覧を stdout に出す (`help` は command の代わりに単独で書いたときだけ)。他の引数と一緒に書いたら引数の誤りで、一覧は誤りの行の後ろに stderr へ出る。exit 0 を完了と読む呼び出し側 (§11) で、引数の値が `-h` になっても完了に見せないため
+  - 却下: 他の引数を読まずに一覧を出して exit 0 で終える。理由: `run "$TRIGGER" "issue#$N"` の TRIGGER が `-h` のとき、worker を起動しないまま exit 0 が返り、§6・§7.4 の引数の誤りにも例外が要る
+  - 却下: `run` だけ exit 0 にしない。理由: 規則に command ごとの例外が増え、§6・§7.4 の例外も残る
+  - 見直し条件: 置かない (引数の形の規則で、実行の記録から測れる量が無い)
+- subcommand ごとの一覧は持たない。subcommand に限る flag は `(<subcommand>)` の印で同じ一覧に並べてあり、手順の細部は案内 (§9) が持つため
 - `Arguments:` は位置引数を並べる。workflow 定義の path は `WORKFLOW` と書き、省いたときの既定 (cwd の `WORKFLOW.md`) を説明に書く。`run` (§11) の位置引数 `TRIGGER`・`TARGET` も並べ、説明の頭に `(run)` を書く。`max-concurrent` (§13) の位置引数 `N` も並べ、説明の頭に `(max-concurrent)` を書く
 - usage の placeholder は ASCII で空白を含めない (`<site>`・`<key>`・`WORKFLOW`)。引数がいくつかを一目で読めるようにする
 - 最後の行は案内 (§9) を指す
 
-exit: 0 (`--help`・`-h`・`help`・command の後ろの `-h`・`--help`) / 2 = 引数が無い・引数の誤り (`help` の後ろに引数を渡したときを含む)。
+exit: 0 (`--help`・`-h`・`help`・`<command> --help`・`<command> -h` を単独で撃ったとき) / 2 = 引数が無い・引数の誤り (`-h`・`--help`・`help` を他の引数と一緒に書いたときを含む)。
 
 ## 11. 単発起動 (`run`)
 
@@ -866,7 +870,7 @@ claude-dispatcher run <trigger> <作業対象> [<workflow の path>]
 実装 repo の clone を cwd にして撃つ。指名した 1 つの trigger と 1 つの作業対象で worker を 1 回だけ起動し、終わりを待って完了したかを exit code で返す (system.md §7 の「単発起動」)。
 
 - `<trigger>` は workflow 定義の trigger の名前。`<作業対象>` は log.jsonl (§4) の `target` と同じ綴り (`issue#42` / `cl#57`)。番号は 1 以上の 10 進数
-- flag は受けない。位置引数が 2 つに足りない・4 つ以上は引数の誤り (exit 2)
+- flag は受けない (単独の `-h`・`--help` は §10 が一覧として取る)。位置引数が 2 つに足りない・4 つ以上は引数の誤り (exit 2)
 
 **起動前の検査** (落ちたら stderr に理由を出して終わる): 作業対象の綴りを引数として先に読み、§6 の起動時の検査のうち lock の前までを同じ順・同じ exit code で通し、続けて次を確かめる。
 
@@ -908,7 +912,7 @@ claude-dispatcher run <trigger> <作業対象> [<workflow の path>]
 - 着手宣言の push に負けたら stderr に `<作業対象> は他の loop が先に着手したので起動しない` を、他の生きている loop の着手宣言があれば `<作業対象> は loop <loop 名> が着手しているので起動しない` を、新しい版の ref があれば `coordination board に新しい版の ref があるので起動しない (dispatcher を上げる)` を出す
 - 停止要求を受けたら、stderr に `停止要求 <signal>: worker の終了を待つ` (1 回目) / `worker を止める` (2 回目と、claude を起動する前の hooks の間) / `止められない claude を残して終える` を出す。`<signal>` は `SIGINT` の綴り
 
-exit: 0 = 完了 / 1・2・3・4 = 起動前の検査・読み直し (§3) / 5 = 起動しなかった / 6 = 起動したが完了しなかった。
+exit: 0 = 完了 (単独の `-h`・`--help` は §10 の一覧で、worker を起動しない) / 1・2・3・4 = 起動前の検査・読み直し (§3) / 5 = 起動しなかった / 6 = 起動したが完了しなかった。
 
 ## 12. coordination board の ref
 
@@ -997,7 +1001,7 @@ claude-dispatcher max-concurrent <N> [<workflow の path>]
 
 走っている loop の並列上限を、loop を止めずに変える (system.md §8)。workflow 定義を読んで scope key を決め、その state dir の `max_concurrent` (§1) に `<N>` を書く。tracker の CLI は撃たない。
 
-- `<N>` は 1 以上の整数。`<N>` が無い・1 以上の整数でない・位置引数が 3 つ以上のときは引数の誤り (exit 2)。flag は受けない
+- `<N>` は 1 以上の整数。`<N>` が無い・1 以上の整数でない・位置引数が 3 つ以上のときは引数の誤り (exit 2)。flag は受けない (単独の `-h`・`--help` は §10 が一覧として取る)
 - 書く前に、`status` (§7.2) と同じく `alive.lock` (§6) で loop が生きているかを確かめる。`alive.lock` を取れれば (loop が立っていない)、書かずに stderr に `loop が立っていない: <scope key>` を出して exit 1。書いても、次に起動する loop は起動時にこの file を消す (§6 の起動時の検査) ので効かない
 - loop が生きていても、次のときは書かずに exit 1 にする。書いても次の tick で読まれず、効かない値に成功を返すことになる
   - 状態 file (§7.1) が無い (loop が起動した直後で、まだ書いていない): stderr に `loop の状態 file がまだ無い: <scope key> (起動した直後なら少し待って撃ち直す)`
