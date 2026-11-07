@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+
+	"github.com/swat9013/claude-dispatcher/internal/loop"
 )
 
 // optionsSection は `--help` の出力の Options 節の行。
@@ -140,7 +142,33 @@ func TestEveryCommandRejectsAnUnknownFlag(t *testing.T) {
 func TestPositionalArgumentAndFlagsMayBeMixed(t *testing.T) {
 	got, err := loopFlags([]string{"W.md", "--max-concurrent=2", "--dry-run"})
 
-	if want := (loopOptions{path: "W.md", dryRun: true, maxConcurrent: 2}); err != nil || got != want {
+	if want := (loopOptions{path: "W.md", dryRun: true, maxConcurrent: 2, thresholds: loop.UsageThresholds{FiveHour: 100, Weekly: 100}}); err != nil || got != want {
 		t.Fatalf("loopFlags = %+v, %v, want %+v", got, err, want)
+	}
+}
+
+func TestUsageThresholdsDefaultToTheLimit(t *testing.T) {
+	got, err := loopFlags(nil)
+
+	if err != nil || got.thresholds != (loop.UsageThresholds{FiveHour: 100, Weekly: 100}) {
+		t.Fatalf("loopFlags = %+v, %v, want 5 時間・週とも 100", got, err)
+	}
+}
+
+func TestUsageThresholdsAcceptTheEndsOfTheirRange(t *testing.T) {
+	got, err := loopFlags([]string{"--max-five-hour-usage", "1", "--max-weekly-usage=100"})
+
+	if err != nil || got.thresholds != (loop.UsageThresholds{FiveHour: 1, Weekly: 100}) {
+		t.Fatalf("loopFlags = %+v, %v", got, err)
+	}
+}
+
+func TestUsageThresholdOutOfItsRangeNamesTheFlag(t *testing.T) {
+	for _, value := range []string{"0", "101", "-1", "80%", "80.5", "x"} {
+		_, err := loopFlags([]string{"--max-weekly-usage=" + value})
+
+		if err == nil || !strings.Contains(err.Error(), "--max-weekly-usage") {
+			t.Errorf("loopFlags(%s) の誤り = %v, want flag を名指しする", value, err)
+		}
 	}
 }

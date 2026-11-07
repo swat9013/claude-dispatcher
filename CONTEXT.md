@@ -24,6 +24,14 @@ _Avoid_: daemon, scheduler (監督を持つ常駐物と紛れる)
 1 つの loop が同時に塞いでおける並列の枠の数。走っている worker のほか、再起動待ちの claim と生きている orphan も枠を塞ぐ。project の宣言ではなく、loop を回すマシンの資源で決まる値。
 _Avoid_: 並列数 (走っている worker の数と紛れる), concurrency (同時に走っている状態全般に広がり、上限を呼び出さない)
 
+**usage limit**:
+Claude の契約が 5 時間と週の window ごとに決める使用量の上限。loop は worker の stream から、window ごとの使用率とリセット時刻を読む。
+_Avoid_: rate limit (tracker の rate limit と紛れる), token 制限 (上限は token 数ではなく使用率で届く), quota (Claude の docs の語でなく、意味が広い)
+
+**admission control**:
+loop が usage limit の使用率を閾値と比べ、新しい worker の起動と再起動を見合わせる判定。走っている worker は止めず、loop も回り続け、window のリセット時刻を過ぎると解ける。
+_Avoid_: 起動の見合わせ・launch hold (定義なしでは意味が定まらない), throttling (速度を絞る語で、起動を完全には止めない), circuit breaker (下流の障害の遮断に定着した語), 停止要求 (loop の process を止める別の操作)
+
 **tick**:
 loop の 1 周期分の仕事。走っている worker を外部 store と突き合わせ、作業対象を読み直し、trigger を評価して、空いている分だけ worker を起動する。
 _Avoid_: run, cycle, poll

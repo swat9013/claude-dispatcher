@@ -60,6 +60,8 @@ var commandSpecs = []commandSpec{
 	{name: "loop", arguments: workflowArgument, flags: []flagSpec{
 		{name: "--dry-run", help: "起動するはずの作業対象と trigger を示す。何も起動せず、何も書かない"},
 		{name: "--max-concurrent", value: "<N>", help: "起動時の並列上限 (1 以上の整数)。省けば 1", check: positiveInt("--max-concurrent")},
+		{name: "--max-five-hour-usage", value: "<P>", help: "5 時間の usage limit の閾値 (1 以上 100 以下の百分率)。省けば 100", check: percentage("--max-five-hour-usage")},
+		{name: "--max-weekly-usage", value: "<P>", help: "週の usage limit の閾値 (1 以上 100 以下の百分率)。省けば 100", check: percentage("--max-weekly-usage")},
 	}},
 	{name: "status", arguments: workflowArgument},
 	{name: "paths", arguments: workflowArgument, required: []string{"--json"}, flags: []flagSpec{
@@ -272,6 +274,23 @@ func parsePositiveInt(name, value string) (int, error) {
 	n, err := strconv.Atoi(value)
 	if err != nil || n < 1 {
 		return 0, fmt.Errorf("%s は 1 以上の整数 (%q)", name, value)
+	}
+	return n, nil
+}
+
+// percentage は値が 1 以上 100 以下の整数かを検査する。
+func percentage(name string) func(string) error {
+	return func(value string) error {
+		_, err := parsePercentage(name, value)
+		return err
+	}
+}
+
+// parsePercentage は 1 以上 100 以下の整数を読む。読めなければ name を名指しした誤り。
+func parsePercentage(name, value string) (int, error) {
+	n, err := strconv.Atoi(value)
+	if err != nil || n < 1 || n > 100 {
+		return 0, fmt.Errorf("%s は 1 以上 100 以下の整数 (%q)", name, value)
 	}
 	return n, nil
 }

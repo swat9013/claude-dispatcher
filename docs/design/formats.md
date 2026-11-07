@@ -190,6 +190,8 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 | `taken_over` | 自分の着手宣言が乗っ取られていたのを見た (§12。走っている worker は止め、それ以外の claim は解く) | `target`・`trigger`・`by` (今の持ち主の loop 名。消えていたら空文字列、持ち主の commit message を読めなければ `?`) |
 | `dead_loop` | 他の loop を死んだとみなし、その生存報告と、乗っ取らなかった着手宣言を消した (§12。1 つの loop につき 1 行) | `loop` (死んだ loop の loop 名)・`refs` (消した ref の列) |
 | `slow_listing` | tick か loop の起動時の確認の open な一覧の読み出しが 15 秒を超えた (読み出し 1 回につき 1 行。いつ書くかは §6 の「遅い一覧」) | `kind` (`issue` / `cl`。読んだ置き場の種類)・`place` (置き場。綴りは画面の行の `<置き場>` と同じ) |
+| `admission_close` | admission control が閉じた (閉じるたびに 1 行) | `reason` (`usage` / `unreadable`)・`window` (`five_hour` / `seven_day`。両方が閾値以上なら、リセットが遅い方)・`utilization` (整数の百分率)・`threshold`・`resets_at` (RFC 3339 の UTC。`window` 以降は `reason` が `usage` のときだけ) |
+| `admission_open` | admission control が解けた (1 行) | ほかの key は無い |
 | `error` | 処理は続けるが、運用者が知るべき失敗 | `target` (あれば)・`error` |
 
 - `target` は、issue なら `issue#<番号>`、CL なら `cl#<番号>`
@@ -219,6 +221,8 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 | `trigger_removed` | 再起動を待つ claim を起動した trigger が、workflow 定義から消えた | `trigger が workflow 定義から消えた` | `release` |
 | `undecided` | 作業対象が trigger に当たるかをまだ決められない (conflict を計算中の CL。§2.3) | `当たるかをまだ決められない` | `verify_wait`・`recheck_skip` |
 | `earlier_trigger` | 作業対象が、宣言順で先の trigger に当たる | `宣言順で先の trigger に当たる` | `recheck_skip` |
+| `usage` | window の使用率が閾値以上 | `使用率が閾値以上` | `admission_close` |
+| `unreadable` | どの window も読めない `rate_limit_event` を見た | `rate_limit_event を読めない` | `admission_close` |
 
 - `end` の `failure`: worker 自身の失敗の理由 (異常終了・hook の失敗・描画の失敗・起動できない・stall・上限時間の超過) の自由文。失敗したときだけ載せ、`completed` と `failed` で同じ形にする。`stopped` には載せない。`reason` には失敗を含めない
 
@@ -238,10 +242,10 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 ## 5. 試運転 (`loop --dry-run`)
 
 ```
-claude-dispatcher loop --dry-run [--max-concurrent <N>] [<workflow の path>]
+claude-dispatcher loop --dry-run [--max-concurrent <N>] [--max-five-hour-usage <P>] [--max-weekly-usage <P>] [<workflow の path>]
 ```
 
-`--max-concurrent` は `loop` (§6) と同じ綴りと検査で受ける。試運転は並列上限に依らずに候補を出すので、渡しても出力は変わらない。
+`--max-concurrent`・`--max-five-hour-usage`・`--max-weekly-usage` は `loop` (§6) と同じ綴りと検査で受ける。試運転は並列上限と usage limit の閾値に依らずに候補を出すので、渡しても出力は変わらない。
 
 workflow 定義を読んで検査し、事前検査 (§2.9) を通し、snapshot を作って trigger を評価し、起動するはずの作業対象を示して終わる。**何も書かない** (state dir を作らず、lock も取らない)。coordination board (§12) も読みも書きもしないので、他のマシンの loop が持つ作業対象も示しうる。
 
@@ -270,7 +274,7 @@ snapshot の一覧の読み出しが 15 秒を超えたら、読み終わる前�
 ## 6. `loop`
 
 ```
-claude-dispatcher loop [--max-concurrent <N>] [<workflow の path>]
+claude-dispatcher loop [--max-concurrent <N>] [--max-five-hour-usage <P>] [--max-weekly-usage <P>] [<workflow の path>]
 ```
 
 実装 repo の clone を cwd にして撃つ。
@@ -278,6 +282,7 @@ claude-dispatcher loop [--max-concurrent <N>] [<workflow の path>]
 - `--max-concurrent <N>` は、loop の起動時の並列上限 (`system.md` §8)。省けば 1。`--max-concurrent 3` の形でも `--max-concurrent=3` の形でも書ける。値が無い (flag の直後が `-` で始まるときを含む)・値が空・2 回書いた・1 以上の整数でないときは引数の誤り (exit 2)
   - 走っている間は `max-concurrent` (§13) で変えられる。`max-concurrent` で渡した値は、この引数より優先する
   - 本節と §4 の並列上限は、`max-concurrent` で渡した値があればその値、無ければこの引数の値 (省けば 1)
+- `--max-five-hour-usage <P>`・`--max-weekly-usage <P>` は、usage limit の閾値 (`system.md` §7 の「admission control」)。1 以上 100 以下の整数の百分率。省けば 100。書き方と引数の誤りは `--max-concurrent` と同じ (exit 2)
 
 **起動時の検査** (落ちたら stderr に理由を出して終わる):
 
@@ -401,6 +406,13 @@ claude-dispatcher loop [--max-concurrent <N>] [<workflow の path>]
 4. 終わったら (止めたときを含む)、worker log からその attempt の最後の `result` を読んで `end` の行に要約を載せ (§4)、`after_run` を撃ち、作業対象を読み直す (SIGKILL を送れず claude が終わっていなければ、claude が終わるまでどれもしない。下の「止められない worker」)。終端か、起動した trigger から外れていれば `completed` として claim を解き、当たったままなら `failed` として再起動 (上) に回す
    - 当たるかをまだ決められなければ (conflict を計算中の CL)、完了とも失敗とも数えない。log.jsonl に `verify_wait` の行 (§4) を書き、人が読む行に `確かめ待ち` を出して、claim を持ったまま次の tick で確かめ直す
    - workspace を消すときは、worker を最初に起動したときの `workspace.root` と、消す時点の workflow 定義の hooks を使う
+
+**admission control** (system.md §7):
+
+- worker の stream の `type: rate_limit_event` の行の `rate_limit_info.unifiedWindows` から、`five_hour` と `seven_day` の `utilization` (上限で 1 になる小数) と `resetsAt` (epoch 秒) を読む。読む範囲は progress と同じく、前の確認で読み終えた offset からの完結した行
+- `utilization` か `resetsAt` が数でない window は、無いものとして扱う。`utilization` が負か、`resetsAt` が負か 9999 年より先の window も同じ (`resetsAt` の単位がミリ秒に変わった行を読まない)。1 を超える `utilization` は読む (どの閾値でも閉じ、リセットで解ける)。片方の window だけが無い行は読める行で、どの window も読めない行を読めない event とする。`{"type":"rate_limit_event"` で始まり JSON として読めない行も同じ
+- 判定は `rate_limit_event` を読んだときと、tick の手順 7 と、再起動を試みるとき (tick の外を含む) に撃つ。`admission_close` の使用率は、閾値を超えた観測の値になる
+- ログの行: `<時刻> 起動を止める: 週の使用率 81% が閾値 80% 以上 (11/14 07:00 に再開)`・`<時刻> 起動を再開する`
 
 **画面**: loop の stdout が端末かどうかで形を変える。どちらも、状態 file (§7) と同じ中身を描く。
 
@@ -601,6 +613,7 @@ loop の今の状態を、表示のためだけに書き出す (system.md §9)�
 | `taken_over` | この loop が着手宣言を乗っ取られた作業対象 (`target`) と、見たときの持ち主の loop 名 (`by`。消えていたら空文字列、持ち主の loop を読めなければ `?`)。loop を起動し直すまで残す。coordination board を指した project だけ |
 | `heartbeat_failures` | 生存報告の置き直しが 2 回以上続けて落ちている間だけ、続けて落ちた回数 (`count`) と直近の理由 (`error`)。置き直せたら無くなる |
 | `newer_format` | 直近の tick で、coordination board に自分の知る版より新しい版の ref を見た間だけ、見た版 (`format`。版を読めなければ `null`)。この間はその scope で worker を起動しない |
+| `usage` | window (`five_hour`・`seven_day`) ごとの直近の観測 (`utilization` は整数の百分率。`resets_at`。無いか、リセット時刻を過ぎていれば `null`) と閾値 (`threshold`)、直近の判定で admission control が閉じていたか (`closed`)、再開の時刻 (`reopen_at`。閾値以上の window のうち遅い方のリセット時刻。閉じていないか、読めない event で閉じていれば `null`)、読めない event を見たか (`unreadable`)。この key を足す前の版が書いた状態 file には無い |
 
 ### 7.2 `status`
 
@@ -613,6 +626,7 @@ claude-dispatcher status [<workflow の path>]
 ```
 ● loop 稼働中  github.com/acme/widgets · v0.3.0
 次の tick 00:10:00 · 並列上限 3 · 直近の tick 00:05:00 ok · 候補 1
+使用率 5 時間 41% · 週 81% (閾値 80%) · 起動を止めている · 11/14 07:00 に再開
 
 workers 3 ────────────────────────────────────────────
 作業対象  trigger    attempt  段階           経過               活動
@@ -620,16 +634,18 @@ issue#42  implement  1        running        5m10s              Bash go test ./.
 issue#44  implement  2        waiting_retry  00:06:40 に再起動
 issue#46  implement  1        unstopped      12m03s
 
-要対処 5 ─────────────────────────────────────────────
+要対処 6 ─────────────────────────────────────────────
 打ち切り issue#43 (implement): label を外して trigger から外し、1 周期待ってから付け直すと解ける
 曖昧な CL worktree-issue-7: cl#52, cl#53
 起動しない trigger fix-ci: action の先頭の /fix が見つからない (plugin・repo の .claude・~/.claude の skill と command)
 止められない issue#46: claude (pid 4242) が終わっていない。workspace /path/to/workspaces/issue-46。その pid の claude を止めると、loop が後始末して解ける (loop が先に止まれば、次の loop が orphan として扱う)
 orphan issue#45: 前の loop の claude がまだ動いている。終わるのを待つか、claude の pid (log.jsonl のこの作業対象の直近の start の行) を止める。止めても残れば、worker log (state_dir の workers/issue-45.log) を開いている process を lsof で探して止める
+使用率を読めない: rate_limit_event の形式が変わった。dispatcher を上げて loop を起動し直す
 ```
 
-- 見出しは 2 行。1 行目は loop の状態と scope key と版: loop が生きていれば `● loop 稼働中` (停止要求の後は `● loop 停止待ち`)、`alive.lock` を取れれば `○ loop なし`。版は scope key に続けて ` · <version>` (状態 file の `version`) を出す。commit は出さない (状態 file と log.jsonl で読める)。`○ loop なし` のとき (状態 file の版は止まった loop のもの) と、状態 file に `version` が無いとき (版を足す前の版が書いた状態 file) は出さない
+- 見出しは 3 行まで。1 行目は loop の状態と scope key と版: loop が生きていれば `● loop 稼働中` (停止要求の後は `● loop 停止待ち`)、`alive.lock` を取れれば `○ loop なし`。版は scope key に続けて ` · <version>` (状態 file の `version`) を出す。commit は出さない (状態 file と log.jsonl で読める)。`○ loop なし` のとき (状態 file の版は止まった loop のもの) と、状態 file に `version` が無いとき (版を足す前の版が書いた状態 file) は出さない
 - 2 行目は `次の tick <時刻>` (停止要求の後は `次の tick なし`)・`並列上限 <n>` (状態 file の `max_concurrent`)・`直近の tick <時刻> ok · 候補 <n>` を ` · ` で繋ぐ。直近の tick が error なら `直近の tick <時刻> error: <理由>`。`loop なし` のときは次の tick と並列上限の欄を出さない。状態 file に `max_concurrent` が無ければ (足す前の版が書いた状態 file) 並列上限の欄を出さない。出す欄が無ければ 2 行目を出さない
+- 3 行目は usage limit の使用率: `使用率 5 時間 41% · 週 81% (閾値 80%) · 起動を止めている · 11/14 07:00 に再開`。閾値が 100 でない window にだけ `(閾値 <n>%)` を付け、閉じている間だけ後ろの 2 欄を出す。観測の無い window は `未観測`。`loop なし` のときは出さない
 - `loop なし` のときは見出しだけを出す (状態 file が残っていても、worker と打ち切りは loop の memory と一緒に消えている)。段階が `unstopped` の claim も描かない: 状態 file は止まった loop が最後に書いた記録で、その後に claude が終わったかを `status` は確かめられない (生死を確かめられるのは worker log の flock だけで、§6 の orphan)。終わった claude の pid を今のものとして描くと、古い状態を今のものと読ませる。残った claude の pid と workspace は、log.jsonl の §6 の `error` の行 (`claude を止められないまま止まる`) で読む
 - 状態 file が無ければ、見出しの 2 行目は `記録なし`
 - 見出しの後に空行を挟み、セクションを空行で区切って並べる。セクションの 1 行目はセクション名と件数の後に罫線を引く
@@ -639,7 +655,7 @@ orphan issue#45: 前の loop の claude がまだ動いている。終わるの�
   - 段階は `workers[].phase` (§7.1) の値のまま
   - 経過は、段階が `running`・`stopping`・`unstopped` の claim の、今の attempt の起動からの時間 (`45s`・`5m10s`・`1h02m05s`)。`waiting_retry` の claim は `<時刻> に再起動`。停止要求の後に失敗した claim は再起動を予定しないので空
   - 活動は §6 の要約
-- `要対処 <n>`: 打ち切り・曖昧な CL・起動しない trigger・止められない worker (段階が `unstopped` の claim)・orphan・乗っ取られた・生存報告の失敗・新しい版の ref を 1 件 1 行で並べる。1 件も無ければセクションごと出さない
+- `要対処 <n>`: 打ち切り・曖昧な CL・起動しない trigger・止められない worker (段階が `unstopped` の claim)・orphan・乗っ取られた・生存報告の失敗・新しい版の ref・使用率を読めない を 1 件 1 行で並べる。1 件も無ければセクションごと出さない
   - `乗っ取られた <作業対象>: loop <by> が着手宣言を持っている。worker を止めた。止まる前に push された成果を確かめる` (`by` が空なら `着手宣言が消えていた。…`、`?` なら `持ち主を読めない着手宣言に置き換わっていた。…`)
   - `生存報告 <count> 回続けて置けない: <error>。他のマシンの loop に死んだとみなされ、着手宣言を乗っ取られうる`
   - `新しい版の ref coordination board に版 <format> の ref がある: この scope では worker を起動しない。dispatcher を上げる` (版を読めなければ `版を読めない ref がある`)
@@ -653,7 +669,7 @@ orphan issue#45: 前の loop の claude がまだ動いている。終わるの�
   - 見出しの `● loop 稼働中` は緑、`● loop 停止待ち` は黄、`○ loop なし` は灰。scope key は太字。直近の tick の `ok` は緑、`error: <理由>` は赤。欄の名前 (`次の tick` など) は灰
   - セクション名は太字 (`要対処` は黄)、罫線は薄く、列見出しは灰
   - 段階は `running` が水色、`waiting_retry` が黄、`unstopped` が赤、`verifying` が灰
-  - `要対処` の行の頭の語は、`打ち切り`・`起動しない trigger`・`止められない`・`新しい版の ref` が赤、`曖昧な CL`・`orphan`・`乗っ取られた`・`生存報告` が黄
+  - `要対処` の行の頭の語は、`打ち切り`・`起動しない trigger`・`止められない`・`新しい版の ref`・`使用率を読めない` が赤、`曖昧な CL`・`orphan`・`乗っ取られた`・`生存報告` が黄
 - stdout が端末なら、長い行を端末の幅で切り、`…` を付ける。幅は全角の文字と絵文字を 2 桁、結合文字・異体字セレクタなど幅を持たない文字を 0 桁、それ以外 (曖昧幅の `●` `─` `…` `·` を含む) を 1 桁と数える。制御文字 (改行・タブなど) は空白にして 1 行に収める。罫線は端末の幅まで引く
 - stdout が端末でないか、端末の幅を取れなければ、行を切らず、罫線はセクションの 1 行目が 60 桁になるまで引く
 

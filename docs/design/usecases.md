@@ -288,3 +288,32 @@ Cockburn『ユースケース実践ガイド』(Writing Effective Use Cases) の
   - 4a1. loop は走っている worker を止めず、走っている数が並列上限を下回るまで新しい起動と再起動を待つ
 - **4b.** 運用者が loop を起動し直した
   - 4b1. loop は起動時に前の値を消し、起動時の引数の値 (省けば 1) から始める
+
+## UC-10 usage limit の閾値で worker の起動を見合わせる
+
+- **Primary Actor**: 人間 (loop を起動した運用者)
+- **Scope**: dispatcher (機械システム)
+- **Level**: user-goal (sea)
+- **Trigger**: 走っている worker の stream が、閾値以上の使用率を届けた
+- **事前条件**: loop が走っている
+- **成功保証**: 閾値以上の間は新しい worker が起動しない。走っている worker は完走する。リセット時刻を過ぎると、人の操作なしに起動が再開する。止めた理由と再開の時刻が画面と `status` に残る
+
+**Main Success Scenario**
+
+1. dispatcher が worker の stream から、window ごとの使用率とリセット時刻を読む
+2. dispatcher が閾値以上の window を見つけ、admission control を閉じてログの行に残す
+3. dispatcher が候補の起動と再起動を見合わせ、走っている worker は走らせ続ける
+4. 運用者が画面か `status` で、理由と再開の時刻を読む
+5. リセット時刻を過ぎた tick で、dispatcher が admission control を解いてログの行に残す
+6. dispatcher が空いている分だけ起動を再開する
+
+**Extensions**
+
+- **1a.** event がまだ来ていない
+  - 1a1. dispatcher は `未観測` と出し、起動を止めない
+- **1b.** どの window も読めない event が来た
+  - 1b1. dispatcher は起動を止めて要対処に出す。運用者は dispatcher を上げて loop を起動し直す
+- **3a.** 再起動待ちの claim の backoff が明けた
+  - 3a1. dispatcher は attempt を進めずに待ち直し、step 5 へ進む
+- **5a.** 運用者がリセットを待たずに再開したい
+  - 5a1. 運用者は閾値を上げて loop を起動し直す

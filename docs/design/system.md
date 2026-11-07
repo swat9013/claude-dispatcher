@@ -66,7 +66,7 @@ issue や CL を起点に無人で作業を回す機構は、次の 4 つの失�
 解き方は「**状態を外部 store に置き、機械は読むだけにする。何を起動するかは宣言で決める**」。
 
 - **機械は tracker に書かず、CL host には coordination board の独自 ref (`refs/dispatcher/*`) だけを書く** (ADR 0011)。label・CL・review・branch には書かないので、silent な機械遷移は起きない
-- **loop の memory に持つのは claim と retry だけ**
+- **loop の memory に持つのは claim と retry と usage limit の観測だけ**
   - coordination board を指した project では、claim を持つ間はその着手宣言も remote に置く (§4)。着手宣言は他のマシンの loop との分担のためのもので、loop は claim を remote から読み戻さない
   - どちらも loop の process と寿命を共にする。loop が止まっても、走っていた claude は止まらずに orphan として残りうる (§7)
   - 起動し直した loop は外部 store を読み直すので、drift は tick を跨いで残らない
@@ -83,6 +83,7 @@ dispatcher は、状態の意味を定めない。issue の label が何を表�
 | 終端 | issue の close、CL の merge か close | 人 / worker | 外部 store |
 | claim (起動中・再起動待ち) | loop の memory | loop | loop の process |
 | attempt・打ち切り | loop の memory | loop | loop の process |
+| usage limit の観測 (window ごとの使用率とリセット時刻) | loop の memory | loop | loop の process |
 | workspace | workflow 定義が決める root の下の作業場所 (既定は clone 配下) | loop (hooks) | 作業対象が終端になるまで |
 | orphan の生死 | worker log に掛けた flock | kernel (claude が持つ fd) | claude の process |
 | 着手宣言 | coordination board の `refs/dispatcher/<scope dir>/claims/<作業対象>` (下の「マシンを跨いだ分担」) | loop / 単発起動 | claim を持つ間。落ちた loop のものは、気づいた loop が消すまで |
@@ -123,7 +124,7 @@ dispatcher は、状態の意味を定めない。issue の label が何を表�
 
 | 主体 | やってよいこと | やらないこと |
 |---|---|---|
-| CLI (`loop`) | 外部 store の観測と正規化<br>trigger の評価<br>claim・attempt・打ち切りの記憶<br>coordination board の着手宣言と生存報告 (§4)<br>workspace の作成と削除 (hooks を撃つ)<br>worker の起動・監視・停止<br>状態 file と log を書くこと | tracker・CL・review・branch への書き込み<br>宣言にない判断 (見送り・優先順位の変更) |
+| CLI (`loop`) | 外部 store の観測と正規化<br>trigger の評価<br>claim・attempt・打ち切りの記憶<br>coordination board の着手宣言と生存報告 (§4)<br>workspace の作成と削除 (hooks を撃つ)<br>worker の起動・監視・停止<br>状態 file と log を書くこと<br>usage limit の観測と admission control (§7) | tracker・CL・review・branch への書き込み<br>宣言にない判断 (見送り・優先順位の変更) |
 | worker | action の実行 (実装・CL 作成・コメント・label の付け替えなど)<br>作業対象を trigger から外すこと<br>見送ること・人へ返すこと | loop への問い合わせ<br>permission が止めた操作の迂回 |
 | 人間 | workflow 定義を書くこと・triage・merge (workflow 定義で worker に任せない限り) | — |
 
@@ -239,6 +240,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。claim の段階と打�
    - 読み直せなかった候補 (error として log に残す) と、trigger に当たるかをまだ決められない候補も、その tick では起動しない。次の tick で候補になれば試み直す
    - 読み直すと宣言順で先の trigger に当たるようになっていれば、その tick では起動しない。次の tick の評価が先の trigger で拾う
    - 起動しなかった分の空きは、次の候補に回す
+   - admission control (下の「admission control」) が閉じていれば、候補を起動しない。候補の定義は変えない (閉じている間も候補として数え、log に出す)
 
 **coordination board の突き合わせ** (coordination board を指した project だけ。§4 の「マシンを跨いだ分担」)。
 
@@ -255,6 +257,23 @@ SPEC §7・§8・§16 の状態機械を土台にする。claim の段階と打�
 - 死んだ loop (§4) の着手宣言のうち、その tick の候補の起動で乗っ取らなかったものと、死んだ loop の生存報告を、候補の起動の後に消す。消すときの push に負けたら (他の loop が先に消したか乗っ取った)、何も書かずに読み飛ばす。生きている orphan (上の「orphan」) の作業対象の着手宣言は消さず、旧 sha を期待値にした置き換えで自分の名前に引き継ぐ (ADR 0027)。持ち主が同じマシンの別の loop 名なら、死の判定を待たずに引き継ぐ (同じ scope の loop は 1 台に 1 つなので、落ちた前の loop)。orphan の claude が作業を続けているので、別のマシンの loop に乗っ取らせない。引き継いだ着手宣言には claim を立てず、自分の生存報告で守る。orphan が終わった tick に、候補の起動の前に消す。引き継いだ着手宣言の sha が変わったか消えていたら忘れる (claim が無いので止める worker が無い)。置き換わっていたら、orphan と二重に動きうることを error として log に残す
 - 候補の起動 (手順 5) では、claim を立てる直前に着手宣言を push する。作業対象に他の生きている loop の着手宣言があれば push しない (候補の定義。§4)。持ち主が死んだ着手宣言があれば旧 sha を期待値に、無ければ「無いときだけ作る」で push する。負けたら claim を立てない
 - 再起動 (下の「失敗の扱い」) は、claim を持つ間の着手宣言をそのまま使い、push し直さない
+
+**admission control**。loop が人の知らない間に token を消費し続けないよう、usage limit の使用率が閾値に達したら、新しい worker の起動を見合わせる。閾値は loop の引数で渡す (§8)。
+
+- **観測**: loop は走っている worker の stream の `rate_limit_event` から、window (5 時間・週) ごとの使用率とリセット時刻を読み、window ごとに最新の値を memory に持つ。event に無い window は前の値のまま残す
+- **閉じる条件**: リセット時刻がまだ来ていない最新の観測で、どれかの window の使用率が閾値以上なら閉じている。閉じている間は候補の起動と再起動をしない。走っている worker は止めない (手順 1 と同じく、worker は終端でだけ止める)。そのため使用率は、走っている worker の分だけ閾値を超えうる
+- **解ける**: 閾値以上の window のリセット時刻を過ぎると、人の操作なしに解ける。閉じている間は worker が走らず新しい観測が来ないので、最後に読んだリセット時刻で決める
+- **観測が無いとき**: event がまだ来ていない window は未観測で、閉じない。API key や Bedrock など event の来ない環境と区別できないので、分岐しない。loop の起動後の最初の worker は、使用率を知らずに起動する
+- **読めない event**: どの window も読めない `rate_limit_event` を見たら、loop は閉じて要対処に出す。閾値が黙って効かなくなるのを防ぐため。読める event が来るか、loop を起動し直すと解ける
+- **loop ごとに判定する**: 観測はほかの loop と共有しない。event の値はアカウント全体の使用率なので、どの loop も自分の worker の次の event で閾値に気づく
+- **単発起動には当てない**: 人が作業対象を指名して 1 回だけ起動するので、知らない間の消費に当たらない
+- 却下: `/usage` の文章を tick ごとに読む。理由: 文言や locale の変更で黙って壊れる
+- 却下: 非公開の `/api/oauth/usage` を読む。理由: 公式の支持が無い
+- 却下: 閾値で loop の process を止める。理由: loop は自分では起き直さず (§9)、5 時間の window がリセットしても再開しない
+- 却下: 観測を state root に置いて loop の間で共有する。理由: 減らせる超過は worker 1 本分で、scope key の外に状態を持つ重さに見合わない
+- 却下: 閾値の既定を置かない。理由: 引数を付け忘れた loop が、上限に達しても起動を続ける
+- 見直し条件: loop の `admission_close` の行の、使用率と閾値の差。5 ポイントを超える行が出たら、stream だけで観測し loop の間で共有しない決定を見直す
+- 見直し条件: 閾値を 95 以下で渡した loop の worker log の、`status` が `rejected` の `rate_limit_event` の件数。1 件でも出たら、走っている worker を止めない決定を見直す
 
 **worker の 1 回分**。
 
@@ -284,6 +303,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。claim の段階と打�
   - CL の head branch を別の claim の workspace が checkout している (branch の重なり) か、その branch を読めないときも、claim を解かず、attempt を進めずに次の tick で試み直す。同じ branch に worker を重ねないため
   - 再起動は同じ trigger で続ける。宣言順で先の trigger に当たるようになっていても、その評価は claim が解けた後の tick で行う
   - coordination board に自分の知る版より新しい版の ref がある間は、attempt を進めずに待ち直す (上の「coordination board の突き合わせ」)
+  - admission control が閉じている間は、attempt を進めずに待ち直す (ADR 0009「空きを待つ間は attempt を進めない」と同じ理由)
   - 再起動を試みるときに、起動した trigger が workflow 定義から消えていれば、作業対象を読み直さずに claim を解く (続ける trigger が無いため)。trigger は名前で引き当てるので、名前を変えた trigger は消えたものと数える。試みるのは backoff が明けて空きがあるときなので、それまでは claim を持ったまま待つ
 - **attempt が上限に達したら打ち切る**
   - 打ち切りは memory に持ち、log と `status` に出す。tracker には書かない
@@ -336,12 +356,13 @@ SPEC §7・§8・§16 の状態機械を土台にする。claim の段階と打�
   - 周期
   - `claude` の起動 command と引数
   - `coordination.remote`: マシンを跨いで分担するときに coordination board にする remote を、workflow 定義のある clone の git remote の名前で書く (§4)。書かなければ coordination board を読みも書きもせず、1 台で回す
-- **loop を回すマシンごとに値が変わらざるを得ないものは、workflow 定義に置かず、loop の引数と subcommand で渡す** (今は並列上限。ADR 0024)。workflow 定義は repo に commit され、その版を読むどの loop にも同じ値が効くので、マシンごとの値を置くと、loop を回すマシンを替える・一時的に絞るたびに commit が要り、coordination board (§4) で分担するとマシンごとに違う値を置けない。trigger・action・hooks・置き場・周期・retry と時間の上限・起動の command と引数は project の宣言なので workflow 定義に置く。path と command のようにマシンで変わりうる値でも、相対 path や PATH からの探索でどのマシンでも同じ値に書けるなら、workflow 定義に置く
+- **loop を回すマシンごとに値が変わらざるを得ないものは、workflow 定義に置かず、loop の引数と subcommand で渡す** (今は並列上限と usage limit の閾値。ADR 0024)。workflow 定義は repo に commit され、その版を読むどの loop にも同じ値が効くので、マシンごとの値を置くと、loop を回すマシンを替える・一時的に絞るたびに commit が要り、coordination board (§4) で分担するとマシンごとに違う値を置けない。trigger・action・hooks・置き場・周期・retry と時間の上限・起動の command と引数は project の宣言なので workflow 定義に置く。path と command のようにマシンで変わりうる値でも、相対 path や PATH からの探索でどのマシンでも同じ値に書けるなら、workflow 定義に置く
   - 並列上限は、loop の起動時に引数 (`--max-concurrent`) で受け、省けば 1 にする。走っている間は `max-concurrent` subcommand で変えられ、subcommand で渡した値が引数より優先して、その loop が止まるまで効く
   - subcommand は、workflow 定義から scope key を引き、その state dir に値を書く。loop が立っていなければ書かずに失敗する (書いても次の loop には効かないため)
   - loop は tick の手順 2 (§7) でこの値を読み、次の tick から新しい値で空きを判定する。新しい値を採った tick で、ログの行に前の値と新しい値を 1 行出す。loop を起こして tick を早めることはしない
   - loop は起動時にこの値を消す。落ちた loop が残した値を、次の loop に継がない
   - 走っている worker の数より下げても、走っている worker は止めない。空きが出るまで、新しい起動と再起動を待つ (§7 の手順 1 と同じく、worker は終端でだけ止める)
+  - usage limit の閾値は、loop の起動時に引数 (`--max-five-hour-usage`・`--max-weekly-usage`) で window ごとに百分率で受ける。省いた window の閾値は 100 にする。上限に達した window では起動しない。usage limit はアカウントごとに決まるので、手前で止めるかは利用者が引数で決める。走っている間は変えない (変えるなら loop を起動し直す)
 - **本文は共通 prompt**
 - **秘密は `$VAR` で間接参照する**。値そのものは書かない (SPEC §5.3.1)
   - loop は、起動した shell の環境変数を引き継ぐ
@@ -396,8 +417,9 @@ SPEC §7・§8・§16 の状態機械を土台にする。claim の段階と打�
 - **loop の画面が第一の観測点**
   - 見出し・`workers`・`要対処`・`ログ` のセクションに分けて描き直す
   - 見出しは loop の状態 (稼働中・停止待ち) と scope key と loop の binary の版、並列上限、次の tick の時刻、直近の tick の結果と error
+  - 見出しに usage limit の使用率を出す。閉じている間は、理由と再開の時刻も出す
   - `workers` は claim の表 (作業対象・trigger・attempt・段階・経過・stream の最新の活動)。最新の活動は表の列で見るので、`ログ` には活動の行を出さない
-  - `要対処` は人の手当てを待つもの (打ち切り・曖昧な CL・起動しない trigger・止められない worker (SIGKILL を送れず claude が終わっていない claim。段階は unstopped)・orphan)。無ければ出さない
+  - `要対処` は人の手当てを待つもの (打ち切り・曖昧な CL・起動しない trigger・止められない worker (SIGKILL を送れず claude が終わっていない claim。段階は unstopped)・orphan・読めない `rate_limit_event`)。無ければ出さない
   - stdout が端末のときだけ色を付ける。`status` も同じ描画を使う
 - **別の端末からは `status` で見る**。loop が state dir に書き出す状態 file を読む
   - 状態 file は表示のためだけの痕跡で、loop は読み戻さない

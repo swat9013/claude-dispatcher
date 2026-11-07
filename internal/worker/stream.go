@@ -48,6 +48,8 @@ type streamWatch struct {
 	readError string
 	// workspace は worker の workspace の path (活動の tool の入力の path を相対にする)
 	workspace string
+	// unsent は読んだ rate_limit_event の使用率のうち、loop へまだ渡していないもの (古い順)
+	unsent []UsageObserved
 }
 
 // observation は 1 回の確認の結果。
@@ -69,24 +71,29 @@ func newStreamWatch(file streamHandle, offset int64, started time.Time, workspac
 // stall の時計を now に戻す。読めなければ (大きさを確かめられない・中身を読み出せない のどちらも)、時計も読み終えた offset も
 // 進めず、その理由を活動にする。読めなかった後は、伸びていなくても読み直す。
 func (w *streamWatch) check(now time.Time) observation {
-	activity, changed := w.read(now)
-	return observation{activity: activity, changed: changed, stop: w.stopReason(now)}
+	seen := w.read(now)
+	seen.stop = w.stopReason(now)
+	return seen
 }
 
-func (w *streamWatch) read(now time.Time) (activity string, changed bool) {
+func (w *streamWatch) read(now time.Time) observation {
 	info, err := w.file.Stat()
 	if err != nil {
 		return w.unreadable(err)
 	}
 	size := info.Size()
 	if size == w.lines.read && w.readError == "" {
-		return "", false
+		return observation{}
 	}
 	// 前の確認から完結した行を古い順に見る。活動は file の末尾に収まる行のうち、数える最後の行
 	var found, summarized bool
 	var summary string
+	var usage []UsageObserved
 	err = w.lines.readTo(w.file, size, func(head []byte, start, length int64) {
 		found = found || countsAsProgress(head, length)
+		if u, ok := parseUsage(head); ok {
+			usage = append(usage, u)
+		}
 		if !inTail(start, size) {
 			return
 		}
@@ -102,17 +109,18 @@ func (w *streamWatch) read(now time.Time) (activity string, changed bool) {
 	if found {
 		w.progressed = now
 	}
-	return summary, summarized
+	w.unsent = append(w.unsent, usage...)
+	return observation{activity: summary, changed: summarized}
 }
 
 // unreadable は stream を読めなかった理由を活動にする。直前と同じ理由なら changed が false。
-func (w *streamWatch) unreadable(err error) (activity string, changed bool) {
+func (w *streamWatch) unreadable(err error) observation {
 	message := printable.Line("stream を読めない: " + err.Error())
 	if message == w.readError {
-		return "", false
+		return observation{}
 	}
 	w.readError = message
-	return message, true
+	return observation{activity: message, changed: true}
 }
 
 // sinceProgress は progress を最後に見てから now までの時間。

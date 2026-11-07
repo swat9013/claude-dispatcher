@@ -61,6 +61,7 @@ WaitingRetry --> WaitingRetry : 事前検査に落ちた
 WaitingRetry --> WaitingRetry : workflow定義を採れない
 WaitingRetry --> WaitingRetry : 停止要求1回目
 WaitingRetry --> WaitingRetry : 新しい版のref
+WaitingRetry --> WaitingRetry : admissionが閉じている
 WaitingRetry --> NoClaim : 乗っ取られた / claim を解く
 WaitingRetry --> NoClaim : 終端の観測 / claim を解く
 WaitingRetry --> NoClaim : trigger外れの観測 / 完了
@@ -96,6 +97,7 @@ Abandoned --> [*] : loopの終了
 ' uncovered: NoClaim x triggerの削除 — claim も打ち切りも無いので変わる記憶が無い。消えた trigger は評価しないので、その trigger では候補にならないだけ
 ' uncovered: NoClaim x 乗っ取られた — claim が無いので止める worker が無い。orphan のために引き継いだ着手宣言は忘れる (置き換わっていたら error の行を残す)。消し損ねた自分の着手宣言は消すだけ (§7 の coordination board の突き合わせ)
 ' uncovered: NoClaim x 新しい版のref — その tick は候補を起動しないので、claim は立たない (§7 の coordination board の突き合わせ)
+' uncovered: NoClaim x admissionが閉じている — その tick は候補を起動しないので、claim は立たない (§7 の admission control)
 ' 走っている
 ' uncovered: Running x 候補になる — claim されている作業対象は候補にならない (§4 の候補の定義)
 ' uncovered: Running x trigger外れの観測 — 走っている worker は終端でだけ止める (ADR 0009)
@@ -112,6 +114,7 @@ Abandoned --> [*] : loopの終了
 ' uncovered: Running x triggerの削除 — 走っている worker は終端でだけ止め、trigger を見ない (ADR 0009)
 ' uncovered: Running x 着手宣言に負けた — 着手宣言は claim を立てる前にだけ push し、再起動では push し直さない
 ' uncovered: Running x 新しい版のref — 新しい版の ref は起動と再起動だけを止め、走っている worker は止めない
+' uncovered: Running x admissionが閉じている — admission control は起動と再起動だけを止め、走っている worker は止めない
 ' 止めている
 ' uncovered: Stopping x 候補になる — claim されている作業対象は候補にならない (§4 の候補の定義)
 ' uncovered: Stopping x 終端の観測 — 止めている worker の作業対象は読み直さず、worker が終わるのを待つ (止められない worker は claude が終わるまで待ち、終われば worker終了 か stall上限 か 上限時間 で受ける)
@@ -130,6 +133,7 @@ Abandoned --> [*] : loopの終了
 ' uncovered: Stopping x 先のtriggerに当たる — 止めている worker の作業対象は読み直さず、worker が終わるのを待つ (止められない worker は claude が終わるまで待ち、終われば worker終了 か stall上限 か 上限時間 で受ける)
 ' uncovered: Stopping x 着手宣言に負けた — 着手宣言は claim を立てる前にだけ push する
 ' uncovered: Stopping x 新しい版のref — 既に止めているので、起動を止める検査は関わらない
+' uncovered: Stopping x admissionが閉じている — 既に止めているので、起動を止める判定は関わらない
 ' uncovered: Stopping x triggerの削除 — 止めている worker は trigger を見ずに終わるのを待つ。止められて終われば claim を解き、止める前に終わっていれば起動したときの trigger で終わりを確かめる (止められない worker は claude が終わるまで待ち、終われば worker終了 か stall上限 か 上限時間 で受ける)
 ' 終わりを確かめ待ち
 ' uncovered: AwaitingVerification x 候補になる — claim されている作業対象は候補にならない (§4 の候補の定義)
@@ -148,6 +152,7 @@ Abandoned --> [*] : loopの終了
 ' uncovered: AwaitingVerification x 先のtriggerに当たる — 確かめは起動した trigger から外れたかだけを見る
 ' uncovered: AwaitingVerification x 着手宣言に負けた — 着手宣言は claim を立てる前にだけ push する
 ' uncovered: AwaitingVerification x 新しい版のref — 確かめは作業対象 1 件の読み直しで決め、起動を伴わない
+' uncovered: AwaitingVerification x admissionが閉じている — 確かめは作業対象 1 件の読み直しで決め、起動を伴わない
 ' uncovered: AwaitingVerification x triggerの削除 — 確かめは claim が起動したときに持った trigger の述語で決め、workflow 定義から引き直さない (§7 の worker の 1 回分)。失敗と数えた後の再起動待ちか打ち切りで、消えたことが効く
 ' 再起動待ち
 ' uncovered: WaitingRetry x 候補になる — claim されている作業対象は候補にならない (§4 の候補の定義)
@@ -179,5 +184,6 @@ Abandoned --> [*] : loopの終了
 ' uncovered: Abandoned x 着手宣言に負けた — 打ち切った作業対象は候補にならないので、着手宣言を push しない
 ' uncovered: Abandoned x 乗っ取られた — 打ち切りは claim を解いて着手宣言を消しているので、乗っ取られる着手宣言が無い
 ' uncovered: Abandoned x 新しい版のref — 打ち切りを解く判定は trigger の述語で行い、coordination board の ref を見ない
+' uncovered: Abandoned x admissionが閉じている — 打ち切りは起動を待たない
 
 @enduml
