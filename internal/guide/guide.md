@@ -59,7 +59,7 @@ workflow 定義に誤りがあれば、試運転・`loop` の起動・`doctor` �
 - `claude-dispatcher loop --max-concurrent <N>` で、その loop の並列上限 (同時に走らせる worker の上限) を決める (1 以上の整数。省けば 1)。並列上限は loop を回すマシンで決まる値なので、`WORKFLOW.md` には書かない (書くと未知の key として検査に落ちる)
   - loop を回したまま変えるなら、別の端末で `claude-dispatcher max-concurrent <N>` を撃つ。次の tick から効き、loop を止めるまで続く。走っている worker の数より下げても、走っている worker は止めず、空きが出るまで新しい起動を待つ。loop が立っていなければ何も書かずに exit 1 で終わる
   - loop を起動し直すと、`max-concurrent` で変えた値は消え、`--max-concurrent` の値 (省けば 1) から始まる
-- `claude-dispatcher loop --max-five-hour-usage <P> --max-weekly-usage <P>` で、Claude の usage limit の使用率の閾値 (百分率) を決める。どちらかが閾値以上になると、loop は新しい worker の起動と再起動を止める。走っている worker は完走し、枠のリセット時刻を過ぎると自動で再開する。省いた枠の閾値は 100%。`WORKFLOW.md` には書かない
+- `claude-dispatcher loop --max-five-hour-usage <P> --max-weekly-usage <P>` で、Claude の usage limit の使用率の閾値 (百分率) を決める。どちらかが閾値以上になると、loop は新しい worker の起動と再起動を止める。走っている worker は完走し、閾値以上の方のリセット時刻を過ぎると自動で再開する。省いた方の閾値は 100%。`WORKFLOW.md` には書かない
   - 使用率は worker の stream から読むので、loop の起動後の最初の worker は閾値を見ずに起動する。単発起動 (`run`) には効かない。API key など使用率が届かない環境では閾値は効かず、`status` の使用率は `未観測` のまま
 - 同じ issue 置き場の loop は、同じマシンで 1 本しか起動できない (2 本目と、`run` が走っている間の loop は exit 3 で止まる)。マシンを跨いで分け合うなら `coordination.remote` を書く (上の「導入の流れ」の 2)。書かなければマシンを跨いだ排他は持たないので、1 つの issue 置き場は 1 台から回す
 - `coordination.remote` を書いた project では、loop の起動時に coordination board の remote を解いて読めて、生存報告を置けることを確かめる。落ちれば exit 1 で起動しない
@@ -75,7 +75,7 @@ workflow 定義に誤りがあれば、試運転・`loop` の起動・`doctor` �
   - 見出しの 1 行目は loop が生きているか (`loop 稼働中` / `loop 停止待ち` / `loop なし`)、2 行目は次の tick・今の並列上限・直近の tick の結果
   - 3 行目は 5 時間と週の使用率。起動を止めている間は再開の時刻も出る
   - loop が止まった後 (`loop なし`) は見出しだけを描き、止められない worker も描かない。loop が止まった後に残った claude の pid と workspace は、log.jsonl の `error` の行 `claude を止められないまま止まる (pid <pid>, workspace <path>)` で読む
-  - `workers` に走っている worker と再起動待ちを (段階・経過・最新の活動を含む)、`要対処` に打ち切り・曖昧な CL・事前検査に落ちた trigger・止められない worker (SIGKILL を送れず claude が終わっていない。段階は `unstopped` で、pid と workspace の path を出す)・orphan (前の loop が止まった後も動いている claude。終わるまでその作業対象では起動しない) を解き方とともに並べる。`coordination.remote` を書いた project では、乗っ取られた作業対象 (worker を止めたので、止まる前に push された成果を確かめる)・続けて落ちている生存報告・新しい版の ref (dispatcher を上げる) も並べる
+  - `workers` に走っている worker と再起動待ちを (段階・経過・最新の活動を含む)、`要対処` に打ち切り・曖昧な CL・事前検査に落ちた trigger・止められない worker (SIGKILL を送れず claude が終わっていない。段階は `unstopped` で、pid と workspace の path を出す)・orphan (前の loop が止まった後も動いている claude。終わるまでその作業対象では起動しない)・使用率を読めない (`rate_limit_event` の形式が変わった。リセットを待っても解けず、起動を止めたままになるので、dispatcher を上げて loop を起動し直す) を解き方とともに並べる。`coordination.remote` を書いた project では、乗っ取られた作業対象 (worker を止めたので、止まる前に push された成果を確かめる)・続けて落ちている生存報告・新しい版の ref (dispatcher を上げる) も並べる
 - 置き場は `claude-dispatcher paths --json` で引く。何も書かず、tracker の CLI も撃たない
 
 | key | 中身 |
@@ -353,7 +353,7 @@ triggers:                    # 必須。1 つ以上
 
 - 作業対象ごとに trigger を宣言順に評価し、最初に当たった 1 つだけを採る。issue には `on: issue` の trigger だけを、CL には `on: cl` の trigger だけを当てる
 - 候補は、trigger の宣言順を先に、同じ trigger の中では作業対象の作成日時の古い順に並べる。作成日時が同じなら番号の小さい順。`jira` では、作成日時の代わりに番号の小さい順 (acli の一覧は作成日時を返さない)
-- 空いている並列の枠 (並列上限 (`max-concurrent` で変えたならその値、変えていなければ `loop --max-concurrent` の値。省けば 1) から、走っている worker と再起動待ちの数を引いた分) だけ、候補を先頭から起動する。起動の直前に作業対象を読み直し、終端になっているか trigger から外れていれば起動しない
+- 空いている並列の枠 (並列上限 (`max-concurrent` で変えたならその値、変えていなければ `loop --max-concurrent` の値。省けば 1) から、走っている worker と再起動待ちの数を引いた分) だけ、候補を先頭から起動する。usage limit の使用率が閾値以上の間は起動しない。起動の直前に作業対象を読み直し、終端になっているか trigger から外れていれば起動しない
 - **曖昧な CL** (同じ repo の同じ head branch から、open な CL が 2 本以上ある) には、CL 側の trigger を当てない。fork の head branch は、fork ごとに別の branch として数える (fork は GitHub では head の repo の名前、GitLab では `source_project_id` で見分ける)。head の repo が消えた fork の CL (GitHub の `headRepository` が null、GitLab の `source_project_id` が null) は、どの fork の branch か分からないので、曖昧さを数えるときに数えない
 - loop は、worker を割り当てている作業対象 (worker が走っている・止めている・終わりを確かめ待ち・再起動待ちのどれか) の workspace で checkout されている branch を head に持つ、同じ repo の CL にも CL 側の trigger を当てない。issue の worker が CL を開いた後も作業を続けている間に、同じ branch へ CL の worker を重ねないため。試運転はこの除外を掛けない
 - open な一覧は、trigger に現れる種類のものだけを読む (`on: cl` の trigger が 1 つも無ければ CL の一覧を読まず、`on: issue` の trigger が無ければ issue の一覧を読まない)

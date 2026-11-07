@@ -410,7 +410,7 @@ claude-dispatcher loop [--max-concurrent <N>] [--max-five-hour-usage <P>] [--max
 **admission control** (system.md §7):
 
 - worker の stream の `type: rate_limit_event` の行の `rate_limit_info.unifiedWindows` から、`five_hour` と `seven_day` の `utilization` (0 以上 1 以下の小数) と `resetsAt` (epoch 秒) を読む。読む範囲は progress と同じく、前の確認で読み終えた offset からの完結した行
-- `utilization` か `resetsAt` が数でない window は、無いものとして扱う。片方の window だけが無い行は読める行で、どの window も読めない行を読めない event とする
+- `utilization` か `resetsAt` が数でない window は、無いものとして扱う。`utilization` が負か、`resetsAt` が負か 9999 年より先の window も同じ (`resetsAt` の単位がミリ秒に変わった行を読まない)。1 を超える `utilization` は読む (どの閾値でも閉じ、リセットで解ける)。片方の window だけが無い行は読める行で、どの window も読めない行と、`rate_limit_info` を decode できない行を読めない event とする
 - 判定は tick の手順 7 と、再起動を試みるとき (tick の外を含む) に撃つ
 - ログの行: `<時刻> 起動を止める: 週の使用率 81% が閾値 80% 以上 (11/14 07:00 に再開)`・`<時刻> 起動を再開する`
 
@@ -613,7 +613,7 @@ loop の今の状態を、表示のためだけに書き出す (system.md §9)�
 | `taken_over` | この loop が着手宣言を乗っ取られた作業対象 (`target`) と、見たときの持ち主の loop 名 (`by`。消えていたら空文字列、持ち主の loop を読めなければ `?`)。loop を起動し直すまで残す。coordination board を指した project だけ |
 | `heartbeat_failures` | 生存報告の置き直しが 2 回以上続けて落ちている間だけ、続けて落ちた回数 (`count`) と直近の理由 (`error`)。置き直せたら無くなる |
 | `newer_format` | 直近の tick で、coordination board に自分の知る版より新しい版の ref を見た間だけ、見た版 (`format`。版を読めなければ `null`)。この間はその scope で worker を起動しない |
-| `usage` | window (`five_hour`・`seven_day`) ごとの直近の観測 (`utilization` は整数の百分率。`resets_at`。無いか、リセット時刻を過ぎていれば `null`) と閾値 (`threshold`)、admission control が閉じているか (`closed`)、再開の時刻 (`reopen_at`。閾値以上の window のうち遅い方のリセット時刻。閉じていないか、読めない event で閉じていれば `null`)、読めない event を見たか (`unreadable`)。この key を足す前の版が書いた状態 file には無い |
+| `usage` | window (`five_hour`・`seven_day`) ごとの直近の観測 (`utilization` は整数の百分率。`resets_at`。無いか、リセット時刻を過ぎていれば `null`) と閾値 (`threshold`)、直近の判定で admission control が閉じていたか (`closed`)、再開の時刻 (`reopen_at`。閾値以上の window のうち遅い方のリセット時刻。閉じていないか、読めない event で閉じていれば `null`)、読めない event を見たか (`unreadable`)。この key を足す前の版が書いた状態 file には無い |
 
 ### 7.2 `status`
 
