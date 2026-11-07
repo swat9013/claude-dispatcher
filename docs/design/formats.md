@@ -865,7 +865,7 @@ claude-dispatcher <command> --help
 claude-dispatcher <command> -h
 ```
 
-使い方の一覧を stdout に出す。引数が無いときは同じ一覧だけを、引数の誤りのときは誤りの行の後ろに同じ一覧を、stderr に出す。
+使い方の一覧を stdout に出す。引数が無いときは同じ一覧だけを、引数の誤りのときは誤りの行の後ろに同じ一覧を、stderr に出す。誤りの行の制御文字 (タブ・改行・ESC など) は空白に置き換える。
 
 - 節を `Usage:` → `Commands:` → `Options:` → `Arguments:` の順に並べ、節の間を空行で区切る。主流の CLI help と同じ節の並び (見出しの綴りは tool ごとに違う) にし、一覧として流し読みできるようにする
 - `Usage:` は撃ち方の形を 1 つにつき 1 行で並べる: command を取る形 (`<command> [options] [WORKFLOW]`)・単発起動 (`run TRIGGER TARGET [WORKFLOW]`)・並列上限の変更 (`max-concurrent N [WORKFLOW]`)・`-h | --help | help`・`--version`。2 行目からは `claude-dispatcher` の桁を 1 行目に揃える
