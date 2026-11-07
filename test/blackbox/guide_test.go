@@ -108,6 +108,10 @@ func TestUsageWithoutArgumentsGoesToStderrWithExit2(t *testing.T) {
 func TestHelpSpellingWrittenAloneInPlaceOfACommandPrintsTheSameUsage(t *testing.T) {
 	s := newSandbox(t)
 	want := s.run("--help")
+	assertExit(t, want, 0)
+	if want.stderr != "" {
+		t.Fatalf("--help が stderr に出した: %q", want.stderr)
+	}
 	for _, spelling := range []string{"-h", "help"} {
 		t.Run(spelling, func(t *testing.T) {
 			r := s.run(spelling)
@@ -118,6 +122,7 @@ func TestHelpSpellingWrittenAloneInPlaceOfACommandPrintsTheSameUsage(t *testing.
 			}
 		})
 	}
+	s.assertNoGh("単独の -h・--help・help は")
 }
 
 func TestHelpFlagWrittenAloneAfterAnyCommandPrintsTheSameUsage(t *testing.T) {
@@ -143,7 +148,7 @@ func TestHelpFlagWrittenAloneAfterAnyCommandPrintsTheSameUsage(t *testing.T) {
 }
 
 func TestHelpOrVersionWrittenWithOtherArgumentsIsAnArgumentErrorFollowedByTheUsage(t *testing.T) {
-	// exit 0 を完了と読む呼び出し側で、引数の値が -h になっても完了に見せない (formats.md §10)
+	// exit 0 を完了と読む呼び出し側で、他の引数と一緒の値が -h になっても完了に見せない (formats.md §10)
 	s := newSandbox(t)
 	usage := s.run("--help")
 	for _, c := range []struct {
@@ -157,12 +162,12 @@ func TestHelpOrVersionWrittenWithOtherArgumentsIsAnArgumentErrorFollowedByTheUsa
 		{[]string{"--version", "extra"}, "extra"},
 		{[]string{"--version", "-h"}, "-h"},
 		{[]string{"-h", "--version"}, "--version"},
-		{[]string{"run", "-h", "issue#1"}, "-h"},
+		{[]string{"run", "-h", "issue#1"}, "-h は他の引数と一緒に書けない"},
 		{[]string{"run", "a", "issue#1", "W", "x", "-h"}, "x"},
 		{[]string{"loop", "--max-concurrent", "-h"}, "--max-concurrent"},
 		{[]string{"setup", "--host", "-h"}, "--host"},
 		{[]string{"guide", "x", "-h"}, "x"},
-		{[]string{"max-concurrent", "2", "-h"}, "-h"},
+		{[]string{"max-concurrent", "2", "-h"}, "-h は他の引数と一緒に書けない"},
 	} {
 		t.Run(strings.Join(c.args, " "), func(t *testing.T) {
 			r := s.run(c.args...)
@@ -175,6 +180,19 @@ func TestHelpOrVersionWrittenWithOtherArgumentsIsAnArgumentErrorFollowedByTheUsa
 		})
 	}
 	s.assertNoGh("help の綴りや --version を他の引数と一緒に書いたのに")
+}
+
+func TestArgumentErrorLineStaysOneLineWhenTheArgumentHoldsControlCharacters(t *testing.T) {
+	s := newSandbox(t)
+	usage := s.run("--help")
+
+	r := s.run("--version", "a\nb\x1b]0;x\x07")
+
+	assertExit(t, r, 2)
+	errLine, rest, _ := strings.Cut(r.stderr, "\n")
+	if strings.Contains(errLine, "\x1b") || rest != usage.stdout {
+		t.Fatalf("誤りの行が制御文字を残している: %q", r.stderr)
+	}
 }
 
 func TestUsageMarksHelpFlagAsWritableInPlaceOfOrAfterACommand(t *testing.T) {

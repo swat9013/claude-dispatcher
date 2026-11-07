@@ -130,8 +130,9 @@ func runGuide(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+// usageError は誤りの行の後ろに usage を stderr へ出す。誤りの行は引数の値を含むので、制御文字を残さず 1 行にする。
 func usageError(stderr io.Writer, format string, args ...any) int {
-	fmt.Fprintf(stderr, format+"\n%s", append(args, usage)...)
+	fmt.Fprintf(stderr, "%s\n%s", printable.Line(fmt.Sprintf(format, args...)), usage)
 	return exitUsage
 }
 

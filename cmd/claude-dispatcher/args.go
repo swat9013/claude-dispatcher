@@ -78,7 +78,7 @@ var commandSpecs = []commandSpec{
 	{name: "guide", arguments: noArguments},
 }
 
-// globalFlag は command の代わりに書く flag の宣言。afterCommand なら command の後ろにも書ける。
+// globalFlag は command の代わりに単独で書く flag の宣言。afterCommand なら command の後ろにも単独で書ける。
 type globalFlag struct {
 	// spellings は受ける flag の綴り。usage の Options 節には `, ` で並べる
 	spellings []string
@@ -125,7 +125,7 @@ func (g globalFlag) placement() string {
 var (
 	helpFlag    = globalFlag{spellings: []string{"-h", "--help"}, word: "help", afterCommand: true, help: "単独で書くとこの一覧を出す。command の代わりには help でも同じ"}
 	versionFlag = globalFlag{spellings: []string{"--version"}, help: "版を出す"}
-	// globalFlags は command の代わり (afterCommand なら後ろにも) に書く flag。並びは usage の Usage 節と Options 節の並び
+	// globalFlags は command の代わり (afterCommand なら後ろにも) に単独で書く flag。並びは usage の Usage 節と Options 節の並び
 	globalFlags = []globalFlag{helpFlag, versionFlag}
 )
 
@@ -224,6 +224,8 @@ func (c commandSpec) parse(argv []string) (parsedArgs, error) {
 	for _, arg := range rest {
 		f, known := c.flag(arg)
 		switch {
+		case helpFlag.acceptsAfterCommand(arg):
+			return a, fmt.Errorf("%s は他の引数と一緒に書けない", arg)
 		case c.arguments == noArguments:
 			return a, fmt.Errorf("引数が多い: %s", arg)
 		case known:
