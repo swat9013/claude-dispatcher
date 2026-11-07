@@ -224,10 +224,10 @@ func (c commandSpec) parse(argv []string) (parsedArgs, error) {
 	for _, arg := range rest {
 		f, known := c.flag(arg)
 		switch {
-		case helpFlag.acceptsAfterCommand(arg):
-			return a, fmt.Errorf("%s は他の引数と一緒に書けない", arg)
 		case c.arguments == noArguments:
 			return a, fmt.Errorf("引数が多い: %s", arg)
+		case helpFlag.acceptsAfterCommand(arg):
+			return a, fmt.Errorf("%s は他の引数と一緒に書けない", arg)
 		case known:
 			a.set[f.name] = true
 		case strings.HasPrefix(arg, "-"):

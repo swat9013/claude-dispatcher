@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"unicode"
 )
 
 // `guide` と、案内を指す行 (formats.md §9・§2.8)。
@@ -183,6 +184,7 @@ func TestHelpOrVersionWrittenWithOtherArgumentsIsAnArgumentErrorFollowedByTheUsa
 }
 
 func TestArgumentErrorLineStaysOneLineWhenTheArgumentHoldsControlCharacters(t *testing.T) {
+	// 誤りの行の制御文字は空白に置き換える (formats.md §10)
 	s := newSandbox(t)
 	usage := s.run("--help")
 
@@ -190,7 +192,7 @@ func TestArgumentErrorLineStaysOneLineWhenTheArgumentHoldsControlCharacters(t *t
 
 	assertExit(t, r, 2)
 	errLine, rest, _ := strings.Cut(r.stderr, "\n")
-	if strings.Contains(errLine, "\x1b") || rest != usage.stdout {
+	if strings.ContainsFunc(errLine, unicode.IsControl) || rest != usage.stdout {
 		t.Fatalf("誤りの行が制御文字を残している: %q", r.stderr)
 	}
 }
