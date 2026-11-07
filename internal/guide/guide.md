@@ -75,7 +75,7 @@ workflow 定義に誤りがあれば、試運転・`loop` の起動・`doctor` �
   - 見出しの 1 行目は loop が生きているか (`loop 稼働中` / `loop 停止待ち` / `loop なし`)、2 行目は次の tick・今の並列上限・直近の tick の結果
   - 3 行目は 5 時間と週の使用率。起動を止めている間は再開の時刻も出る
   - loop が止まった後 (`loop なし`) は見出しだけを描き、止められない worker も描かない。loop が止まった後に残った claude の pid と workspace は、log.jsonl の `error` の行 `claude を止められないまま止まる (pid <pid>, workspace <path>)` で読む
-  - `workers` に走っている worker と再起動待ちを (段階・経過・最新の活動を含む)、`要対処` に打ち切り・曖昧な CL・事前検査に落ちた trigger・止められない worker (SIGKILL を送れず claude が終わっていない。段階は `unstopped` で、pid と workspace の path を出す)・orphan (前の loop が止まった後も動いている claude。終わるまでその作業対象では起動しない)・使用率を読めない (`rate_limit_event` の形式が変わった。リセットを待っても解けず、起動を止めたままになるので、dispatcher を上げて loop を起動し直す) を解き方とともに並べる。`coordination.remote` を書いた project では、乗っ取られた作業対象 (worker を止めたので、止まる前に push された成果を確かめる)・続けて落ちている生存報告・新しい版の ref (dispatcher を上げる) も並べる
+  - `workers` に走っている worker と再起動待ちを (段階・経過・最新の活動を含む)、`要対処` に打ち切り・曖昧な CL・事前検査に落ちた trigger・止められない worker (SIGKILL を送れず claude が終わっていない。段階は `unstopped` で、pid と workspace の path を出す)・orphan (前の loop が止まった後も動いている claude。終わるまでその作業対象では起動しない)・使用率を読めない (worker の stream の使用率の形式が変わった。リセットを待っても解けず、読める使用率が届くまで起動を止めるので、dispatcher を上げて loop を起動し直す) を解き方とともに並べる。`coordination.remote` を書いた project では、乗っ取られた作業対象 (worker を止めたので、止まる前に push された成果を確かめる)・続けて落ちている生存報告・新しい版の ref (dispatcher を上げる) も並べる
 - 置き場は `claude-dispatcher paths --json` で引く。何も書かず、tracker の CLI も撃たない
 
 | key | 中身 |

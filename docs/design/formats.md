@@ -409,9 +409,9 @@ claude-dispatcher loop [--max-concurrent <N>] [--max-five-hour-usage <P>] [--max
 
 **admission control** (system.md §7):
 
-- worker の stream の `type: rate_limit_event` の行の `rate_limit_info.unifiedWindows` から、`five_hour` と `seven_day` の `utilization` (0 以上 1 以下の小数) と `resetsAt` (epoch 秒) を読む。読む範囲は progress と同じく、前の確認で読み終えた offset からの完結した行
-- `utilization` か `resetsAt` が数でない window は、無いものとして扱う。`utilization` が負か、`resetsAt` が負か 9999 年より先の window も同じ (`resetsAt` の単位がミリ秒に変わった行を読まない)。1 を超える `utilization` は読む (どの閾値でも閉じ、リセットで解ける)。片方の window だけが無い行は読める行で、どの window も読めない行と、`rate_limit_info` を decode できない行を読めない event とする
-- 判定は tick の手順 7 と、再起動を試みるとき (tick の外を含む) に撃つ
+- worker の stream の `type: rate_limit_event` の行の `rate_limit_info.unifiedWindows` から、`five_hour` と `seven_day` の `utilization` (上限で 1 になる小数) と `resetsAt` (epoch 秒) を読む。読む範囲は progress と同じく、前の確認で読み終えた offset からの完結した行
+- `utilization` か `resetsAt` が数でない window は、無いものとして扱う。`utilization` が負か、`resetsAt` が負か 9999 年より先の window も同じ (`resetsAt` の単位がミリ秒に変わった行を読まない)。1 を超える `utilization` は読む (どの閾値でも閉じ、リセットで解ける)。片方の window だけが無い行は読める行で、どの window も読めない行を読めない event とする。`{"type":"rate_limit_event"` で始まり JSON として読めない行も同じ
+- 判定は `rate_limit_event` を読んだときと、tick の手順 7 と、再起動を試みるとき (tick の外を含む) に撃つ。`admission_close` の使用率は、閾値を超えた観測の値になる
 - ログの行: `<時刻> 起動を止める: 週の使用率 81% が閾値 80% 以上 (11/14 07:00 に再開)`・`<時刻> 起動を再開する`
 
 **画面**: loop の stdout が端末かどうかで形を変える。どちらも、状態 file (§7) と同じ中身を描く。
