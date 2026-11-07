@@ -37,7 +37,7 @@ func TestWaitReportsAnUnkillableClaudeOnceAndReturnsOnlyAfterItExits(t *testing.
 	aliveWhenReported := false
 
 	// 止められないと知らせた後に、claude が死ぬ (SIGKILL が遅れて届いた形)
-	result := Runner{}.wait(cmd, run, newStreamWatch(stream, 0, time.Now(), t.TempDir(), limits{}), func(stopError string, done <-chan struct{}) {
+	result := Runner{}.wait(cmd, run, newStreamWatch(stream, 0, time.Now(), t.TempDir(), limits{}), notices{unstopped: func(stopError string, done <-chan struct{}) {
 		reported, exited = append(reported, stopError), done
 		select {
 		case <-done:
@@ -45,7 +45,7 @@ func TestWaitReportsAnUnkillableClaudeOnceAndReturnsOnlyAfterItExits(t *testing.
 			aliveWhenReported = true
 		}
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-	})
+	}})
 
 	if len(reported) != 1 || reported[0] == "" {
 		t.Errorf("止められない知らせ = %q, want 理由付きで 1 回", reported)

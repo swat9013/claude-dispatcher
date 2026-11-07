@@ -214,9 +214,12 @@ type loopOptions struct {
 	dryRun bool
 	// maxConcurrent は --max-concurrent の値。0 は渡されていない (1 以上しか受けない)
 	maxConcurrent int
+	// thresholds は usage limit の閾値。省いた window は既定の値
+	thresholds loop.UsageThresholds
 }
 
-// loopFlags は `loop [--dry-run] [--max-concurrent <N>] [<workflow の path>]` の引数を読む (formats.md §5・§6)。
+// loopFlags は `loop [--dry-run] [--max-concurrent <N>] [--max-five-hour-usage <P>] [--max-weekly-usage <P>] [<workflow の path>]`
+// の引数を読む (formats.md §5・§6)。
 func loopFlags(argv []string) (loopOptions, error) {
 	a, err := commandSpecOf("loop").parse(argv)
 	if err != nil {
@@ -230,10 +233,24 @@ func loopFlags(argv []string) (loopOptions, error) {
 		}
 		o.maxConcurrent = n
 	}
+	o.thresholds = loop.UsageThresholds{FiveHour: usageThreshold(a, "--max-five-hour-usage"), Weekly: usageThreshold(a, "--max-weekly-usage")}
 	return o, nil
 }
 
-// runLoop は `loop [--dry-run] [--max-concurrent <N>] [<workflow の path>]` を撃つ。
+// usageThreshold は usage limit の閾値の flag の値。省けば既定の値 (system.md §8)。
+func usageThreshold(a parsedArgs, name string) int {
+	v := a.value(name)
+	if v == "" {
+		return status.DefaultUsageThreshold
+	}
+	n, err := parsePercentage(name, v)
+	if err != nil {
+		panic(fmt.Sprintf("%s の値 %q が宣言の検査 (percentage) を通っていない", name, v))
+	}
+	return n
+}
+
+// runLoop は `loop` の引数 (loopFlags) で loop を撃つ。
 func runLoop(args []string, stdout, stderr io.Writer) int {
 	opts, err := loopFlags(args)
 	if err != nil {
@@ -340,14 +357,15 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 	output.Show(loop.Line{At: time.Now(), Label: "loop を始めた", Rest: fmt.Sprintf(": scope %s · state dir %s · workflow %s", scope, dir, abs)})
 	hookLock := &sync.Mutex{}
 	return loop.Run(loop.Options{
-		Coordination:   coordination,
-		HeartbeatAfter: time.After,
-		Load:           load,
-		MaxConcurrent:  func() (int, bool, error) { return state.ReadMaxConcurrent(dir) },
-		Definition:     def,
-		Precheck:       e.precheck,
-		Store:          func(def workflow.Definition) places.Store { return e.places(def).Store() },
-		Workspaces:     func(def workflow.Definition) loop.Workspaces { return e.workspaces(def, hookLock) },
+		Coordination:    coordination,
+		HeartbeatAfter:  time.After,
+		Load:            load,
+		MaxConcurrent:   func() (int, bool, error) { return state.ReadMaxConcurrent(dir) },
+		UsageThresholds: opts.thresholds,
+		Definition:      def,
+		Precheck:        e.precheck,
+		Store:           func(def workflow.Definition) places.Store { return e.places(def).Store() },
+		Workspaces:      func(def workflow.Definition) loop.Workspaces { return e.workspaces(def, hookLock) },
 		Launch: func(def workflow.Definition, job worker.Job, events chan<- worker.Event) loop.Worker {
 			return worker.Runner{Workspaces: e.workspaces(def, hookLock), Definition: def, StateDir: dir}.Start(job, events)
 		},

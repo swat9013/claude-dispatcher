@@ -262,3 +262,102 @@ func TestSectionRulesStopAtTheWidthOfTheTerminal(t *testing.T) {
 		t.Fatalf("罫線が端末の幅で止まらない:\n%s", got)
 	}
 }
+
+// usageOf は 5 時間と週の使用率 (nil なら未観測) と閾値を持つ usage。
+func usageOf(fiveHour, weekly *int, fiveHourThreshold, weeklyThreshold int) *status.Usage {
+	return &status.Usage{
+		FiveHour: status.UsageWindow{Utilization: fiveHour, Threshold: fiveHourThreshold},
+		SevenDay: status.UsageWindow{Utilization: weekly, Threshold: weeklyThreshold},
+	}
+}
+
+func percent(n int) *int { return &n }
+
+func TestHeadingShowsTheUsageOnItsThirdLine(t *testing.T) {
+	s := status.Snapshot{Scope: "s", NextTickAt: at(time.Minute), Usage: usageOf(percent(41), percent(12), 100, 100)}
+
+	got := status.Heading(s, status.LoopAlive, time.UTC, pipe)
+
+	want := "● loop 稼働中  s\n次の tick 00:01:00\n使用率 5 時間 41% · 週 12%\n"
+	if got != want {
+		t.Fatalf("見出し:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestHeadingNamesOnlyAThresholdBelowTheLimit(t *testing.T) {
+	s := status.Snapshot{Scope: "s", Usage: usageOf(percent(41), percent(12), 100, 80)}
+
+	got := status.Heading(s, status.LoopAlive, time.UTC, pipe)
+
+	if !strings.HasSuffix(got, "使用率 5 時間 41% · 週 12% (閾値 80%)\n") {
+		t.Fatalf("見出し:\n%s", got)
+	}
+}
+
+func TestHeadingShowsAWindowWithoutAnObservationAsUnobserved(t *testing.T) {
+	s := status.Snapshot{Scope: "s", Usage: usageOf(nil, nil, 50, 100)}
+
+	got := status.Heading(s, status.LoopAlive, time.UTC, pipe)
+
+	if !strings.HasSuffix(got, "使用率 5 時間 未観測 (閾値 50%) · 週 未観測\n") {
+		t.Fatalf("見出し:\n%s", got)
+	}
+}
+
+func TestHeadingShowsTheReopenTimeWhileAdmissionIsClosed(t *testing.T) {
+	u := usageOf(percent(41), percent(81), 100, 80)
+	u.Closed, u.ReopenAt = true, at(44*24*time.Hour+7*time.Hour)
+	s := status.Snapshot{Scope: "s", Usage: u}
+
+	got := status.Heading(s, status.LoopAlive, time.UTC, pipe)
+
+	if !strings.HasSuffix(got, "使用率 5 時間 41% · 週 81% (閾値 80%) · 起動を止めている · 11/14 07:00 に再開\n") {
+		t.Fatalf("見出し:\n%s", got)
+	}
+}
+
+func TestHeadingShowsNoReopenTimeAfterAnUnreadableEvent(t *testing.T) {
+	u := usageOf(nil, nil, 100, 100)
+	u.Closed, u.Unreadable = true, true
+	s := status.Snapshot{Scope: "s", Usage: u}
+
+	got := status.Heading(s, status.LoopAlive, time.UTC, pipe)
+
+	if !strings.HasSuffix(got, "· 起動を止めている\n") {
+		t.Fatalf("見出し:\n%s", got)
+	}
+}
+
+func TestHeadingOfAGoneLoopShowsNoUsage(t *testing.T) {
+	s := status.Snapshot{Scope: "s", Usage: usageOf(percent(41), percent(12), 100, 100)}
+
+	if got := status.Heading(s, status.LoopGone, time.UTC, pipe); strings.Contains(got, "使用率") {
+		t.Fatalf("見出し:\n%s", got)
+	}
+}
+
+func TestStatusFileWrittenBeforeTheUsageKeyShowsNoUsageLine(t *testing.T) {
+	if got := status.Heading(status.Snapshot{Scope: "s"}, status.LoopAlive, time.UTC, pipe); strings.Contains(got, "使用率") {
+		t.Fatalf("見出し:\n%s", got)
+	}
+}
+
+func TestUnreadableUsageNeedsAttention(t *testing.T) {
+	u := usageOf(nil, nil, 100, 100)
+	u.Closed, u.Unreadable = true, true
+
+	got := status.Render(status.Snapshot{Scope: "s", Usage: u}, status.LoopAlive, base, time.UTC, pipe)
+
+	if !strings.Contains(got, "要対処 1") || !strings.Contains(got, "使用率を読めない: rate_limit_event の形式が変わった。dispatcher を上げて loop を起動し直す\n") {
+		t.Fatalf("描画:\n%s", got)
+	}
+}
+
+func TestUsageAtTheThresholdDoesNotNeedAttention(t *testing.T) {
+	u := usageOf(percent(41), percent(81), 100, 80)
+	u.Closed = true
+
+	if got := status.Render(status.Snapshot{Scope: "s", Usage: u}, status.LoopAlive, base, time.UTC, pipe); strings.Contains(got, "要対処") {
+		t.Fatalf("描画:\n%s", got)
+	}
+}

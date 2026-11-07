@@ -68,6 +68,7 @@ var (
 	noDefinition   = claimEvent{"workflow定義を採れない", elapsed(hindranceDefinitionUnavailable)}
 	triggerRemoved = claimEvent{"triggerの削除", elapsed(hindranceTriggerRemoved)}
 	newerFormat    = claimEvent{"新しい版のref", elapsed(hindranceNewerFormat)}
+	admissionShut  = claimEvent{"admissionが閉じている", elapsed(hindranceAdmissionClosed)}
 	takenOver      = claimEvent{"乗っ取られた", func(c *claim, ref target.Ref, _ claimEnv) effect { return c.takenOverBy(ref, "other-1a2b3c4d") }}
 	loopEnded      = claimEvent{"loopの終了", loopEnd}
 )
@@ -94,6 +95,7 @@ func TestClaimTransitions(t *testing.T) {
 		{phaseRunning, 1, takenOver, phaseStopping, claimIO{stopWorker: true}},
 		// uncovered
 		{phaseRunning, 1, newerFormat, phaseRunning, noIO},
+		{phaseRunning, 1, admissionShut, phaseRunning, noIO},
 		{phaseRunning, 1, leftTrigger, phaseRunning, noIO},
 		{phaseRunning, 1, stillMatches, phaseRunning, noIO},
 		{phaseRunning, 1, undecided, phaseRunning, noIO},
@@ -117,6 +119,7 @@ func TestClaimTransitions(t *testing.T) {
 		{phaseStopping, 1, takenOver, phaseStopping, noIO},
 		// uncovered
 		{phaseStopping, 1, newerFormat, phaseStopping, noIO},
+		{phaseStopping, 1, admissionShut, phaseStopping, noIO},
 		{phaseStopping, 1, terminal, phaseStopping, noIO},
 		{phaseStopping, 1, leftTrigger, phaseStopping, noIO},
 		{phaseStopping, 1, stillMatches, phaseStopping, noIO},
@@ -144,6 +147,7 @@ func TestClaimTransitions(t *testing.T) {
 		{phaseAwaitingVerification, 1, takenOver, phaseAwaitingVerification, claimIO{exit: release}},
 		// uncovered
 		{phaseAwaitingVerification, 1, newerFormat, phaseAwaitingVerification, noIO},
+		{phaseAwaitingVerification, 1, admissionShut, phaseAwaitingVerification, noIO},
 		{phaseAwaitingVerification, 1, workerEnd, phaseAwaitingVerification, noIO},
 		{phaseAwaitingVerification, 1, unstoppable, phaseAwaitingVerification, noIO},
 		{phaseAwaitingVerification, 1, stall, phaseAwaitingVerification, noIO},
@@ -175,6 +179,7 @@ func TestClaimTransitions(t *testing.T) {
 		{phaseWaitingRetry, 1, triggerRemoved, phaseWaitingRetry, claimIO{exit: release}},
 		{phaseWaitingRetry, 1, loopEnded, phaseWaitingRetry, noIO},
 		{phaseWaitingRetry, 1, newerFormat, phaseWaitingRetry, noIO},
+		{phaseWaitingRetry, 1, admissionShut, phaseWaitingRetry, noIO},
 		{phaseWaitingRetry, 1, takenOver, phaseWaitingRetry, claimIO{exit: release}},
 		// uncovered
 		{phaseWaitingRetry, 1, workerEnd, phaseWaitingRetry, noIO},

@@ -49,6 +49,34 @@ type Snapshot struct {
 	HeartbeatFailures *HeartbeatFailures `json:"heartbeat_failures,omitempty"`
 	// NewerFormat は直近の tick で、coordination board に自分の知る版より新しい版の ref を見た間だけ持つ
 	NewerFormat *NewerFormat `json:"newer_format,omitempty"`
+	// Usage は usage limit の使用率と admission control の状態。key を足す前の版が書いた状態 file を読むと nil
+	Usage *Usage `json:"usage,omitempty"`
+}
+
+// Usage は usage limit の window ごとの使用率と、admission control が閉じているか。
+type Usage struct {
+	FiveHour UsageWindow `json:"five_hour"`
+	SevenDay UsageWindow `json:"seven_day"`
+	Closed   bool        `json:"closed"`
+	// ReopenAt は再開の時刻。閉じていないか、読めない event で閉じているなら nil
+	ReopenAt *time.Time `json:"reopen_at"`
+	// Unreadable は、どの window も読めない rate_limit_event を見たか
+	Unreadable bool `json:"unreadable"`
+}
+
+// UsageWindow は window 1 つの閾値と観測 (どちらも百分率)。効いている観測が無ければ Utilization と ResetsAt は nil。
+type UsageWindow struct {
+	Utilization *int       `json:"utilization"`
+	ResetsAt    *time.Time `json:"resets_at"`
+	Threshold   int        `json:"threshold"`
+}
+
+// DefaultUsageThreshold は usage limit の閾値の既定。見出しはこの値の閾値を出さない。
+const DefaultUsageThreshold = 100
+
+// ReopenText は再開の時刻を人が読む文。loop の画面と status が共に使う。
+func ReopenText(at time.Time, loc *time.Location) string {
+	return at.In(loc).Format("01/02 15:04") + " に再開"
 }
 
 // UnknownHolder は、乗っ取った着手宣言の持ち主の loop を読めないときの TakenOver.By (formats.md §4 の taken_over)。
@@ -228,8 +256,8 @@ func Render(s Snapshot, loop Liveness, now time.Time, loc *time.Location, d Disp
 
 func clock(t time.Time, loc *time.Location) string { return t.In(loc).Format("15:04:05") }
 
-// Heading は見出し: loop の状態と scope key と版の行と、次の tick と並列上限と直近の tick の行 (出す欄が無ければ出さない)。
-// 版は loop が生きていて、状態 file が版を持つときだけ出す (止まった loop の状態 file の版は、今の loop のものでない)。
+// Heading は見出し: loop の状態と scope key と版の行と、次の tick と並列上限と直近の tick の行 (出す欄が無ければ出さない) と、
+// usage limit の使用率の行 (loop が生きていて、状態 file が usage を持つときだけ)。版は loop が生きていて、状態 file が版を持つときだけ出す (止まった loop の状態 file の版は、今の loop のものでない)。
 func Heading(s Snapshot, loop Liveness, loc *time.Location, d Display) string {
 	first := []Span{state(loop, s.Stopping), {Plain, "  "}, {Bold, s.Scope}}
 	if loop != LoopGone && s.Version != "" {
@@ -256,17 +284,50 @@ func Heading(s Snapshot, loop Liveness, loc *time.Location, d Display) string {
 		}
 		ticks = append(ticks, last)
 	}
-	if len(ticks) == 0 {
-		return head
+	if len(ticks) > 0 {
+		head += d.Line(joinFields(ticks)...) + "\n"
 	}
+	if loop != LoopGone && s.Usage != nil {
+		head += d.Line(usageLine(*s.Usage, loc)...) + "\n"
+	}
+	return head
+}
+
+// joinFields は見出しの欄を ` · ` で繋ぐ。
+func joinFields(fields [][]Span) []Span {
 	var line []Span
-	for i, spans := range ticks {
+	for i, spans := range fields {
 		if i > 0 {
 			line = append(line, Span{Gray, " · "})
 		}
 		line = append(line, spans...)
 	}
-	return head + d.Line(line...) + "\n"
+	return line
+}
+
+// usageLine は見出しの使用率の行。閉じている間だけ、止めていることと再開の時刻を足す。
+func usageLine(u Usage, loc *time.Location) []Span {
+	fields := [][]Span{usageField("使用率 5 時間 ", u.FiveHour), usageField("週 ", u.SevenDay)}
+	if u.Closed {
+		fields = append(fields, []Span{{Plain, "起動を止めている"}})
+	}
+	if u.ReopenAt != nil {
+		fields = append(fields, []Span{{Plain, ReopenText(*u.ReopenAt, loc)}})
+	}
+	return joinFields(fields)
+}
+
+// usageField は window 1 つの欄。閾値は既定と違うときだけ出す。
+func usageField(name string, w UsageWindow) []Span {
+	value := "未観測"
+	if w.Utilization != nil {
+		value = strconv.Itoa(*w.Utilization) + "%"
+	}
+	field := []Span{{Gray, name}, {Plain, value}}
+	if w.Threshold != DefaultUsageThreshold {
+		field = append(field, Span{Gray, fmt.Sprintf(" (閾値 %d%%)", w.Threshold)})
+	}
+	return field
 }
 
 // Sections は見出しの後に並べるセクション: workers と、人の手当てを待つものがあれば要対処。セクションは空行で区切る。
@@ -341,7 +402,7 @@ func elapsed(d time.Duration) string {
 }
 
 // needsAttention は要対処の行: 打ち切り・曖昧な CL・起動しない trigger・止められない worker・orphan・乗っ取られた・生存報告の
-// 失敗・新しい版の ref。
+// 失敗・新しい版の ref・使用率を読めない。
 func needsAttention(s Snapshot) [][]Span {
 	var lines [][]Span
 	for _, a := range s.Abandoned {
@@ -373,6 +434,9 @@ func needsAttention(s Snapshot) [][]Span {
 			found = fmt.Sprintf("版 %d の ref がある", *n.Format)
 		}
 		lines = append(lines, []Span{{Red, "新しい版の ref"}, {Plain, fmt.Sprintf(" coordination board に%s: この scope では worker を起動しない。dispatcher を上げる", found)}})
+	}
+	if s.Usage != nil && s.Usage.Unreadable {
+		lines = append(lines, []Span{{Red, "使用率を読めない"}, {Plain, ": rate_limit_event の形式が変わった。dispatcher を上げて loop を起動し直す"}})
 	}
 	return lines
 }

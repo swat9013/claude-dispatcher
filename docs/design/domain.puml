@@ -63,7 +63,7 @@ package "coordination board (正本は実装 repo の git remote の独自 ref�
   }
 }
 
-package "集約: loop (claim・attempt・打ち切りの記憶)" as LoopAgg {
+package "集約: loop (claim・attempt・打ち切り・使用率の観測の記憶)" as LoopAgg {
   class "loop" as Loop <<loop の記憶>> {
     {field} scope key : 起動時の issue 置き場のもの
     {field} loop 名 : <hostname を無害化したもの>-<乱数 8 hex>。起動ごとに新しい
@@ -76,6 +76,11 @@ package "集約: loop (claim・attempt・打ち切りの記憶)" as LoopAgg {
   }
   class "打ち切り" as Abandoned <<loop の記憶>> {
     {field} 作業対象 : Ref
+  }
+  class "使用率の観測" as UsageObservation <<loop の記憶>> {
+    {field} window : 5 時間 | 週
+    {field} 使用率
+    {field} リセット時刻
   }
 }
 
@@ -101,6 +106,7 @@ CL --|> WorkTarget
 
 Loop "1" *-- "*" Claim
 Loop "1" *-- "*" Abandoned
+Loop "1" *-- "0..2" UsageObservation : window ごとに最新の 1 件
 Claim "0..1" ..> "1" WorkTarget : ID参照 Ref
 Abandoned "0..1" ..> "1" WorkTarget : ID参照 Ref
 Workspace "0..1" ..> "1" WorkTarget : ID参照 Ref

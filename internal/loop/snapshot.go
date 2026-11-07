@@ -48,7 +48,7 @@ var phases = map[phase]status.Phase{
 func (l *loop) snapshot() status.Snapshot {
 	s := status.Snapshot{
 		Scope: l.o.ScopeKey, Workflow: l.o.Workflow, StartedAt: l.published.startedAt, Version: l.o.Build.Version, Commit: l.o.Build.Commit, UpdatedAt: l.o.Now(),
-		Stopping: l.stop.requested(), MaxConcurrent: l.def.MaxConcurrent, LastTick: l.published.lastTick,
+		Stopping: l.stop.requested(), MaxConcurrent: l.def.MaxConcurrent, LastTick: l.published.lastTick, Usage: l.admission.snapshot(l.o.Now()),
 		Workers: []status.Worker{}, Abandoned: []status.Abandoned{}, Ambiguous: []status.Ambiguous{}, Blocked: []status.Blocked{}, Orphans: []status.Orphan{},
 	}
 	for _, ref := range target.SortedRefs(l.orphans) {

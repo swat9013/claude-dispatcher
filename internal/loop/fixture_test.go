@@ -101,6 +101,8 @@ type workerScript struct {
 	unstopped string
 	// neverEnds なら終わりを送らない (止められない claude が loop の終了まで終わらない)
 	neverEnds bool
+	// usage は起動の後に順に送る使用率の観測
+	usage []worker.UsageObserved
 }
 
 // exits は起動するとすぐに exit code で終わる worker。
@@ -222,11 +224,13 @@ func (r *rig) launch(_ workflow.Definition, job worker.Job, events chan<- worker
 		s = r.script(job)
 	}
 	ref := job.Item.Ref()
+	r.send(events, worker.Started{Target: ref, PID: 1})
+	for _, u := range s.usage {
+		r.send(events, u)
+	}
 	if s.untilStopped {
-		r.send(events, worker.Started{Target: ref, PID: 1})
 		return &loop.FakeWorker{OnStop: func() { r.send(events, worker.Ended{Target: ref, Result: worker.Result{Stopped: true}}) }}
 	}
-	r.send(events, worker.Started{Target: ref, PID: 1})
 	if s.unstopped != "" {
 		// 終わる worker の claude は、終わりより先に終わっている
 		exited := make(chan struct{})

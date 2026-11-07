@@ -61,6 +61,7 @@ func (l *loop) retry(store places.Store, v *view) {
 		// 進めるので、明けた予定で wake を置き直し続けない
 		return
 	}
+	closed := l.judgeAdmission()
 	for ref, c := range l.claims {
 		if c.phase != phaseWaitingRetry || now.Before(c.retryAt) {
 			continue
@@ -100,6 +101,9 @@ func (l *loop) retry(store places.Store, v *view) {
 		} else if l.coordination.Newer() {
 			// coordination board に新しい版の ref がある間は、attempt を進めずに待ち直す (formats.md §12)
 			h = hindranceNewerFormat
+		} else if closed {
+			// admission control が閉じている間は、attempt を進めずに待ち直す (system.md §7)。解けたら tick が試み直す
+			h = hindranceAdmissionClosed
 		}
 		l.apply(ref, c, c.backoffElapsed(ref, h, item, l.env()))
 	}

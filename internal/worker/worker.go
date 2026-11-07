@@ -36,7 +36,7 @@ type Job struct {
 	Prompt string
 }
 
-// Event は worker の起動 (Started)・止められないことの知らせ (Unstopped)・終わり (Ended)。
+// Event は worker の起動 (Started)・止められないことの知らせ (Unstopped)・使用率の観測 (UsageObserved)・終わり (Ended)。
 type Event interface{ isEvent() }
 
 // Started は claude を起動したこと。
@@ -161,6 +161,7 @@ func (r Runner) Start(job Job, events chan<- Event) *Run {
 			unstopped: func(stopError string, exited <-chan struct{}) {
 				events <- Unstopped{Target: ref, StopError: stopError, Exited: exited}
 			},
+			usage: events,
 		})
 		events <- Ended{Target: ref, Result: result}
 	}()
@@ -171,6 +172,8 @@ func (r Runner) Start(job Job, events chan<- Event) *Run {
 type notices struct {
 	started   func(pid int, workspace string)
 	unstopped func(stopError string, exited <-chan struct{})
+	// usage は使用率の観測の送り先。watch の select に載せて確認を止めないよう、関数でなく channel で持つ
+	usage chan<- Event
 }
 
 func (r Runner) attempt(job Job, run *Run, n notices) Result {
@@ -241,7 +244,12 @@ func (r Runner) launch(job Job, run *Run, workspacePath string, stream *os.File,
 	n.started(cmd.Process.Pid, workspacePath)
 	watch := newStreamWatch(stream, before.Size(), time.Now(), workspacePath,
 		limits{stall: r.Definition.StallTimeout, run: r.Definition.RunTimeout})
-	result := r.wait(cmd, run, watch, n.unstopped)
+	result := r.wait(cmd, run, watch, n)
+	// 最後の確認の後に claude が書いた使用率を、終わりより先に渡す。loop は終わりを受けて再起動を試みる
+	watch.check(time.Now())
+	for _, u := range watch.unsent {
+		n.usage <- u
+	}
 	// claude の process が終わった後に読むので、claude が書く result の行はそろっている
 	result.ResultSummary, err = watch.lastResult()
 	if err != nil {
@@ -278,10 +286,10 @@ func (r Runner) render(job Job, workspacePath string) (action, promptFile string
 
 // wait は起動した claude が終わるか、止められるか、stall か上限時間で止めるまで待つ。止めようとして SIGKILL を送れず
 // claude が終わっていなければ、unstopped で知らせてから claude が終わるまで待つ。
-func (r Runner) wait(cmd *exec.Cmd, run *Run, w *streamWatch, unstopped func(stopError string, exited <-chan struct{})) Result {
+func (r Runner) wait(cmd *exec.Cmd, run *Run, w *streamWatch, n notices) Result {
 	group := proc.Watch(cmd)
 	ticker := time.NewTicker(watchInterval)
-	result, ended := watch(group.Done(), run, w, ticker.C)
+	result, ended := watch(group.Done(), run, w, ticker.C, n.usage)
 	ticker.Stop()
 	if ended {
 		// 子が自分で終わった。group に残った孫は Watch が止めたので、止められなかった理由だけを拾う
@@ -301,7 +309,7 @@ func (r Runner) wait(cmd *exec.Cmd, run *Run, w *streamWatch, unstopped func(sto
 		return r.exited(cmd, stopError(result, err))
 	default:
 		// SIGKILL を送れず claude はまだ終わっていない。Group.Done は claude が終われば閉じるので、知らせてから待ち続ける
-		unstopped(stopError(Result{}, err).StopError, group.Done())
+		n.unstopped(stopError(Result{}, err).StopError, group.Done())
 		<-group.Done()
 		// 送れなかった理由は知らせが運んだので、終わりには claude が終わった後に孫を止められなかった理由だけを載せる
 		_, err = group.Stop(stopGrace)
@@ -322,14 +330,23 @@ func stopError(result Result, err error) Result {
 }
 
 // watch は claude が終わるまで待つ (ended が true)。先に止める理由ができたら、その理由を持った result を返す。
-// ticks が届くたびに、その時刻で stream を確かめ、活動を更新し、確認が返した理由で止める。
-func watch(done <-chan struct{}, run *Run, w *streamWatch, ticks <-chan time.Time) (result Result, ended bool) {
+// ticks が届くたびに、その時刻で stream を確かめ、活動を更新し、確認が返した理由で止める。読んだ使用率は usage が受けられるときに
+// 渡す。loop が tick の中で受けられなくても確認を止めない。渡せなかった分は w.unsent に残る。
+func watch(done <-chan struct{}, run *Run, w *streamWatch, ticks <-chan time.Time, usage chan<- Event) (result Result, ended bool) {
 	for {
+		// 渡すものが無ければ nil の channel にして、select のこの枝を外す
+		var send chan<- Event
+		var next Event
+		if len(w.unsent) > 0 {
+			send, next = usage, w.unsent[0]
+		}
 		select {
 		case <-done:
 			return Result{}, true
 		case <-run.stop:
 			return Result{Stopped: true}, false
+		case send <- next:
+			w.unsent = w.unsent[1:]
 		case now := <-ticks:
 			seen := w.check(now)
 			if seen.changed {
