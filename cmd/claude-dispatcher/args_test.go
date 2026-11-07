@@ -77,7 +77,7 @@ func globalFlagsWhere(t *testing.T, want bool) []string {
 	return spellings
 }
 
-func TestGlobalFlagDeclaredAfterCommandActsAfterACommandAsInPlaceOfIt(t *testing.T) {
+func TestGlobalFlagDeclaredAfterCommandActsAloneAfterACommandAsInPlaceOfIt(t *testing.T) {
 	// Options 節が示す位置 (afterCommand) と振る舞いが同じ宣言から決まる
 	for _, spelling := range globalFlagsWhere(t, true) {
 		t.Run(spelling, func(t *testing.T) {
@@ -87,7 +87,7 @@ func TestGlobalFlagDeclaredAfterCommandActsAfterACommandAsInPlaceOfIt(t *testing
 			}
 			var stdout, stderr bytes.Buffer
 
-			code := run([]string{"status", "--no-such-flag", spelling}, &stdout, &stderr)
+			code := run([]string{"status", spelling}, &stdout, &stderr)
 
 			if code != 0 || stdout.String() != want.String() || stderr.Len() != 0 {
 				t.Fatalf("command の後ろの %s が command の代わりと同じに振る舞わない: exit %d, stderr %q", spelling, code, stderr.String())

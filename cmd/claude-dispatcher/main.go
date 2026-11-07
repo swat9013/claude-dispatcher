@@ -86,10 +86,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stderr, usage)
 		return exitUsage
 	}
-	args = moveFlagAfterCommandToFront(args)
+	args = moveLoneFlagAfterCommandToFront(args)
 	switch {
-	case args[0] == helpFlag.word && len(args) > 1:
-		// guide の後ろの引数と同じく誤りにする (formats.md §10)
+	case isGlobalFlag(args[0]) && len(args) > 1:
+		// guide の後ろの引数と同じく誤りにする (formats.md §8・§10)
 		return usageError(stderr, "引数が多い: %s", args[1])
 	case helpFlag.accepts(args[0]):
 		fmt.Fprint(stdout, usage)
@@ -130,8 +130,9 @@ func runGuide(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+// usageError は誤りの行の後ろに usage を stderr へ出す。誤りの行は引数の値を含むので、制御文字を残さず 1 行にする。
 func usageError(stderr io.Writer, format string, args ...any) int {
-	fmt.Fprintf(stderr, format+"\n%s", append(args, usage)...)
+	fmt.Fprintf(stderr, "%s\n%s", printable.Line(fmt.Sprintf(format, args...)), usage)
 	return exitUsage
 }
 

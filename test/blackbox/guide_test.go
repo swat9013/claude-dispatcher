@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"unicode"
 )
 
 // `guide` と、案内を指す行 (formats.md §9・§2.8)。
@@ -105,8 +106,27 @@ func TestUsageWithoutArgumentsGoesToStderrWithExit2(t *testing.T) {
 	}
 }
 
-func TestHelpFlagAfterAnyCommandPrintsTheSameUsageWithoutReadingTheRest(t *testing.T) {
-	// command の後ろの -h・--help は command と他の flag・引数を読まない (formats.md §10)。読めば誤りになる引数を前に置く
+func TestHelpSpellingWrittenAloneInPlaceOfACommandPrintsTheSameUsage(t *testing.T) {
+	s := newSandbox(t)
+	want := s.run("--help")
+	assertExit(t, want, 0)
+	if want.stderr != "" {
+		t.Fatalf("--help が stderr に出した: %q", want.stderr)
+	}
+	for _, spelling := range []string{"-h", "help"} {
+		t.Run(spelling, func(t *testing.T) {
+			r := s.run(spelling)
+
+			assertExit(t, r, 0)
+			if r.stdout != want.stdout || r.stderr != "" {
+				t.Fatalf("--help と同じ一覧を stdout だけに出していない: stderr = %q\nstdout:\n%s", r.stderr, r.stdout)
+			}
+		})
+	}
+	s.assertNoGh("単独の -h・--help・help は")
+}
+
+func TestHelpFlagWrittenAloneAfterAnyCommandPrintsTheSameUsage(t *testing.T) {
 	s := newSandbox(t)
 	want := s.run("--help")
 	commands := regexp.MustCompile(`(?m)^  ([a-z-]+) `).FindAllStringSubmatch(usageSection(t, want.stdout, "Commands"), -1)
@@ -116,7 +136,7 @@ func TestHelpFlagAfterAnyCommandPrintsTheSameUsageWithoutReadingTheRest(t *testi
 	for _, c := range commands {
 		for _, spelling := range []string{"-h", "--help"} {
 			t.Run(c[1]+" "+spelling, func(t *testing.T) {
-				r := s.run(c[1], "--no-such-flag", "extra", spelling)
+				r := s.run(c[1], spelling)
 
 				assertExit(t, r, 0)
 				if r.stdout != want.stdout || r.stderr != "" {
@@ -128,16 +148,52 @@ func TestHelpFlagAfterAnyCommandPrintsTheSameUsageWithoutReadingTheRest(t *testi
 	s.assertNoGh("command の後ろの -h・--help は")
 }
 
-func TestHelpWithAnArgumentIsAnArgumentErrorFollowedByTheUsage(t *testing.T) {
+func TestHelpOrVersionWrittenWithOtherArgumentsIsAnArgumentErrorFollowedByTheUsage(t *testing.T) {
+	// exit 0 を完了と読む呼び出し側で、他の引数と一緒の値が -h になっても完了に見せない (formats.md §10)
+	s := newSandbox(t)
+	usage := s.run("--help")
+	for _, c := range []struct {
+		args []string
+		// names は誤りの行が名指しする語
+		names string
+	}{
+		{[]string{"--help", "extra"}, "extra"},
+		{[]string{"-h", "extra"}, "extra"},
+		{[]string{"help", "extra"}, "extra"},
+		{[]string{"--version", "extra"}, "extra"},
+		{[]string{"--version", "-h"}, "-h"},
+		{[]string{"-h", "--version"}, "--version"},
+		{[]string{"run", "-h", "issue#1"}, "-h は他の引数と一緒に書けない"},
+		{[]string{"run", "a", "issue#1", "W", "x", "-h"}, "x"},
+		{[]string{"loop", "--max-concurrent", "-h"}, "--max-concurrent"},
+		{[]string{"setup", "--host", "-h"}, "--host"},
+		{[]string{"guide", "x", "-h"}, "x"},
+		{[]string{"max-concurrent", "2", "-h"}, "-h は他の引数と一緒に書けない"},
+	} {
+		t.Run(strings.Join(c.args, " "), func(t *testing.T) {
+			r := s.run(c.args...)
+
+			assertExit(t, r, 2)
+			errLine, rest, _ := strings.Cut(r.stderr, "\n")
+			if r.stdout != "" || !strings.Contains(errLine, c.names) || rest != usage.stdout {
+				t.Fatalf("誤りの行の後ろに同じ一覧を stderr に出していない: stdout = %q\nstderr:\n%s", r.stdout, r.stderr)
+			}
+		})
+	}
+	s.assertNoGh("help の綴りや --version を他の引数と一緒に書いたのに")
+}
+
+func TestArgumentErrorLineStaysOneLineWhenTheArgumentHoldsControlCharacters(t *testing.T) {
+	// 誤りの行の制御文字は空白に置き換える (formats.md §10)
 	s := newSandbox(t)
 	usage := s.run("--help")
 
-	r := s.run("help", "loop")
+	r := s.run("--version", "a\nb\x1b]0;x\x07")
 
 	assertExit(t, r, 2)
 	errLine, rest, _ := strings.Cut(r.stderr, "\n")
-	if r.stdout != "" || !strings.Contains(errLine, "loop") || rest != usage.stdout {
-		t.Fatalf("誤りの行の後ろに同じ一覧を stderr に出していない: stdout = %q\nstderr:\n%s", r.stdout, r.stderr)
+	if strings.ContainsFunc(errLine, unicode.IsControl) || rest != usage.stdout {
+		t.Fatalf("誤りの行が制御文字を残している: %q", r.stderr)
 	}
 }
 
