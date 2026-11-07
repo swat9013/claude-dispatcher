@@ -59,7 +59,7 @@ workflow 定義に誤りがあれば、試運転・`loop` の起動・`doctor` �
 - `claude-dispatcher loop --max-concurrent <N>` で、その loop の並列上限 (同時に走らせる worker の上限) を決める (1 以上の整数。省けば 1)。並列上限は loop を回すマシンで決まる値なので、`WORKFLOW.md` には書かない (書くと未知の key として検査に落ちる)
   - loop を回したまま変えるなら、別の端末で `claude-dispatcher max-concurrent <N>` を撃つ。次の tick から効き、loop を止めるまで続く。走っている worker の数より下げても、走っている worker は止めず、空きが出るまで新しい起動を待つ。loop が立っていなければ何も書かずに exit 1 で終わる
   - loop を起動し直すと、`max-concurrent` で変えた値は消え、`--max-concurrent` の値 (省けば 1) から始まる
-- `claude-dispatcher loop --max-five-hour-usage <P> --max-weekly-usage <P>` で、Claude の usage limit の使用率の閾値 (百分率) を決める。どちらかが閾値以上になると、loop は新しい worker の起動と再起動を止める。走っている worker は完走し、枠のリセット時刻を過ぎると自動で再開する。省いた枠には閾値を置かない。`WORKFLOW.md` には書かない
+- `claude-dispatcher loop --max-five-hour-usage <P> --max-weekly-usage <P>` で、Claude の usage limit の使用率の閾値 (百分率) を決める。どちらかが閾値以上になると、loop は新しい worker の起動と再起動を止める。走っている worker は完走し、枠のリセット時刻を過ぎると自動で再開する。省いた枠の閾値は 100%。`WORKFLOW.md` には書かない
   - 使用率は worker の stream から読むので、loop の起動後の最初の worker は閾値を見ずに起動する。単発起動 (`run`) には効かない。API key など使用率が届かない環境では閾値は効かず、`status` の使用率は `未観測` のまま
 - 同じ issue 置き場の loop は、同じマシンで 1 本しか起動できない (2 本目と、`run` が走っている間の loop は exit 3 で止まる)。マシンを跨いで分け合うなら `coordination.remote` を書く (上の「導入の流れ」の 2)。書かなければマシンを跨いだ排他は持たないので、1 つの issue 置き場は 1 台から回す
 - `coordination.remote` を書いた project では、loop の起動時に coordination board の remote を解いて読めて、生存報告を置けることを確かめる。落ちれば exit 1 で起動しない

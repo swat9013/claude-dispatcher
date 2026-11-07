@@ -282,7 +282,7 @@ claude-dispatcher loop [--max-concurrent <N>] [--max-five-hour-usage <P>] [--max
 - `--max-concurrent <N>` は、loop の起動時の並列上限 (`system.md` §8)。省けば 1。`--max-concurrent 3` の形でも `--max-concurrent=3` の形でも書ける。値が無い (flag の直後が `-` で始まるときを含む)・値が空・2 回書いた・1 以上の整数でないときは引数の誤り (exit 2)
   - 走っている間は `max-concurrent` (§13) で変えられる。`max-concurrent` で渡した値は、この引数より優先する
   - 本節と §4 の並列上限は、`max-concurrent` で渡した値があればその値、無ければこの引数の値 (省けば 1)
-- `--max-five-hour-usage <P>`・`--max-weekly-usage <P>` は、usage limit の閾値 (`system.md` §7 の「admission control」)。1 以上 100 以下の整数の百分率。省いた window には閾値を置かない。書き方と引数の誤りは `--max-concurrent` と同じ (exit 2)
+- `--max-five-hour-usage <P>`・`--max-weekly-usage <P>` は、usage limit の閾値 (`system.md` §7 の「admission control」)。1 以上 100 以下の整数の百分率。省けば 100。書き方と引数の誤りは `--max-concurrent` と同じ (exit 2)
 
 **起動時の検査** (落ちたら stderr に理由を出して終わる):
 
@@ -613,7 +613,7 @@ loop の今の状態を、表示のためだけに書き出す (system.md §9)�
 | `taken_over` | この loop が着手宣言を乗っ取られた作業対象 (`target`) と、見たときの持ち主の loop 名 (`by`。消えていたら空文字列、持ち主の loop を読めなければ `?`)。loop を起動し直すまで残す。coordination board を指した project だけ |
 | `heartbeat_failures` | 生存報告の置き直しが 2 回以上続けて落ちている間だけ、続けて落ちた回数 (`count`) と直近の理由 (`error`)。置き直せたら無くなる |
 | `newer_format` | 直近の tick で、coordination board に自分の知る版より新しい版の ref を見た間だけ、見た版 (`format`。版を読めなければ `null`)。この間はその scope で worker を起動しない |
-| `usage` | window (`five_hour`・`seven_day`) ごとの直近の観測 (`utilization`・`resets_at`。無ければ `null`) と閾値 (`threshold`。渡していなければ `null`)、admission control が閉じているか (`closed`)、再開の時刻 (`reopen_at`。閉じていなければ `null`)、読めない event を見たか (`unreadable`)。この key を足す前の版が書いた状態 file には無い |
+| `usage` | window (`five_hour`・`seven_day`) ごとの直近の観測 (`utilization`・`resets_at`。無ければ `null`) と閾値 (`threshold`)、admission control が閉じているか (`closed`)、再開の時刻 (`reopen_at`。閉じていなければ `null`)、読めない event を見たか (`unreadable`)。この key を足す前の版が書いた状態 file には無い |
 
 ### 7.2 `status`
 
@@ -645,7 +645,7 @@ orphan issue#45: 前の loop の claude がまだ動いている。終わるの�
 
 - 見出しは 3 行まで。1 行目は loop の状態と scope key と版: loop が生きていれば `● loop 稼働中` (停止要求の後は `● loop 停止待ち`)、`alive.lock` を取れれば `○ loop なし`。版は scope key に続けて ` · <version>` (状態 file の `version`) を出す。commit は出さない (状態 file と log.jsonl で読める)。`○ loop なし` のとき (状態 file の版は止まった loop のもの) と、状態 file に `version` が無いとき (版を足す前の版が書いた状態 file) は出さない
 - 2 行目は `次の tick <時刻>` (停止要求の後は `次の tick なし`)・`並列上限 <n>` (状態 file の `max_concurrent`)・`直近の tick <時刻> ok · 候補 <n>` を ` · ` で繋ぐ。直近の tick が error なら `直近の tick <時刻> error: <理由>`。`loop なし` のときは次の tick と並列上限の欄を出さない。状態 file に `max_concurrent` が無ければ (足す前の版が書いた状態 file) 並列上限の欄を出さない。出す欄が無ければ 2 行目を出さない
-- 3 行目は usage limit の使用率: `使用率 5 時間 41% · 週 81% (閾値 80%) · 起動を止めている · 11/14 07:00 に再開`。閾値を渡した window にだけ `(閾値 <n>%)` を付け、閉じている間だけ後ろの 2 欄を出す。観測の無い window は `未観測`。`loop なし` のときは出さない
+- 3 行目は usage limit の使用率: `使用率 5 時間 41% · 週 81% (閾値 80%) · 起動を止めている · 11/14 07:00 に再開`。閾値が 100 でない window にだけ `(閾値 <n>%)` を付け、閉じている間だけ後ろの 2 欄を出す。観測の無い window は `未観測`。`loop なし` のときは出さない
 - `loop なし` のときは見出しだけを出す (状態 file が残っていても、worker と打ち切りは loop の memory と一緒に消えている)。段階が `unstopped` の claim も描かない: 状態 file は止まった loop が最後に書いた記録で、その後に claude が終わったかを `status` は確かめられない (生死を確かめられるのは worker log の flock だけで、§6 の orphan)。終わった claude の pid を今のものとして描くと、古い状態を今のものと読ませる。残った claude の pid と workspace は、log.jsonl の §6 の `error` の行 (`claude を止められないまま止まる`) で読む
 - 状態 file が無ければ、見出しの 2 行目は `記録なし`
 - 見出しの後に空行を挟み、セクションを空行で区切って並べる。セクションの 1 行目はセクション名と件数の後に罫線を引く

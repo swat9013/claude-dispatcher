@@ -295,7 +295,7 @@ Cockburn『ユースケース実践ガイド』(Writing Effective Use Cases) の
 - **Scope**: dispatcher (機械システム)
 - **Level**: user-goal (sea)
 - **Trigger**: 走っている worker の stream が、閾値以上の使用率を届けた
-- **事前条件**: 閾値を渡した loop が走っている
+- **事前条件**: loop が走っている
 - **成功保証**: 閾値以上の間は新しい worker が起動しない。走っている worker は完走する。リセット時刻を過ぎると、人の操作なしに起動が再開する。止めた理由と再開の時刻が画面と `status` に残る
 
 **Main Success Scenario**

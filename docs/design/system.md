@@ -260,18 +260,19 @@ SPEC §7・§8・§16 の状態機械を土台にする。claim の段階と打�
 
 **admission control**。loop が人の知らない間に token を消費し続けないよう、usage limit の使用率が閾値に達したら、新しい worker の起動を見合わせる。閾値は loop の引数で渡す (§8)。
 
-- **観測**: loop は走っている worker の stream の `rate_limit_event` から、window (5 時間・週) ごとの使用率とリセット時刻を読み、window ごとに最新の値を memory に持つ。event に無い window は前の値のまま残す。閾値を渡していない loop も、画面に出すために読む
+- **観測**: loop は走っている worker の stream の `rate_limit_event` から、window (5 時間・週) ごとの使用率とリセット時刻を読み、window ごとに最新の値を memory に持つ。event に無い window は前の値のまま残す
 - **閉じる条件**: リセット時刻がまだ来ていない最新の観測で、どれかの window の使用率が閾値以上なら閉じている。閉じている間は候補の起動と再起動をしない。走っている worker は止めない (手順 1 と同じく、worker は終端でだけ止める)。そのため使用率は、走っている worker の分だけ閾値を超えうる
 - **解ける**: 閾値以上の window のリセット時刻を過ぎると、人の操作なしに解ける。閉じている間は worker が走らず新しい観測が来ないので、最後に読んだリセット時刻で決める
 - **観測が無いとき**: event がまだ来ていない window は未観測で、閉じない。API key や Bedrock など event の来ない環境と区別できないので、分岐しない。loop の起動後の最初の worker は、使用率を知らずに起動する
-- **読めない event**: どの window も読めない `rate_limit_event` を見たら、閾値を渡した loop は閉じて要対処に出す。閾値が黙って効かなくなるのを防ぐため。読める event が来るか、loop を起動し直すと解ける
+- **読めない event**: どの window も読めない `rate_limit_event` を見たら、loop は閉じて要対処に出す。閾値が黙って効かなくなるのを防ぐため。読める event が来るか、loop を起動し直すと解ける
 - **loop ごとに判定する**: 観測はほかの loop と共有しない。event の値はアカウント全体の使用率なので、どの loop も自分の worker の次の event で閾値に気づく
 - **単発起動には当てない**: 人が作業対象を指名して 1 回だけ起動するので、知らない間の消費に当たらない
 - 却下: `/usage` の文章を tick ごとに読む。理由: 文言や locale の変更で黙って壊れる
 - 却下: 非公開の `/api/oauth/usage` を読む。理由: 公式の支持が無い
 - 却下: 閾値で loop の process を止める。理由: loop は自分では起き直さず (§9)、5 時間の window がリセットしても再開しない
 - 却下: 観測を state root に置いて loop の間で共有する。理由: 減らせる超過は worker 1 本分で、scope key の外に状態を持つ重さに見合わない
-- 見直し条件: 閾値を渡した loop の `admission_close` の行の、使用率と閾値の差。5 ポイントを超える行が出たら、stream だけで観測し loop の間で共有しない決定を見直す
+- 却下: 閾値の既定を置かない。理由: 引数を付け忘れた loop が、上限に達しても起動を続ける
+- 見直し条件: loop の `admission_close` の行の、使用率と閾値の差。5 ポイントを超える行が出たら、stream だけで観測し loop の間で共有しない決定を見直す
 - 見直し条件: 閾値を 95 以下で渡した loop の worker log の、`status` が `rejected` の `rate_limit_event` の件数。1 件でも出たら、走っている worker を止めない決定を見直す
 
 **worker の 1 回分**。
@@ -361,7 +362,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。claim の段階と打�
   - loop は tick の手順 2 (§7) でこの値を読み、次の tick から新しい値で空きを判定する。新しい値を採った tick で、ログの行に前の値と新しい値を 1 行出す。loop を起こして tick を早めることはしない
   - loop は起動時にこの値を消す。落ちた loop が残した値を、次の loop に継がない
   - 走っている worker の数より下げても、走っている worker は止めない。空きが出るまで、新しい起動と再起動を待つ (§7 の手順 1 と同じく、worker は終端でだけ止める)
-  - usage limit の閾値は、loop の起動時に引数 (`--max-five-hour-usage`・`--max-weekly-usage`) で window ごとに百分率で受ける。省いた window には閾値を置かない。usage limit はアカウントごとに決まり、どこまで使うかは利用者の運用方針なので、既定の値を持たない。走っている間は変えない (変えるなら loop を起動し直す)
+  - usage limit の閾値は、loop の起動時に引数 (`--max-five-hour-usage`・`--max-weekly-usage`) で window ごとに百分率で受ける。省いた window の閾値は 100 にする。上限に達した window では起動しない。usage limit はアカウントごとに決まるので、手前で止めるかは利用者が引数で決める。走っている間は変えない (変えるなら loop を起動し直す)
 - **本文は共通 prompt**
 - **秘密は `$VAR` で間接参照する**。値そのものは書かない (SPEC §5.3.1)
   - loop は、起動した shell の環境変数を引き継ぐ
@@ -416,7 +417,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。claim の段階と打�
 - **loop の画面が第一の観測点**
   - 見出し・`workers`・`要対処`・`ログ` のセクションに分けて描き直す
   - 見出しは loop の状態 (稼働中・停止待ち) と scope key と loop の binary の版、並列上限、次の tick の時刻、直近の tick の結果と error
-  - 見出しに usage limit の使用率を出す。閉じている間は、理由と再開の時刻も出す。閾値を渡していない loop でも使用率は出す
+  - 見出しに usage limit の使用率を出す。閉じている間は、理由と再開の時刻も出す
   - `workers` は claim の表 (作業対象・trigger・attempt・段階・経過・stream の最新の活動)。最新の活動は表の列で見るので、`ログ` には活動の行を出さない
   - `要対処` は人の手当てを待つもの (打ち切り・曖昧な CL・起動しない trigger・止められない worker (SIGKILL を送れず claude が終わっていない claim。段階は unstopped)・orphan・読めない `rate_limit_event`)。無ければ出さない
   - stdout が端末のときだけ色を付ける。`status` も同じ描画を使う
