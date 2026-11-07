@@ -291,7 +291,7 @@ Cockburn『ユースケース実践ガイド』(Writing Effective Use Cases) の
 - **4b.** 運用者が loop を起動し直した
   - 4b1. loop は起動時に前の値を消し、起動時の引数の値 (省けば 1) から始める
 
-## UC-10 usage limit の閾値で worker の起動を見合わせる
+## UC-10 usage limit の閾値で admission control を閉じる
 
 - **Primary Actor**: 人間 (loop を起動した運用者)
 - **Scope**: dispatcher (機械システム)
@@ -304,7 +304,7 @@ Cockburn『ユースケース実践ガイド』(Writing Effective Use Cases) の
 
 1. dispatcher が worker の stream から、window ごとの使用率とリセット時刻を読む
 2. dispatcher が閾値以上の window を見つけ、admission control を閉じてログの行に残す
-3. dispatcher が候補の起動と再起動を見合わせ、走っている worker は走らせ続ける
+3. dispatcher が候補の起動と再起動を止め、走っている worker は走らせ続ける
 4. 運用者が画面か `status` で、理由と再開の時刻を読む
 5. リセット時刻を過ぎた tick で、dispatcher が admission control を解いてログの行に残す
 6. dispatcher が空いている分だけ起動を再開する

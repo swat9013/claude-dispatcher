@@ -29,7 +29,7 @@ Claude の契約が 5 時間と週の window ごとに決める使用量の上�
 _Avoid_: rate limit (tracker の rate limit と紛れる), token 制限 (上限は token 数ではなく使用率で届く), quota (Claude の docs の語でなく、意味が広い)
 
 **admission control**:
-loop が usage limit の使用率を閾値と比べ、新しい worker の起動と再起動を見合わせる判定。走っている worker は止めず、loop も回り続け、window のリセット時刻を過ぎると解ける。
+loop が usage limit の使用率を閾値と比べ、新しい worker の起動と再起動を止める判定。走っている worker は止めず、loop も回り続け、window のリセット時刻を過ぎると解ける。
 _Avoid_: 起動の見合わせ・launch hold (定義なしでは意味が定まらない), throttling (速度を絞る語で、起動を完全には止めない), circuit breaker (下流の障害の遮断に定着した語), 停止要求 (loop の process を止める別の操作)
 
 **tick**:
