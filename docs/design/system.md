@@ -304,6 +304,7 @@ SPEC §7・§8・§16 の状態機械を土台にする。claim の段階と打�
   - workspace を消せなかったときは error として log に残し、次の tick で消し直す
 - **workspace root は 1 つの scope key が専有する**。掃除は root の下をすべて自分の project のものとして読むので、別の scope key の loop と共有すると、相手の workspace を終端と読んで消しうる
   - loop は起動時に `<workspace root>/.scope-key` を読み、無ければ自分の scope key を書く。別の scope key が書いてあれば、起動せずに失敗する。試運転と `doctor` は読むだけで書かず、別の scope key なら同じく失敗する
+  - `.scope-key` が無い root に、自分の worker log の無い workspace があれば、別の project のものと読み、書かずに起動を失敗させる。自分の workspace は起動の前に worker log を開くので、必ず worker log がある
   - 決定の理由と退けた案は ADR 0032
 - **作り方は hooks に任せる**
   - issue なら branch を切った worktree、CL なら head を detach で checkout した worktree、など

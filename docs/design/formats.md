@@ -300,6 +300,7 @@ claude-dispatcher loop [--max-concurrent <N>] [<workflow の path>]
 - よく使われる置き場は、workflow 定義が撃つ依存 CLI (`tracker.kind` の CLI・`cl.kind` の CLI・claude・git) のどれかが PATH に無いときだけ PATH の前に足す。使わない置き場の CLI が無いことでは PATH を書き換えない (worker と hooks は loop の PATH を継ぐので、足すと worker が撃つ git などが入れ替わりうる)
 - 同じ issue 置き場の 2 本目の loop は、clone や workflow 定義の path が違っても起動時に止まる
 - `.scope-key` の中身は scope key の 1 行。別の scope key が書いてあれば、`workspace.root <path> は scope key <書いてある scope key> が使っている` と名指しして終わる。中身が空の file は読めないときと同じに扱う。project key を改名したら、`.scope-key` を消して起動し直す。別の issue 置き場へ移すなら、`.scope-key` を消さずに `workspace.root` を別の dir に直す (番号が別の作業対象を指すので、残った workspace を終端と読んで消しうる)
+- `.scope-key` が無く、root の下に自分の state dir の worker log が無い作業対象の dir があれば、`workspace.root <path> に別の project の workspace <作業対象> がある` と名指しして exit 2 で終わる。その dir を移すか、`workspace.root` を別の dir に直す。試運転 (§5) は同じく exit 2、`doctor` (§7.4) は同じ文の `NG` の行を出す
 - `jira` の issue 置き場の確認は、次の順に撃ち、最初に落ちたもので終わる。試運転 (§5) と `doctor` (§7.4) も同じ確認を通す
   1. acli の認証の site: `acli jira auth status` が通り (落ちれば認証の失敗、exit 4)、出力の `Site:` の行の site が `tracker.host` と同じ (大文字と小文字を区別しない)。違うか `Site:` の行を読めなければ exit 2。acli は呼び出しごとに site を指定できず、active な account の site を読むため
   2. open な一覧 (`project = "<project key>" AND statusCategory != Done`) を読める。落ちたら §3 の acli の分類で、認証 (exit 4) か見えない (exit 2)。試運転 (§5) は、ここで読んだ一覧を snapshot に使う

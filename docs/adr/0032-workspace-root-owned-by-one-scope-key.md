@@ -25,6 +25,6 @@
 
 ### 悪い影響 / 制約
 
-- `.scope-key` の無い root は最初に起動した loop のものになる。この決定の前から共有していた root では、この検査は相手の workspace を守らない
+- `.scope-key` の無い root は、自分の worker log の無い workspace が無ければ、最初に起動した loop のものになる。両方の project に同じ番号の worker log があると、この検査は見逃す。state dir を手で消すと、自分の workspace でも起動を拒む
 - project key を改名したら `.scope-key` を手で消す。別の issue 置き場へ移すなら `workspace.root` を別の dir に直す
 - 見直し条件は置かない。起きるのは設定の誤りの 1 回ごとで、実行の記録から決定の良し悪しを言える量が無い
