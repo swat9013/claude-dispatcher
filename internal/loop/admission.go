@@ -9,7 +9,7 @@ import (
 )
 
 // admission control (system.md §7、formats.md §6): worker の stream が届けた usage limit の使用率が閾値以上なら、候補の起動と
-// 再起動を見合わせる。走っている worker は止めない。観測は loop の memory だけに持つ。
+// 再起動を止める。走っている worker は止めない。観測は loop の memory だけに持つ。
 
 // UsageThresholds は usage limit の window ごとの閾値 (百分率)。
 type UsageThresholds struct {
@@ -57,8 +57,9 @@ type admission struct {
 	fiveHour, sevenDay usageWindow
 	// unreadable は、直近の rate_limit_event がどの window も読めなかったか
 	unreadable bool
-	// closed は admission_close と admission_open のどちらを最後に書いたか (閉じたなら true)
-	closed bool
+	// closed と reopenAt は直近の判定の結果。状態 file もこれを出すので、log.jsonl の行と食い違わない
+	closed   bool
+	reopenAt *time.Time
 }
 
 func newAdmission(t UsageThresholds) admission {
@@ -91,33 +92,31 @@ func (a *admission) blocking(now time.Time) *usageWindow {
 	return later
 }
 
-// shut は now の時点で閉じているか。
-func (a *admission) shut(now time.Time) bool { return a.unreadable || a.blocking(now) != nil }
-
 // snapshot は状態 file の usage。
 func (a *admission) snapshot(now time.Time) *status.Usage {
-	s := &status.Usage{
+	return &status.Usage{
 		FiveHour: a.fiveHour.statusWindow(now), SevenDay: a.sevenDay.statusWindow(now),
-		Closed: a.shut(now), Unreadable: a.unreadable,
+		Closed: a.closed, ReopenAt: a.reopenAt, Unreadable: a.unreadable,
 	}
-	if w := a.blocking(now); w != nil && !a.unreadable {
-		s.ReopenAt = &w.latest.ResetsAt
-	}
-	return s
 }
 
-// admissionClosed は今 admission control が閉じているかを返す。閉じたか解けたときだけ、そのことを 1 行残す。
-func (l *loop) admissionClosed() bool {
+// judgeAdmission は admission control を判定し、結果を記憶して、閉じているかを返す。閉じたか解けたときだけ、そのことを 1 行残す。
+func (l *loop) judgeAdmission() (closed bool) {
 	now := l.o.Now()
-	shut := l.admission.shut(now)
+	a := &l.admission
+	blocking := a.blocking(now)
+	closed = a.unreadable || blocking != nil
 	switch {
-	case shut && !l.admission.closed:
+	case closed && !a.closed:
 		l.logAdmissionClose(now)
-	case !shut && l.admission.closed:
+	case !closed && a.closed:
 		l.rec.event("admission_open", map[string]any{}, LineNote, "起動を再開する", "")
 	}
-	l.admission.closed = shut
-	return shut
+	a.closed, a.reopenAt = closed, nil
+	if blocking != nil && !a.unreadable {
+		a.reopenAt = &blocking.latest.ResetsAt
+	}
+	return closed
 }
 
 // logAdmissionClose は閉じた理由の行を書く。読めない event はリセットを待っても解けないので、使用率より先に出す。

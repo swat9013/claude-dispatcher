@@ -304,7 +304,7 @@ func TestHeadingShowsAWindowWithoutAnObservationAsUnobserved(t *testing.T) {
 	}
 }
 
-func TestHeadingShowsTheReopenTimeWhileLaunchesAreHeldBack(t *testing.T) {
+func TestHeadingShowsTheReopenTimeWhileAdmissionIsClosed(t *testing.T) {
 	u := usageOf(percent(41), percent(81), 100, 80)
 	u.Closed, u.ReopenAt = true, at(44*24*time.Hour+7*time.Hour)
 	s := status.Snapshot{Scope: "s", Usage: u}

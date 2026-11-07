@@ -61,7 +61,7 @@ func (l *loop) retry(store places.Store, v *view) {
 		// 進めるので、明けた予定で wake を置き直し続けない
 		return
 	}
-	closed := l.admissionClosed()
+	closed := l.judgeAdmission()
 	for ref, c := range l.claims {
 		if c.phase != phaseWaitingRetry || now.Before(c.retryAt) {
 			continue

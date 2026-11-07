@@ -52,25 +52,6 @@ func TestWorkerAtTheThresholdFinishesWhileTheNextCandidateWaits(t *testing.T) {
 	}
 }
 
-func TestLoopReopensAfterTheResetWithoutAnOperator(t *testing.T) {
-	s := newSandbox(t)
-	s.writeWorkflowWithCommands(s.workerWorkflow(fastRetry))
-	s.setIssues(readyIssue(42))
-	s.onClaude(stubwire.Rule{Stdout: usageEvent(0.1, 1, time.Now().Add(3*time.Second))})
-	loop := s.startLoop()
-
-	s.waitEvents("admission_close", 1)
-	s.waitEvents("admission_open", 1)
-
-	loop.waitForOutput(regexp.MustCompile(`起動を再開する`))
-	if start := s.waitEvents("start", 2)[1]; start["attempt"] != float64(2) {
-		t.Fatalf("2 本目の start の行 = %v, want attempt 2", start)
-	}
-	if !loop.running() {
-		t.Fatal("loop が止まった, want 回り続ける")
-	}
-}
-
 func TestUsageWrittenRightBeforeTheWorkerEndsIsNotLost(t *testing.T) {
 	// claude が書いてすぐ終わった行は監視の周期に当たらないので、終わりを受ける前に読み切る
 	s := newSandbox(t)

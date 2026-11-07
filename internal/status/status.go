@@ -71,6 +71,9 @@ type UsageWindow struct {
 	Threshold   int        `json:"threshold"`
 }
 
+// DefaultUsageThreshold は usage limit の閾値の既定。見出しはこの値の閾値を出さない。
+const DefaultUsageThreshold = 100
+
 // ReopenText は再開の時刻を人が読む文。loop の画面と status が共に使う。
 func ReopenText(at time.Time, loc *time.Location) string {
 	return at.In(loc).Format("01/02 15:04") + " に再開"
@@ -314,14 +317,14 @@ func usageLine(u Usage, loc *time.Location) []Span {
 	return joinFields(fields)
 }
 
-// usageField は window 1 つの欄。閾値は 100 でないときだけ出す。
+// usageField は window 1 つの欄。閾値は既定と違うときだけ出す。
 func usageField(name string, w UsageWindow) []Span {
 	value := "未観測"
 	if w.Utilization != nil {
 		value = strconv.Itoa(*w.Utilization) + "%"
 	}
 	field := []Span{{Gray, name}, {Plain, value}}
-	if w.Threshold != 100 {
+	if w.Threshold != DefaultUsageThreshold {
 		field = append(field, Span{Gray, fmt.Sprintf(" (閾値 %d%%)", w.Threshold)})
 	}
 	return field

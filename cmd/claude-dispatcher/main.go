@@ -209,7 +209,7 @@ type loopOptions struct {
 	dryRun bool
 	// maxConcurrent は --max-concurrent の値。0 は渡されていない (1 以上しか受けない)
 	maxConcurrent int
-	// thresholds は usage limit の閾値。省いた window は 100
+	// thresholds は usage limit の閾値。省いた window は既定の値
 	thresholds loop.UsageThresholds
 }
 
@@ -232,11 +232,11 @@ func loopFlags(argv []string) (loopOptions, error) {
 	return o, nil
 }
 
-// usageThreshold は usage limit の閾値の flag の値。省けば 100 (system.md §8)。
+// usageThreshold は usage limit の閾値の flag の値。省けば既定の値 (system.md §8)。
 func usageThreshold(a parsedArgs, name string) int {
 	v := a.value(name)
 	if v == "" {
-		return 100
+		return status.DefaultUsageThreshold
 	}
 	n, err := parsePercentage(name, v)
 	if err != nil {

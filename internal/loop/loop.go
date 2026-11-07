@@ -419,7 +419,7 @@ func (l *loop) tick() {
 	l.report(l.coordination.ReleaseInherited(l.orphans))
 	l.sweep(store, ws, open, unclaimed)
 	l.retry(store, v)
-	closed := l.admissionClosed()
+	closed := l.judgeAdmission()
 	// 起動を始める前の数を tick の行にも載せる。起動した worker は走っている worker に加わるので、launched の数を足して判定する。
 	// orphan も claude が走り続けうるので並列の枠を使う
 	running, waitingRetry, orphans := l.running(), l.waitingRetry(), len(l.orphans)
@@ -828,8 +828,8 @@ func (l *loop) handle(ev worker.Event) {
 		}
 		l.apply(ev.Target, c, c.workerUnstopped(ev.StopError, ev.Exited))
 	case worker.UsageObserved:
+		// 判定は起動を試みるときにする (system.md §7)
 		l.admission.observe(ev)
-		l.admissionClosed()
 	case worker.Ended:
 		c, ok := l.claimOf(ev.Target)
 		if !ok {

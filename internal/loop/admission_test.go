@@ -15,7 +15,7 @@ import (
 	"github.com/swat9013/claude-dispatcher/internal/workflow"
 )
 
-// admission control (system.md §7、formats.md §6)。worker の stream が届けた使用率で、候補の起動と再起動を見合わせる。
+// admission control (system.md §7、formats.md §6)。worker の stream が届けた使用率で、候補の起動と再起動を止める。
 
 // usagePeriod は admission control の test の周期
 const usagePeriod = time.Hour
@@ -42,6 +42,8 @@ type usageLoop struct {
 	failing int
 	// periods は回す周期の数
 	periods int
+	// maxConcurrent は並列上限。0 なら 1
+	maxConcurrent int
 }
 
 // usageRun は回した loop の観測。
@@ -56,7 +58,7 @@ func (u usageLoop) run(t *testing.T) *usageRun {
 	if u.thresholds == (loop.UsageThresholds{}) {
 		u.thresholds = loop.UsageThresholds{FiveHour: 100, Weekly: 100}
 	}
-	def := workflow.Definition{Tracker: githubTracker, Interval: usagePeriod, MaxConcurrent: 1, MaxAttempts: 5, MaxRetryBackoff: 5 * time.Minute, Triggers: []trigger.Trigger{readyTrigger}}
+	def := workflow.Definition{Tracker: githubTracker, Interval: usagePeriod, MaxConcurrent: max(u.maxConcurrent, 1), MaxAttempts: 5, MaxRetryBackoff: 5 * time.Minute, Triggers: []trigger.Trigger{readyTrigger}}
 	r := &usageRun{rig: newRig()}
 	periods := 0
 	r.timer = func(kind timerKind, _ time.Duration) timing {
@@ -127,7 +129,7 @@ func (r *usageRun) lastUsage(t *testing.T) status.Usage {
 	return *last.Usage
 }
 
-func TestUsageAtTheThresholdHoldsBackTheNextCandidate(t *testing.T) {
+func TestUsageAtTheThresholdClosesAdmissionToTheNextCandidate(t *testing.T) {
 	r := usageLoop{
 		issues:     []int{1, 2},
 		thresholds: loop.UsageThresholds{FiveHour: 100, Weekly: 80},
@@ -140,7 +142,7 @@ func TestUsageAtTheThresholdHoldsBackTheNextCandidate(t *testing.T) {
 	}
 }
 
-func TestUsageBelowTheThresholdDoesNotHoldBackACandidate(t *testing.T) {
+func TestUsageBelowTheThresholdLeavesAdmissionOpen(t *testing.T) {
 	r := usageLoop{
 		issues:     []int{1, 2},
 		thresholds: loop.UsageThresholds{FiveHour: 100, Weekly: 80},
@@ -153,7 +155,7 @@ func TestUsageBelowTheThresholdDoesNotHoldBackACandidate(t *testing.T) {
 	}
 }
 
-func TestUsageThatEqualsAThresholdWithoutAnExactBinaryValueHoldsBackACandidate(t *testing.T) {
+func TestUsageThatEqualsAThresholdWithoutAnExactBinaryValueClosesAdmission(t *testing.T) {
 	// 0.57 × 100 は浮動小数で 57 に届かない
 	r := usageLoop{
 		issues:     []int{1, 2},
@@ -167,7 +169,7 @@ func TestUsageThatEqualsAThresholdWithoutAnExactBinaryValueHoldsBackACandidate(t
 	}
 }
 
-func TestDefaultThresholdHoldsBackACandidateOnlyAtTheLimit(t *testing.T) {
+func TestDefaultThresholdClosesAdmissionOnlyAtTheLimit(t *testing.T) {
 	below := usageLoop{issues: []int{1, 2}, usage: map[int][]worker.UsageObserved{1: {weekly(0.99, 100*time.Hour)}}, periods: 3}.run(t)
 	limit := usageLoop{issues: []int{1, 2}, usage: map[int][]worker.UsageObserved{1: {weekly(1, 100*time.Hour)}}, periods: 3}.run(t)
 
@@ -179,7 +181,7 @@ func TestDefaultThresholdHoldsBackACandidateOnlyAtTheLimit(t *testing.T) {
 	}
 }
 
-func TestEitherWindowAtItsThresholdHoldsBackACandidate(t *testing.T) {
+func TestEitherWindowAtItsThresholdClosesAdmission(t *testing.T) {
 	r := usageLoop{
 		issues:     []int{1, 2},
 		thresholds: loop.UsageThresholds{FiveHour: 50, Weekly: 100},
@@ -212,7 +214,7 @@ func TestClosingAndReopeningEachLeaveOneLine(t *testing.T) {
 	r := usageLoop{
 		issues:     []int{1, 2},
 		thresholds: loop.UsageThresholds{FiveHour: 100, Weekly: 80},
-		usage:      map[int][]worker.UsageObserved{1: {weekly(0.81, 150*time.Minute), weekly(0.82, 150*time.Minute)}},
+		usage:      map[int][]worker.UsageObserved{1: {weekly(0.8, 150*time.Minute), weekly(0.81, 150*time.Minute)}},
 		periods:    4,
 	}.run(t)
 
@@ -312,6 +314,19 @@ func TestReopenTimeIsTheLaterResetWhenBothWindowsAreAtTheirThresholds(t *testing
 	}
 }
 
+func TestEventsBetweenTwoJudgementsLeaveNoLine(t *testing.T) {
+	// 判定は起動を試みるときだけなので、次の判定までに読める event が届けば閉じない
+	r := usageLoop{
+		issues:  []int{1},
+		usage:   map[int][]worker.UsageObserved{1: {{}, weekly(0.2, 100*time.Hour)}},
+		periods: 1,
+	}.run(t)
+
+	if closes := r.logEvents(t, "admission_close"); len(closes) != 0 {
+		t.Fatalf("admission_close = %v, want 行は無い", closes)
+	}
+}
+
 func TestStatusFileCarriesTheObservationsAndTheReopenTimeWhileClosed(t *testing.T) {
 	r := usageLoop{
 		issues:     []int{1, 2},
@@ -392,13 +407,15 @@ func TestEventWithNoReadableWindowClosesAdmissionUntilALoopRestart(t *testing.T)
 }
 
 func TestReadableEventReopensAdmissionClosedByAnUnreadableOne(t *testing.T) {
+	// issue#1 の worker の終わりの判定で閉じた後、並んで走っていた issue#2 の worker が読める event を届ける
 	r := usageLoop{
-		issues:  []int{1, 2},
-		usage:   map[int][]worker.UsageObserved{1: {{}, weekly(0.2, 100*time.Hour)}},
-		periods: 3,
+		issues:        []int{1, 2, 3},
+		usage:         map[int][]worker.UsageObserved{1: {{}}, 2: {weekly(0.2, 100*time.Hour)}},
+		periods:       3,
+		maxConcurrent: 2,
 	}.run(t)
 
-	if got := r.launched(); !slices.Equal(got, []int{1, 2}) {
+	if got := r.launched(); !slices.Equal(got, []int{1, 2, 3}) {
 		t.Fatalf("起動 = %v, want 読める event で解ける", got)
 	}
 	if opens := r.logEvents(t, "admission_open"); len(opens) != 1 {

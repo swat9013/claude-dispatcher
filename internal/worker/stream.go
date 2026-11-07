@@ -48,6 +48,8 @@ type streamWatch struct {
 	readError string
 	// workspace は worker の workspace の path (活動の tool の入力の path を相対にする)
 	workspace string
+	// unsent は読んだ rate_limit_event の使用率のうち、loop へまだ渡していないもの (古い順)
+	unsent []UsageObserved
 }
 
 // observation は 1 回の確認の結果。
@@ -57,8 +59,6 @@ type observation struct {
 	changed  bool
 	// stop は止める理由 (stall・上限時間)。止めなければ ""
 	stop string
-	// usage は前の確認から完結した行の rate_limit_event の使用率 (古い順)
-	usage []UsageObserved
 }
 
 // newStreamWatch は、file の offset より後 (今の attempt が書く行) を started から見始める streamWatch。
@@ -109,7 +109,8 @@ func (w *streamWatch) read(now time.Time) observation {
 	if found {
 		w.progressed = now
 	}
-	return observation{activity: summary, changed: summarized, usage: usage}
+	w.unsent = append(w.unsent, usage...)
+	return observation{activity: summary, changed: summarized}
 }
 
 // unreadable は stream を読めなかった理由を活動にする。直前と同じ理由なら changed が false。
