@@ -7,7 +7,7 @@
 
 loop は候補がある限り worker を起動するので、人の知らない間に Claude の usage limit を消費する。2026-11-07 には週の使用率が 97% に達した後も起動が続き、リセットの直前に 100% に達して overage に入った (#499)。
 
-使用率は、走っている worker の stream の `rate_limit_event` で読める。閉じている間は worker が走らないので、新しい event が来ない。event の形式が変わると、どの window も読めない `rate_limit_event` になる。そこで閉じると、使用率が 0% でも無人の loop の起動が止まる。手元の worker log の 1,516 件に、読めない行は 0 件だった (#502)。
+使用率は、走っている worker の stream の `rate_limit_event` で読める。閉じている間は新しい worker を起動しないので、event は走っている worker からしか来ない。event の形式が変わると、どの window も読めない `rate_limit_event` になる。そこで閉じると、使用率が 0% でも無人の loop の起動が止まる。手元の worker log の 1,516 件に、読めない行は 0 件だった (#502)。
 
 ## Decision
 
