@@ -190,7 +190,7 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 | `taken_over` | 自分の着手宣言が乗っ取られていたのを見た (§12。走っている worker は止め、それ以外の claim は解く) | `target`・`trigger`・`by` (今の持ち主の loop 名。消えていたら空文字列、持ち主の commit message を読めなければ `?`) |
 | `dead_loop` | 他の loop を死んだとみなし、その生存報告と、乗っ取らなかった着手宣言を消した (§12。1 つの loop につき 1 行) | `loop` (死んだ loop の loop 名)・`refs` (消した ref の列) |
 | `slow_listing` | tick か loop の起動時の確認の open な一覧の読み出しが 15 秒を超えた (読み出し 1 回につき 1 行。いつ書くかは §6 の「遅い一覧」) | `kind` (`issue` / `cl`。読んだ置き場の種類)・`place` (置き場。綴りは画面の行の `<置き場>` と同じ) |
-| `admission_close` | admission control が閉じた (閉じるたびに 1 行) | `reason` (`usage` / `unreadable`)・`window` (`five_hour` / `seven_day`)・`utilization` (百分率)・`threshold`・`resets_at` (`reason` が `usage` のときだけ) |
+| `admission_close` | admission control が閉じた (閉じるたびに 1 行) | `reason` (`usage` / `unreadable`)・`window` (`five_hour` / `seven_day`。両方が閾値以上なら、リセットが遅い方)・`utilization` (整数の百分率)・`threshold`・`resets_at` (RFC 3339 の UTC。`window` 以降は `reason` が `usage` のときだけ) |
 | `admission_open` | admission control が解けた (1 行) | ほかの key は無い |
 | `error` | 処理は続けるが、運用者が知るべき失敗 | `target` (あれば)・`error` |
 
@@ -242,10 +242,10 @@ trigger fix-ci: action が template 変数で始まるので、先頭の skill �
 ## 5. 試運転 (`loop --dry-run`)
 
 ```
-claude-dispatcher loop --dry-run [--max-concurrent <N>] [<workflow の path>]
+claude-dispatcher loop --dry-run [--max-concurrent <N>] [--max-five-hour-usage <P>] [--max-weekly-usage <P>] [<workflow の path>]
 ```
 
-`--max-concurrent` は `loop` (§6) と同じ綴りと検査で受ける。試運転は並列上限に依らずに候補を出すので、渡しても出力は変わらない。
+`--max-concurrent`・`--max-five-hour-usage`・`--max-weekly-usage` は `loop` (§6) と同じ綴りと検査で受ける。試運転は並列上限と usage limit の閾値に依らずに候補を出すので、渡しても出力は変わらない。
 
 workflow 定義を読んで検査し、事前検査 (§2.9) を通し、snapshot を作って trigger を評価し、起動するはずの作業対象を示して終わる。**何も書かない** (state dir を作らず、lock も取らない)。coordination board (§12) も読みも書きもしないので、他のマシンの loop が持つ作業対象も示しうる。
 
@@ -613,7 +613,7 @@ loop の今の状態を、表示のためだけに書き出す (system.md §9)�
 | `taken_over` | この loop が着手宣言を乗っ取られた作業対象 (`target`) と、見たときの持ち主の loop 名 (`by`。消えていたら空文字列、持ち主の loop を読めなければ `?`)。loop を起動し直すまで残す。coordination board を指した project だけ |
 | `heartbeat_failures` | 生存報告の置き直しが 2 回以上続けて落ちている間だけ、続けて落ちた回数 (`count`) と直近の理由 (`error`)。置き直せたら無くなる |
 | `newer_format` | 直近の tick で、coordination board に自分の知る版より新しい版の ref を見た間だけ、見た版 (`format`。版を読めなければ `null`)。この間はその scope で worker を起動しない |
-| `usage` | window (`five_hour`・`seven_day`) ごとの直近の観測 (`utilization`・`resets_at`。無ければ `null`) と閾値 (`threshold`)、admission control が閉じているか (`closed`)、再開の時刻 (`reopen_at`。閉じていなければ `null`)、読めない event を見たか (`unreadable`)。この key を足す前の版が書いた状態 file には無い |
+| `usage` | window (`five_hour`・`seven_day`) ごとの直近の観測 (`utilization` は整数の百分率。`resets_at`。無いか、リセット時刻を過ぎていれば `null`) と閾値 (`threshold`)、admission control が閉じているか (`closed`)、再開の時刻 (`reopen_at`。閾値以上の window のうち遅い方のリセット時刻。閉じていないか、読めない event で閉じていれば `null`)、読めない event を見たか (`unreadable`)。この key を足す前の版が書いた状態 file には無い |
 
 ### 7.2 `status`
 
