@@ -786,6 +786,7 @@ func TestFailingBeforeRemoveHookIsLoggedAndTheWorkspaceIsStillRemoved(t *testing
 	s := newSandbox(t)
 	s.writeWorkflowWithCommands(regexp.MustCompile(`(?m)^  before_remove: .*$`).ReplaceAllString(s.workerWorkflow(""), "  before_remove: exit 6"))
 	mustMkdir(t, s.workspace(7))
+	mustWrite(t, s.scopeKeyFile(), defaultScopeKey+"\n")
 	closed := readyIssue(7)
 	closed.closed = true
 	s.setIssues(closed)
@@ -821,6 +822,7 @@ func TestWorkspaceIsRemovedUnderTheRootItWasCreatedInAfterTheRootChanges(t *test
 func TestLoopRemovesTheWorkspacesOfClosedIssuesWhenItStarts(t *testing.T) {
 	s := newSandbox(t)
 	s.writeWorkflowWithCommands(s.workerWorkflow(""))
+	mustWrite(t, s.scopeKeyFile(), defaultScopeKey+"\n")
 	mustMkdir(t, s.workspace(7))
 	mustMkdir(t, s.workspace(8))
 	closed := readyIssue(7)

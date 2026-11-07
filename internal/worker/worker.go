@@ -386,6 +386,16 @@ func workerFile(stateDir string, ref target.Ref) string {
 	return filepath.Join(stateDir, "workers", ref.FileName())
 }
 
+// Launched は、作業対象の worker log があるかを返す。worker log は hooks より前に開いて消さないので、この state dir の loop か
+// 単発起動が作った workspace には必ずある (system.md §7)。
+func Launched(stateDir string, ref target.Ref) (bool, error) {
+	_, err := os.Stat(LogFile(stateDir, ref))
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
 // Orphaned は、作業対象の worker log の flock を、前の loop が起動した claude (orphan) がまだ持っているかを返す
 // (system.md §7 の orphan)。claim している作業対象には使わない (loop 自身の worker の lock も持っているものと見える)。
 func Orphaned(stateDir string, ref target.Ref) (bool, error) {

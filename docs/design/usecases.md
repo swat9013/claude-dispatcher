@@ -165,6 +165,8 @@ Cockburn『ユースケース実践ガイド』(Writing Effective Use Cases) の
   - 6b1. CLI は 2 本目の loop を起動時に拒む。導入者は走っている loop の画面を見る
 - **6c.** tick が認証の失敗で止まる (起動した環境から認証を取れない。ssh 越しの session など)
   - 6c1. 導入者は認証を環境変数で渡して loop を起動し直す (`jira` は token を渡せないので、acli が認証を読めるようにしてから起動し直す。README の「前提」)
+- **6d.** `workspace.root` を別の issue 置き場の project が使っている
+  - 6d1. CLI は loop を起動時に拒む。導入者は workflow 定義の `workspace.root` を別の dir に直して loop を起動し直す
 
 ## UC-6 loop を止める
 

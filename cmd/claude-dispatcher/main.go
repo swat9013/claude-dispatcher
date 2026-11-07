@@ -183,10 +183,15 @@ func (e environment) stateDir(def workflow.Definition) (scopeKey, dir string) {
 	return scopeKey, state.Dir(state.Root(e.getenv), scopeKey)
 }
 
-// failureExit は観測の失敗の exit code (formats.md §3)。
+// failureExit は観測の失敗と workspace root の検査の失敗の exit code (formats.md §3)。
 func failureExit(err error) int {
 	var unknown *target.UnknownNames
 	if errors.As(err, &unknown) {
+		return exitUsage
+	}
+	var inUse *workspace.RootInUse
+	var foreign *workspace.ForeignWorkspace
+	if errors.As(err, &inUse) || errors.As(err, &foreign) {
 		return exitUsage
 	}
 	var f *target.Failure
@@ -288,6 +293,10 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, err)
 			return failureExit(err)
 		}
+		if err := e.checkRoot(def); err != nil {
+			fmt.Fprintln(stderr, printable.Line(err.Error()))
+			return failureExit(err)
+		}
 		return dryRunOnce(store, def, stdout, stderr)
 	}
 
@@ -379,9 +388,9 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 	})
 }
 
-// confirmLaunchable は起動時の検査のうち、依存 CLI の解決と置き場の確認を通す (formats.md §6)。loop と単発起動が使う。
-// 落ちたら stderr に理由を出して exit code を返す。確認が読む open な一覧が遅ければ slow で知らせる (formats.md §6 の
-// 「遅い一覧」)。
+// confirmLaunchable は起動時の検査のうち、lock の前までを通す (formats.md §6): 依存 CLI の解決・置き場の確認・state dir の
+// 用意・workspace root の専有。loop と単発起動が使う。落ちたら stderr に理由を出して exit code を返す。確認が読む open な一覧が
+// 遅ければ slow で知らせる (formats.md §6 の「遅い一覧」)。
 func (e environment) confirmLaunchable(def workflow.Definition, remote coord.Remote, stderr io.Writer, slow places.SlowNotice) int {
 	// 起動時は人が画面の前にいるので、起動した後に落ちる前に依存 CLI を解決できることを確かめる (system.md §8)
 	for _, name := range places.RequiredCommands(def) {
@@ -400,7 +409,27 @@ func (e environment) confirmLaunchable(def workflow.Definition, remote coord.Rem
 			return exitFailed
 		}
 	}
+	scopeKey, dir := e.stateDir(def)
+	if err := state.MakeDir(dir); err != nil {
+		fmt.Fprintln(stderr, err)
+		return exitFailed
+	}
+	if err := workspace.ClaimRoot(def.WorkspaceRoot, scopeKey, launchedFrom(dir)); err != nil {
+		fmt.Fprintln(stderr, printable.Line(err.Error()))
+		return failureExit(err)
+	}
 	return 0
+}
+
+// launchedFrom は state dir dir の worker log で、作業対象に worker を起動したことがあるかを答える。
+func launchedFrom(dir string) func(target.Ref) (bool, error) {
+	return func(ref target.Ref) (bool, error) { return worker.Launched(dir, ref) }
+}
+
+// checkRoot は workspace root の専有を読むだけで確かめる (試運転と doctor。formats.md §5・§7.4)。
+func (e environment) checkRoot(def workflow.Definition) error {
+	scopeKey, dir := e.stateDir(def)
+	return workspace.CheckRoot(def.WorkspaceRoot, scopeKey, launchedFrom(dir))
 }
 
 // coordinationRemote は workflow 定義の coordination board (formats.md §12)。git は workflow 定義のある dir から撃ち、remote の URL と
@@ -434,7 +463,7 @@ func (e environment) join(def workflow.Definition, remote coord.Remote, stderr i
 	return coord.NewBoard(party, interval), 0
 }
 
-// lockState は state dir を作って scope key の lock を take に取らせる (formats.md §6・§11)。loop (state.Lock) と単発起動
+// lockState は scope key の lock を take に取らせる (formats.md §6・§11)。loop (state.Lock) と単発起動
 // (state.LockRun) が同じ loop.lock を取り合う。
 func lockState(take func(dir, scopeKey string) (*state.Held, error), dir, scopeKey string, stderr io.Writer) (*state.Held, int) {
 	lock, err := take(dir, scopeKey)

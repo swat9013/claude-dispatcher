@@ -94,7 +94,7 @@ package "集約: workspace" as WorkspaceAgg {
 Project "1" -- "1" Definition
 Definition "1" *-- "1..*" Trigger : 宣言順
 Project "1" ..> "1" IssuePlace : ID参照 tracker.repo
-Project "1" ..> "1" CLPlace : ID参照 tracker.repo か cl.repo
+Project "*" ..> "1" CLPlace : ID参照 tracker.repo か cl.repo
 Project "1" -- "0..1" Loop : 同じマシンの中
 
 Tracker "1" -- "*" IssuePlace
@@ -156,6 +156,7 @@ note bottom of Workspace
   終端の作業対象の workspace は残さない
   (終端を観測したら消し、loop の起動時にも掃除する)。
   ただし orphan (前の loop が残した claude) が生きている間は残す。
-  attempt と loop の再起動を跨いで残る
+  attempt と loop の再起動を跨いで残る。
+  workspace root は 1 つの scope key が専有する
 end note
 @enduml

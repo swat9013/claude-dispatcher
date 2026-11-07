@@ -40,7 +40,7 @@ claude-dispatcher は、tracker (GitHub・GitLab・Jira Cloud) の issue と CL 
      - 試運転 (`loop --dry-run`) は coordination board を読まないので、他のマシンが作業している作業対象も示しうる。`doctor` は coordination board を読めるかを確かめる (push は撃たない)
 3. **試運転**: `claude-dispatcher loop --dry-run` が workflow 定義を検査し、起動するはずの作業対象と trigger を 1 件 1 行で示す。何も起動せず、何も書かない
    - action まで確かめるなら、`claude-dispatcher run <trigger> <作業対象>` (作業対象は `issue#<番号>` か `cl#<番号>` と書く) で、その作業対象に worker を 1 回だけ起動する (単発起動)。作業対象が trigger に当たっているときだけ起動し、終わった後に trigger から外れていれば exit 0、起動しなかったら exit 5、起動したが当たったままなら exit 6 で終わる。retry はしない。同じ issue 置き場の loop が走っている間は撃てない (exit 3)。workspace・hooks・時間の上限・Ctrl+C の扱い (1 回目は待つ、2 回目は止める) は loop と同じ。workspace は作業対象が閉じていなければ残り、後の loop がそのまま使う。`coordination.remote` (上の 2) を書いた project では、走っている間は loop と同じく着手宣言と生存報告を置き、他のマシンの loop が作業している作業対象では起動しない (exit 5)
-4. **導入を確かめる**: `claude-dispatcher doctor` が workflow 定義・issue 置き場・依存 CLI・事前検査を確かめ、利用者の約束に頼る宣言を警告する。Claude Code の settings (`permissions.allow`) に要りそうな entry も示すので、自分で足す (CLI は settings を書かない)
+4. **導入を確かめる**: `claude-dispatcher doctor` が workflow 定義・issue 置き場・依存 CLI・事前検査・`workspace.root` を確かめ、利用者の約束に頼る宣言を警告する。Claude Code の settings (`permissions.allow`) に要りそうな entry も示すので、自分で足す (CLI は settings を書かない)
    - 依存 CLI は、gh・glab・acli のどれか・claude・git (git は CL 側の trigger があるときと、`coordination.remote` を書いたとき)
    - `coordination.remote` を書いたなら、その remote を解いて読めることも確かめる
    - 警告する宣言は、承認済みの CL への action と、絞り込みの無い CL 側の trigger
@@ -102,6 +102,40 @@ workflow 定義に誤りがあれば、試運転・`loop` の起動・`doctor` �
    - worker が途中まで書いた成果は workspace と remote branch に残る
    - 作業対象が trigger に当たったままなら、次に起動した loop が同じ workspace で worker を起動し直す。session は新しく、attempt も 1 から数え直す。前の成果を拾わせるなら、共通 prompt にそう書く
 3. 使うのをやめるなら、`paths --json` が返す `state_dir` と `workspace_root` を消す (workspace が worktree なら、消した後に clone で `git worktree prune` を撃つ)。tracker の label は残る
+
+### 1 つの repo で複数の issue 置き場を回す
+
+1 つの repo の作業が複数の Jira project に分かれているときは、issue 置き場ごとに workflow 定義の file を置き、file を引数で渡して loop を分ける。
+
+雛形は `setup` に file の path を渡して file ごとに置く。
+
+```sh
+claude-dispatcher setup --kind jira --host acme.atlassian.net --repo WIDGETS WORKFLOW.widgets.md
+claude-dispatcher setup --kind jira --host acme.atlassian.net --repo GADGETS WORKFLOW.gadgets.md
+```
+
+雛形は `workspace.root` を書かないので、file ごとに別の dir を足す。
+
+```yaml
+workspace:
+  root: .claude-dispatcher/workspaces-widgets
+```
+
+loop は file を渡して起動する。
+
+```sh
+claude-dispatcher loop WORKFLOW.widgets.md
+claude-dispatcher loop WORKFLOW.gadgets.md
+```
+
+- file ごとに `tracker.repo`・`workspace.root`・CL 側の trigger の `head` を別の値にする
+- `workspace.root` の既定は定義の dir から決まるので、同じ dir の file どうしでは重なる。重なると、後から起動した loop は起動時に失敗する
+- `workspace.root` が clone の中なら、その dir も `.gitignore` に足す
+- 起動時に `workspace.root <path> に別の project の workspace <作業対象> がある` と出たら、その dir を移すか、`workspace.root` を別の dir に直す。この版より前に root を共有していると、ここで止まる
+- `head` は重ならない pattern にする (`feature/WIDGETS-*`)。雛形の `head` はどの file も同じなので、書き換える。loop どうしは互いの着手を読まないので、同じ CL に当たると worker が重なる
+- branch 名は file ごとに action と hooks に書く。hooks の `CLAUDE_DISPATCHER_NUMBER` は key の数字の部分だけなので、project key は file に書く
+- `loop --dry-run`・`run`・`status`・`paths`・`doctor`・`max-concurrent` にも同じ file を渡す
+- 別の loop の `after_create` と重なると、clone の ref の lock の競合で attempt を 1 つ失うことがある
 
 ## action が守る約束
 
@@ -206,7 +240,7 @@ triggers:                    # 必須。1 つ以上
 | `cl.host` | 文字列 | `cl.kind: gitlab` でだけ書ける。GitLab の host 名。既定 `gitlab.com`。`$VAR` で書ける。`github` で書くと未知の key |
 | `cl.repo` | 文字列 | 必須。CL 置き場。綴りは `tracker.repo` の `github` (`<owner>/<name>`)・`gitlab` (`<group>/…/<name>`) と同じ。`$VAR` で書ける |
 | `polling.interval` | 文字列 | 周期。Go の duration の綴り (`90s` / `5m` / `1h30m`) で、1s 以上 24h 以下。短い周期は tracker の rate limit を食う |
-| `workspace.root` | 文字列 | workspace (作業対象ごとに worker が作業する dir) を置く dir。相対 path は workflow 定義の dir から、`~/` は HOME から (HOME が絶対 path でなければ失敗)。`$VAR` で書ける。workspace は `<workspace.root>/<作業対象>` (`issue-<番号>` か `cl-<番号>`) に作り、作業対象が終端になるまで残す |
+| `workspace.root` | 文字列 | workspace (作業対象ごとに worker が作業する dir) を置く dir。相対 path は workflow 定義の dir から、`~/` は HOME から (HOME が絶対 path でなければ失敗)。`$VAR` で書ける。workspace は `<workspace.root>/<作業対象>` (`issue-<番号>` か `cl-<番号>`) に作り、作業対象が終端になるまで残す。root は 1 つの issue 置き場の loop が専有する。別の issue 置き場の loop が使っている root では起動時に失敗する (root の下の `.scope-key` で見分ける) |
 | `hooks.after_create` | 文字列 | workspace を作った直後に撃つ shell script。失敗したら workspace を消し、その attempt は失敗。`before_remove` と合わせて、作業対象を跨いで直列に撃つ (同時に 1 本まで)。遅い `after_create` は他の workspace の用意と削除を待たせ、削除を待つ間は loop も停止要求・tick に応えない |
 | `hooks.before_run` | 文字列 | worker を起動する前に毎回撃つ。失敗したら、その attempt は失敗。作業対象を跨いで並列に走りうる (clone を触るなら、hook の中で排他する) |
 | `hooks.after_run` | 文字列 | worker が終わった後 (止めたときも) に毎回撃つ。失敗は log に残して続ける。作業対象を跨いで並列に走りうる (clone を触るなら、hook の中で排他する) |
@@ -300,7 +334,8 @@ triggers:                    # 必須。1 つ以上
   - status 名は `project = "<project key>" AND status = "<名前>"` の検索の件数を撃ち、JQL の失敗で見分ける。acli は project の status の一覧を返さないので、site の単位の検査にとどまる。他の project にだけある status 名は検査を通る
   - issue type 名は project の issue type (`acli jira project view --key <project key> --json` の `issueTypes`) と比べる
 - `blocked` を書いた trigger があると、tick ごとに open な一覧を読んだ後、その trigger のどれかで `blocked` 以外の条件をすべて満たす issue だけ依存先を読む。依存を持つ open な issue を検索し (`issueLinkType = "is blocked by"`)、そのうち当たった issue を 1 件ずつ読み直して依存先の status の区分を見る。当たる issue が 1 件も無い tick は、依存の検索も撃たない
-- 1 つの Jira project は 1 本の loop と 1 つの実装 repo で回す (同じ project の 2 本目の loop は起動時に止まる)。project key を改名したら、workflow 定義を書き換えて loop を起動し直す
+- 別の issue 置き場へ移すときは、`workspace.root` も別の dir に直す。同じ root では、前の scope key が使っているとして起動時に失敗する
+- 1 つの Jira project は 1 本の loop と 1 つの実装 repo で回す (同じ project の 2 本目の loop は起動時に止まる)。project key を改名したら、workflow 定義を書き換え、`<workspace root>/.scope-key` を消して loop を起動し直す
 - acli は呼び出しごとに site を選べず、active な account の site を読む。`loop` の起動時・試運転・`doctor` で、acli の認証の site が `tracker.host` と違えば止まる (`acli jira auth switch --site <site>` で切り替える)
 - `jira` の issue と `cl:` の CL を、dispatcher は結び付けない。CL を merge しても、closing reference は置き場を跨げないので Jira の issue は終端にならない。status を動かすのは人か worker (action に書く)
 

@@ -41,7 +41,7 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	if !checkCLPlace(e, def, stdout, stderr) {
 		failed = true
 	}
-	for _, check := range []func(environment, workflow.Definition, io.Writer) bool{checkCommands, checkPrecheck, checkCoordination} {
+	for _, check := range []func(environment, workflow.Definition, io.Writer) bool{checkCommands, checkPrecheck, checkWorkspaceRoot, checkCoordination} {
 		if !check(e, def, stdout) {
 			failed = true
 		}
@@ -140,6 +140,16 @@ func checkPrecheck(e environment, def workflow.Definition, stdout io.Writer) boo
 		return false
 	}
 	fmt.Fprintln(stdout, "ok   事前検査")
+	return true
+}
+
+// checkWorkspaceRoot は、workspace root を別の scope key が使っていないかを読むだけで確かめる (formats.md §7.4)。
+func checkWorkspaceRoot(e environment, def workflow.Definition, stdout io.Writer) bool {
+	if err := e.checkRoot(def); err != nil {
+		fmt.Fprintf(stdout, "NG   %s\n", printable.Line(err.Error()))
+		return false
+	}
+	fmt.Fprintf(stdout, "ok   workspace.root %s\n", def.WorkspaceRoot)
 	return true
 }
 
