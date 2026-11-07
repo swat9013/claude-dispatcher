@@ -52,7 +52,7 @@ func assertInUseBy(t *testing.T, err error, root, owner string) {
 	}
 }
 
-func assertUnreadable(t *testing.T, err error) {
+func assertFailsWithoutOwner(t *testing.T, err error) {
 	t.Helper()
 	var inUse *workspace.RootInUse
 	if err == nil || errors.As(err, &inUse) {
@@ -145,7 +145,7 @@ func TestClaimFailsWithoutNamingAnOwnerWhenTheScopeKeyFileCannotBeRead(t *testin
 
 	err := workspace.ClaimRoot(root, widgets)
 
-	assertUnreadable(t, err)
+	assertFailsWithoutOwner(t, err)
 }
 
 func TestAnEmptyScopeKeyFileIsTreatedAsUnreadable(t *testing.T) {
@@ -154,8 +154,19 @@ func TestAnEmptyScopeKeyFileIsTreatedAsUnreadable(t *testing.T) {
 
 	err := workspace.ClaimRoot(root, widgets)
 
-	assertUnreadable(t, err)
+	assertFailsWithoutOwner(t, err)
 	assertScopeKeyFile(t, root, "\n")
+}
+
+func TestClaimFailsWhenTheScopeKeyFileIsADanglingSymlink(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Symlink("missing", scopeKeyFile(root)); err != nil {
+		t.Fatal(err)
+	}
+
+	err := workspace.ClaimRoot(root, widgets)
+
+	assertFailsWithoutOwner(t, err)
 }
 
 func TestClaimFailsWhenTheRootCannotBeWritten(t *testing.T) {
@@ -170,7 +181,7 @@ func TestClaimFailsWhenTheRootCannotBeWritten(t *testing.T) {
 
 	err := workspace.ClaimRoot(root, widgets)
 
-	assertUnreadable(t, err)
+	assertFailsWithoutOwner(t, err)
 }
 
 func TestCheckingARootWithoutAScopeKeyFilePassesWithoutWriting(t *testing.T) {

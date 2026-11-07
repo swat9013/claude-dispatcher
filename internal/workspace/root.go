@@ -47,7 +47,15 @@ func ClaimRoot(root, scopeKey string) error {
 			return err
 		}
 	}
-	return CheckRoot(root, scopeKey)
+	if err := CheckRoot(root, scopeKey); err != nil {
+		return err
+	}
+	// 指す先の無い symlink は、読むと無く、link すると既にある。書けていないので専有が成り立たない
+	owner, err = rootOwner(root)
+	if err == nil && owner == "" {
+		err = fmt.Errorf("workspace root の scope key を書けない: %s を置けない", filepath.Join(root, scopeKeyFile))
+	}
+	return err
 }
 
 // rootOwner は root の scope key を読む。無ければ ""。
@@ -78,9 +86,9 @@ func writeRootOwner(root, scopeKey string) error {
 		return fmt.Errorf("workspace root の scope key を書けない: %w", err)
 	}
 	defer os.Remove(tmp.Name())
-	// CreateTemp は 0600 で作るので、state dir の file と同じ 0644 に揃える
+	// CreateTemp は 0600 で作るので、他の利用者も読める 0644 にする。link の前に Sync し、電源断で空の file を残さない
 	_, err = tmp.WriteString(scopeKey + "\n")
-	err = errors.Join(err, tmp.Chmod(0o644), tmp.Close())
+	err = errors.Join(err, tmp.Chmod(0o644), tmp.Sync(), tmp.Close())
 	if err == nil {
 		err = os.Link(tmp.Name(), filepath.Join(root, scopeKeyFile))
 	}
