@@ -190,7 +190,8 @@ func failureExit(err error) int {
 		return exitUsage
 	}
 	var inUse *workspace.RootInUse
-	if errors.As(err, &inUse) {
+	var foreign *workspace.ForeignWorkspace
+	if errors.As(err, &inUse) || errors.As(err, &foreign) {
 		return exitUsage
 	}
 	var f *target.Failure
@@ -275,7 +276,7 @@ func runLoop(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, err)
 			return failureExit(err)
 		}
-		if err := workspace.CheckRoot(def.WorkspaceRoot, places.ScopeKey(def)); err != nil {
+		if err := e.checkRoot(def); err != nil {
 			fmt.Fprintln(stderr, printable.Line(err.Error()))
 			return failureExit(err)
 		}
@@ -395,11 +396,22 @@ func (e environment) confirmLaunchable(def workflow.Definition, remote coord.Rem
 		fmt.Fprintln(stderr, err)
 		return exitFailed
 	}
-	if err := workspace.ClaimRoot(def.WorkspaceRoot, scopeKey); err != nil {
+	if err := workspace.ClaimRoot(def.WorkspaceRoot, scopeKey, launchedFrom(dir)); err != nil {
 		fmt.Fprintln(stderr, printable.Line(err.Error()))
 		return failureExit(err)
 	}
 	return 0
+}
+
+// launchedFrom は state dir dir の worker log で、作業対象に worker を起動したことがあるかを答える。
+func launchedFrom(dir string) func(target.Ref) (bool, error) {
+	return func(ref target.Ref) (bool, error) { return worker.Launched(dir, ref) }
+}
+
+// checkRoot は workspace root の専有を読むだけで確かめる (試運転と doctor。formats.md §5・§7.4)。
+func (e environment) checkRoot(def workflow.Definition) error {
+	scopeKey, dir := e.stateDir(def)
+	return workspace.CheckRoot(def.WorkspaceRoot, scopeKey, launchedFrom(dir))
 }
 
 // coordinationRemote は workflow 定義の coordination board (formats.md §12)。git は workflow 定義のある dir から撃ち、remote の URL と

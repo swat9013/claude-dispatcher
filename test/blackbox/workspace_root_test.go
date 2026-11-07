@@ -261,3 +261,51 @@ func TestTwoDefinitionsInOneDirStartTwoLoopsWhenTheirRootsDiffer(t *testing.T) {
 		t.Fatalf("loop が止まった: widgets %v, gadgets %v", widgets.running(), gadgets.running())
 	}
 }
+
+func TestLoopRefusesARootWithoutAScopeKeyThatHoldsAnotherProjectsWorkspace(t *testing.T) {
+	s := newSandbox(t)
+	s.writeWorkflowWithCommands(s.workerWorkflow(""))
+	s.setIssues(readyIssue(42))
+	mustWrite(t, filepath.Join(s.workspace(7), "work"), "別の loop の作業\n")
+
+	r := s.run("loop")
+
+	s.assertRejected(r, "workspace.root "+s.workspaceRoot()+" に別の project の workspace issue-7 がある")
+	s.assertNoClaude()
+	if _, err := os.Stat(filepath.Join(s.workspace(7), "work")); err != nil {
+		t.Fatalf("別の loop の workspace を消した: %v", err)
+	}
+}
+
+func TestDryRunAndDoctorReportAnotherProjectsWorkspaceWithoutWriting(t *testing.T) {
+	s := newSandbox(t)
+	mustMkdir(t, s.workspace(7))
+	line := "workspace.root " + s.workspaceRoot() + " に別の project の workspace issue-7 がある"
+
+	dry := s.dryRun()
+	assertExit(t, dry, 2)
+	if !strings.Contains(dry.stderr, line) {
+		t.Fatalf("stderr = %q", dry.stderr)
+	}
+
+	doctor := s.run("doctor")
+
+	assertExit(t, doctor, 1)
+	if !strings.Contains(doctor.stdout, "NG   "+line+"\n") {
+		t.Fatalf("stdout = %q", doctor.stdout)
+	}
+	if _, err := os.Stat(s.scopeKeyFile()); !os.IsNotExist(err) {
+		t.Fatalf(".scope-key を書いた: %v", err)
+	}
+}
+
+func TestLoopClaimsARootWhoseWorkspacesItLaunched(t *testing.T) {
+	s := newSandbox(t)
+	mustMkdir(t, s.workspace(7))
+	mustWrite(t, filepath.Join(s.defaultStateDir(), "workers", "issue-7.log"), "")
+
+	p := s.startLoop()
+
+	p.waitForOutput(loopStarted)
+	s.assertScopeKeyFile(defaultScopeKey + "\n")
+}

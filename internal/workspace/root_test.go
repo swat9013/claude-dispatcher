@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/swat9013/claude-dispatcher/internal/target"
 	"github.com/swat9013/claude-dispatcher/internal/workspace"
 )
 
@@ -17,6 +18,10 @@ const (
 	widgets = "acme.atlassian.net/WIDGETS"
 	gadgets = "acme.atlassian.net/GADGETS"
 )
+
+func neverLaunched(target.Ref) (bool, error) { return false, nil }
+
+func alwaysLaunched(target.Ref) (bool, error) { return true, nil }
 
 func scopeKeyFile(root string) string { return filepath.Join(root, ".scope-key") }
 
@@ -63,7 +68,7 @@ func assertFailsWithoutOwner(t *testing.T, err error) {
 func TestClaimingARootThatDoesNotExistCreatesItAndWritesTheScopeKey(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "a", "workspaces")
 
-	err := workspace.ClaimRoot(root, widgets)
+	err := workspace.ClaimRoot(root, widgets, neverLaunched)
 
 	if err != nil {
 		t.Fatal(err)
@@ -75,7 +80,7 @@ func TestClaimingARootWithTheSameScopeKeyPassesAgain(t *testing.T) {
 	root := t.TempDir()
 	writeScopeKeyFile(t, root, widgets+"\n")
 
-	err := workspace.ClaimRoot(root, widgets)
+	err := workspace.ClaimRoot(root, widgets, neverLaunched)
 
 	if err != nil {
 		t.Fatal(err)
@@ -87,7 +92,7 @@ func TestClaimingARootThatAnotherScopeKeyUsesFailsAndKeepsTheFile(t *testing.T) 
 	root := t.TempDir()
 	writeScopeKeyFile(t, root, gadgets+"\n")
 
-	err := workspace.ClaimRoot(root, widgets)
+	err := workspace.ClaimRoot(root, widgets, neverLaunched)
 
 	assertInUseBy(t, err, root, gadgets)
 	assertScopeKeyFile(t, root, gadgets+"\n")
@@ -102,7 +107,7 @@ func TestOnlyOneOfTheConcurrentClaimsOnAnEmptyRootSucceeds(t *testing.T) {
 	for i := range claims {
 		wg.Go(func() {
 			<-start
-			errs[i] = workspace.ClaimRoot(root, fmt.Sprintf("scope-%d", i))
+			errs[i] = workspace.ClaimRoot(root, fmt.Sprintf("scope-%d", i), neverLaunched)
 		})
 	}
 
@@ -143,7 +148,7 @@ func TestClaimFailsWithoutNamingAnOwnerWhenTheScopeKeyFileCannotBeRead(t *testin
 		t.Fatal(err)
 	}
 
-	err := workspace.ClaimRoot(root, widgets)
+	err := workspace.ClaimRoot(root, widgets, neverLaunched)
 
 	assertFailsWithoutOwner(t, err)
 }
@@ -152,7 +157,7 @@ func TestAnEmptyScopeKeyFileIsTreatedAsUnreadable(t *testing.T) {
 	root := t.TempDir()
 	writeScopeKeyFile(t, root, "\n")
 
-	err := workspace.ClaimRoot(root, widgets)
+	err := workspace.ClaimRoot(root, widgets, neverLaunched)
 
 	assertFailsWithoutOwner(t, err)
 	assertScopeKeyFile(t, root, "\n")
@@ -164,7 +169,7 @@ func TestClaimFailsWhenTheScopeKeyFileIsADanglingSymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := workspace.ClaimRoot(root, widgets)
+	err := workspace.ClaimRoot(root, widgets, neverLaunched)
 
 	assertFailsWithoutOwner(t, err)
 }
@@ -175,7 +180,7 @@ func TestCheckFailsWhenTheScopeKeyFileIsADanglingSymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := workspace.CheckRoot(root, widgets)
+	err := workspace.CheckRoot(root, widgets, neverLaunched)
 
 	assertFailsWithoutOwner(t, err)
 }
@@ -190,7 +195,7 @@ func TestClaimFailsWhenTheRootCannotBeWritten(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(root, 0o755) })
 
-	err := workspace.ClaimRoot(root, widgets)
+	err := workspace.ClaimRoot(root, widgets, neverLaunched)
 
 	assertFailsWithoutOwner(t, err)
 }
@@ -198,7 +203,7 @@ func TestClaimFailsWhenTheRootCannotBeWritten(t *testing.T) {
 func TestCheckingARootWithoutAScopeKeyFilePassesWithoutWriting(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "workspaces")
 
-	err := workspace.CheckRoot(root, widgets)
+	err := workspace.CheckRoot(root, widgets, neverLaunched)
 
 	if err != nil {
 		t.Fatal(err)
@@ -212,7 +217,7 @@ func TestCheckingARootPassesForTheSameScopeKey(t *testing.T) {
 	root := t.TempDir()
 	writeScopeKeyFile(t, root, widgets+"\n")
 
-	err := workspace.CheckRoot(root, widgets)
+	err := workspace.CheckRoot(root, widgets, neverLaunched)
 
 	if err != nil {
 		t.Fatal(err)
@@ -223,8 +228,53 @@ func TestCheckingARootThatAnotherScopeKeyUsesFails(t *testing.T) {
 	root := t.TempDir()
 	writeScopeKeyFile(t, root, gadgets+"\n")
 
-	err := workspace.CheckRoot(root, widgets)
+	err := workspace.CheckRoot(root, widgets, neverLaunched)
 
 	assertInUseBy(t, err, root, gadgets)
 	assertScopeKeyFile(t, root, gadgets+"\n")
+}
+
+func TestClaimRefusesARootWithoutAScopeKeyFileThatHoldsAForeignWorkspace(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "issue-7"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	err := workspace.ClaimRoot(root, widgets, neverLaunched)
+
+	var foreign *workspace.ForeignWorkspace
+	if !errors.As(err, &foreign) {
+		t.Fatalf("err = %v, want *workspace.ForeignWorkspace", err)
+	}
+	if _, err := os.Stat(scopeKeyFile(root)); !os.IsNotExist(err) {
+		t.Fatalf(".scope-key を書いた: %v", err)
+	}
+}
+
+func TestClaimWritesTheScopeKeyWhenEveryWorkspaceIsItsOwn(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "issue-7"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	err := workspace.ClaimRoot(root, widgets, alwaysLaunched)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertScopeKeyFile(t, root, widgets+"\n")
+}
+
+func TestAWorkspaceWithoutALogIsIgnoredOnceTheScopeKeyIsItsOwn(t *testing.T) {
+	root := t.TempDir()
+	writeScopeKeyFile(t, root, widgets+"\n")
+	if err := os.Mkdir(filepath.Join(root, "issue-7"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	err := workspace.CheckRoot(root, widgets, neverLaunched)
+
+	if err != nil {
+		t.Fatal(err)
+	}
 }

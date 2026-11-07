@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/swat9013/claude-dispatcher/internal/target"
 )
 
 // scopeKeyFile は workspace root を使う scope key を書く file (formats.md §1・§6)。
@@ -23,21 +25,53 @@ func (e *RootInUse) Error() string {
 	return fmt.Sprintf("workspace.root %s は scope key %s が使っている", e.Root, e.ScopeKey)
 }
 
-// CheckRoot は root を scope key が使えるかを読むだけで確かめる。別の scope key が書いてあれば *RootInUse。
-func CheckRoot(root, scopeKey string) error {
+// ForeignWorkspace は .scope-key の無い root に、自分のものでない workspace があること。.scope-key を書く前の版の loop が
+// 使っていた root では、別の project の workspace を掃除が消しうる (system.md §7)。
+type ForeignWorkspace struct {
+	Root string
+	Ref  target.Ref
+}
+
+func (e *ForeignWorkspace) Error() string {
+	return fmt.Sprintf("workspace.root %s に別の project の workspace %s がある", e.Root, e.Ref.FileName())
+}
+
+// CheckRoot は root を scope key が使えるかを読むだけで確かめる。別の scope key が書いてあれば *RootInUse。.scope-key が無く、
+// launched が false を返す workspace があれば *ForeignWorkspace。launched は作業対象に自分が worker を起動したことがあるかを返す。
+func CheckRoot(root, scopeKey string, launched func(target.Ref) (bool, error)) error {
 	owner, err := rootOwner(root)
 	if err != nil {
 		return err
 	}
-	if owner != "" && owner != scopeKey {
-		return &RootInUse{Root: root, ScopeKey: owner}
+	if owner != "" {
+		if owner != scopeKey {
+			return &RootInUse{Root: root, ScopeKey: owner}
+		}
+		return nil
+	}
+	refs, err := Manager{Root: root}.Existing()
+	if err != nil {
+		return err
+	}
+	for _, ref := range refs {
+		own, err := launched(ref)
+		if err != nil {
+			return err
+		}
+		if !own {
+			return &ForeignWorkspace{Root: root, Ref: ref}
+		}
 	}
 	return nil
 }
 
 // ClaimRoot は root を scope key のものにする。誰のものでもなければ root を作って scope key を書く。別の scope key が書いて
-// あれば *RootInUse。同時に撃った別の scope key に先を越されたときも、読み直して *RootInUse を返す。
-func ClaimRoot(root, scopeKey string) error {
+// あれば *RootInUse。同時に撃った別の scope key に先を越されたときも、読み直して *RootInUse を返す。自分のものでない workspace が
+// あれば書かずに *ForeignWorkspace (CheckRoot)。
+func ClaimRoot(root, scopeKey string, launched func(target.Ref) (bool, error)) error {
+	if err := CheckRoot(root, scopeKey, launched); err != nil {
+		return err
+	}
 	owner, err := rootOwner(root)
 	if err != nil {
 		return err
@@ -47,7 +81,7 @@ func ClaimRoot(root, scopeKey string) error {
 			return err
 		}
 	}
-	return CheckRoot(root, scopeKey)
+	return CheckRoot(root, scopeKey, launched)
 }
 
 // rootOwner は root の scope key を読む。無ければ ""。
