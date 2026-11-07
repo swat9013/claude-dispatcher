@@ -104,6 +104,22 @@ workflow 定義に誤りがあれば、試運転・`loop` の起動・`doctor` �
 
 1 つの repo の作業が複数の Jira project に分かれているときは、issue 置き場ごとに workflow 定義の file を置き、file を引数で渡して loop を分ける。
 
+雛形は `setup` に file の path を渡して file ごとに置く。
+
+```sh
+claude-dispatcher setup --kind jira --host acme.atlassian.net --repo WIDGETS WORKFLOW.widgets.md
+claude-dispatcher setup --kind jira --host acme.atlassian.net --repo GADGETS WORKFLOW.gadgets.md
+```
+
+雛形は `workspace.root` を書かないので、file ごとに別の dir を足す。
+
+```yaml
+workspace:
+  root: .claude-dispatcher/workspaces-widgets
+```
+
+loop は file を渡して起動する。
+
 ```sh
 claude-dispatcher loop WORKFLOW.widgets.md
 claude-dispatcher loop WORKFLOW.gadgets.md
@@ -111,7 +127,9 @@ claude-dispatcher loop WORKFLOW.gadgets.md
 
 - file ごとに `tracker.repo`・`workspace.root`・CL 側の trigger の `head` を別の値にする
 - `workspace.root` の既定は定義の dir から決まるので、同じ dir の file どうしでは重なる。重なると、後から起動した loop は起動時に失敗する
-- `head` は重ならない pattern にする (`feature/WIDGETS-*`)。loop どうしは互いの着手を読まないので、同じ CL に当たると worker が重なる
+- `workspace.root` が clone の中なら、その dir も `.gitignore` に足す
+- 起動時に `workspace.root <path> に別の project の workspace <作業対象> がある` と出たら、その dir を移すか、`workspace.root` を別の dir に直す。この版より前に root を共有していると、ここで止まる
+- `head` は重ならない pattern にする (`feature/WIDGETS-*`)。雛形の `head` はどの file も同じなので、書き換える。loop どうしは互いの着手を読まないので、同じ CL に当たると worker が重なる
 - branch 名は file ごとに action と hooks に書く。hooks の `CLAUDE_DISPATCHER_NUMBER` は key の数字の部分だけなので、project key は file に書く
 - `loop --dry-run`・`run`・`status`・`paths`・`doctor`・`max-concurrent` にも同じ file を渡す
 - 別の loop の `after_create` と重なると、clone の ref の lock の競合で attempt を 1 つ失うことがある
