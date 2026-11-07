@@ -398,7 +398,15 @@ func TestWindowMissingFromAnEventKeepsItsPreviousObservation(t *testing.T) {
 func TestStatusFileShowsAWindowWithoutAnObservationAsNull(t *testing.T) {
 	r := usageLoop{issues: []int{1, 2}, periods: 3}.run(t)
 
-	if got := r.lastUsage(t); got.Closed || got.FiveHour.Utilization != nil || got.SevenDay.Utilization != nil || got.SevenDay.ResetsAt != nil {
+	if got := r.lastUsage(t); got.FiveHour.Utilization != nil || got.SevenDay.Utilization != nil || got.SevenDay.ResetsAt != nil {
+		t.Fatalf("usage = %+v, want 未観測の window は null", got)
+	}
+}
+
+func TestStatusFileShowsAdmissionOpenWithoutAnObservation(t *testing.T) {
+	r := usageLoop{issues: []int{1, 2}, periods: 3}.run(t)
+
+	if got := r.lastUsage(t); got.Closed {
 		t.Fatalf("usage = %+v, want 未観測で閉じない", got)
 	}
 }

@@ -126,7 +126,7 @@ func usageLine(utilization string) string {
 	return `{"type":"rate_limit_event","rate_limit_info":{"unifiedWindows":{"seven_day":{"utilization":` + utilization + `,"resetsAt":1792188000}}}}` + "\n"
 }
 
-// usageWait は test が watch の応答を待つ上限。watch が応答しなければ、go test の timeout を待たずに落とす。
+// usageWait は test が非同期の応答を待つ上限。応答が無ければ、go test の timeout を待たずに落とす。
 const usageWait = 5 * time.Second
 
 // runningWatch は別の goroutine で走る watch。
@@ -135,8 +135,9 @@ type runningWatch struct {
 	ticks    chan time.Time
 	usage    chan Event
 	returned chan struct{}
-	// result は watch が返した値。returned が閉じてから読む
+	// result と ended は watch が返した値。returned が閉じてから読む
 	result Result
+	ended  bool
 }
 
 // watching は w を見る watch を別の goroutine で走らせ、test の終わりに止める。
@@ -146,7 +147,7 @@ func watching(t *testing.T, w *streamWatch) *runningWatch {
 	run := &Run{stop: make(chan struct{})}
 	go func() {
 		defer close(r.returned)
-		r.result, _ = watch(make(chan struct{}), run, w, r.ticks, r.usage)
+		r.result, r.ended = watch(make(chan struct{}), run, w, r.ticks, r.usage)
 	}()
 	t.Cleanup(func() {
 		run.Stop()
@@ -248,14 +249,14 @@ func TestWatchStopsAWorkerEvenIfNobodyTakesTheUsage(t *testing.T) {
 	case <-time.After(usageWait):
 		t.Fatal("watch が止まらない")
 	}
-	if r.result.Failure == "" {
-		t.Fatalf("watch = %+v, want loop が受けなくても上限時間で止める", r.result)
+	if r.ended || r.result.Failure == "" {
+		t.Fatalf("watch = %+v, %v, want loop が受けなくても上限時間で止める", r.result, r.ended)
 	}
 }
 
 func TestUsageStillUnsentWhenAWorkerIsStoppedIsHandedOverAtItsEnd(t *testing.T) {
 	dir := t.TempDir()
-	stub := "#!/bin/sh\nprintf '%s' '" + usageLine("0.2") + "'\nexec /bin/sleep 60\n"
+	stub := "#!/bin/sh\nprintf '%s' '" + usageLine("0.2") + `{"type":"system","subtype":"init"}` + "\n'\nexec /bin/sleep 60\n"
 	if err := os.WriteFile(filepath.Join(dir, "claude"), []byte(stub), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -272,13 +273,23 @@ func TestUsageStillUnsentWhenAWorkerIsStoppedIsHandedOverAtItsEnd(t *testing.T) 
 		defer close(ended)
 		r.attempt(job, run, notices{started: func(int, string) {}, usage: usage})
 	}()
-	for deadline := time.Now().Add(usageWait); ; time.Sleep(time.Millisecond) {
-		if content, _ := os.ReadFile(LogFile(r.StateDir, job.Item.Ref())); len(content) > 0 {
-			break
+	t.Cleanup(func() {
+		run.Stop()
+		for {
+			select {
+			case <-usage:
+			case <-ended:
+				return
+			case <-time.After(usageWait):
+				t.Error("attempt が終わらない")
+				return
+			}
 		}
+	})
+	// 活動が更新されたなら、同じ確認が使用率の行も読んでいる。誰も受けていないので、使用率は未送のまま
+	for deadline := time.Now().Add(usageWait); run.Activity().At.IsZero(); time.Sleep(time.Millisecond) {
 		if time.Now().After(deadline) {
-			run.Stop()
-			t.Fatal("claude が使用率を書かない")
+			t.Fatal("watch が claude の行を読まない")
 		}
 	}
 
@@ -287,5 +298,4 @@ func TestUsageStillUnsentWhenAWorkerIsStoppedIsHandedOverAtItsEnd(t *testing.T) 
 	if got := nextWeeklyUsage(t, usage); got != 0.2 {
 		t.Fatalf("使用率 = %v, want 止めた worker の 0.2", got)
 	}
-	<-ended
 }
