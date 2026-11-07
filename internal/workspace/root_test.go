@@ -169,6 +169,17 @@ func TestClaimFailsWhenTheScopeKeyFileIsADanglingSymlink(t *testing.T) {
 	assertFailsWithoutOwner(t, err)
 }
 
+func TestCheckFailsWhenTheScopeKeyFileIsADanglingSymlink(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Symlink("missing", scopeKeyFile(root)); err != nil {
+		t.Fatal(err)
+	}
+
+	err := workspace.CheckRoot(root, widgets)
+
+	assertFailsWithoutOwner(t, err)
+}
+
 func TestClaimFailsWhenTheRootCannotBeWritten(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root は dir の権限を無視する")

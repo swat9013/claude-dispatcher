@@ -185,7 +185,7 @@ func (s Store) normalizeWithBlockers(nodes []issueJSON) ([]target.Issue, error) 
 	for _, n := range nodes {
 		number, ok := s.number(n.Key)
 		if !ok {
-			return nil, fmt.Errorf("open な一覧に project %s でない key %q がある (project key を改名したなら tracker.repo を書き換えて loop を起動し直す)", s.project.Key, n.Key)
+			return nil, fmt.Errorf("open な一覧に project %s でない key %q がある (project key を改名したなら tracker.repo を書き換え、workspace root の .scope-key を消して loop を起動し直す)", s.project.Key, n.Key)
 		}
 		issue := s.normalize(n, number, 0)
 		if s.readsBlockers(issue) {

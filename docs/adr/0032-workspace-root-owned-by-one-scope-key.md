@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-11-07
-- ADR 0010 の改名の手順を補う (置き換えない)。scope key が変わったら `.scope-key` も消す
+- ADR 0010 の改名の手順を補う (置き換えない)。project key を改名したら `.scope-key` も消す
 
 ## Context
 
@@ -26,5 +26,5 @@
 ### 悪い影響 / 制約
 
 - `.scope-key` の無い root は最初に起動した loop のものになる。この決定の前から共有していた root では、この検査は相手の workspace を守らない
-- scope key を変えたら `.scope-key` を手で消す
+- project key を改名したら `.scope-key` を手で消す。別の issue 置き場へ移すなら `workspace.root` を別の dir に直す
 - 見直し条件は置かない。起きるのは設定の誤りの 1 回ごとで、実行の記録から決定の良し悪しを言える量が無い

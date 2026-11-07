@@ -47,15 +47,7 @@ func ClaimRoot(root, scopeKey string) error {
 			return err
 		}
 	}
-	if err := CheckRoot(root, scopeKey); err != nil {
-		return err
-	}
-	// 指す先の無い symlink は、読むと無く、link すると既にある。書けていないので専有が成り立たない
-	owner, err = rootOwner(root)
-	if err == nil && owner == "" {
-		err = fmt.Errorf("workspace root の scope key を書けない: %s を置けない", filepath.Join(root, scopeKeyFile))
-	}
-	return err
+	return CheckRoot(root, scopeKey)
 }
 
 // rootOwner は root の scope key を読む。無ければ ""。
@@ -63,6 +55,10 @@ func rootOwner(root string) (string, error) {
 	file := filepath.Join(root, scopeKeyFile)
 	raw, err := os.ReadFile(file)
 	if errors.Is(err, os.ErrNotExist) {
+		// 指す先の無い symlink は、読むと無いが link すると既にあるので、書けないまま専有が成り立たない
+		if _, lerr := os.Lstat(file); lerr == nil {
+			return "", fmt.Errorf("workspace root の scope key を読めない: %s は指す先の無い symlink", file)
+		}
 		return "", nil
 	}
 	if err != nil {
