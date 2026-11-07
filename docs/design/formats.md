@@ -244,7 +244,7 @@ claude-dispatcher loop --dry-run [--max-concurrent <N>] [<workflow の path>]
 
 `--max-concurrent` は `loop` (§6) と同じ綴りと検査で受ける。試運転は並列上限に依らずに候補を出すので、渡しても出力は変わらない。
 
-workflow 定義を読んで検査し、事前検査 (§2.9) を通し、snapshot を作って trigger を評価し、起動するはずの作業対象を示して終わる。**何も書かない** (state dir を作らず、lock も取らない)。`<workspace root>/.scope-key` は読むだけで書かない。別の scope key が書いてあれば exit 2 で終わる。coordination board (§12) も読みも書きもしないので、他のマシンの loop が持つ作業対象も示しうる。
+workflow 定義を読んで検査し、事前検査 (§2.9) を通し、snapshot を作って trigger を評価し、起動するはずの作業対象を示して終わる。**何も書かない** (state dir を作らず、lock も取らない)。`<workspace root>/.scope-key` は読むだけで書かない。別の scope key が書いてあれば exit 2、読めなければ exit 1 で終わる (§6)。coordination board (§12) も読みも書きもしないので、他のマシンの loop が持つ作業対象も示しうる。
 
 候補は、loop の起動の直前と同じ読み直し (§6 の tick の手順 7) を 1 件ずつ掛け、loop が起動しない候補は出さない (open な一覧の検索は、書き込みの直後に古い結果を返しうるため)。読み直しで起動しない理由は §6 と同じで、出さなかったことはどこにも示さない。候補が並列上限より多くても、どれも読み直す。候補を 1 件でも読み直せなければ、open な一覧を読めなかったときと同じく失敗する (下)。
 
@@ -299,7 +299,7 @@ claude-dispatcher loop [--max-concurrent <N>] [<workflow の path>]
 
 - よく使われる置き場は、workflow 定義が撃つ依存 CLI (`tracker.kind` の CLI・`cl.kind` の CLI・claude・git) のどれかが PATH に無いときだけ PATH の前に足す。使わない置き場の CLI が無いことでは PATH を書き換えない (worker と hooks は loop の PATH を継ぐので、足すと worker が撃つ git などが入れ替わりうる)
 - 同じ issue 置き場の 2 本目の loop は、clone や workflow 定義の path が違っても起動時に止まる
-- `.scope-key` の中身は scope key の 1 行。別の scope key が書いてあれば、`workspace.root <path> は scope key <書いてある scope key> が使っている` と名指しして終わる。project key を改名したら、`.scope-key` を消して起動し直す
+- `.scope-key` の中身は scope key の 1 行。別の scope key が書いてあれば、`workspace.root <path> は scope key <書いてある scope key> が使っている` と名指しして終わる。中身が空の file は読めないときと同じに扱う。project key を改名したら、`.scope-key` を消して起動し直す
 - `jira` の issue 置き場の確認は、次の順に撃ち、最初に落ちたもので終わる。試運転 (§5) と `doctor` (§7.4) も同じ確認を通す
   1. acli の認証の site: `acli jira auth status` が通り (落ちれば認証の失敗、exit 4)、出力の `Site:` の行の site が `tracker.host` と同じ (大文字と小文字を区別しない)。違うか `Site:` の行を読めなければ exit 2。acli は呼び出しごとに site を指定できず、active な account の site を読むため
   2. open な一覧 (`project = "<project key>" AND statusCategory != Done`) を読める。落ちたら §3 の acli の分類で、認証 (exit 4) か見えない (exit 2)。試運転 (§5) は、ここで読んだ一覧を snapshot に使う
@@ -780,7 +780,7 @@ triggers:
    - 一覧の読み出しが 15 秒を超えたら、読み終わる前に stderr に 1 行出す (§6 の「遅い一覧」)。stdout の行と exit は変えない
 3. tracker の CLI・`jira` では `cl.kind` の CLI・`claude.command` を解決できる。`on: cl` の trigger があるか `coordination.remote` を書いたなら git も (loop の起動時の検査と同じ。§6)
 4. 事前検査 (§2.9)。落ちた trigger ごとに `NG` の行
-   - `<workspace root>/.scope-key` に別の scope key が書いてあれば、`NG   workspace.root <path> は scope key <書いてある scope key> が使っている` を出す。書かない
+   - 続けて `<workspace root>/.scope-key` を読み、`ok   workspace.root <path>` か、別の scope key が書いてあれば `NG   workspace.root <path> は scope key <書いてある scope key> が使っている`、読めなければ理由を載せた `NG` の行を出す。書かない
    - coordination board を指した project では、続けて loop の起動時と同じ coordination board の確認 (§12) を通し、`ok   coordination board の remote <名前> (<URL>)` か、§12 の起動時の確認の文を載せた `NG   coordination board の remote <名前> を解けない: <理由>` / `NG   coordination board の remote <名前> を読めない: <理由>` の行を出す。push は撃たない
 5. 利用者の約束に頼る宣言を `警告` の行に出す (system.md §11)
    - `approved: true` の CL 側の trigger (merge を worker に任せうる)
