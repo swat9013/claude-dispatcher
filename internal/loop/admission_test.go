@@ -214,7 +214,7 @@ func TestClosingAndReopeningEachLeaveOneLine(t *testing.T) {
 	r := usageLoop{
 		issues:     []int{1, 2},
 		thresholds: loop.UsageThresholds{FiveHour: 100, Weekly: 80},
-		usage:      map[int][]worker.UsageObserved{1: {weekly(0.8, 150*time.Minute), weekly(0.81, 150*time.Minute)}},
+		usage:      map[int][]worker.UsageObserved{1: {weekly(0.81, 150*time.Minute), weekly(0.82, 150*time.Minute)}},
 		periods:    4,
 	}.run(t)
 
@@ -230,6 +230,14 @@ func TestClosingAndReopeningEachLeaveOneLine(t *testing.T) {
 	if out := r.stdout.String(); !strings.Contains(out, "起動を止める: 週の使用率 81% が閾値 80% 以上 (01/01 02:30 に再開)\n") ||
 		!strings.Contains(out, " 起動を再開する\n") {
 		t.Fatalf("人が読む行:\n%s", out)
+	}
+}
+
+func TestUtilizationTooLargeForAnIntStaysPositiveInTheLine(t *testing.T) {
+	r := usageLoop{issues: []int{1}, usage: map[int][]worker.UsageObserved{1: {weekly(1e300, 100*time.Hour)}}, periods: 1}.run(t)
+
+	if c := r.logEvents(t, "admission_close"); len(c) != 1 || c[0]["utilization"].(float64) <= 0 {
+		t.Fatalf("admission_close = %v, want 正の百分率", c)
 	}
 }
 
@@ -311,19 +319,6 @@ func TestReopenTimeIsTheLaterResetWhenBothWindowsAreAtTheirThresholds(t *testing
 				t.Fatalf("usage = %+v, want 再開の時刻は遅い方のリセット時刻", got)
 			}
 		})
-	}
-}
-
-func TestEventsBetweenTwoJudgementsLeaveNoLine(t *testing.T) {
-	// 判定は起動を試みるときだけなので、次の判定までに読める event が届けば閉じない
-	r := usageLoop{
-		issues:  []int{1},
-		usage:   map[int][]worker.UsageObserved{1: {{}, weekly(0.2, 100*time.Hour)}},
-		periods: 1,
-	}.run(t)
-
-	if closes := r.logEvents(t, "admission_close"); len(closes) != 0 {
-		t.Fatalf("admission_close = %v, want 行は無い", closes)
 	}
 }
 

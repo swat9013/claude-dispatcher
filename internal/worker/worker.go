@@ -172,7 +172,7 @@ func (r Runner) Start(job Job, events chan<- Event) *Run {
 type notices struct {
 	started   func(pid int, workspace string)
 	unstopped func(stopError string, exited <-chan struct{})
-	// usage は使用率の観測の送り先
+	// usage は使用率の観測の送り先。watch の select に載せて確認を止めないよう、関数でなく channel で持つ
 	usage chan<- Event
 }
 

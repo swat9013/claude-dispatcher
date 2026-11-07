@@ -57,12 +57,34 @@ func TestRateLimitEventWithNoReadableWindowIsUnreadable(t *testing.T) {
 		`{"type":"rate_limit_event","rate_limit_info":{"unifiedWindows":{"seven_day":{"utilization":0.1,"resetsAt":1792188000000}}}}`,
 		`{"type":"rate_limit_event","rate_limit_info":{"unifiedWindows":{"seven_day":{"utilization":0.1,"resetsAt":-1}}}}`,
 		`{"type":"rate_limit_event","rate_limit_info":{"unifiedWindows":{"seven_day":{"utilization":-0.1,"resetsAt":1792188000}}}}`,
-		`{"type":"rate_limit_event","rate_limit_info":{"overageResetsAt":1e999,"unifiedWindows":{"seven_day":{"utilization":0.1,"resetsAt":1792188000}}}}`,
+		`{"type":"rate_limit_event","rate_limit_info":{"unifiedWindows":{"seven_day":{"utilization":1e999,"resetsAt":1792188000}}}}`,
 	} {
 		got, ok := parseUsage([]byte(line))
 		if !ok || !got.Unreadable() {
 			t.Errorf("parseUsage(%s) = %+v, %v, want 読めない event", line, got, ok)
 		}
+	}
+}
+
+func TestRateLimitEventThatIsNotValidJSONIsUnreadable(t *testing.T) {
+	for _, line := range []string{
+		`{"type":"rate_limit_event","rate_limit_info":{"unifiedWindows":{"seven_day":{"utilization":0.1,}}}}`,
+		`{"type":"rate_limit_event","rate_limit_info":{"pad":"` + strings.Repeat("x", lineHeadLimit),
+	} {
+		got, ok := parseUsage([]byte(line))
+		if !ok || !got.Unreadable() {
+			t.Errorf("parseUsage(%.80s) = %+v, %v, want 読めない event", line, got, ok)
+		}
+	}
+}
+
+func TestFieldOutsideTheWindowsDoesNotHideThem(t *testing.T) {
+	line := `{"type":"rate_limit_event","rate_limit_info":{"overageResetsAt":1e999,"unifiedWindows":{"seven_day":{"utilization":0.1,"resetsAt":1792188000}}}}`
+
+	got, ok := parseUsage([]byte(line))
+
+	if !ok || got.SevenDay == nil {
+		t.Fatalf("parseUsage = %+v, %v, want window の外の項目が崩れていても読む", got, ok)
 	}
 }
 

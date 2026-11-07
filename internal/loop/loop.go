@@ -828,8 +828,9 @@ func (l *loop) handle(ev worker.Event) {
 		}
 		l.apply(ev.Target, c, c.workerUnstopped(ev.StopError, ev.Exited))
 	case worker.UsageObserved:
-		// 判定は起動を試みるときにする (system.md §7)
 		l.admission.observe(ev)
+		// 閉じたことは、次の起動を待たずに残す。admission_close の使用率は閾値を超えた観測の値にする (system.md §7 の見直し条件)
+		l.judgeAdmission()
 	case worker.Ended:
 		c, ok := l.claimOf(ev.Target)
 		if !ok {

@@ -39,8 +39,13 @@ func (w usageWindow) atThreshold(now time.Time) bool {
 	return c != nil && c.Utilization >= float64(w.threshold)/100
 }
 
+// maxPercentInput は percent が受ける使用率の上限。stream の値が int に収まらない桁でも負の百分率を出さない
+const maxPercentInput = 1e6
+
 // percent は使用率を整数の百分率にする。
-func percent(utilization float64) int { return int(math.Round(utilization * 100)) }
+func percent(utilization float64) int {
+	return int(math.Round(min(utilization, maxPercentInput) * 100))
+}
 
 // statusWindow は状態 file の window 1 つ。
 func (w usageWindow) statusWindow(now time.Time) status.UsageWindow {
@@ -57,7 +62,7 @@ type admission struct {
 	fiveHour, sevenDay usageWindow
 	// unreadable は、直近の rate_limit_event がどの window も読めなかったか
 	unreadable bool
-	// closed と reopenAt は直近の判定の結果。状態 file もこれを出すので、log.jsonl の行と食い違わない
+	// closed と reopenAt は直近の判定の結果。状態 file はこれを出すので、閉じているかが log.jsonl の行と食い違わない
 	closed   bool
 	reopenAt *time.Time
 }
