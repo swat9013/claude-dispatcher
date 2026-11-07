@@ -251,6 +251,8 @@ const (
 	hindranceTriggerRemoved
 	// hindranceNewerFormat は coordination board に自分の知る版より新しい版の ref がある
 	hindranceNewerFormat
+	// hindranceAdmissionClosed は admission control が閉じている
+	hindranceAdmissionClosed
 )
 
 // backoffElapsed は再起動待ちの claim の backoff の明けを受ける。妨げが無ければ次の attempt を起動し、trigger が消えて

@@ -85,6 +85,8 @@ type Options struct {
 	// StartupSlowKinds は、起動時の確認で一覧の読み出しが places.SlowListing を超えた置き場の種類 (読んだ順)。確認は log.jsonl を
 	// 開く前に読むので、loop_start の後に slow_listing の行として書く。人が読む行は確認のときに出ているので出さない
 	StartupSlowKinds []target.Kind
+	// UsageThresholds は usage limit の閾値 (system.md §8)
+	UsageThresholds UsageThresholds
 	// Coordination は coordination board の口 (system.md §4 のマシンを跨いだ分担)。coordination board を指さない project では nil
 	// で、何もしない口になる。最初の生存報告は呼び出し側が起動時の検査として置いてから渡す
 	Coordination Coordination
@@ -196,6 +198,8 @@ type loop struct {
 	// beats は生存報告の置き直しの結果が届く channel。stopBeating は置き直しを止めて、終わりを待つ
 	beats       chan error
 	stopBeating func()
+	// admission は usage limit の観測と admission control の判定 (system.md §7)
+	admission admission
 }
 
 // fixedAtStartChanged は、起動時に固定する項目 (formats.md §6) のうち def で起動時と変わったものがあれば、その tick の error の
@@ -225,7 +229,7 @@ func Run(o Options) int {
 	l := &loop{
 		o: o, def: o.Definition, claims: map[target.Ref]*claim{}, abandoned: map[target.Ref]string{}, events: make(chan worker.Event),
 		rec: recorder{log: o.Log, output: o.Output, now: o.Now, scope: o.ScopeKey}, published: published{startedAt: o.Now()},
-		coordination: o.Coordination, beats: make(chan error, 16),
+		coordination: o.Coordination, beats: make(chan error, 16), admission: newAdmission(o.UsageThresholds),
 	}
 	l.coordinated = l.coordination != nil
 	if !l.coordinated {
@@ -415,6 +419,7 @@ func (l *loop) tick() {
 	l.report(l.coordination.ReleaseInherited(l.orphans))
 	l.sweep(store, ws, open, unclaimed)
 	l.retry(store, v)
+	closed := l.admissionClosed()
 	// 起動を始める前の数を tick の行にも載せる。起動した worker は走っている worker に加わるので、launched の数を足して判定する。
 	// orphan も claude が走り続けうるので並列の枠を使う
 	running, waitingRetry, orphans := l.running(), l.waitingRetry(), len(l.orphans)
@@ -436,6 +441,10 @@ func (l *loop) tick() {
 		}
 		if l.coordination.Newer() {
 			// 新しい版の ref がある間は、その scope で worker を起動しない (formats.md §12)
+			break
+		}
+		if closed {
+			// 閉じている間は起動しない。候補の数は変えず、tick の行に出す (system.md §7)
 			break
 		}
 		if l.coordination.Held(ref) {
@@ -796,7 +805,7 @@ func (l *loop) definitionOf(c *claim) workflow.Definition {
 	return def
 }
 
-// handle は worker の起動・止められない知らせ・終わりを受ける。
+// handle は worker の起動・止められない知らせ・使用率の観測・終わりを受ける。
 func (l *loop) handle(ev worker.Event) {
 	switch ev := ev.(type) {
 	case worker.Started:
@@ -818,6 +827,9 @@ func (l *loop) handle(ev worker.Event) {
 			return
 		}
 		l.apply(ev.Target, c, c.workerUnstopped(ev.StopError, ev.Exited))
+	case worker.UsageObserved:
+		l.admission.observe(ev)
+		l.admissionClosed()
 	case worker.Ended:
 		c, ok := l.claimOf(ev.Target)
 		if !ok {
