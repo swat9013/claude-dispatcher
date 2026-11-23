@@ -27,7 +27,7 @@ jobs:
       # 出荷する Go (go.mod の toolchain directive) で標準ライブラリを判定する。golang/govulncheck-action は
       # 既定で setup-go に go-version: stable を渡し、go-version-file に勝って最新 stable で検査してしまうので使わない。
       # この job に setup-go を 2 回置かない (2 回目は 1 回目が export した GOTOOLCHAIN=local のために go 行の版を入れる)
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
       # 判定は text 出力の exit code で行う (-json / sarif / openvex は検出があっても 0 を返す)。
